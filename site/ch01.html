@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 章 你好，世界！</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li class="active"><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 1 章 你好，世界！——写下第一行代码</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>本章结束时，你会让电脑在屏幕上说出第一句话，还会写一个小程序：它先跟你打招呼，再报出你今天已经是"程序员"了。别担心，这一切只需要几行字。</p>
+<p><strong>成品预览：</strong></p>
+<pre>你好，世界！
+欢迎来到编程的世界，新程序员！</pre>
+</div><blockquote>
+<p>好消息：本书是网页版，几乎每段代码右上角都有一个绿色的 <strong>▶ 运行</strong> 按钮。你不用装任何东西，直接点它就能在浏览器里跑起来，还能改代码再运行。当然，最好还是按<a href="appendix-a.md">附录 A</a> 在自己电脑上装好 Python，那才是真正的编程环境。</p>
+</blockquote>
+<h2>电脑其实很&quot;笨&quot;</h2>
+<p>在开始之前，先记住一件事：<strong>电脑非常听话，但也非常笨。</strong> 它只会做你明确告诉它的事，一字不差。你说&quot;打印你好&quot;，它就打印&quot;你好&quot;；你少写一个符号，它可能就完全看不懂。</p>
+<p>所以<strong>编程（programming）</strong>，说白了就是：用一种电脑能听懂的语言，把你想让它做的事，一步一步、清清楚楚地写下来。我们用的这门语言叫 <strong>Python（读作&quot;派森&quot;)</strong>，它是世界上最受欢迎的编程语言之一，长得很像英语，特别适合入门。</p>
+<p>我们写下的这些&quot;命令&quot;，合起来就叫<strong>代码（code）</strong>；一整份能完成某件事的代码，叫一个<strong>程序（program）</strong>。</p>
+<h2>第一行代码：让电脑说话</h2>
+<p>打开你的代码编辑器（比如 VS Code，见附录 A），新建一个文件，命名为 <code>hello.py</code>。</p>
+<blockquote>
+<p>小贴士：Python 程序的文件名都以 <code>.py</code> 结尾，就像图片以 <code>.jpg</code> 结尾一样。这是在告诉电脑&quot;这是一份 Python 代码&quot;。</p>
+</blockquote>
+<p>在文件里敲下这一行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20hello.py%0Aprint(%22%E4%BD%A0%E5%A5%BD%EF%BC%8C%E4%B8%96%E7%95%8C%EF%BC%81%22)"># hello.py
+print("你好，世界！")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>保存，然后运行它（怎么运行见附录 A，通常是在终端里输入 <code>python hello.py</code>）。</p>
+<p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好，世界！</code></pre>
+</div><p>成功了！你刚刚写出了人生第一个程序。几乎每个程序员的第一个程序，都是让电脑说这句&quot;你好，世界&quot;。恭喜你，正式加入这个大家庭。</p>
+<h2>拆开看看这行代码</h2>
+<p>这短短一行里，藏着几个重要的东西，我们一个个认识：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="print(%22%E4%BD%A0%E5%A5%BD%EF%BC%8C%E4%B8%96%E7%95%8C%EF%BC%81%22)">print("你好，世界！")</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><ul>
+<li><strong><code>print</code></strong>：这是一个<strong>函数（function）</strong>，你可以把它理解成一个&quot;小工具&quot;或&quot;按钮&quot;。<code>print</code> 这个工具的作用就是&quot;把括号里的东西打印到屏幕上&quot;。（print 是英语&quot;打印&quot;的意思。）</li>
+<li><strong><code>( )</code> 圆括号</strong>：你要让工具处理的东西，得放进它的括号里。就像你要用微波炉热饭，得把饭放进去、关上门。</li>
+<li><strong><code>&quot;你好，世界！&quot;</code> 引号里的文字</strong>：这段被双引号包起来的文字，在编程里叫<strong>字符串（string）</strong>——就是&quot;一串字符&quot;的意思。引号是在告诉电脑：&quot;从这里到那里，都是一段普通文字，原样打印出来就好。&quot;</li>
+</ul>
+<p>连起来读就是：<strong>&quot;嘿 print 工具，把&#39;你好，世界！&#39;这段文字打印到屏幕上。&quot;</strong></p>
+<div class="concept">
+<svg viewBox="0 0 560 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="10" y="45" width="230" height="60" rx="10" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="125" y="70" text-anchor="middle" font-size="15" fill="#2f6db3" font-weight="bold">print(</text>
+  <text x="125" y="70" text-anchor="middle" font-size="15" fill="#2f6db3" opacity="0"> </text>
+  <text x="125" y="82" text-anchor="middle" font-size="13" fill="#333">print( "你好，世界！" )</text>
+  <text x="125" y="30" text-anchor="middle" font-size="13" fill="#6b6459">你写的代码</text>
+  <path d="M245 75 L330 75" stroke="#e06a3b" stroke-width="3" marker-end="url(#arr)"/>
+  <text x="287" y="66" text-anchor="middle" font-size="12" fill="#e06a3b">交给电脑</text>
+  <rect x="335" y="35" width="215" height="80" rx="10" fill="#1b1b1b"/>
+  <text x="442" y="25" text-anchor="middle" font-size="13" fill="#6b6459">屏幕</text>
+  <text x="352" y="80" font-size="15" fill="#9fe3b0" font-family="monospace">你好，世界！</text>
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#e06a3b"/>
+    </marker>
+  </defs>
+</svg>
+<div class="caption">图 1-1　print() 把引号里的文字送到屏幕上显示出来</div>
+</div><blockquote>
+<p>小贴士：括号、引号这些符号，必须用<strong>英文半角</strong>的，不能用中文的（）「」。这是新手最常犯的错误之一，本章末尾会专门讲。</p>
+</blockquote>
+<h2>那个 <code>#</code> 是什么？</h2>
+<p>你注意到第一行 <code># hello.py</code> 了吗？以 <code>#</code> 开头的行叫<strong>注释（comment）</strong>。</p>
+<p>注释是<strong>写给人看的，电脑会完全忽略它</strong>。它就像你在作业本边上写的小笔记，用来提醒自己&quot;这段代码是干嘛的&quot;。本书里，每份完整代码的开头，我都会用注释写上文件名，方便你对照。</p>
+<p>试试看，把这段加到你的文件里再运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code2">▶ 运行</button>
+    <button class="reset-btn" data-target="code2">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code2" data-original="%23%20%E8%BF%99%E4%B8%80%E8%A1%8C%E6%98%AF%E6%B3%A8%E9%87%8A%EF%BC%8C%E7%94%B5%E8%84%91%E4%B8%8D%E4%BC%9A%E7%90%86%E4%BC%9A%0Aprint(%22%E7%94%B5%E8%84%91%E7%9C%8B%E4%B8%8D%E8%A7%81%E4%B8%8A%E9%9D%A2%E9%82%A3%E8%A1%8C%E5%AD%97%22)%20%20%23%20%E5%86%99%E5%9C%A8%E4%BB%A3%E7%A0%81%E5%90%8E%E9%9D%A2%E7%9A%84%E6%B3%A8%E9%87%8A%E4%B9%9F%E5%8F%AF%E4%BB%A5"># 这一行是注释，电脑不会理会
+print("电脑看不见上面那行字")  # 写在代码后面的注释也可以</code></pre>
+  <div class="output" id="code2-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">电脑看不见上面那行字</code></pre>
+</div><p>看，注释一个字都没被打印出来。以后你写复杂代码时，注释会帮大忙。</p>
+<h2>让电脑多说几句</h2>
+<p>一个 <code>print</code> 只能打印一行。想让电脑说好几句话，就写好几个 <code>print</code>，它们会<strong>从上到下依次执行</strong>。这是编程里最重要的规律之一：<strong>代码是一行一行、按顺序运行的。</strong></p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code3">▶ 运行</button>
+    <button class="reset-btn" data-target="code3">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code3" data-original="%23%20hello.py%0Aprint(%22%E4%BD%A0%E5%A5%BD%EF%BC%8C%E4%B8%96%E7%95%8C%EF%BC%81%22)%0Aprint(%22%E6%AC%A2%E8%BF%8E%E6%9D%A5%E5%88%B0%E7%BC%96%E7%A8%8B%E7%9A%84%E4%B8%96%E7%95%8C%EF%BC%8C%E6%96%B0%E7%A8%8B%E5%BA%8F%E5%91%98%EF%BC%81%22)"># hello.py
+print("你好，世界！")
+print("欢迎来到编程的世界，新程序员！")</code></pre>
+  <div class="output" id="code3-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好，世界！
+欢迎来到编程的世界，新程序员！</code></pre>
+</div><p>电脑先执行第一行，打印第一句；再执行第二行，打印第二句。顺序不能乱——如果你把两行调换，打印出来的顺序也会跟着换。</p>
+<h2>动手改一改</h2>
+<p>现在轮到你了。把上面的程序改成打印你自己的话，比如：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code4">▶ 运行</button>
+    <button class="reset-btn" data-target="code4">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code4" data-original="%23%20hello.py%0Aprint(%22%E6%88%91%E5%8F%AB%E5%B0%8F%E6%98%8E%E3%80%82%22)%0Aprint(%22%E6%88%91%E4%BB%8A%E5%B9%B4%2013%20%E5%B2%81%E3%80%82%22)%0Aprint(%22%E8%BF%99%E6%98%AF%E6%88%91%E5%86%99%E7%9A%84%E7%AC%AC%E4%B8%80%E4%B8%AA%E7%A8%8B%E5%BA%8F%EF%BC%81%22)"># hello.py
+print("我叫小明。")
+print("我今年 13 岁。")
+print("这是我写的第一个程序！")</code></pre>
+  <div class="output" id="code4-out" hidden></div>
+</div><p>把名字和年龄换成你自己的，运行看看。你会发现：<strong>代码是你说了算的</strong>，你写什么，它就说什么。这种&quot;我能指挥电脑&quot;的感觉，就是编程最上瘾的地方。</p>
+<h2>常见错误</h2>
+<p>新手第一天最容易踩这几个坑，先认识它们，遇到就不慌：</p>
+<p><strong>1. 用了中文的括号或引号</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">print（"你好"）</code></pre>
+</div><p>运行会报错，最后一行大概长这样：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">SyntaxError: invalid character '（' (U+FF08)</code></pre>
+</div><p><code>SyntaxError</code> 是&quot;语法错误&quot;，意思是电脑看不懂你写的东西。这里的问题是括号 <code>（）</code> 是中文全角的。改成英文的 <code>()</code> 就好了。<strong>记住：写代码时把输入法切到英文。</strong></p>
+<p><strong>2. 引号忘了配对</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">print("你好)</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">SyntaxError: unterminated string literal</code></pre>
+</div><p>意思是&quot;字符串没结束&quot;——你开了引号却没关上。引号必须一头一尾成对出现：<code>&quot;你好&quot;</code>。</p>
+<p><strong>3. <code>print</code> 拼错了</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">prit("你好")</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NameError: name 'prit' is not defined</code></pre>
+</div><p><code>NameError</code>（名字错误）表示电脑不认识 <code>prit</code> 这个词。检查一下拼写，是 <code>p-r-i-n-t</code>，五个字母，一个都不能少或错。</p>
+<blockquote>
+<p>小贴士：报错不可怕，它其实是电脑在<strong>帮你</strong>指出问题在哪儿。多数报错的最后一行会告诉你错误类型和大概原因。看不懂的报错，去<a href="appendix-b.md">附录 B</a> 查。</p>
+</blockquote>
+<h2>动手挑战</h2>
+<p>试着独立完成下面的任务，只用本章学到的 <code>print</code> 就够了。</p>
+<p><strong>★ 挑战一：自我介绍卡片</strong>
+写一个程序，用至少 4 行 <code>print</code>，打印出你的自我介绍：名字、年龄、爱好、最喜欢的一门课。</p>
+<p><strong>★★ 挑战二：画个图案</strong>
+只用 <code>print</code> 和文字符号，打印出一个简单的图案。比如一棵小树：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  *
+ ***
+*****
+  |</code></pre>
+</div><p>想一想，这需要几行 <code>print</code>？（提示：一行一个 <code>print</code>。）</p>
+<p><strong>★★★ 挑战三：会讲笑话的程序</strong>
+写一个程序，先打印一个笑话的&quot;问&quot;，再打印&quot;答&quot;。比如：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">问：什么鱼不能吃？
+答：木鱼！</code></pre>
+</div><p>试着多存几个笑话，让程序一次讲完。</p>
+<h2>本章小结</h2>
+<p>这一章你迈出了最重要的第一步。回顾一下你学到的：</p>
+<ul>
+<li><strong>编程</strong>就是用电脑能懂的语言，把要做的事一步步写清楚；电脑很听话但很笨，只做你明确说的事。</li>
+<li><strong><code>print()</code></strong> 是打印文字的工具（函数），要打印的内容放在圆括号里。</li>
+<li>用<strong>双引号 <code>&quot; &quot;</code></strong> 包起来的文字叫<strong>字符串</strong>。</li>
+<li>以 <strong><code>#</code></strong> 开头的是<strong>注释</strong>，写给人看的，电脑会忽略。</li>
+<li>代码<strong>从上到下按顺序一行一行执行</strong>。</li>
+<li>符号必须用<strong>英文半角</strong>，这是新手最常见的报错来源。</li>
+</ul>
+<p>下一章，我们要给程序装上&quot;记忆&quot;——用<strong>变量</strong>这个神奇的盒子，把名字、分数这些信息记下来，程序就能变得越来越聪明。翻页吧！</p>
+
+<div class="chapter-nav">
+  <span></span>
+  <a class="nav-next" href="ch02.html">第 2 章 变量与数据类型 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

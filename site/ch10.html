@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 用海龟画图</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li class="active"><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 10 章 用海龟画图（turtle）</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>到现在为止，你写的程序都在用文字说话。这一章，你要第一次让电脑<strong>画画</strong>！Python 自带一只小海龟，它会在屏幕上爬来爬去，爬过的地方就留下一条线。你指挥它前进、转弯，就能画出正方形、五角星，还有一朵五颜六色的花。</p>
+<p><strong>成品预览：</strong>一个能弹出来的画图窗口，海龟先画出一个正方形，再转着圈画出一朵漂亮的花——就像下面这样（真正跑起来是彩色的、会动的）。</p>
+<pre>   ___________
+  |           |
+  |  正方形   |      ✿ 一朵转圈画出的花
+  |___________|
+</pre>
+</div><blockquote>
+<p>重要！和前面几章不一样：<strong>这一章的代码，网页上的&quot;▶ 运行&quot;按钮跑不了。</strong> turtle（海龟）需要弹出一个真正的画图窗口，浏览器里做不到。所以本章的代码块都没有运行按钮。<strong>请务必按<a href="appendix-a.md">附录 A</a> 在自己的电脑上装好 Python</strong>，把代码抄进去，用 <code>python 文件名.py</code> 运行，才能看到海龟真的动起来。这也是好事——你要开始像真正的程序员那样，在自己电脑上写程序啦。</p>
+</blockquote>
+<h2>一只会画画的小海龟</h2>
+<p>想象一只小海龟，尾巴上绑着一支笔，趴在一张大白纸的正中央。你喊一声&quot;前进 100 步&quot;，它就朝着头对的方向爬 100 步，笔一路拖着，纸上就留下一条线。你再喊&quot;右转 90 度&quot;，它原地把头扭向右边。就这样，一句一句地指挥，它爬过的轨迹拼起来，就成了一幅画。</p>
+<p>这只海龟就藏在 Python 自带的一个**模块（module）**里，模块就是&quot;别人提前写好、打包送给你用的一堆工具&quot;。这个模块的名字叫 <strong>turtle</strong>（英语&quot;海龟&quot;的意思）。要用它，先在程序开头把它&quot;请&quot;进来：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">import turtle</code></pre>
+</div><p><strong><code>import</code></strong> 是英语&quot;引入、导入&quot;的意思。<code>import turtle</code> 这行的意思就是：&quot;把 turtle 这盒工具搬进我的程序，接下来我要用它。&quot;以后凡是要用海龟的功能，都写成 <code>turtle.</code> 加上具体动作。</p>
+<h2>让海龟走第一步</h2>
+<p>新建一个文件，命名为 <code>first_turtle.py</code>，抄进下面这几行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># first_turtle.py
+import turtle
+
+turtle.forward(100)   # 向前爬 100 步（像素）
+turtle.done()         # 画完了，让窗口停住别关</code></pre>
+</div><p>在自己电脑上运行（终端里输入 <code>python first_turtle.py</code>）。一个窗口会弹出来，中间出现一只小海龟（有的电脑上是一个小箭头），它向右爬了一段，留下一条横线。</p>
+<p>我们来认识这两行新东西：</p>
+<ul>
+<li><strong><code>turtle.forward(100)</code></strong>：<code>forward</code> 是&quot;前进&quot;的意思。括号里的 <code>100</code> 是走多少步——这里的&quot;步&quot;其实是屏幕上的<strong>像素（pixel）</strong>，也就是一个个小点。数字越大，线越长。</li>
+<li><strong><code>turtle.done()</code></strong>：告诉程序&quot;画完了&quot;。有了它，窗口才会乖乖停在那儿等你看；不写的话，窗口可能一闪就没了。<strong>它一般放在整个程序的最后一行。</strong></li>
+</ul>
+<blockquote>
+<p>小贴士：海龟一开始头朝右边（东边），所以 <code>forward</code> 默认是往右爬。别急，马上就教它转弯。</p>
+</blockquote>
+<h2>转弯：right 和 left</h2>
+<p>只会直着走可画不出图形，得会拐弯。海龟转弯用这两个工具：</p>
+<ul>
+<li><strong><code>turtle.right(90)</code></strong>：原地向<strong>右</strong>转 90 度（<code>right</code> 是&quot;右&quot;）。</li>
+<li><strong><code>turtle.left(90)</code></strong>：原地向<strong>左</strong>转 90 度（<code>left</code> 是&quot;左&quot;）。</li>
+</ul>
+<p>注意：转弯时海龟<strong>不动地方，只扭头</strong>，改变的是它下一步要爬的方向。度数就是转多少——90 度是转个直角，180 度是掉头往回。</p>
+<p>下面让海龟走一个&quot;L&quot;形：先向前，再右转，再向前。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># corner.py
+import turtle
+
+turtle.forward(100)   # 先向右爬 100
+turtle.right(90)      # 向右转 90 度，现在头朝下
+turtle.forward(100)   # 再向下爬 100
+turtle.done()</code></pre>
+</div><p>运行一下，你会看到一条拐了个直角的线。<strong>&quot;前进 + 转向&quot;这两个动作反复组合，几乎能画出任何形状。</strong> 下面这张图帮你看清海龟每一步在做什么：</p>
+<div class="concept">
+<svg viewBox="0 0 560 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 起点 -->
+  <circle cx="90" cy="80" r="6" fill="#3f9b5c"/>
+  <text x="90" y="65" text-anchor="middle" font-size="12" fill="#3f9b5c">起点（海龟头朝右）</text>
+  <!-- 第一段 forward(100) -->
+  <path d="M90 80 L290 80" stroke="#2f6db3" stroke-width="3" marker-end="url(#a10)"/>
+  <text x="190" y="70" text-anchor="middle" font-size="13" fill="#2f6db3">forward(100) 向前爬</text>
+  <!-- 转向标记 -->
+  <path d="M290 80 A22 22 0 0 1 290 100" fill="none" stroke="#e06a3b" stroke-width="2.5" marker-end="url(#a10o)"/>
+  <text x="360" y="115" text-anchor="middle" font-size="13" fill="#e06a3b">right(90) 向右转</text>
+  <!-- 第二段 forward(100) 向下 -->
+  <path d="M290 100 L290 210" stroke="#2f6db3" stroke-width="3" marker-end="url(#a10)"/>
+  <text x="410" y="165" text-anchor="middle" font-size="13" fill="#2f6db3">forward(100) 再向前爬</text>
+  <!-- 海龟当前位置 -->
+  <circle cx="290" cy="210" r="6" fill="#333"/>
+  <text x="290" y="232" text-anchor="middle" font-size="12" fill="#333">海龟现在在这里</text>
+  <defs>
+    <marker id="a10" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#2f6db3"/>
+    </marker>
+    <marker id="a10o" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#e06a3b"/>
+    </marker>
+  </defs>
+</svg>
+<div class="caption">图 10-1　海龟靠"前进一段、转个方向、再前进一段"来画出折线</div>
+</div><h2>完整程序一：画一个正方形</h2>
+<p>正方形有四条一样长的边，每画完一条边就右转 90 度。你当然可以老老实实写四遍&quot;前进、右转&quot;：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># square_long.py
+import turtle
+
+turtle.forward(100)
+turtle.right(90)
+turtle.forward(100)
+turtle.right(90)
+turtle.forward(100)
+turtle.right(90)
+turtle.forward(100)
+turtle.right(90)
+turtle.done()</code></pre>
+</div><p>能画出来，但你有没有觉得——<strong>这四组代码几乎一模一样，抄四遍好烦？</strong> 还记得第 6 章学的<strong>循环</strong>吗？重复的事，正是循环最擅长的！&quot;前进 + 右转&quot;重复 4 次，用 <code>for</code> 循环写就清爽多了：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># square.py
+import turtle
+
+for i in range(4):        # 重复做 4 次
+    turtle.forward(100)   # 画一条边
+    turtle.right(90)      # 右转 90 度，准备画下一条
+
+turtle.done()</code></pre>
+</div><p>运行它，海龟就会画出一个端端正正的正方形。是不是短多了？这就是循环的威力：<strong>同样的动作，交给循环去重复。</strong></p>
+<blockquote>
+<p>小贴士：为什么是右转 90 度？因为正方形四个角加起来转一整圈是 360 度，4 个角平分，每个角就转 <code>360 ÷ 4 = 90</code> 度。记住这个&quot;360 除以边数&quot;，等下画别的多边形要用到。</p>
+</blockquote>
+<h2>举一反三：任意多边形</h2>
+<p>正方形转 90 度，那三角形、五边形呢？按上面的规律：<strong>转的度数 = 360 ÷ 边数</strong>。想画几边形，就把循环次数和转角一起改掉。比如画一个正五边形（5 条边，每个角转 <code>360 ÷ 5 = 72</code> 度）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># pentagon.py
+import turtle
+
+for i in range(5):        # 五条边，循环 5 次
+    turtle.forward(100)
+    turtle.right(72)      # 360 ÷ 5 = 72 度
+
+turtle.done()</code></pre>
+</div><p>把 <code>5</code> 和 <code>72</code> 换成 <code>3</code> 和 <code>120</code>，就是三角形；换成 <code>6</code> 和 <code>60</code>，就是六边形。<strong>你现在已经能画出任意正多边形了</strong>，试试看！</p>
+<h2>给海龟换个颜色</h2>
+<p>黑白线条太朴素了。海龟的画笔可以换颜色，用 <strong><code>turtle.color</code></strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># color_square.py
+import turtle
+
+turtle.color("red")       # 把画笔换成红色（red 是"红"）
+for i in range(4):
+    turtle.forward(120)
+    turtle.right(90)
+turtle.done()</code></pre>
+</div><p>括号里放颜色的英文名，都要用引号包起来。常用的有：<code>&quot;red&quot;</code>（红）、<code>&quot;blue&quot;</code>（蓝）、<code>&quot;green&quot;</code>（绿）、<code>&quot;orange&quot;</code>（橙）、<code>&quot;purple&quot;</code>（紫）、<code>&quot;pink&quot;</code>（粉）、<code>&quot;black&quot;</code>（黑）。多试几个，挑你喜欢的。</p>
+<h2>抬笔和落笔：penup 与 pendown</h2>
+<p>有时你想让海龟<strong>走过去但不留线</strong>——比如画完一个图形，想挪到别处再画下一个。这时就得把笔&quot;抬起来&quot;：</p>
+<ul>
+<li><strong><code>turtle.penup()</code></strong>：抬笔（pen up，笔抬起）。之后海龟移动<strong>不画线</strong>。</li>
+<li><strong><code>turtle.pendown()</code></strong>：落笔（pen down，笔放下）。之后海龟移动<strong>又开始画线</strong>了。</li>
+</ul>
+<p>就像你写字，抬起笔挪到下一行，再落笔继续写。看这个例子：画一条线，空一段，再画一条线。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># jump.py
+import turtle
+
+turtle.forward(100)   # 画第一条线
+turtle.penup()        # 抬笔
+turtle.forward(50)    # 悄悄往前挪 50，不留痕迹
+turtle.pendown()      # 落笔
+turtle.forward(100)   # 画第二条线
+turtle.done()</code></pre>
+</div><p>运行后你会看到两条线中间空了一段——那就是海龟抬着笔走过的地方。</p>
+<h2>完整程序二：画一朵花</h2>
+<p>现在来点更酷的。一朵花，可以看成&quot;很多个正方形（或多边形）绕着中心转一圈&quot;。做法是：画一个多边形，<strong>转一个小角度</strong>，再画一个，再转……转满一圈，一朵花就出来了。</p>
+<p>思路拆开：</p>
+<ol>
+<li>外层循环转一圈（比如转 36 次，每次转 10 度，<code>36 × 10 = 360</code>，正好一整圈）。</li>
+<li>每次循环里，先用内层循环画一个多边形（一片&quot;花瓣&quot;）。</li>
+<li>顺便每片花瓣换个颜色，更好看。</li>
+</ol>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># flower.py
+import turtle
+
+# 准备一串颜色，画每片花瓣时轮流用
+colors = ["red", "orange", "purple", "blue", "green", "pink"]
+
+turtle.speed(0)              # 把海龟速度调到最快（0 表示最快），不然画得太慢
+
+for i in range(36):          # 外层：转一圈，画 36 片花瓣
+    turtle.color(colors[i % 6])   # 用 i 除以 6 的余数，在 6 种颜色间轮换
+    for j in range(4):       # 内层：画一个正方形当花瓣
+        turtle.forward(100)
+        turtle.right(90)
+    turtle.right(10)         # 画完一片，整体转 10 度，再画下一片
+
+turtle.done()</code></pre>
+</div><p>在电脑上运行它，你会看到海龟飞快地转着圈，一片一片地叠出一朵五彩缤纷的花。<strong>这就是你写出的第一幅真正的图画！</strong></p>
+<p>这里出现了两个小新招，顺带认识一下：</p>
+<ul>
+<li><strong><code>turtle.speed(0)</code></strong>：调海龟爬行速度。数字 1（最慢）到 10（快），特别地，<code>0</code> 表示<strong>最快</strong>。画复杂图形时调快点，省得等半天。</li>
+<li><strong><code>colors[i % 6]</code></strong>：<code>colors</code> 是一个<strong>列表</strong>（第 7 章学过），里面装了 6 种颜色。<code>i % 6</code> 是&quot;i 除以 6 的余数&quot;，结果总在 0～5 之间，正好能从列表里轮流取出这 6 种颜色。这样每片花瓣颜色都不同。</li>
+</ul>
+<p>试着把颜色列表、花瓣形状（把内层改成三角形或五边形）、转的角度换一换，你会得到完全不同的花。</p>
+<h2>常见错误</h2>
+<p>海龟画图是你第一次在自己电脑上跑程序，除了老朋友&quot;中文符号&quot;&quot;拼写错误&quot;，还会遇到几个新坑：</p>
+<p><strong>1. 点了网页的&quot;运行&quot;按钮，什么都没发生</strong></p>
+<p>这不是 bug！本章开头就说过：<strong>turtle 的窗口浏览器里弹不出来</strong>，网页运行按钮跑不了它。你必须把代码存成 <code>.py</code> 文件，在自己电脑上用 <code>python 文件名.py</code> 运行。没装好 Python 的话，回到<a href="appendix-a.md">附录 A</a> 一步步来。</p>
+<p><strong>2. 忘了写 <code>import turtle</code></strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">turtle.forward(100)</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NameError: name 'turtle' is not defined</code></pre>
+</div><p><code>NameError</code>（名字错误）说电脑不认识 <code>turtle</code>。因为你还没把这盒工具搬进来。<strong>程序第一行永远先写 <code>import turtle</code>。</strong></p>
+<p><strong>3. 忘了写 <code>turtle.done()</code>，窗口一闪就关了</strong></p>
+<p>如果运行后窗口&quot;啪&quot;地闪一下就消失，多半是漏了最后的 <code>turtle.done()</code>。加上它，窗口就会停住等你欣赏。</p>
+<p><strong>4. 颜色名写错或没加引号</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">turtle.color(red)</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NameError: name 'red' is not defined</code></pre>
+</div><p>颜色名是<strong>字符串</strong>，必须用引号包起来：<code>turtle.color(&quot;red&quot;)</code>。另外颜色要用英文名，写 <code>&quot;红色&quot;</code> 电脑也不认识，会报另一种错。</p>
+<h2>动手挑战</h2>
+<p>下面的程序都要在<strong>你自己电脑上</strong>运行才看得到效果哦。</p>
+<p><strong>★ 挑战一：画个三角形</strong>
+仿照正方形的写法，用 <code>for</code> 循环画一个正三角形。想一想：三条边，每个角该转多少度？（提示：360 ÷ 3。）</p>
+<p><strong>★★ 挑战二：五角星</strong>
+画一个五角星。它有 5 条边，但每画完一条边要转的角度不是 72 度，而是 <strong>144 度</strong>（试试就知道为什么星星和五边形不一样）。用 <code>range(5)</code> 的循环搞定它。</p>
+<p><strong>★★★ 挑战三：彩色螺旋</strong>
+画一条越转越大的彩色螺旋线。思路：用一个循环，每一圈都比上一圈爬得<strong>更远一点</strong>，同时<strong>换个颜色</strong>。提示——让前进的步数跟着循环变量变大，比如第 <code>i</code> 次就 <code>forward(i * 5)</code>，每次还稍微转个角度（比如右转 91 度，故意不整齐，会更像螺旋）。多调几个数字，做出你自己的螺旋。</p>
+<h2>本章小结</h2>
+<p>太棒了，你从&quot;让电脑说话&quot;跨到了&quot;让电脑画画&quot;！回顾这一章：</p>
+<ul>
+<li>用 <strong><code>import turtle</code></strong> 把海龟工具箱搬进程序，这是画图程序的第一行。</li>
+<li><strong><code>forward()</code>／<code>backward()</code></strong> 让海龟前进／后退，<strong><code>right()</code>／<code>left()</code></strong> 让它右转／左转。</li>
+<li><strong>前进 + 转向反复组合</strong>就能画出各种形状；正多边形每个角转 <code>360 ÷ 边数</code> 度。</li>
+<li>用<strong>循环</strong>代替重复的&quot;前进、转弯&quot;，代码又短又清楚。</li>
+<li><strong><code>color(&quot;颜色名&quot;)</code></strong> 换画笔颜色，<strong><code>penup()</code>／<code>pendown()</code></strong> 控制走的时候画不画线。</li>
+<li><strong><code>turtle.done()</code></strong> 放在最后，让窗口停住；<strong><code>speed(0)</code></strong> 让海龟画得飞快。</li>
+<li>最重要的一点：<strong>turtle 要在自己电脑上运行</strong>，网页运行按钮跑不了它——你已经迈进真正的编程环境了。</li>
+</ul>
+<p>下一章更刺激：我们要用一个叫 <strong>pygame</strong> 的工具，做出一个<strong>真正的游戏窗口</strong>——一个能用键盘方向键控制、在屏幕上跑来跑去的小方块。你写了这么多文字游戏，这次要做出会动、能玩的那种了。翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch09.html">← 第 9 章 石头剪刀布</a>
+  <a class="nav-next" href="ch11.html">第 11 章 第一个游戏窗口 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

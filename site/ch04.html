@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 条件判断</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li class="active"><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 4 章 让程序做选择——条件判断</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>上一章程序学会了听你说话，但它很"死板"——不管你答什么，都走同一条路。这一章，程序要长出"脑子"：它会根据不同的情况，做出不同的反应。章末你会做一个"成绩评级机"，输入分数，它告诉你是优、良、中还是差；还会做一个"电影年龄检查器"，看你够不够年龄进场。</p>
+<p><strong>成品预览（下划线部分是你输入的）：</strong></p>
+<pre>请输入你的分数：85
+85 分，评级：良。不错，继续加油！</pre>
+</div><h2>电脑怎么&quot;做判断&quot;</h2>
+<p>生活里我们每天都在做判断：&quot;如果下雨，就带伞；否则不带。&quot;&quot;如果分数够 60，就及格；不够就补考。&quot;</p>
+<p>这种&quot;<strong>如果……就……否则……</strong>&quot;的思路，编程里叫<strong>条件判断（conditional）</strong>。程序会先看一个条件成不成立，再决定接下来走哪条路。这一章的主角，就是实现它的关键词 <code>if</code>（英语&quot;如果&quot;）。</p>
+<p>不过在学 <code>if</code> 之前，我们得先认识一种全新的&quot;值&quot;，它是所有判断的基础。</p>
+<h2>真还是假：布尔值</h2>
+<p>前面我们见过数字（<code>int</code>、<code>float</code>）和字符串（<code>str</code>）。现在来认识第四种、也是最简单的一种值——<strong>布尔值（boolean）</strong>。</p>
+<p>布尔值只有两个：<strong><code>True</code>（真）</strong> 和 <strong><code>False</code>（假）</strong>。你可以把它理解成一个只能回答&quot;是&quot;或&quot;否&quot;的开关：要么开（True），要么关（False），没有中间状态。</p>
+<blockquote>
+<p>小贴士：<code>True</code> 和 <code>False</code> 首字母<strong>必须大写</strong>，而且不加引号。写成 <code>true</code> 或 <code>&quot;True&quot;</code> 都是错的。它俩是 Python 里的特殊词。</p>
+</blockquote>
+<p>布尔值是从哪来的？最常见的来源，是<strong>比较两个东西</strong>。我们来看看怎么比较。</p>
+<h2>比较运算符</h2>
+<p>想问电脑&quot;3 比 5 大吗？&quot;，就用<strong>比较运算符（comparison operator）</strong>。Python 一共有 6 个：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20compare.py%0Aprint(3%20%3E%205)%20%20%20%20%20%23%203%20%E5%A4%A7%E4%BA%8E%205%20%E5%90%97%EF%BC%9F%0Aprint(3%20%3C%205)%20%20%20%20%20%23%203%20%E5%B0%8F%E4%BA%8E%205%20%E5%90%97%EF%BC%9F%0Aprint(5%20%3D%3D%205)%20%20%20%20%23%205%20%E7%AD%89%E4%BA%8E%205%20%E5%90%97%EF%BC%9F%0Aprint(5%20!%3D%203)%20%20%20%20%23%205%20%E4%B8%8D%E7%AD%89%E4%BA%8E%203%20%E5%90%97%EF%BC%9F%0Aprint(5%20%3E%3D%205)%20%20%20%20%23%205%20%E5%A4%A7%E4%BA%8E%E6%88%96%E7%AD%89%E4%BA%8E%205%20%E5%90%97%EF%BC%9F%0Aprint(3%20%3C%3D%202)%20%20%20%20%23%203%20%E5%B0%8F%E4%BA%8E%E6%88%96%E7%AD%89%E4%BA%8E%202%20%E5%90%97%EF%BC%9F"># compare.py
+print(3 &gt; 5)     # 3 大于 5 吗？
+print(3 &lt; 5)     # 3 小于 5 吗？
+print(5 == 5)    # 5 等于 5 吗？
+print(5 != 3)    # 5 不等于 3 吗？
+print(5 &gt;= 5)    # 5 大于或等于 5 吗？
+print(3 &lt;= 2)    # 3 小于或等于 2 吗？</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">False
+True
+True
+True
+True
+False</code></pre>
+</div><p>看，每个比较都得出一个布尔值：成立就是 <code>True</code>，不成立就是 <code>False</code>。把这 6 个符号读熟：</p>
+<table>
+<thead>
+<tr>
+<th>符号</th>
+<th>意思</th>
+<th>例子</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>&gt;</code></td>
+<td>大于</td>
+<td><code>7 &gt; 3</code></td>
+<td><code>True</code></td>
+</tr>
+<tr>
+<td><code>&lt;</code></td>
+<td>小于</td>
+<td><code>7 &lt; 3</code></td>
+<td><code>False</code></td>
+</tr>
+<tr>
+<td><code>==</code></td>
+<td>等于</td>
+<td><code>4 == 4</code></td>
+<td><code>True</code></td>
+</tr>
+<tr>
+<td><code>!=</code></td>
+<td>不等于</td>
+<td><code>4 != 5</code></td>
+<td><code>True</code></td>
+</tr>
+<tr>
+<td><code>&gt;=</code></td>
+<td>大于或等于</td>
+<td><code>6 &gt;= 6</code></td>
+<td><code>True</code></td>
+</tr>
+<tr>
+<td><code>&lt;=</code></td>
+<td>小于或等于</td>
+<td><code>6 &lt;= 5</code></td>
+<td><code>False</code></td>
+</tr>
+</tbody></table>
+<p>字符串也能比较，最常用的是判断&quot;相不相等&quot;：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20compare_str.py%0Apassword%20%3D%20%22python%22%0Aprint(password%20%3D%3D%20%22python%22)%20%20%20%23%20%E8%BE%93%E5%85%A5%E7%9A%84%E5%AF%86%E7%A0%81%E5%AF%B9%E5%90%97%EF%BC%9F%0Aprint(password%20%3D%3D%20%22java%22)"># compare_str.py
+password = "python"
+print(password == "python")   # 输入的密码对吗？
+print(password == "java")</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">True
+False</code></pre>
+</div><h2>天大的坑：<code>==</code> 和 <code>=</code> 不是一回事</h2>
+<p>请画三条横线记住这一点，它是本章最容易栽跟头的地方：</p>
+<blockquote>
+<p><strong>一个等号 <code>=</code> 是&quot;赋值&quot;（把右边装进左边），两个等号 <code>==</code> 是&quot;比较&quot;（问左右相不相等）。</strong></p>
+</blockquote>
+<p>它们长得像，作用天差地别：</p>
+<ul>
+<li><code>age = 13</code> 的意思是：<strong>把 13 装进 <code>age</code> 这个盒子</strong>。这是命令。</li>
+<li><code>age == 13</code> 的意思是：<strong>问一句，<code>age</code> 里装的是不是 13？</strong> 这是提问，会得到 <code>True</code> 或 <code>False</code>。</li>
+</ul>
+<p>一个是&quot;我给你 13&quot;，一个是&quot;你是 13 吗？&quot;。想判断相不相等，一定要用<strong>两个</strong>等号 <code>==</code>。写成一个等号，程序要么报错，要么行为完全不对。这个错新手几乎都会犯，你现在提前知道了。</p>
+<h2>if：如果……就……</h2>
+<p>准备工作做完，主角登场。<code>if</code> 让程序<strong>在条件成立时，才执行某段代码</strong>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code2">▶ 运行</button>
+    <button class="reset-btn" data-target="code2">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code2" data-original="%23%20if_basic.py%0Ascore%20%3D%2085%0A%0Aif%20score%20%3E%3D%2060%3A%0A%20%20%20%20print(%22%E6%81%AD%E5%96%9C%EF%BC%8C%E5%8F%8A%E6%A0%BC%E4%BA%86%EF%BC%81%22)"># if_basic.py
+score = 85
+
+if score &gt;= 60:
+    print("恭喜，及格了！")</code></pre>
+  <div class="output" id="code2-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">恭喜，及格了！</code></pre>
+</div><p>我们来拆开这段代码，它有几个必须记牢的部分：</p>
+<ul>
+<li><strong><code>if</code></strong> 后面跟一个<strong>条件</strong>（这里是 <code>score &gt;= 60</code>），也就是一个能算出 <code>True</code> 或 <code>False</code> 的式子。</li>
+<li>条件后面跟一个<strong>英文冒号 <code>:</code></strong>，这个冒号绝不能少，它在说&quot;下面开始是条件成立要做的事&quot;。</li>
+<li>冒号下面那些<strong>往右缩进</strong>的行，就是&quot;条件成立时才执行&quot;的代码。</li>
+</ul>
+<p>如果把 <code>score</code> 改成 50 再运行呢？<code>50 &gt;= 60</code> 是 <code>False</code>，条件不成立，缩进里的 <code>print</code> 就<strong>被跳过</strong>，程序什么也不打印。你可以自己改改试试。</p>
+<h2>缩进：Python 靠它分辨&quot;哪些代码属于 if&quot;</h2>
+<p>这里要专门讲一个 Python 特别看重的东西——<strong>缩进（indentation）</strong>，也就是每行代码前面空的那几格。</p>
+<p>很多语言用大括号 <code>{ }</code> 来圈出&quot;属于 if 的代码&quot;，Python 不用，它靠<strong>缩进</strong>。缩进进去的，就属于上面那个 <code>if</code>；顶回到最左边的，就不属于了。看这个对比：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code3">▶ 运行</button>
+    <button class="reset-btn" data-target="code3">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code3" data-original="%23%20indent_demo.py%0Ascore%20%3D%2050%0A%0Aif%20score%20%3E%3D%2060%3A%0A%20%20%20%20print(%22%E8%BF%99%E8%A1%8C%E7%BC%A9%E8%BF%9B%E4%BA%86%EF%BC%8C%E5%B1%9E%E4%BA%8E%20if%EF%BC%8C%E5%8F%AA%E5%9C%A8%E5%8F%8A%E6%A0%BC%E6%97%B6%E6%89%93%E5%8D%B0%22)%0Aprint(%22%E8%BF%99%E8%A1%8C%E6%B2%A1%E7%BC%A9%E8%BF%9B%EF%BC%8C%E4%B8%8D%E5%B1%9E%E4%BA%8E%20if%EF%BC%8C%E6%B0%B8%E8%BF%9C%E9%83%BD%E4%BC%9A%E6%89%93%E5%8D%B0%22)"># indent_demo.py
+score = 50
+
+if score &gt;= 60:
+    print("这行缩进了，属于 if，只在及格时打印")
+print("这行没缩进，不属于 if，永远都会打印")</code></pre>
+  <div class="output" id="code3-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">这行没缩进，不属于 if，永远都会打印</code></pre>
+</div><p>看，<code>score</code> 是 50，不及格，所以缩进的第一句被跳过了；但第二句没缩进，它不归 <code>if</code> 管，照样打印。</p>
+<blockquote>
+<p>小贴士：缩进用 <strong>4 个空格</strong>是 Python 的通行习惯。大多数编辑器里，你按一下 <strong>Tab 键</strong>就会自动缩进。同一段代码的缩进要对齐，不能一会儿 2 格一会儿 4 格，否则会报错。</p>
+</blockquote>
+<h2>else：否则……</h2>
+<p>只有&quot;如果&quot;还不够。我们常常想说&quot;如果……<strong>否则</strong>……&quot;——条件成立走一条路，不成立走另一条路。这就要用到 <strong><code>else</code></strong>（英语&quot;否则&quot;）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code4">▶ 运行</button>
+    <button class="reset-btn" data-target="code4">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code4" data-original="%23%20if_else.py%0Ascore%20%3D%2050%0A%0Aif%20score%20%3E%3D%2060%3A%0A%20%20%20%20print(%22%E6%81%AD%E5%96%9C%EF%BC%8C%E5%8F%8A%E6%A0%BC%E4%BA%86%EF%BC%81%22)%0Aelse%3A%0A%20%20%20%20print(%22%E5%B7%AE%E4%B8%80%E7%82%B9%EF%BC%8C%E4%B8%8B%E6%AC%A1%E5%8A%A0%E6%B2%B9%EF%BC%81%22)"># if_else.py
+score = 50
+
+if score &gt;= 60:
+    print("恭喜，及格了！")
+else:
+    print("差一点，下次加油！")</code></pre>
+  <div class="output" id="code4-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">差一点，下次加油！</code></pre>
+</div><p><code>else</code> 也要跟一个冒号，下面同样要缩进。它的意思是：&quot;上面那个 <code>if</code> 的条件<strong>不</strong>成立时，就执行我这里。&quot; <code>if</code> 和 <code>else</code> 就像一个岔路口：条件成立走左边，不成立走右边，<strong>两条路只会走一条</strong>。</p>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 起点 -->
+  <rect x="200" y="15" width="160" height="45" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="280" y="43" text-anchor="middle" font-size="14" fill="#2f6db3">程序走到这里</text>
+  <!-- 菱形判断 -->
+  <path d="M280 75 L370 130 L280 185 L190 130 Z" fill="#fff" stroke="#e06a3b" stroke-width="2"/>
+  <text x="280" y="126" text-anchor="middle" font-size="14" fill="#e06a3b" font-weight="bold">score >= 60 ?</text>
+  <text x="280" y="144" text-anchor="middle" font-size="11" fill="#6b6459">条件成立吗</text>
+  <path d="M280 60 L280 75" stroke="#2f6db3" stroke-width="2" marker-end="url(#a4)"/>
+  <!-- True 左路 -->
+  <path d="M190 130 L90 130 L90 215" stroke="#3f9b5c" stroke-width="2.5" marker-end="url(#g4)" fill="none"/>
+  <text x="135" y="122" text-anchor="middle" font-size="13" fill="#3f9b5c" font-weight="bold">True 成立</text>
+  <rect x="20" y="220" width="140" height="50" rx="8" fill="#eafaef" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="90" y="243" text-anchor="middle" font-size="13" fill="#3f9b5c">走 if 里的代码</text>
+  <text x="90" y="260" text-anchor="middle" font-size="12" fill="#333">"及格了！"</text>
+  <!-- False 右路 -->
+  <path d="M370 130 L470 130 L470 215" stroke="#e06a3b" stroke-width="2.5" marker-end="url(#o4)" fill="none"/>
+  <text x="425" y="122" text-anchor="middle" font-size="13" fill="#e06a3b" font-weight="bold">False 不成立</text>
+  <rect x="400" y="220" width="140" height="50" rx="8" fill="#fdeee8" stroke="#e06a3b" stroke-width="2"/>
+  <text x="470" y="243" text-anchor="middle" font-size="13" fill="#e06a3b">走 else 里的代码</text>
+  <text x="470" y="260" text-anchor="middle" font-size="12" fill="#333">"下次加油！"</text>
+  <defs>
+    <marker id="a4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6db3"/></marker>
+    <marker id="g4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="o4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 4-1　if/else 就是一个岔路口：条件成立走一边，不成立走另一边，两条路只会走一条</div>
+</div><h2>elif：多个岔路口</h2>
+<p><code>if/else</code> 只能分两条路。可现实里常常有好几种情况，比如成绩要分&quot;优、良、中、差&quot;四档。这时用 <strong><code>elif</code></strong>（是 &quot;else if&quot; 的缩写，意思是&quot;否则，如果……&quot;）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code5">▶ 运行</button>
+    <button class="reset-btn" data-target="code5">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code5" data-original="%23%20grade.py%0Ascore%20%3D%2085%0A%0Aif%20score%20%3E%3D%2090%3A%0A%20%20%20%20print(%22%E8%AF%84%E7%BA%A7%EF%BC%9A%E4%BC%98%22)%0Aelif%20score%20%3E%3D%2080%3A%0A%20%20%20%20print(%22%E8%AF%84%E7%BA%A7%EF%BC%9A%E8%89%AF%22)%0Aelif%20score%20%3E%3D%2060%3A%0A%20%20%20%20print(%22%E8%AF%84%E7%BA%A7%EF%BC%9A%E4%B8%AD%22)%0Aelse%3A%0A%20%20%20%20print(%22%E8%AF%84%E7%BA%A7%EF%BC%9A%E5%B7%AE%22)"># grade.py
+score = 85
+
+if score &gt;= 90:
+    print("评级：优")
+elif score &gt;= 80:
+    print("评级：良")
+elif score &gt;= 60:
+    print("评级：中")
+else:
+    print("评级：差")</code></pre>
+  <div class="output" id="code5-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">评级：良</code></pre>
+</div><p>程序是<strong>从上往下</strong>一个个检查条件的：</p>
+<ol>
+<li>先问 <code>score &gt;= 90</code>？85 不够 90，<code>False</code>，跳过。</li>
+<li>再问 <code>score &gt;= 80</code>？85 够，<code>True</code>！打印&quot;良&quot;，然后<strong>整个判断结束</strong>，后面的 <code>elif</code>、<code>else</code> 都不再看了。</li>
+</ol>
+<p>这就是关键规律：<strong>一串 <code>if / elif / else</code> 里，只会执行其中一个分支</strong>——从上往下遇到的第一个成立的条件。所以顺序很重要：因为 85 同时满足 <code>&gt;= 80</code> 和 <code>&gt;= 60</code>，但它先撞上 <code>&gt;= 80</code>，就归到&quot;良&quot;了。</p>
+<blockquote>
+<p>小贴士：<code>elif</code> 可以写任意多个，夹在 <code>if</code> 和 <code>else</code> 中间。而 <code>if</code> 一串里，开头的 <code>if</code> 只有一个，结尾的 <code>else</code> 最多一个（也可以没有）。</p>
+</blockquote>
+<h2>组合条件：and、or、not</h2>
+<p>有时一个条件不够用。比如&quot;周末<strong>并且</strong>天气好，才去公园&quot;，这里有两个条件要同时满足。Python 用三个词来组合条件：<strong><code>and</code>（并且）</strong>、<strong><code>or</code>（或者）</strong>、<strong><code>not</code>（不是）</strong>。</p>
+<p><strong><code>and</code></strong>：两个条件<strong>都</strong>成立，结果才 <code>True</code>（像&quot;既要……又要……&quot;）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code6">▶ 运行</button>
+    <button class="reset-btn" data-target="code6">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code6" data-original="%23%20logic_and.py%0Aage%20%3D%2015%0Ahas_ticket%20%3D%20True%0A%0Aif%20age%20%3E%3D%2012%20and%20has_ticket%3A%0A%20%20%20%20print(%22%E5%8F%AF%E4%BB%A5%E8%BF%9B%E5%9C%BA%E7%9C%8B%E7%94%B5%E5%BD%B1%22)%0Aelse%3A%0A%20%20%20%20print(%22%E4%B8%8D%E8%83%BD%E8%BF%9B%E5%9C%BA%22)"># logic_and.py
+age = 15
+has_ticket = True
+
+if age &gt;= 12 and has_ticket:
+    print("可以进场看电影")
+else:
+    print("不能进场")</code></pre>
+  <div class="output" id="code6-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">可以进场看电影</code></pre>
+</div><p>年龄够 12（True），而且有票（True），两个都成立，<code>and</code> 的结果才是 True。只要有一个不成立，就进 <code>else</code>。</p>
+<p><strong><code>or</code></strong>：两个条件<strong>只要有一个</strong>成立，结果就 <code>True</code>（像&quot;要么……要么……&quot;）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code7">▶ 运行</button>
+    <button class="reset-btn" data-target="code7">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code7" data-original="%23%20logic_or.py%0Aday%20%3D%20%22%E5%91%A8%E5%85%AD%22%0A%0Aif%20day%20%3D%3D%20%22%E5%91%A8%E5%85%AD%22%20or%20day%20%3D%3D%20%22%E5%91%A8%E6%97%A5%22%3A%0A%20%20%20%20print(%22%E4%BB%8A%E5%A4%A9%E6%98%AF%E5%91%A8%E6%9C%AB%EF%BC%8C%E6%94%BE%E5%81%87%EF%BC%81%22)%0Aelse%3A%0A%20%20%20%20print(%22%E4%BB%8A%E5%A4%A9%E8%A6%81%E4%B8%8A%E5%AD%A6%E3%80%82%22)"># logic_or.py
+day = "周六"
+
+if day == "周六" or day == "周日":
+    print("今天是周末，放假！")
+else:
+    print("今天要上学。")</code></pre>
+  <div class="output" id="code7-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">今天是周末，放假！</code></pre>
+</div><p><strong><code>not</code></strong>：把结果<strong>反过来</strong>，True 变 False，False 变 True（像&quot;不是&quot;）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code8">▶ 运行</button>
+    <button class="reset-btn" data-target="code8">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code8" data-original="%23%20logic_not.py%0Ais_raining%20%3D%20False%0A%0Aif%20not%20is_raining%3A%0A%20%20%20%20print(%22%E6%B2%A1%E4%B8%8B%E9%9B%A8%EF%BC%8C%E5%87%BA%E5%8E%BB%E7%8E%A9%EF%BC%81%22)"># logic_not.py
+is_raining = False
+
+if not is_raining:
+    print("没下雨，出去玩！")</code></pre>
+  <div class="output" id="code8-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">没下雨，出去玩！</code></pre>
+</div><p><code>is_raining</code> 是 <code>False</code>（没下雨），<code>not is_raining</code> 就把它翻成 <code>True</code>，于是打印。</p>
+<h2>完整代码一：成绩评级机</h2>
+<p>把 <code>input</code>、<code>int</code>、<code>if/elif/else</code> 全用上，做一个真正能用的评级程序。新建 <code>grade_machine.py</code>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code9">▶ 运行</button>
+    <button class="reset-btn" data-target="code9">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code9" data-original="%23%20grade_machine.py%0A%0Aprint(%22%3D%3D%3D%20%E6%88%90%E7%BB%A9%E8%AF%84%E7%BA%A7%E6%9C%BA%20%3D%3D%3D%22)%0A%0Ascore%20%3D%20int(input(%22%E8%AF%B7%E8%BE%93%E5%85%A5%E4%BD%A0%E7%9A%84%E5%88%86%E6%95%B0%EF%BC%9A%22))%20%20%20%23%20%E8%AE%B0%E5%BE%97%E8%BD%AC%E6%88%90%E6%95%B4%E6%95%B0%E6%89%8D%E8%83%BD%E6%AF%94%E8%BE%83%E5%A4%A7%E5%B0%8F%0A%0Aif%20score%20%3E%3D%2090%3A%0A%20%20%20%20grade%20%3D%20%22%E4%BC%98%22%0A%20%20%20%20comment%20%3D%20%22%E5%A4%AA%E6%A3%92%E4%BA%86%EF%BC%8C%E5%AD%A6%E9%9C%B8%E5%B0%B1%E6%98%AF%E4%BD%A0%EF%BC%81%22%0Aelif%20score%20%3E%3D%2080%3A%0A%20%20%20%20grade%20%3D%20%22%E8%89%AF%22%0A%20%20%20%20comment%20%3D%20%22%E4%B8%8D%E9%94%99%EF%BC%8C%E7%BB%A7%E7%BB%AD%E5%8A%A0%E6%B2%B9%EF%BC%81%22%0Aelif%20score%20%3E%3D%2060%3A%0A%20%20%20%20grade%20%3D%20%22%E4%B8%AD%22%0A%20%20%20%20comment%20%3D%20%22%E5%8F%8A%E6%A0%BC%E5%95%A6%EF%BC%8C%E8%BF%98%E6%9C%89%E6%8F%90%E5%8D%87%E7%A9%BA%E9%97%B4%E3%80%82%22%0Aelse%3A%0A%20%20%20%20grade%20%3D%20%22%E5%B7%AE%22%0A%20%20%20%20comment%20%3D%20%22%E5%88%AB%E7%81%B0%E5%BF%83%EF%BC%8C%E4%B8%8B%E6%AC%A1%E4%B8%80%E5%AE%9A%E8%A1%8C%EF%BC%81%22%0A%0Aprint(f%22%7Bscore%7D%20%E5%88%86%EF%BC%8C%E8%AF%84%E7%BA%A7%EF%BC%9A%7Bgrade%7D%E3%80%82%7Bcomment%7D%22)"># grade_machine.py
+
+print("=== 成绩评级机 ===")
+
+score = int(input("请输入你的分数："))   # 记得转成整数才能比较大小
+
+if score &gt;= 90:
+    grade = "优"
+    comment = "太棒了，学霸就是你！"
+elif score &gt;= 80:
+    grade = "良"
+    comment = "不错，继续加油！"
+elif score &gt;= 60:
+    grade = "中"
+    comment = "及格啦，还有提升空间。"
+else:
+    grade = "差"
+    comment = "别灰心，下次一定行！"
+
+print(f"{score} 分，评级：{grade}。{comment}")</code></pre>
+  <div class="output" id="code9-out" hidden></div>
+</div><p>运行结果（下划线部分是你输入的）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 成绩评级机 ===
+请输入你的分数：85
+85 分，评级：良。不错，继续加油！</code></pre>
+</div><p>看，同一个程序，你输入不同的分数，它会走不同的分支，说出不同的话。程序真的会&quot;看情况办事&quot;了。注意这里每个分支都把结果存进 <code>grade</code> 和 <code>comment</code> 两个变量，最后统一用一句 <code>print</code> 打印——这样代码更整齐。</p>
+<h2>完整代码二：电影年龄检查器</h2>
+<p>再做一个用到组合条件的程序。有些电影有年龄限制，我们来做个检查器。新建 <code>movie_check.py</code>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code10">▶ 运行</button>
+    <button class="reset-btn" data-target="code10">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code10" data-original="%23%20movie_check.py%0A%0Aprint(%22%3D%3D%3D%20%E7%94%B5%E5%BD%B1%E5%B9%B4%E9%BE%84%E6%A3%80%E6%9F%A5%E5%99%A8%20%3D%3D%3D%22)%0Aprint(%22%E6%9C%AC%E7%89%87%E5%BB%BA%E8%AE%AE%2013%20%E5%B2%81%E4%BB%A5%E4%B8%8A%E8%A7%82%E7%9C%8B%EF%BC%8C13%20%E5%B2%81%E4%BB%A5%E4%B8%8B%E9%9C%80%E5%AE%B6%E9%95%BF%E9%99%AA%E5%90%8C%E3%80%82%22)%0A%0Aage%20%3D%20int(input(%22%E8%AF%B7%E8%BE%93%E5%85%A5%E4%BD%A0%E7%9A%84%E5%B9%B4%E9%BE%84%EF%BC%9A%22))%0Awith_parent%20%3D%20input(%22%E6%9C%89%E5%AE%B6%E9%95%BF%E9%99%AA%E5%90%8C%E5%90%97%EF%BC%9F(y%2Fn)%EF%BC%9A%22)%0A%0A%23%2013%20%E5%B2%81%E5%8F%8A%E4%BB%A5%E4%B8%8A%EF%BC%8C%E6%88%96%E8%80%85%E8%99%BD%E7%84%B6%E4%B8%8D%E5%A4%9F%E4%BD%86%E6%9C%89%E5%AE%B6%E9%95%BF%E9%99%AA%E5%90%8C%EF%BC%8C%E9%83%BD%E5%8F%AF%E4%BB%A5%E7%9C%8B%0Aif%20age%20%3E%3D%2013%20or%20with_parent%20%3D%3D%20%22y%22%3A%0A%20%20%20%20print(%22%E5%8F%AF%E4%BB%A5%E8%A7%82%E7%9C%8B%EF%BC%8C%E7%A5%9D%E4%BD%A0%E7%9C%8B%E5%BE%97%E5%BC%80%E5%BF%83%EF%BC%81%22)%0Aelse%3A%0A%20%20%20%20print(%22%E6%8A%B1%E6%AD%89%EF%BC%8C%E4%BD%A0%E8%BF%98%E4%B8%8D%E5%A4%9F%E5%B9%B4%E9%BE%84%EF%BC%8C%E4%B8%94%E6%B2%A1%E6%9C%89%E5%AE%B6%E9%95%BF%E9%99%AA%E5%90%8C%EF%BC%8C%E4%B8%8D%E8%83%BD%E8%A7%82%E7%9C%8B%E3%80%82%22)"># movie_check.py
+
+print("=== 电影年龄检查器 ===")
+print("本片建议 13 岁以上观看，13 岁以下需家长陪同。")
+
+age = int(input("请输入你的年龄："))
+with_parent = input("有家长陪同吗？(y/n)：")
+
+# 13 岁及以上，或者虽然不够但有家长陪同，都可以看
+if age &gt;= 13 or with_parent == "y":
+    print("可以观看，祝你看得开心！")
+else:
+    print("抱歉，你还不够年龄，且没有家长陪同，不能观看。")</code></pre>
+  <div class="output" id="code10-out" hidden></div>
+</div><p>运行结果（两次不同的输入）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 电影年龄检查器 ===
+本片建议 13 岁以上观看，13 岁以下需家长陪同。
+请输入你的年龄：11
+有家长陪同吗？(y/n)：y
+可以观看，祝你看得开心！</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">请输入你的年龄：11
+有家长陪同吗？(y/n)：n
+抱歉，你还不够年龄，且没有家长陪同，不能观看。</code></pre>
+</div><p>这里 <code>or</code> 派上了大用场：够 13 岁的可以看，不够 13 岁但有家长陪同也可以看——两个条件满足任意一个就放行。你能想到怎么改，让它变成&quot;必须够 13 岁<strong>并且</strong>买了票&quot;才让进吗？把 <code>or</code> 换成 <code>and</code> 试试。</p>
+<h2>常见错误</h2>
+<p><strong>1. 把 <code>==</code> 写成了 <code>=</code></strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">score = 60
+if score = 60:
+    print("正好及格线")</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">SyntaxError: invalid syntax</code></pre>
+</div><p>判断相不相等要用<strong>两个</strong>等号 <code>==</code>。一个等号是赋值，不能放在 <code>if</code> 的条件里。这是本章头号大坑，报错时先检查这里。</p>
+<p><strong>2. 忘了写冒号 <code>:</code></strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">score = 85
+if score &gt;= 60
+    print("及格")</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">SyntaxError: expected ':'</code></pre>
+</div><p><code>if</code>、<code>elif</code>、<code>else</code> 后面都必须跟一个英文冒号 <code>:</code>。报错信息 <code>expected &#39;:&#39;</code>（&quot;缺一个冒号&quot;）已经告诉你答案了。</p>
+<p><strong>3. 缩进错了</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">score = 85
+if score &gt;= 60:
+print("及格")</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">IndentationError: expected an indented block after 'if' statement</code></pre>
+</div><p><code>IndentationError</code>（缩进错误）表示：<code>if</code> 冒号下面那行忘了缩进。属于 <code>if</code> 的代码必须往右缩进（通常 4 个空格）。</p>
+<p><strong>4. <code>and</code> / <code>or</code> 写成了中文或符号</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">age = 15
+if age &gt; 12 &amp;&amp; age &lt; 18:
+    print("青少年")</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">SyntaxError: invalid syntax</code></pre>
+</div><p>Python 里组合条件用的是英文单词 <code>and</code>、<code>or</code>、<code>not</code>，不是别的语言里的 <code>&amp;&amp;</code>、<code>||</code>，也不是中文的&quot;并且&quot;&quot;或者&quot;。记牢这三个词。</p>
+<h2>动手挑战</h2>
+<p><strong>★ 挑战一：闰年判断（简化版）</strong>
+让用户输入一个年份，如果它能被 4 整除（提示：用 <code>年份 % 4 == 0</code> 判断），就打印&quot;可能是闰年&quot;，否则打印&quot;不是闰年&quot;。</p>
+<p><strong>★★ 挑战二：石头剪刀布裁判</strong>
+让两位玩家分别输入 <code>石头</code>、<code>剪刀</code> 或 <code>布</code>，程序判断谁赢了（或平局）。想一想一共有几种情况，用 <code>if/elif/else</code> 把它们列全。</p>
+<p><strong>★★★ 挑战三：BMI 健康小助手</strong>
+让用户输入身高（米，用 <code>float</code>）和体重（千克），算出 BMI 值（公式：体重 ÷ 身高 ÷ 身高），再按下面的标准分档打印：小于 18.5 偏瘦，18.5 到 24 正常，24 到 28 偏重，28 以上肥胖。（提示：分档要用 <code>elif</code>，注意条件顺序。）</p>
+<h2>本章小结</h2>
+<p>这一章，你的程序装上了&quot;脑子&quot;，会看情况做选择了。回顾要点：</p>
+<ul>
+<li><strong>布尔值</strong>只有 <code>True</code>（真）和 <code>False</code>（假）两个，首字母大写、不加引号。</li>
+<li><strong>比较运算符</strong> <code>&gt;</code>、<code>&lt;</code>、<code>==</code>、<code>!=</code>、<code>&gt;=</code>、<code>&lt;=</code> 会得出一个布尔值。</li>
+<li><strong>最大的坑：<code>=</code> 是赋值，<code>==</code> 是判断相等</strong>，判断时千万别少写一个等号。</li>
+<li><strong><code>if</code></strong> 在条件成立时执行；<strong><code>else</code></strong> 在不成立时执行；<strong><code>elif</code></strong> 处理中间的多种情况。一串判断里只会走其中一个分支。</li>
+<li><strong>缩进</strong>决定哪些代码属于 <code>if</code>；<code>if</code>/<code>elif</code>/<code>else</code> 后面都要跟英文冒号 <code>:</code>。</li>
+<li>用 <strong><code>and</code>（并且）、<code>or</code>（或者）、<code>not</code>（取反）</strong> 组合多个条件。</li>
+</ul>
+<p>现在程序会做一次选择了。但如果要做同一件事很多次呢？比如打印 100 遍&quot;我错了&quot;，难道要写 100 个 <code>print</code>？下一章，我们学<strong>循环</strong>——让电脑不厌其烦地重复干活，一句话就能让它跑上千万遍。翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch03.html">← 第 3 章 输入与输出</a>
+  <a class="nav-next" href="ch05.html">第 5 章 循环 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

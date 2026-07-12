@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 章 变量与数据类型</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li class="active"><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 2 章 会记东西的盒子——变量与数据类型</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>上一章，你让电脑说了话。但那时候电脑说完就忘，什么也记不住。这一章，我们要给程序装上"记忆"：用<strong>变量</strong>把名字、年龄、身高这些信息存起来，随时拿出来用。章末你会做一张"个人信息卡"程序，把自己的资料存进变量，再漂漂亮亮地打印出来。</p>
+<p><strong>成品预览：</strong></p>
+<pre>========== 个人信息卡 ==========
+姓名：小明
+年龄：13 岁
+身高：1.58 米
+明年你就 14 岁啦！
+================================</pre>
+</div><h2>电脑的&quot;记性&quot;：贴标签的盒子</h2>
+<p>想象你有一排空盒子。你往一个盒子里放进数字 <code>13</code>，然后在盒子外面贴一张标签，写上 <code>age</code>（英语&quot;年龄&quot;）。以后你只要说&quot;把 <code>age</code> 盒子里的东西拿出来&quot;，就能得到 <code>13</code>。</p>
+<p>这个&quot;贴了标签的盒子&quot;，就是编程里的<strong>变量（variable）</strong>。变量是用来<strong>存放数据的容器</strong>，每个变量有一个<strong>名字</strong>（就是标签）和一个<strong>值</strong>（就是盒子里装的东西）。</p>
+<p>为什么叫&quot;变&quot;量？因为盒子里的东西是可以换的——今天装 <code>13</code>，明天你过生日了，可以把它换成 <code>14</code>。名字不变，里面的值能变，所以叫&quot;变量&quot;。</p>
+<div class="concept">
+<svg viewBox="0 0 520 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="40" y="55" width="110" height="70" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <rect x="40" y="30" width="110" height="24" rx="6" fill="#2f6db3"/>
+  <text x="95" y="47" text-anchor="middle" font-size="15" fill="#fff" font-family="monospace">age</text>
+  <text x="95" y="98" text-anchor="middle" font-size="26" fill="#e06a3b" font-weight="bold">13</text>
+  <text x="95" y="143" text-anchor="middle" font-size="12" fill="#6b6459">标签(变量名)贴在盒子上</text>  <rect x="290" y="55" width="110" height="70" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <rect x="290" y="30" width="110" height="24" rx="6" fill="#2f6db3"/>
+  <text x="345" y="47" text-anchor="middle" font-size="15" fill="#fff" font-family="monospace">age</text>
+  <text x="345" y="98" text-anchor="middle" font-size="26" fill="#e06a3b" font-weight="bold">14</text>
+  <text x="345" y="143" text-anchor="middle" font-size="12" fill="#6b6459">名字不变，值可以换</text>  <path d="M160 90 L280 90" stroke="#3f9b5c" stroke-width="2.5" marker-end="url(#v)"/>
+  <text x="220" y="82" text-anchor="middle" font-size="12" fill="#3f9b5c">过生日了</text>
+  <defs>
+    <marker id="v" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 2-1　变量就像贴了标签的盒子：标签是名字，盒子里装着值，值可以换</div>
+</div><h2>赋值：把东西放进盒子</h2>
+<p>怎么把东西放进盒子？用一个等号 <code>=</code>。看这行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20variable.py%0Aage%20%3D%2013%0Aprint(age)"># variable.py
+age = 13
+print(age)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">13</code></pre>
+</div><p>这里的 <code>=</code> 叫<strong>赋值（assignment）</strong>，意思是&quot;把右边的东西装进左边的盒子&quot;。所以 <code>age = 13</code> 读作：<strong>&quot;把 13 装进名叫 age 的盒子里。&quot;</strong></p>
+<blockquote>
+<p>小贴士：编程里的 <code>=</code> 和数学里的&quot;等于&quot;不是一回事！数学里 <code>age = 13</code> 是在说&quot;两边相等&quot;；编程里它是一个<strong>动作</strong>——&quot;把右边放进左边&quot;。方向是从右往左的，别读反了。</p>
+</blockquote>
+<p>装好之后，下一行 <code>print(age)</code> 里的 <code>age</code> <strong>没有引号</strong>，电脑就知道：&quot;这不是要原样打印的文字，而是一个盒子的名字，我得把盒子里的东西拿出来。&quot;于是它打印出 <code>13</code>。</p>
+<p>对比一下有没有引号的区别：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="print(%22age%22)%20%20%20%23%20%E6%9C%89%E5%BC%95%E5%8F%B7%EF%BC%8C%E5%8E%9F%E6%A0%B7%E6%89%93%E5%8D%B0%E8%BF%99%E4%B8%89%E4%B8%AA%E5%AD%97%E6%AF%8D%0Aprint(age)%20%20%20%20%20%23%20%E6%B2%A1%E5%BC%95%E5%8F%B7%EF%BC%8C%E6%89%93%E5%8D%B0%E7%9B%92%E5%AD%90%E9%87%8C%E7%9A%84%E5%80%BC">print("age")   # 有引号，原样打印这三个字母
+print(age)     # 没引号，打印盒子里的值</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">age
+13</code></pre>
+</div><p>看出来了吧：有引号的 <code>&quot;age&quot;</code> 是一串普通文字，没引号的 <code>age</code> 是在喊盒子的名字。</p>
+<h2>盒子里的东西可以换</h2>
+<p>变量最厉害的地方，是里面的值随时能换。再装一次，旧的就被顶掉了：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code2">▶ 运行</button>
+    <button class="reset-btn" data-target="code2">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code2" data-original="%23%20variable.py%0Ascore%20%3D%2060%0Aprint(score)%20%20%20%23%20%E7%8E%B0%E5%9C%A8%E7%9B%92%E5%AD%90%E9%87%8C%E6%98%AF%2060%0A%0Ascore%20%3D%2095%20%20%20%20%20%23%20%E6%8D%A2%E6%88%90%2095%EF%BC%8C%E6%97%A7%E7%9A%84%2060%20%E6%B2%A1%E4%BA%86%0Aprint(score)%20%20%20%23%20%E7%8E%B0%E5%9C%A8%E7%9B%92%E5%AD%90%E9%87%8C%E6%98%AF%2095"># variable.py
+score = 60
+print(score)   # 现在盒子里是 60
+
+score = 95     # 换成 95，旧的 60 没了
+print(score)   # 现在盒子里是 95</code></pre>
+  <div class="output" id="code2-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">60
+95</code></pre>
+</div><p>盒子还是那个 <code>score</code> 盒子，但里面的东西从 <code>60</code> 变成了 <code>95</code>。这就是&quot;变量会变&quot;的意思。</p>
+<h2>给盒子起名字：命名规则</h2>
+<p>标签可以随便写吗？不行，有几条规矩必须守：</p>
+<ul>
+<li>只能用<strong>英文字母、数字、下划线 <code>_</code></strong>，不能有空格和其他符号。</li>
+<li><strong>不能用数字开头</strong>。<code>age1</code> 可以，<code>1age</code> 不行。</li>
+<li><strong>区分大小写</strong>。<code>age</code>、<code>Age</code>、<code>AGE</code> 是三个不同的盒子。</li>
+<li>不能用 Python 已经占用的词（比如 <code>print</code>、<code>if</code> 这些，以后会认识）。</li>
+</ul>
+<p>除了这些硬规矩，还有两条&quot;好习惯&quot;，会让你的代码好懂很多：</p>
+<ul>
+<li><strong>起有意义的名字</strong>。存年龄就叫 <code>age</code>，别叫 <code>x</code> 或 <code>a</code>。过几天你自己回头看，<code>x</code> 是啥你都忘了。</li>
+<li><strong>多个单词用下划线连起来</strong>，全小写。比如玩家名字叫 <code>player_name</code>，最高分叫 <code>high_score</code>。这在 Python 里叫&quot;蛇形命名&quot;，因为下划线像蛇趴在字母中间。</li>
+</ul>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code3">▶ 运行</button>
+    <button class="reset-btn" data-target="code3">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code3" data-original="player_name%20%3D%20%22%E5%B0%8F%E7%BA%A2%22%20%20%20%20%23%20%E5%A5%BD%E5%90%8D%E5%AD%97%EF%BC%9A%E4%B8%80%E7%9C%8B%E5%B0%B1%E6%87%82%0Ahigh_score%20%3D%209999%20%20%20%20%20%20%20%23%20%E5%A5%BD%E5%90%8D%E5%AD%97%0Ax%20%3D%209999%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%83%BD%E8%B7%91%EF%BC%8C%E4%BD%86%E8%BF%87%E5%87%A0%E5%A4%A9%E4%BD%A0%E5%B0%B1%E5%BF%98%E4%BA%86%20x%20%E6%98%AF%E5%95%A5">player_name = "小红"    # 好名字：一看就懂
+high_score = 9999       # 好名字
+x = 9999                # 能跑，但过几天你就忘了 x 是啥</code></pre>
+  <div class="output" id="code3-out" hidden></div>
+</div><blockquote>
+<p>小贴士：变量名一律用英文，但注释用中文——这是本书的约定。别用拼音（像 <code>nianling</code>），也别用中文当变量名，虽然 Python 3 勉强支持中文变量名，但很容易出各种问题，不推荐。</p>
+</blockquote>
+<h2>三种基本数据类型</h2>
+<p>盒子里能装不同种类的东西。这一章先认识最常用的三种，编程里叫<strong>数据类型（data type）</strong>：</p>
+<p><strong>1. 字符串（string）</strong>——一串文字。用引号包起来，单引号双引号都行。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code4">▶ 运行</button>
+    <button class="reset-btn" data-target="code4">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code4" data-original="name%20%3D%20%22%E5%B0%8F%E6%98%8E%22%0Acity%20%3D%20'%E5%8C%97%E4%BA%AC'">name = "小明"
+city = '北京'</code></pre>
+  <div class="output" id="code4-out" hidden></div>
+</div><p><strong>2. 整数（integer，简称 int）</strong>——没有小数点的数，比如年龄、分数、个数。<strong>不加引号</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code5">▶ 运行</button>
+    <button class="reset-btn" data-target="code5">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code5" data-original="age%20%3D%2013%0Ascore%20%3D%2095">age = 13
+score = 95</code></pre>
+  <div class="output" id="code5-out" hidden></div>
+</div><p><strong>3. 浮点数（float）</strong>——带小数点的数，比如身高、体重、价格。&quot;浮点&quot;是它的学名，你就理解成&quot;小数&quot;。同样<strong>不加引号</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code6">▶ 运行</button>
+    <button class="reset-btn" data-target="code6">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code6" data-original="height%20%3D%201.58%0Aprice%20%3D%209.9">height = 1.58
+price = 9.9</code></pre>
+  <div class="output" id="code6-out" hidden></div>
+</div><p>这里要特别小心：<code>&quot;13&quot;</code> 和 <code>13</code> 长得像，其实完全不同。前者是<strong>字符串</strong>（一串文字，恰好长得像数字），后者是<strong>整数</strong>（真正的数字，能拿来算术）。就像照片上的苹果不能吃，只有真苹果能吃。这个坑第 3 章还会专门讲。</p>
+<h2>用 type() 查看类型</h2>
+<p>分不清一个盒子里装的是哪种类型？Python 给了你一个&quot;照妖镜&quot;工具：<strong><code>type()</code></strong>（英语&quot;类型&quot;），把变量放进它的括号里，它就告诉你类型是什么。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code7">▶ 运行</button>
+    <button class="reset-btn" data-target="code7">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code7" data-original="%23%20type_check.py%0Aname%20%3D%20%22%E5%B0%8F%E6%98%8E%22%0Aage%20%3D%2013%0Aheight%20%3D%201.58%0A%0Aprint(type(name))%0Aprint(type(age))%0Aprint(type(height))"># type_check.py
+name = "小明"
+age = 13
+height = 1.58
+
+print(type(name))
+print(type(age))
+print(type(height))</code></pre>
+  <div class="output" id="code7-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">&lt;class 'str'&gt;
+&lt;class 'int'&gt;
+&lt;class 'float'&gt;</code></pre>
+</div><p><code>str</code> 是 string（字符串）的缩写，<code>int</code> 是整数，<code>float</code> 是浮点数。<code>class</code>（类别）你现在不用管，只看后面那个单词就行。以后你拿不准某个东西是什么类型，就用 <code>type()</code> 照一照。</p>
+<h2>让数字算起来</h2>
+<p>数字类型最好玩的地方，就是能做运算。Python 就是个超级计算器，认识这几个符号：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code8">▶ 运行</button>
+    <button class="reset-btn" data-target="code8">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code8" data-original="%23%20math.py%0Aprint(7%20%2B%202)%20%20%20%20%23%20%E5%8A%A0%E6%B3%95%EF%BC%9A9%0Aprint(7%20-%202)%20%20%20%20%23%20%E5%87%8F%E6%B3%95%EF%BC%9A5%0Aprint(7%20*%202)%20%20%20%20%23%20%E4%B9%98%E6%B3%95%EF%BC%9A14%EF%BC%88%E4%B9%98%E5%8F%B7%E6%98%AF%E6%98%9F%E5%8F%B7%20*%EF%BC%8C%E4%B8%8D%E6%98%AF%20x%EF%BC%89%0Aprint(7%20%2F%202)%20%20%20%20%23%20%E9%99%A4%E6%B3%95%EF%BC%9A3.5%0Aprint(7%20%2F%2F%202)%20%20%20%23%20%E6%95%B4%E9%99%A4%EF%BC%9A3%EF%BC%88%E5%8F%AA%E8%A6%81%E5%95%86%EF%BC%8C%E4%B8%8D%E8%A6%81%E5%B0%8F%E6%95%B0%EF%BC%89%0Aprint(7%20%25%202)%20%20%20%20%23%20%E5%8F%96%E4%BD%99%EF%BC%9A1%EF%BC%88%E9%99%A4%E5%AE%8C%E5%89%A9%E4%B8%8B%E7%9A%84%E4%BD%99%E6%95%B0%EF%BC%89%0Aprint(7%20**%202)%20%20%20%23%20%E4%B9%98%E6%96%B9%EF%BC%9A49%EF%BC%887%20%E7%9A%84%202%20%E6%AC%A1%E6%96%B9%EF%BC%8C%E5%B0%B1%E6%98%AF%207%C3%977%EF%BC%89"># math.py
+print(7 + 2)    # 加法：9
+print(7 - 2)    # 减法：5
+print(7 * 2)    # 乘法：14（乘号是星号 *，不是 x）
+print(7 / 2)    # 除法：3.5
+print(7 // 2)   # 整除：3（只要商，不要小数）
+print(7 % 2)    # 取余：1（除完剩下的余数）
+print(7 ** 2)   # 乘方：49（7 的 2 次方，就是 7×7）</code></pre>
+  <div class="output" id="code8-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">9
+5
+14
+3.5
+3
+1
+49</code></pre>
+</div><p>有几个可能对你来说是新面孔：</p>
+<ul>
+<li><strong><code>*</code> 乘法</strong>：键盘上的星号，不是字母 x。</li>
+<li><strong><code>/</code> 除法</strong>：结果永远是浮点数，<code>8 / 2</code> 得到的是 <code>4.0</code> 而不是 <code>4</code>。</li>
+<li><strong><code>//</code> 整除</strong>：只要&quot;商&quot;，把小数部分砍掉。<code>7 // 2</code> 得 <code>3</code>（7 里面装得下 3 个 2）。</li>
+<li><strong><code>%</code> 取余</strong>：这个叫&quot;取余数&quot;，<code>7 % 2</code> 得 <code>1</code>（7 除以 2，商 3 余 1，它要的就是那个余 1）。取余非常有用，比如判断一个数是不是偶数——偶数除以 2 余数一定是 0。</li>
+<li><strong><code>**</code> 乘方</strong>：两个星号，表示&quot;几次方&quot;。<code>2 ** 10</code> 就是 2 的 10 次方。</li>
+</ul>
+<p>变量当然也能参与运算，就像它本来就是个数字：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code9">▶ 运行</button>
+    <button class="reset-btn" data-target="code9">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code9" data-original="%23%20math.py%0Aprice%20%3D%208%20%20%20%20%20%20%23%20%E4%B8%80%E4%B8%AA%E8%8B%B9%E6%9E%9C%208%20%E5%85%83%0Acount%20%3D%203%20%20%20%20%20%20%23%20%E4%B9%B0%203%20%E4%B8%AA%0Atotal%20%3D%20price%20*%20count%20%20%20%23%20%E6%80%BB%E4%BB%B7%20%3D%20%E5%8D%95%E4%BB%B7%20%C3%97%20%E6%95%B0%E9%87%8F%0Aprint(total)"># math.py
+price = 8      # 一个苹果 8 元
+count = 3      # 买 3 个
+total = price * count   # 总价 = 单价 × 数量
+print(total)</code></pre>
+  <div class="output" id="code9-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">24</code></pre>
+</div><p>Python 先把 <code>price</code> 和 <code>count</code> 盒子里的值拿出来（8 和 3），算出 <code>24</code>，再装进新盒子 <code>total</code>。</p>
+<h2>字符串也能&quot;相加&quot;</h2>
+<p>那字符串能不能用 <code>+</code>？能，但它不是&quot;算数&quot;，而是<strong>把两串文字接在一起</strong>，这叫<strong>拼接（concatenation）</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code10">▶ 运行</button>
+    <button class="reset-btn" data-target="code10">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code10" data-original="%23%20string_join.py%0Afirst%20%3D%20%22%E5%B0%8F%22%0Alast%20%3D%20%22%E6%98%8E%22%0Afull_name%20%3D%20first%20%2B%20last%0Aprint(full_name)"># string_join.py
+first = "小"
+last = "明"
+full_name = first + last
+print(full_name)</code></pre>
+  <div class="output" id="code10-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">小明</code></pre>
+</div><p><code>+</code> 把 <code>&quot;小&quot;</code> 和 <code>&quot;明&quot;</code> 粘成了 <code>&quot;小明&quot;</code>。想中间加个空格或别的字，就再拼一段：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code11">▶ 运行</button>
+    <button class="reset-btn" data-target="code11">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code11" data-original="greeting%20%3D%20%22%E4%BD%A0%E5%A5%BD%EF%BC%8C%22%20%2B%20%22%E5%B0%8F%E6%98%8E%22%20%2B%20%22%EF%BC%81%22%0Aprint(greeting)">greeting = "你好，" + "小明" + "！"
+print(greeting)</code></pre>
+  <div class="output" id="code11-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好，小明！</code></pre>
+</div><blockquote>
+<p>小贴士：<code>+</code> 会看两边是什么类型。两个数字相加是算术（<code>3 + 5</code> 得 <code>8</code>），两个字符串相加是拼接（<code>&quot;3&quot; + &quot;5&quot;</code> 得 <code>&quot;35&quot;</code>）。但一个数字加一个字符串会报错——后面&quot;常见错误&quot;里会讲。</p>
+</blockquote>
+<h2>f-string：拼字符串的神器</h2>
+<p>用一堆 <code>+</code> 拼字符串又长又容易错。Python 有个特别好用的写法，叫 <strong>f-string</strong>（f 是 format&quot;格式化&quot;的意思）。做法是：在引号前面加一个字母 <code>f</code>，然后把变量用<strong>大括号 <code>{}</code></strong> 直接嵌在文字里。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code12">▶ 运行</button>
+    <button class="reset-btn" data-target="code12">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code12" data-original="%23%20fstring.py%0Aname%20%3D%20%22%E5%B0%8F%E6%98%8E%22%0Aage%20%3D%2013%0Aprint(f%22%E4%BD%A0%E5%A5%BD%EF%BC%8C%E6%88%91%E5%8F%AB%7Bname%7D%EF%BC%8C%E4%BB%8A%E5%B9%B4%7Bage%7D%E5%B2%81%E3%80%82%22)"># fstring.py
+name = "小明"
+age = 13
+print(f"你好，我叫{name}，今年{age}岁。")</code></pre>
+  <div class="output" id="code12-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好，我叫小明，今年13岁。</code></pre>
+</div><p>看多方便！大括号 <code>{name}</code> 会被自动替换成盒子里的值。你不用管引号、不用一堆加号，想插哪个变量就 <code>{它的名字}</code>。</p>
+<p>大括号里甚至能直接做运算：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code13">▶ 运行</button>
+    <button class="reset-btn" data-target="code13">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code13" data-original="age%20%3D%2013%0Aprint(f%22%E6%98%8E%E5%B9%B4%E4%BD%A0%E5%B0%B1%20%7Bage%20%2B%201%7D%20%E5%B2%81%E4%BA%86%E3%80%82%22)">age = 13
+print(f"明年你就 {age + 1} 岁了。")</code></pre>
+  <div class="output" id="code13-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">明年你就 14 岁了。</code></pre>
+</div><p>从今往后，本书拼字符串基本都用 f-string，它是你最常用的工具之一，一定要记牢：<strong>引号前加 <code>f</code>，变量放进 <code>{}</code>。</strong></p>
+<h2>类型转换：int() / str() / float()</h2>
+<p>前面说过 <code>&quot;13&quot;</code>（字符串）和 <code>13</code>（整数）不一样。有时候我们手上是一种，却需要另一种——比如想把两个数字字符串加起来当算术。这时要&quot;变个身&quot;，用这三个工具：</p>
+<ul>
+<li><strong><code>int(x)</code></strong>：把 x 变成整数。</li>
+<li><strong><code>float(x)</code></strong>：把 x 变成浮点数（小数）。</li>
+<li><strong><code>str(x)</code></strong>：把 x 变成字符串。</li>
+</ul>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code14">▶ 运行</button>
+    <button class="reset-btn" data-target="code14">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code14" data-original="%23%20convert.py%0Aa%20%3D%20%2210%22%20%20%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E6%98%AF%E5%AD%97%E7%AC%A6%E4%B8%B2%EF%BC%8C%E4%B8%8D%E6%98%AF%E6%95%B0%E5%AD%97%0Ab%20%3D%20%225%22%0A%0Aprint(a%20%2B%20b)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%AD%97%E7%AC%A6%E4%B8%B2%E6%8B%BC%E6%8E%A5%EF%BC%8C%E5%BE%97%E5%88%B0%20%22105%22%0Aprint(int(a)%20%2B%20int(b))%20%20%20%20%23%20%E5%85%88%E8%BD%AC%E6%88%90%E6%95%B4%E6%95%B0%E5%86%8D%E7%9B%B8%E5%8A%A0%EF%BC%8C%E5%BE%97%E5%88%B0%2015"># convert.py
+a = "10"          # 这是字符串，不是数字
+b = "5"
+
+print(a + b)              # 字符串拼接，得到 "105"
+print(int(a) + int(b))    # 先转成整数再相加，得到 15</code></pre>
+  <div class="output" id="code14-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">105
+15</code></pre>
+</div><p>看出区别了吗？<code>a + b</code> 是把两串文字 <code>&quot;10&quot;</code> 和 <code>&quot;5&quot;</code> 粘成 <code>&quot;105&quot;</code>；而 <code>int(a) + int(b)</code> 先把它们变成真正的数字 10 和 5，再相加得到 15。同样一对数据，转不转类型，结果天差地别。</p>
+<p>反过来，数字要和字符串拼接，得先把数字 <code>str()</code> 成字符串（不过用 f-string 就免了这一步，f-string 会自动帮你转）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code15">▶ 运行</button>
+    <button class="reset-btn" data-target="code15">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code15" data-original="score%20%3D%2095%0A%23%20print(%22%E6%88%91%E8%80%83%E4%BA%86%22%20%2B%20score%20%2B%20%22%E5%88%86%22)%20%20%20%23%20%E8%BF%99%E6%A0%B7%E4%BC%9A%E6%8A%A5%E9%94%99%EF%BC%81%E6%95%B0%E5%AD%97%E4%B8%8D%E8%83%BD%E7%9B%B4%E6%8E%A5%E5%92%8C%E5%AD%97%E7%AC%A6%E4%B8%B2%E7%9B%B8%E5%8A%A0%0Aprint(%22%E6%88%91%E8%80%83%E4%BA%86%22%20%2B%20str(score)%20%2B%20%22%E5%88%86%22)%20%20%23%20%E5%85%88%E8%BD%AC%E6%88%90%E5%AD%97%E7%AC%A6%E4%B8%B2%E5%B0%B1%E5%A5%BD%E4%BA%86%0Aprint(f%22%E6%88%91%E8%80%83%E4%BA%86%7Bscore%7D%E5%88%86%22)%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%88%96%E8%80%85%E5%B9%B2%E8%84%86%E7%94%A8%20f-string%EF%BC%8C%E6%9C%80%E7%9C%81%E4%BA%8B">score = 95
+# print("我考了" + score + "分")   # 这样会报错！数字不能直接和字符串相加
+print("我考了" + str(score) + "分")  # 先转成字符串就好了
+print(f"我考了{score}分")             # 或者干脆用 f-string，最省事</code></pre>
+  <div class="output" id="code15-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">我考了95分
+我考了95分</code></pre>
+</div><blockquote>
+<p>小贴士：<code>int(&quot;abc&quot;)</code> 这种转换会报错，因为 &quot;abc&quot; 根本不是数字，没法变成整数。<code>int()</code> 只能转那些&quot;长得像整数&quot;的字符串。</p>
+</blockquote>
+<h2>完整代码：个人信息卡</h2>
+<p>把这一章学的东西全用上，做一张个人信息卡。新建文件 <code>info_card.py</code>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code16">▶ 运行</button>
+    <button class="reset-btn" data-target="code16">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code16" data-original="%23%20info_card.py%0A%0A%23%20%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%9A%E6%8A%8A%E4%B8%AA%E4%BA%BA%E4%BF%A1%E6%81%AF%E5%AD%98%E8%BF%9B%E5%8F%98%E9%87%8F%EF%BC%88%E8%B4%B4%E6%A0%87%E7%AD%BE%E7%9A%84%E7%9B%92%E5%AD%90%EF%BC%89%0Aname%20%3D%20%22%E5%B0%8F%E6%98%8E%22%20%20%20%20%20%20%20%20%20%20%23%20%E5%AD%97%E7%AC%A6%E4%B8%B2%EF%BC%9A%E5%90%8D%E5%AD%97%0Aage%20%3D%2013%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%95%B4%E6%95%B0%EF%BC%9A%E5%B9%B4%E9%BE%84%0Aheight%20%3D%201.58%20%20%20%20%20%20%20%20%20%20%23%20%E6%B5%AE%E7%82%B9%E6%95%B0%EF%BC%9A%E8%BA%AB%E9%AB%98%EF%BC%88%E7%B1%B3%EF%BC%89%0A%0A%23%20%E7%AC%AC%E4%BA%8C%E6%AD%A5%EF%BC%9A%E7%94%A8%20f-string%20%E6%8A%8A%E4%BF%A1%E6%81%AF%E6%8B%BC%E6%88%90%E6%BC%82%E4%BA%AE%E7%9A%84%E5%8D%A1%E7%89%87%E6%89%93%E5%8D%B0%E5%87%BA%E6%9D%A5%0Aprint(%22%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%20%E4%B8%AA%E4%BA%BA%E4%BF%A1%E6%81%AF%E5%8D%A1%20%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%22)%0Aprint(f%22%E5%A7%93%E5%90%8D%EF%BC%9A%7Bname%7D%22)%0Aprint(f%22%E5%B9%B4%E9%BE%84%EF%BC%9A%7Bage%7D%20%E5%B2%81%22)%0Aprint(f%22%E8%BA%AB%E9%AB%98%EF%BC%9A%7Bheight%7D%20%E7%B1%B3%22)%0Aprint(f%22%E6%98%8E%E5%B9%B4%E4%BD%A0%E5%B0%B1%20%7Bage%20%2B%201%7D%20%E5%B2%81%E5%95%A6%EF%BC%81%22)%20%20%20%23%20%E5%A4%A7%E6%8B%AC%E5%8F%B7%E9%87%8C%E7%9B%B4%E6%8E%A5%E7%AE%97%E5%87%BA%E6%98%8E%E5%B9%B4%E5%B9%B4%E9%BE%84%0Aprint(%22%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%22)"># info_card.py
+
+# 第一步：把个人信息存进变量（贴标签的盒子）
+name = "小明"          # 字符串：名字
+age = 13               # 整数：年龄
+height = 1.58          # 浮点数：身高（米）
+
+# 第二步：用 f-string 把信息拼成漂亮的卡片打印出来
+print("========== 个人信息卡 ==========")
+print(f"姓名：{name}")
+print(f"年龄：{age} 岁")
+print(f"身高：{height} 米")
+print(f"明年你就 {age + 1} 岁啦！")   # 大括号里直接算出明年年龄
+print("================================")</code></pre>
+  <div class="output" id="code16-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">========== 个人信息卡 ==========
+姓名：小明
+年龄：13 岁
+身高：1.58 米
+明年你就 14 岁啦！
+================================</code></pre>
+</div><p>试着把 <code>name</code>、<code>age</code>、<code>height</code> 三个盒子里的值换成你自己的，再运行一次。你会发现：只要改最上面那几个变量，下面的打印会全部跟着变——这就是变量的威力。<strong>信息只在一个地方存，用的地方全都自动同步。</strong></p>
+<h2>常见错误</h2>
+<p><strong>1. 变量还没赋值就使用</strong></p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code17">▶ 运行</button>
+    <button class="reset-btn" data-target="code17">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code17" data-original="print(nickname)">print(nickname)</code></pre>
+  <div class="output" id="code17-out" hidden></div>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NameError: name 'nickname' is not defined</code></pre>
+</div><p><code>NameError</code>（名字错误）表示电脑不认识 <code>nickname</code> 这个盒子——因为你还没往这个名字里装过东西。<strong>必须先赋值，再使用。</strong> 就像你不能从一个还没造出来的盒子里拿东西。</p>
+<p><strong>2. 变量名和字符串搞混（该去引号的加了引号）</strong></p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code18">▶ 运行</button>
+    <button class="reset-btn" data-target="code18">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code18" data-original="name%20%3D%20%22%E5%B0%8F%E6%98%8E%22%0Aprint(%22name%22)%20%20%20%20%20%23%20%E6%89%93%E5%8D%B0%E7%9A%84%E6%98%AF%E5%AD%97%E6%AF%8D%20name%EF%BC%8C%E4%B8%8D%E6%98%AF%E5%B0%8F%E6%98%8E">name = "小明"
+print("name")     # 打印的是字母 name，不是小明</code></pre>
+  <div class="output" id="code18-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">name</code></pre>
+</div><p>没报错，但结果不对。你想打印盒子里的值，就别加引号：<code>print(name)</code>；或者用 f-string：<code>print(f&quot;{name}&quot;)</code>。</p>
+<p><strong>3. 数字直接和字符串相加</strong></p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code19">▶ 运行</button>
+    <button class="reset-btn" data-target="code19">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code19" data-original="age%20%3D%2013%0Aprint(%22%E6%88%91%E4%BB%8A%E5%B9%B4%22%20%2B%20age%20%2B%20%22%E5%B2%81%22)">age = 13
+print("我今年" + age + "岁")</code></pre>
+  <div class="output" id="code19-out" hidden></div>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">TypeError: can only concatenate str (not "int") to str</code></pre>
+</div><p><code>TypeError</code>（类型错误）在说：字符串只能和字符串拼接，不能直接粘一个整数。解决办法有两个：用 <code>str(age)</code> 把数字转成字符串，或者干脆用 f-string：<code>print(f&quot;我今年{age}岁&quot;)</code>。</p>
+<p><strong>4. 用中文的等号或标点</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">age ＝ 13</code></pre>
+</div><p>报错（<code>SyntaxError</code> 语法错误）。这里的 <code>＝</code> 是中文全角等号。写代码记得切英文输入法，<code>=</code> 要用英文半角的。</p>
+<h2>动手挑战</h2>
+<p><strong>★ 挑战一：我的宠物档案</strong>
+用变量存下一只宠物（真的或想象的）的名字、年龄、体重（用小数），然后用 f-string 打印成一段介绍，比如&quot;我的猫叫咪咪，今年 2 岁，体重 4.5 千克。&quot;</p>
+<p><strong>★★ 挑战二：小小计算器</strong>
+用两个变量存两个数字，然后打印出它们的和、差、积、商四个结果。要求每行输出都用 f-string，长这样：&quot;10 加 3 等于 13&quot;。</p>
+<p><strong>★★★ 挑战三：秒变小时</strong>
+用一个变量存一个秒数（比如 <code>seconds = 5000</code>），算出它等于几分几秒，打印成&quot;5000 秒等于 83 分 20 秒&quot;。（提示：几分钟用整除 <code>//</code>，剩下几秒用取余 <code>%</code>。）</p>
+<h2>本章小结</h2>
+<p>这一章你给程序装上了记忆，回顾一下：</p>
+<ul>
+<li><strong>变量</strong>是&quot;贴了标签的盒子&quot;，用来存放数据；名字是标签，值是里面装的东西。</li>
+<li>用 <strong><code>=</code> 赋值</strong>，把右边的值装进左边的盒子；它是个动作，不是数学里的&quot;等于&quot;。</li>
+<li>变量名用<strong>英文字母、数字、下划线</strong>，不能数字开头，区分大小写，起有意义的名字。</li>
+<li>三种基本类型：<strong>字符串 <code>str</code></strong>（带引号的文字）、<strong>整数 <code>int</code></strong>、<strong>浮点数 <code>float</code></strong>（小数）。用 <strong><code>type()</code></strong> 查看类型。</li>
+<li>数字运算：<code>+ - * /</code>，还有整除 <code>//</code>、取余 <code>%</code>、乘方 <code>**</code>。</li>
+<li>字符串用 <code>+</code> <strong>拼接</strong>；更方便的是 <strong>f-string</strong>：<code>f&quot;你好{name}&quot;</code>，变量放进 <code>{}</code>。</li>
+<li>类型转换：<strong><code>int()</code>、<code>float()</code>、<code>str()</code></strong>，在数字和文字之间变身。</li>
+</ul>
+<p>现在程序能记东西了，但信息都是你自己写死在代码里的。下一章，我们要让程序<strong>开口问用户</strong>：用 <code>input()</code> 让别人从键盘输入名字、年龄，程序读进来再回应。到时候你就能做一个会跟人聊天的&quot;采访机&quot;了。翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch01.html">← 第 1 章 你好，世界！</a>
+  <a class="nav-next" href="ch03.html">第 3 章 输入与输出 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

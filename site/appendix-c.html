@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 C 继续前进</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li class="active"><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 C 继续往前走</h1>
+<p>你翻到了这本书的最后一页。</p>
+<p>停下来，回头看看走了多远——还记得第 1 章那个战战兢兢敲下 <code>print(&quot;你好，世界！&quot;)</code> 的你吗？那时候连英文括号和中文括号的区别都要小心翼翼。而现在，你已经能让电脑记住信息、做判断、重复干活、和你对话，甚至用上了 AI。<strong>你不再只是电脑的使用者，你成了能指挥它的人。</strong> 这是很多大人都不会的本领，而你在十几岁就学会了。</p>
+<p>这一节不教新东西，只想和你聊聊：接下来，可以去哪儿。</p>
+<hr>
+<h2>先回头看看，你已经会了这些</h2>
+<p>别小看自己走过的路。这本书里，你其实掌握了编程最核心的那几块积木：</p>
+<ul>
+<li><strong>让电脑输出和输入</strong>：<code>print</code> 说话，<code>input</code> 听你说话。</li>
+<li><strong>变量</strong>：给信息起名字、装进&quot;盒子&quot;记住它。</li>
+<li><strong>数据类型</strong>：文字（字符串）、整数、小数、真假值……知道它们不能乱混。</li>
+<li><strong>条件判断</strong>：用 <code>if / else</code> 让程序会&quot;看情况办事&quot;。</li>
+<li><strong>循环</strong>：用 <code>for</code> 和 <code>while</code> 让电脑不厌其烦地重复劳动。</li>
+<li><strong>列表和字典</strong>：把一大堆数据整整齐齐地收纳起来。</li>
+<li><strong>函数</strong>：把一段本领打包，起个名字，随时调用。</li>
+<li><strong>和 AI 对话</strong>：用代码调用大模型，做出会&quot;思考&quot;的程序。</li>
+</ul>
+<p>这些不是零散的知识点，而是<strong>几乎所有编程都在用的通用积木</strong>。换句话说：你已经有了地基。往后无论盖什么样的房子，用的都是这套地基。</p>
+<blockquote>
+<p>小贴士：如果上面哪一条你觉得还有点虚，别担心，也别觉得非得&quot;全懂了&quot;才能往下走。真正的熟练不是靠读书读出来的，是靠<strong>动手写、写到手熟</strong>练出来的。带着现在的水平往前闯，反而会在实战中把它们越用越透。</p>
+</blockquote>
+<hr>
+<h2>往哪儿走？几条路给你选</h2>
+<p>编程像一片大大的游乐园，你现在拿到了通票。下面几个方向，每条都很好玩，挑你最心动的先去。</p>
+<h3>1. 把 Python 学得更深</h3>
+<p>这本书是入门，Python 本身还有很多好东西没讲：怎么把代码整理成一个个&quot;模块&quot;、怎么读写文件把数据永久保存、怎么用现成的&quot;库&quot;（别人写好的工具包）几行代码办大事。<strong>继续深挖 Python，是最顺的一条路</strong>，因为你已经熟悉它的脾气了。</p>
+<h3>2. 做更大的游戏</h3>
+<p>如果你喜欢书里的小游戏，可以学 <strong>Pygame</strong>——一个专门用来做游戏的 Python 库。用它你能做出有画面、有声音、能用键盘鼠标操作的真正的小游戏：躲避障碍、打飞机、走迷宫……把你脑子里的游戏点子做出来，成就感爆棚。</p>
+<h3>3. 更深入地了解 AI</h3>
+<p>你已经尝过用 AI 写程序的甜头了。往下可以了解：AI 到底是怎么&quot;学会&quot;东西的、怎么让 AI 帮你处理更复杂的任务、怎么把 AI 装进你自己的应用里。这是当下最火、也最有想象力的方向之一。</p>
+<h3>4. 数据分析：让数字讲故事</h3>
+<p>现实世界里到处是数据——你们班的考试成绩、你最爱的球队的战绩、一年的天气变化。<strong>数据分析</strong>就是用代码从一堆数字里找出规律，还能画成漂亮的图表。Python 在这个领域是绝对的主角（关键词：<code>pandas</code>、<code>matplotlib</code>）。喜欢数学和探究的同学会特别上瘾。</p>
+<h3>5. 做网站</h3>
+<p>想让全世界都能打开你做的东西？那就学<strong>网站开发</strong>。前端（网页长什么样）会用到 HTML、CSS、JavaScript；后端（网页背后的逻辑）Python 也能干（关键词：<code>Flask</code>、<code>Django</code>）。做一个自己的小网站发给朋友，是件很酷的事。</p>
+<blockquote>
+<p>小贴士：<strong>别想着几条路一起走，那样容易样样都浅。</strong> 挑一个你现在最兴奋的，扎进去做几个东西，做出感觉了再说。方向之间是相通的——学深了任何一条，换到别的方向都会快很多。</p>
+</blockquote>
+<hr>
+<h2>最好的学习方法：做项目</h2>
+<p>我要告诉你一个很多人很晚才明白的秘密：</p>
+<blockquote>
+<p>小贴士：<strong>光看书、光看视频，学不会编程；只有亲手做东西，才能真学会。</strong> 看别人骑车一百遍，不如自己上车摔两跤。代码也一样——你敲过、错过、改对过的，才真正长在你脑子里。</p>
+</blockquote>
+<p>所以从今天起，给自己一个习惯：<strong>每学一点新东西，就用它做一个小玩意儿。</strong> 哪怕很简陋、很傻，也比只在脑子里&quot;我懂了&quot;强一百倍。</p>
+<p>关于练习和做项目，给你几条实在的建议：</p>
+<ul>
+<li><strong>从小到不能再小开始</strong>。别一上来就想做&quot;我的世界&quot;。先做一个能跑的小东西，再一点点加功能。能跑的小程序 &gt; 完美的空想。</li>
+<li><strong>允许自己抄和查</strong>。卡住了去搜、去问 AI、去看别人的代码，这不叫作弊，这就是程序员的日常工作方式。</li>
+<li><strong>做完了给别人看</strong>。发给家长、同学、朋友。被人用、被人夸（或吐槽）是坚持下去的最大动力。</li>
+<li><strong>找练习平台刷手感</strong>。网上有很多适合初学者的编程练习网站，把题目当小游戏闯关，能快速熟练语法。让家长帮你一起找找中文的、适合青少年的平台。</li>
+<li><strong>建一个自己的&quot;代码百宝箱&quot;文件夹</strong>。把每个做过的小程序都留着。过几个月回头看，你会惊讶自己进步了这么多。</li>
+</ul>
+<hr>
+<h2>给你的 10 个项目点子</h2>
+<p>不知道做什么？这里有 10 个，都在你现在的能力范围之内（用书里学过的东西就能做）。从上往下大致由易到难，挑顺眼的开工：</p>
+<ol>
+<li><strong>每日格言机</strong>：程序里存一堆励志/搞笑的句子，每次运行随机送你一句。（随机 + 列表）</li>
+<li><strong>单位换算器</strong>：输入身高体重，帮你算 BMI；或人民币换算成别的单位。（输入 + 运算）</li>
+<li><strong>猜数字升级版</strong>：在书里的基础上加&quot;最多猜几次&quot;&quot;记录最好成绩&quot;&quot;难度选择&quot;。（循环 + 条件）</li>
+<li><strong>待办清单</strong>：能添加、查看、划掉今天要做的事。（列表 + 循环）</li>
+<li><strong>成绩管理小助手</strong>：录入各科成绩，算总分、平均分，判断优良中差。（字典 + 判断）</li>
+<li><strong>石头剪刀布</strong>：和电脑对战，记录几胜几负。（随机 + 条件 + 循环）</li>
+<li><strong>密码生成器</strong>：按你要的长度，随机生成一个又强又难猜的密码。（随机 + 字符串）</li>
+<li><strong>文字冒险游戏</strong>：像&quot;你走到岔路口，往左还是往右？&quot;这样，靠选择推进剧情。（条件 + 循环）</li>
+<li><strong>背单词小卡片</strong>：把要背的单词和意思存进去，随机抽考你。（字典 + 随机）</li>
+<li><strong>AI 聊天小伙伴</strong>：用后面学的 AI 本领，做一个能陪你聊天、回答问题的小助手。（AI 调用）</li>
+</ol>
+<blockquote>
+<p>小贴士：这份清单最好的用法，是<strong>照着做完一个，就自己给它加一个书上没有的新功能</strong>。&quot;给自己出题&quot;这件事本身，就是从&quot;学生&quot;变成&quot;创作者&quot;的分水岭。等哪天你的点子比这份清单还多，你就真的入门了。</p>
+</blockquote>
+<hr>
+<h2>最后，几句心里话</h2>
+<p>写代码这条路上，你一定会遇到怎么都跑不通的程序、看了半天也不懂的报错、卡住好几天的难题。这时候我想让你记住：</p>
+<p><strong>每一个厉害的程序员，都曾经是那个对着报错发愁的新手。</strong> 没有人天生就会。他们只是比别人多试了一次、多改了一遍、在想放弃的时候又坐回了电脑前。你会的东西，最初对他们来说也一样陌生。</p>
+<p>你已经证明了自己能做到——你读完了这整本书，写出了会说话、会判断、会思考的程序。这份耐心和好奇心，比任何一门具体的语法都珍贵，它会带你走到很远的地方。</p>
+<p>编程最迷人的地方，从来不是&quot;学会了 Python&quot;，而是那个念头：<strong>&quot;我脑子里想的东西，我能亲手把它做出来。&quot;</strong> 从今天起，这个世界上又多了一个能创造的人。</p>
+<p>去做点什么吧。做个游戏，做个工具，做个连你自己都觉得好玩的小东西。世界很大，代码是你的画笔。</p>
+<p>我们，代码的世界里再见。🚀</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-b.html">← 附录 B 报错速查表</a>
+  <a class="nav-next" href="appendix-d.html">附录 D 换用别家 AI →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

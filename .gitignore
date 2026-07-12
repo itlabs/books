@@ -1,0 +1,8 @@
+# Node 依赖（用 npm install 自动下载，不入库）
+node_modules/
+
+# 系统/编辑器杂项
+.DS_Store
+Thumbs.db
+*.log
+.vscode/

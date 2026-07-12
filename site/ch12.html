@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 12 章 贪吃蛇大作战</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li class="active"><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 12 章 贪吃蛇大作战——你的第一个完整游戏</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>上一章你让一个方块动了起来。这一章，你要做出一个<strong>完整的、能玩上瘾的经典游戏——贪吃蛇</strong>：一条小蛇在窗口里爬，你用方向键指挥它去吃食物，每吃一个就变长一节、加一分；一不小心撞到墙、或者撞到自己的身子，游戏就结束。这是你学编程以来第一个真正意义上的"大作"，做完它，你就正式入门游戏开发了。</p>
+<p><strong>成品预览：</strong>一条绿色的蛇在黑色画面里游走，追着红色的食物；左上角实时显示分数；撞墙或咬到自己时，屏幕中央弹出"游戏结束"。</p>
+<pre>┌────────────────────────────┐
+│ 得分：5                     │
+│        ●●●●●                │
+│            ●        ◆       │
+│                            │
+└────────────────────────────┘
+   ●=蛇身  ◆=食物  用方向键控制
+</pre>
+</div><blockquote>
+<p>重要！和上一章一样：<strong>本章代码网页上的&quot;▶ 运行&quot;按钮跑不了</strong>，因为游戏窗口浏览器里弹不出来。所有代码都要在<strong>自己电脑上</strong>运行，而且要先装好 pygame。装 pygame 的方法上一章讲过，就一句 <code>pip install pygame</code>（在终端里敲）；装 Python 和终端怎么用，看<a href="appendix-a.md">附录 A</a>。</p>
+</blockquote>
+<h2>先回忆一下：游戏的心脏还是主循环</h2>
+<p>别紧张，贪吃蛇看着复杂，其实骨架和上一章那个&quot;移动方块&quot;一模一样。每一圈主循环，游戏还是在重复做那三件事：</p>
+<ol>
+<li><strong>处理输入</strong>：看你按了哪个方向键、有没有想关窗口。</li>
+<li><strong>更新状态</strong>：让蛇往前爬一步，检查它吃到食物没、撞墙没、咬到自己没。</li>
+<li><strong>画出画面</strong>：把蛇、食物、分数重新画一遍。</li>
+</ol>
+<p>上一章的方块，位置是两个变量 <code>x</code>、<code>y</code>；这一章不一样的地方只有一个——<strong>蛇有很多节身子</strong>，一个变量存不下。那用什么存呢？你其实早就学过了：<strong>列表</strong>。</p>
+<h2>核心思想：用一个列表存整条蛇</h2>
+<p>我们不再让蛇满屏乱跑，而是把窗口划成一格一格的<strong>网格</strong>，就像方格纸。每一格 20 像素宽。蛇的每一节身子，正好占一格。</p>
+<p>蛇是由好几节身子连成的一串，对不对？那就用一个<strong>列表（list）</strong>，把每一节身子的<strong>格子坐标</strong>按顺序装进去。列表里第一个是蛇头，最后一个是蛇尾。</p>
+<p>我们用<strong>格子坐标</strong>来记，不用像素。比如 <code>[5, 3]</code> 表示&quot;从左数第 5 格、从上数第 3 格&quot;。一条有 3 节的蛇，就长这样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># 一条 3 节长的蛇，蛇头在最前面（列表第一个）
+snake = [[7, 5], [6, 5], [5, 5]]
+#         蛇头     身子     蛇尾</code></pre>
+</div><div class="concept">
+<svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="26" text-anchor="middle" font-size="15" fill="#333" font-weight="bold">蛇 = 一串格子坐标的列表</text>
+  <!-- 列表框 -->
+  <rect x="60" y="45" width="440" height="52" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="105" y="77" text-anchor="middle" font-size="14" fill="#2f6db3" font-family="monospace">[7,5]</text>
+  <text x="175" y="77" text-anchor="middle" font-size="14" fill="#333" font-family="monospace">[6,5]</text>
+  <text x="245" y="77" text-anchor="middle" font-size="14" fill="#333" font-family="monospace">[5,5]</text>
+  <text x="150" y="40" text-anchor="middle" font-size="11" fill="#6b6459">snake 列表（左边是头）</text>
+  <text x="105" y="112" text-anchor="middle" font-size="11" fill="#e06a3b">↑ 蛇头</text>
+  <text x="245" y="112" text-anchor="middle" font-size="11" fill="#6b6459">↑ 蛇尾</text>  <!-- 网格上画出来 -->
+  <g>
+    <rect x="360" y="120" width="160" height="80" fill="#111"/>
+    <!-- 网格线 -->
+    <line x1="380" y1="120" x2="380" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="400" y1="120" x2="400" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="420" y1="120" x2="420" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="440" y1="120" x2="440" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="460" y1="120" x2="460" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="480" y1="120" x2="480" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="500" y1="120" x2="500" y2="200" stroke="#333" stroke-width="1"/>
+    <line x1="360" y1="140" x2="520" y2="140" stroke="#333" stroke-width="1"/>
+    <line x1="360" y1="160" x2="520" y2="160" stroke="#333" stroke-width="1"/>
+    <line x1="360" y1="180" x2="520" y2="180" stroke="#333" stroke-width="1"/>
+    <!-- 蛇的三节：格子(5,5)(6,5)(7,5) 对应画面里挪到可见处 -->
+    <rect x="461" y="161" width="18" height="18" fill="#3f9b5c"/>
+    <rect x="441" y="161" width="18" height="18" fill="#3f9b5c"/>
+    <rect x="421" y="161" width="18" height="18" fill="#3f9b5c"/>
+    <text x="470" y="115" text-anchor="middle" font-size="10" fill="#e06a3b">头</text>
+  </g>
+  <text x="440" y="118" text-anchor="middle" font-size="11" fill="#6b6459" opacity="0"> </text>
+  <path d="M300 71 L352 130" stroke="#e06a3b" stroke-width="2" fill="none" marker-end="url(#a12)"/>
+  <text x="330" y="105" font-size="11" fill="#e06a3b">画到网格上</text>
+  <defs>
+    <marker id="a12" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#e06a3b"/>
+    </marker>
+  </defs>
+</svg>
+<div class="caption">图 12-1　蛇就是一个装着格子坐标的列表；把每个坐标画成一个绿方块，连起来就是一条蛇</div>
+</div><p>想通了这一点，贪吃蛇就没什么可怕的了——它不过是<strong>一个列表 + 一些让列表变化的规则</strong>。下面我们一条一条把规则加上去。</p>
+<h2>蛇怎么&quot;爬&quot;？加一个头，去掉尾巴</h2>
+<p>这是整个游戏最巧妙的地方，一定要弄懂。蛇怎么往前爬一步呢？你可能想的是&quot;让每一节都往前挪&quot;——太麻烦了。有个特别聪明的办法：</p>
+<p><strong>在蛇前进的方向上，新添一个头；然后把最后的尾巴去掉。</strong> 就这两步，蛇看起来就整整齐齐地前进了一格，而且长度不变。</p>
+<div class="concept">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="24" text-anchor="middle" font-size="15" fill="#333" font-weight="bold">移动 = 加一个新头 + 去掉旧尾</text>  <!-- 原来的蛇 -->
+<p>  <text x="60" y="60" font-size="12" fill="#6b6459">原来：</text>
+  <rect x="120" y="45" width="26" height="26" fill="#e06a3b"/>
+  <rect x="150" y="45" width="26" height="26" fill="#3f9b5c"/>
+  <rect x="180" y="45" width="26" height="26" fill="#3f9b5c"/>
+  <text x="133" y="88" text-anchor="middle" font-size="10" fill="#6b6459">头</text>
+  <text x="193" y="88" text-anchor="middle" font-size="10" fill="#6b6459">尾</text></p>
+  <!-- 第一步：加头 -->
+<p>  <text x="60" y="130" font-size="12" fill="#6b6459">① 前面加新头：</text>
+  <rect x="165" y="115" width="26" height="26" fill="#2f6db3"/>
+  <rect x="195" y="115" width="26" height="26" fill="#e06a3b"/>
+  <rect x="225" y="115" width="26" height="26" fill="#3f9b5c"/>
+  <rect x="255" y="115" width="26" height="26" fill="#3f9b5c"/>
+  <text x="178" y="158" text-anchor="middle" font-size="10" fill="#2f6db3">新头</text>
+  <path d="M300 128 L340 128" stroke="#333" stroke-width="2" marker-end="url(#a13)"/>
+  <text x="392" y="132" font-size="11" fill="#6b6459">变长了1节</text></p>
+  <!-- 第二步：去尾 -->
+<p>  <text x="60" y="205" font-size="12" fill="#6b6459">② 去掉旧尾：</text>
+  <rect x="165" y="190" width="26" height="26" fill="#2f6db3"/>
+  <rect x="195" y="190" width="26" height="26" fill="#e06a3b"/>
+  <rect x="225" y="190" width="26" height="26" fill="#3f9b5c"/>
+  <rect x="255" y="190" width="26" height="26" fill="#3f9b5c" opacity="0.2" stroke="#888" stroke-dasharray="3"/>
+  <text x="268" y="233" text-anchor="middle" font-size="10" fill="#888">删掉</text>
+  <path d="M300 203 L340 203" stroke="#333" stroke-width="2" marker-end="url(#a13)"/>
+  <text x="392" y="207" font-size="11" fill="#6b6459">长度不变，向前挪一格</text>
+  <defs>
+    <marker id="a13" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#333"/>
+    </marker>
+  </defs>
+</svg></p>
+<div class="caption">图 12-2　蛇每走一步：先在头前面插入一个新格子，再删掉尾巴那一格</div>
+</div><p>用列表操作来写，就是这么两行。假设蛇正在往右走（横坐标每次 +1）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">head = snake[0]                    # snake[0] 是当前的头
+new_head = [head[0] + 1, head[1]]  # 往右一格：x 加 1，y 不变
+snake.insert(0, new_head)          # 把新头插到列表最前面
+snake.pop()                        # 删掉列表最后一个（尾巴）</code></pre>
+</div><ul>
+<li><strong><code>snake[0]</code></strong>：列表的第一个元素，也就是蛇头。</li>
+<li><strong><code>snake.insert(0, new_head)</code></strong>：<code>insert</code> 是&quot;插入&quot;。<code>insert(0, ...)</code> 表示插到第 0 位（最前面）。这样新头就成了新的 <code>snake[0]</code>。</li>
+<li><strong><code>snake.pop()</code></strong>：<code>pop</code> 不带参数时，删掉并&quot;吐出&quot;列表<strong>最后一个</strong>元素——正好就是尾巴。</li>
+</ul>
+<p>记住这个&quot;<strong>加头去尾</strong>&quot;，它是贪吃蛇的灵魂。等下你会看到：吃到食物时，只要<strong>不去尾</strong>，蛇就自然变长了。</p>
+<h2>方向控制：方向键改变前进方向，但不能掉头</h2>
+<p>上一章按住方向键方块才动。贪吃蛇不一样——蛇会<strong>自己一直往前爬</strong>，方向键只是<strong>改变它前进的方向</strong>。松开手它也不会停。</p>
+<p>我们用两个变量 <code>dx</code>、<code>dy</code> 记住&quot;当前每一步往哪个方向挪&quot;：</p>
+<ul>
+<li>往右：<code>dx = 1, dy = 0</code>（x 加 1）</li>
+<li>往左：<code>dx = -1, dy = 0</code></li>
+<li>往上：<code>dx = 0, dy = -1</code>（y 减 1，因为 y 向下增大）</li>
+<li>往下：<code>dx = 0, dy = 1</code></li>
+</ul>
+<p>按了方向键，就改这两个数。但有一条重要规则：<strong>蛇不能直接掉头</strong>。想想真实的蛇——它正往右爬，你不可能让它一瞬间往左，那样头会直接撞进自己的脖子。所以按左键时要先检查：&quot;我现在不是正往右吗？是的话就不理这个左键。&quot;</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">if event.key == pygame.K_LEFT and dx != 1:   # 想往左，但只要现在不是往右就行
+    dx, dy = -1, 0</code></pre>
+</div><p><code>dx != 1</code> 的意思是&quot;现在不是在往右走&quot;。只有满足这个条件才允许转向左。其他三个方向同理。</p>
+<blockquote>
+<p>小贴士：这里我们用 <code>pygame.KEYDOWN</code> 事件（键被按下的那一下），而不是上一章的 <code>get_pressed()</code>。因为方向是&quot;按一下就定下来&quot;，不需要一直按着。</p>
+</blockquote>
+<h2>食物：随机出现，吃到就变长 + 加分</h2>
+<p>食物也是网格上的一个格子，位置用 <code>random</code> 随机决定。你在讲 <code>random</code> 那章学过 <code>random.randint</code>，它能给你一个范围内的随机整数：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">import random
+food = [random.randint(0, 29), random.randint(0, 19)]  # 随机一个格子坐标</code></pre>
+</div><p>我们的网格宽 30 格（编号 0～29）、高 20 格（编号 0～19），所以随机范围就是这么写。</p>
+<p><strong>怎么算&quot;吃到了&quot;？</strong> 特别简单——蛇的新头，正好落在食物那一格，就是吃到了：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">if snake[0] == food:      # 蛇头和食物在同一格
+    score = score + 1     # 加分
+    food = [random.randint(0, 29), random.randint(0, 19)]  # 生成新食物
+    # 注意：吃到时【不做 pop()】，蛇就留下了那一节，自然变长</code></pre>
+</div><p>看到没？吃食物和普通爬行的唯一区别，就是<strong>吃到时不删尾巴</strong>。加了头又没去尾，蛇就长了一节。这就是前面埋的伏笔。</p>
+<h2>判定游戏结束：撞墙、撞到自己</h2>
+<p>蛇有两种死法，都在&quot;更新状态&quot;这一步检查蛇头 <code>snake[0]</code>：</p>
+<p><strong>1. 撞墙</strong>——蛇头跑出了网格范围（格子坐标小于 0，或大于等于边界）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">head = snake[0]
+if head[0] &lt; 0 or head[0] &gt;= 30 or head[1] &lt; 0 or head[1] &gt;= 20:
+    game_over = True      # 出界了，游戏结束</code></pre>
+</div><p><strong>2. 撞到自己</strong>——蛇头这一格，和身子的<strong>某一节</strong>重合了。判断&quot;蛇头是否出现在身子里&quot;，用 <code>in</code> 就行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">if snake[0] in snake[1:]:   # 蛇头出现在【除了头以外】的身子里
+    game_over = True</code></pre>
+</div><p><code>snake[1:]</code> 是&quot;从第 1 个到最后&quot;，也就是除去蛇头的全部身子。<code>in</code> 判断蛇头那一格是不是在这堆身子里。是的话，就是咬到自己了。</p>
+<h2>显示分数：pygame 的文字</h2>
+<p>最后给游戏加个分数显示。在 pygame 里写字，要先做一个&quot;字体&quot;，再用它把文字&quot;渲染&quot;成图片，画到屏幕上：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">font = pygame.font.SysFont(None, 36)   # 做一个字体，None=系统默认字体，36=字号
+text = font.render("得分：" + str(score), True, (255, 255, 255))  # 渲染成白色文字
+screen.blit(text, (10, 10))            # 把文字画到屏幕左上角 (10,10)</code></pre>
+</div><ul>
+<li><strong><code>pygame.font.SysFont(None, 36)</code></strong>：<code>SysFont</code> 用系统自带字体，<code>None</code> 表示用默认那款，<code>36</code> 是字号。</li>
+<li><strong><code>font.render(文字, True, 颜色)</code></strong>：把一段文字&quot;画&quot;成一张小图片。中间的 <code>True</code> 是&quot;抗锯齿&quot;，让字更平滑，照抄即可。</li>
+<li><strong><code>screen.blit(图片, 位置)</code></strong>：<code>blit</code> 是把一张图片&quot;贴&quot;到屏幕的指定位置。文字渲染出来就是张图片，所以用 blit 贴上去。</li>
+</ul>
+<blockquote>
+<p>小贴士：<code>str(score)</code> 是把数字 <code>score</code> 变成文字，才能和&quot;得分：&quot;拼在一起。数字和文字不能直接用 <code>+</code> 相加，这个坑你在前面章节踩过。</p>
+</blockquote>
+<h2>完整程序：贪吃蛇大作战</h2>
+<p>好了，所有零件都齐了，拼成完整的游戏！新建文件 <code>snake.py</code>，把下面的代码抄进去（或复制过去），在<strong>自己电脑上</strong>运行。慢慢读注释，你会发现每一块都是前面讲过的东西拼起来的。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># snake.py
+import pygame
+import random
+
+pygame.init()
+
+# ===== 游戏的基本设定 =====
+CELL = 20                    # 每个格子 20 像素
+COLS = 30                    # 横向 30 格
+ROWS = 20                    # 纵向 20 格
+WIDTH = CELL * COLS          # 窗口宽 = 20 × 30 = 600
+HEIGHT = CELL * ROWS         # 窗口高 = 20 × 20 = 400
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("贪吃蛇大作战")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont(None, 36)     # 显示分数用的字体
+
+# ===== 颜色（红, 绿, 蓝，各 0~255）=====
+BLACK = (0, 0, 0)
+GREEN = (63, 155, 92)        # 蛇身
+ORANGE = (224, 106, 59)      # 蛇头，突出一点
+RED = (220, 60, 60)          # 食物
+WHITE = (255, 255, 255)      # 文字
+
+
+def random_food(snake):
+    """随机生成一个不在蛇身上的食物格子"""
+    while True:
+        food = [random.randint(0, COLS - 1), random.randint(0, ROWS - 1)]
+        if food not in snake:          # 别正好长在蛇身上
+            return food
+
+
+def run_game():
+    # ===== 初始状态 =====
+    # 蛇一开始 3 节，横躺在中间，头在右边
+    snake = [[15, 10], [14, 10], [13, 10]]
+    dx, dy = 1, 0                # 一开始往右走
+    food = random_food(snake)
+    score = 0
+    game_over = False
+
+    running = True
+    while running:
+        # ---- ① 处理输入 ----
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:            # 点了关闭按钮
+                running = False
+            elif event.type == pygame.KEYDOWN:       # 按下了某个键
+                # 改变方向，但不能直接掉头
+                if event.key == pygame.K_LEFT and dx != 1:
+                    dx, dy = -1, 0
+                elif event.key == pygame.K_RIGHT and dx != -1:
+                    dx, dy = 1, 0
+                elif event.key == pygame.K_UP and dy != 1:
+                    dx, dy = 0, -1
+                elif event.key == pygame.K_DOWN and dy != -1:
+                    dx, dy = 0, 1
+
+        if not game_over:
+            # ---- ② 更新状态：让蛇走一步 ----
+            head = snake[0]
+            new_head = [head[0] + dx, head[1] + dy]  # 按方向算出新头的格子
+            snake.insert(0, new_head)                # 加新头
+
+            # 撞墙判定：新头跑出网格了吗
+            if (new_head[0] &lt; 0 or new_head[0] &gt;= COLS or
+                    new_head[1] &lt; 0 or new_head[1] &gt;= ROWS):
+                game_over = True
+            # 撞到自己判定：新头是否落在剩下的身子里
+            elif new_head in snake[1:]:
+                game_over = True
+            elif new_head == food:
+                # 吃到食物：加分、换新食物，【不去尾】所以蛇变长了
+                score = score + 1
+                food = random_food(snake)
+            else:
+                # 没吃到：去掉尾巴，长度不变（正常爬行）
+                snake.pop()
+
+        # ---- ③ 画出画面 ----
+        screen.fill(BLACK)                           # 背景涂黑
+
+        # 画食物（红方块）
+        pygame.draw.rect(screen, RED,
+                         (food[0] * CELL, food[1] * CELL, CELL, CELL))
+
+        # 画蛇：列表里每一格都画成一个方块，头用橙色
+        for i in range(len(snake)):
+            part = snake[i]
+            color = ORANGE if i == 0 else GREEN      # 第 0 个是头
+            pygame.draw.rect(screen, color,
+                             (part[0] * CELL, part[1] * CELL, CELL - 1, CELL - 1))
+            # 宽高用 CELL-1，留一条缝，能看清一节一节
+
+        # 画分数
+        text = font.render("得分：" + str(score), True, WHITE)
+        screen.blit(text, (10, 10))
+
+        # 游戏结束时，屏幕中央显示提示
+        if game_over:
+            over_text = font.render("游戏结束！按关闭退出", True, WHITE)
+            rect = over_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+            screen.blit(over_text, rect)
+
+        pygame.display.flip()                        # 显示出来
+        clock.tick(10)                               # 每秒 10 步：贪吃蛇要慢一点
+
+    pygame.quit()
+
+
+run_game()</code></pre>
+</div><p>在自己电脑上运行，一条绿蛇（橙色的头）就开始往右爬。按方向键指挥它去吃红色食物，每吃一个变长一节、左上角分数加一。撞到墙或咬到自己，中央就显示&quot;游戏结束&quot;。<strong>这是你独立做出的第一个完整游戏，去玩两把犒劳一下自己吧！</strong></p>
+<p>有两个小地方值得说一说：</p>
+<ul>
+<li><strong>格子坐标 × CELL = 像素坐标</strong>：蛇和食物我们都用格子坐标（比如 <code>[15, 10]</code>）来算逻辑，又清楚又不容易错；只有真正画到屏幕上时，才乘以 <code>CELL</code>（20）换成像素。<code>part[0] * CELL</code> 就是这一格左上角的横坐标像素。</li>
+<li><strong><code>clock.tick(10)</code></strong>：上一章我们用 60，画面很流畅。但贪吃蛇每一圈就走一整格，60 太快根本没法玩。改成 <strong>10</strong>，蛇每秒走 10 步，刚刚好。想让游戏更刺激，把这个数调大就更快。</li>
+</ul>
+<h2>常见错误</h2>
+<p>贪吃蛇比前面的程序复杂，新手容易在这几处栽跟头：</p>
+<p><strong>1. 蛇一转向就&quot;自杀&quot;</strong></p>
+<p>如果你发现蛇往右走时按一下左键立刻就&quot;游戏结束&quot;，多半是<strong>漏掉了&quot;不能掉头&quot;的判断</strong>（那几个 <code>and dx != 1</code> 之类）。没有它，蛇头会一步退到自己脖子那一格，判定成&quot;撞到自己&quot;。把四个方向的条件都补齐就好。</p>
+<p><strong>2. 把 <code>pop()</code> 写在了 <code>if</code> 外面，蛇永远长不长</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">snake.insert(0, new_head)
+snake.pop()                # 错！这样不管吃没吃到都去尾
+if new_head == food:
+    score = score + 1</code></pre>
+</div><p>这样每一圈都去尾，蛇吃了食物也不会变长。正确做法是：<strong>只有&quot;没吃到&quot;时才 <code>pop()</code></strong>（放进 <code>else</code> 里），像完整代码那样。</p>
+<p><strong>3. 直接把两条蛇身列表指向同一个</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">new_head = head        # 错！这样 new_head 和 head 是同一个东西
+new_head[0] = new_head[0] + dx</code></pre>
+</div><p>这会连原来的头也一起改掉，画面全乱。要<strong>新建一个列表</strong> <code>new_head = [head[0] + dx, head[1] + dy]</code>，这才是一个全新的格子。</p>
+<p><strong>4. 数字和文字直接相加</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">text = font.render("得分：" + score, True, WHITE)   # 错！score 是数字</code></pre>
+</div><p>报错 <code>TypeError: can only concatenate str (not &quot;int&quot;) to str</code>。文字不能直接加数字，要先用 <code>str(score)</code> 把分数变成文字。</p>
+<h2>动手挑战</h2>
+<p>下面的任务都在<strong>你自己电脑上</strong>运行 <code>snake.py</code> 的基础上改。一步一步来，别急着一次全做完。</p>
+<p><strong>★ 挑战一：调节难度与配色</strong>
+把 <code>clock.tick(10)</code> 里的 10 改成别的数，找出你觉得最好玩的速度。再把蛇、食物、背景换成你喜欢的颜色（记得颜色是 <code>(红, 绿, 蓝)</code> 三个 0～255 的数）。</p>
+<p><strong>★★ 挑战二：越吃越快</strong>
+让游戏随分数变难：每吃到一个食物，蛇就走得快一点点。（提示：用一个变量 <code>speed</code> 代替 <code>tick</code> 里写死的 10，吃到食物时 <code>speed = speed + 1</code>，把 <code>clock.tick(10)</code> 改成 <code>clock.tick(speed)</code>。想想上限要不要设一个，别快到没法玩。）</p>
+<p><strong>★★★ 挑战三：加障碍物 / 重新开始</strong>
+挑一个（或都做）：</p>
+<ul>
+<li><strong>障碍物</strong>：在网格里放几块固定的&quot;石头&quot;（存成一个坐标列表），蛇头撞上它们也算游戏结束，记得把石头也画出来。</li>
+<li><strong>重新开始</strong>：游戏结束后，按空格键就重开一局，不用关窗口重跑。（提示：<code>run_game()</code> 本身就是一局，想办法在游戏结束后侦测空格键，重置 <code>snake</code>、<code>score</code> 等变量再来一遍。）</li>
+</ul>
+<p>这些都不简单，做出来任何一个，你都已经是能独立改游戏的人了。</p>
+<h2>本章小结</h2>
+<p>你做出了人生第一个完整游戏，这是一个了不起的里程碑！回顾这一章把学过的东西怎么拼到了一起：</p>
+<ul>
+<li>贪吃蛇的核心思想：<strong>用一个列表存整条蛇</strong>，列表里每个元素是一节身子的<strong>格子坐标</strong>，<code>snake[0]</code> 是头。</li>
+<li>蛇的移动 = <strong>加头去尾</strong>：<code>snake.insert(0, new_head)</code> 加新头，<code>snake.pop()</code> 删尾巴；吃到食物时<strong>不去尾</strong>，蛇就变长了。</li>
+<li>方向用 <code>dx</code>、<code>dy</code> 两个数表示，靠 <code>pygame.KEYDOWN</code> 事件改变，并且要判断<strong>不能直接掉头</strong>。</li>
+<li>食物用 <code>random.randint</code> 随机放在网格上；蛇头 <code>snake[0]</code> 和食物同格就是<strong>吃到了</strong>。</li>
+<li>两种死法：蛇头<strong>出界</strong>（撞墙），或蛇头 <code>in snake[1:]</code>（<strong>撞到自己</strong>）。</li>
+<li>用 <code>font.render</code> + <code>screen.blit</code> 显示分数；<code>clock.tick(10)</code> 把贪吃蛇的速度放慢到能玩。</li>
+<li><strong>格子坐标算逻辑，乘以 CELL 换成像素再画</strong>，这个分工让代码又清楚又不出错。</li>
+<li>老规矩：<strong>pygame 要在自己电脑上运行</strong>，网页运行按钮跑不了；没装先 <code>pip install pygame</code>。</li>
+</ul>
+<p>到这里，本书&quot;用游戏学编程&quot;的部分就全部完成了。你从只会 <code>print(&quot;你好，世界！&quot;)</code>，一路走到能做出真正能玩的贪吃蛇，把变量、条件、循环、列表、函数、随机数、pygame 全都实战用了一遍。</p>
+<p>下一章，我们要翻开全新的第三部分——<strong>&quot;和 AI 一起编程&quot;</strong>。你天天听说的&quot;人工智能&quot;&quot;AI 大模型&quot;到底是什么？它凭什么能听懂人话、会写文章、能帮你写代码？第 13 章，我们先把 AI 是怎么回事讲清楚，然后教你亲手写代码去&quot;指挥&quot;一个真正的 AI，让它变成你的编程小助手。最激动人心的部分，才刚刚开始。翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch11.html">← 第 11 章 第一个游戏窗口</a>
+  <a class="nav-next" href="ch13.html">第 13 章 AI 是什么 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

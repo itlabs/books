@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 14 章 会聊天的机器人</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li class="active"><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 14 章 做一个会聊天的机器人</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>上一章的程序只能问一句就结束。这一章，你要做一个真正的<strong>聊天机器人</strong>：你可以一直和它聊下去，而且它<strong>记得</strong>你们之前说过的话。你还会给它设定一个"人设"，让它扮演成任何你想要的角色。</p>
+<p><strong>成品预览：</strong></p>
+<pre>你：我叫小美。
+机器人：你好呀小美！很高兴认识你～今天过得怎么样？
+你：你还记得我叫什么吗？
+机器人：当然记得，你叫小美呀！😊
+你：再见
+机器人：拜拜小美，下次再聊！</pre>
+</div><h2>一个大问题：AI 其实&quot;没有记性&quot;</h2>
+<p>先做个实验。回想上一章的代码，它每次运行只发一条消息。如果你连着问两次，AI 会记得第一次吗？</p>
+<p>答案是：<strong>不会</strong>。每次调用 <code>messages.create()</code>，对 AI 来说都是<strong>全新的、互不相干的一次对话</strong>。它就像一个每次醒来都失忆的人——你刚说完的话，下一句它就忘了。</p>
+<p>这怎么能聊天呢？秘密在于：<strong>记性要靠我们的程序自己维护</strong>。</p>
+<p>我们的办法是：准备一个<strong>列表</strong>，把每一句话（你说的、AI 说的）都<strong>依次存进去</strong>。每次要 AI 回答时，就把<strong>到目前为止的全部对话</strong>一起发过去。这样 AI 一看：&quot;哦，原来我们之前聊了这些&quot;，就能接上话了。</p>
+<div class="concept">
+<svg viewBox="0 0 580 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="290" y="22" text-anchor="middle" font-size="14" fill="#2d2a26" font-weight="bold">messages 列表（我们的程序帮 AI 记着）</text>
+  <rect x="120" y="38" width="340" height="30" rx="6" fill="#e8f0fa" stroke="#2f6db3"/>
+  <text x="135" y="58" font-size="13" fill="#2f6db3">user：我叫小美。</text>
+  <rect x="120" y="74" width="340" height="30" rx="6" fill="#fbe6dc" stroke="#e06a3b"/>
+  <text x="135" y="94" font-size="13" fill="#a53f1c">assistant：你好呀小美！</text>
+  <rect x="120" y="110" width="340" height="30" rx="6" fill="#e8f0fa" stroke="#2f6db3"/>
+  <text x="135" y="130" font-size="13" fill="#2f6db3">user：你还记得我叫什么吗？</text>
+  <rect x="120" y="146" width="340" height="30" rx="6" fill="#eee" stroke="#999" stroke-dasharray="4"/>
+  <text x="135" y="166" font-size="13" fill="#777">assistant：（等待 AI 填上这一句…）</text>
+  <text x="290" y="198" text-anchor="middle" font-size="12" fill="#3f9b5c">每问一次，就把整张列表发给 AI，它看完就知道前面聊过啥了</text>
+</svg>
+<div class="caption">图 13-1　把每一句对话都存进列表，AI 就有了"记性"</div>
+</div><h2>一句话对应一个字典</h2>
+<p>还记得上一章 <code>messages</code> 里的写法吗？每条消息是一个<strong>字典</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">{"role": "user", "content": "我叫小美。"}</code></pre>
+</div><ul>
+<li><code>&quot;role&quot;</code> 是&quot;谁说的&quot;：<code>&quot;user&quot;</code> 是你（用户），<code>&quot;assistant&quot;</code>（助手）就是 AI。</li>
+<li><code>&quot;content&quot;</code> 是&quot;说了什么&quot;。</li>
+</ul>
+<p>所以一段对话，就是一串这样的字典组成的<strong>列表</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">messages = [
+    {"role": "user", "content": "我叫小美。"},
+    {"role": "assistant", "content": "你好呀小美！很高兴认识你～"},
+    {"role": "user", "content": "你还记得我叫什么吗？"},
+]</code></pre>
+</div><p>把这整个列表发给 AI，它就能根据前面几句，答出&quot;你叫小美&quot;。<strong>这就是记性的全部秘密。</strong></p>
+<h2>搭建聊天机器人</h2>
+<p>思路理清了，代码其实就是把第 5 章的 <code>while</code> 循环、第 6 章的列表，和上一章的 AI 调用<strong>拼在一起</strong>：</p>
+<ol>
+<li>准备一个空的 <code>messages</code> 列表。</li>
+<li>进入 <code>while</code> 循环：<ul>
+<li>让用户输入一句话（<code>input</code>）。</li>
+<li>如果用户输入&quot;再见&quot;，就跳出循环，结束。</li>
+<li>把用户这句话<strong>追加</strong>进 <code>messages</code>。</li>
+<li>把整个 <code>messages</code> 发给 AI，拿到回答。</li>
+<li>打印回答，并把回答也<strong>追加</strong>进 <code>messages</code>（这样下一轮它就记得自己说过啥）。</li>
+</ul>
+</li>
+</ol>
+<p>新建 <code>chatbot.py</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># chatbot.py
+import anthropic
+
+client = anthropic.Anthropic()
+
+# 这个列表就是机器人的"记忆"，一开始是空的
+messages = []
+
+print("聊天机器人已上线！（输入'再见'结束）")
+
+while True:
+    # 1. 用户说一句
+    user_says = input("你：")
+
+    # 2. 想结束就退出
+    if user_says == "再见":
+        print("机器人：拜拜，下次再聊！")
+        break
+
+    # 3. 把用户这句存进记忆
+    messages.append({"role": "user", "content": user_says})
+
+    # 4. 把全部对话发给 AI，拿回答
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=300,
+        messages=messages,
+    )
+
+    # 5. 取出 AI 的回答文字
+    reply = ""
+    for block in response.content:
+        if block.type == "text":
+            reply += block.text
+
+    # 6. 打印，并把 AI 的回答也存进记忆
+    print("机器人：" + reply)
+    messages.append({"role": "assistant", "content": reply})</code></pre>
+</div><p>设置好密钥（见上一章）后运行 <code>python chatbot.py</code>，你就能和它连续聊天了！试试先告诉它你的名字，聊几句，再问它&quot;我叫什么&quot;，看它记不记得。</p>
+<blockquote>
+<p>💡 小贴士：第 5 步为什么用 <code>reply += block.text</code> 而不是直接 <code>print</code>？因为我们既要<strong>打印</strong>回答，又要把回答<strong>存进记忆</strong>（第 6 步）。所以先把文字拼进 <code>reply</code> 变量攒起来，再一次用掉。</p>
+</blockquote>
+<h2>给机器人一个&quot;人设&quot;</h2>
+<p>现在的机器人挺普通。我们可以给它一个<strong>人设（角色设定）</strong>，让它扮演成任何角色——比如一只傲娇的猫、一位耐心的数学老师、一个海盗船长。</p>
+<p>方法是用一个叫 <strong>system（系统提示）</strong> 的设定。它像是给演员的&quot;剧本说明&quot;，在对话开始前悄悄告诉 AI：&quot;你要扮演谁、用什么口气说话&quot;。</p>
+<p>在 <code>messages.create</code> 里加一个 <code>system</code> 参数：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># cat_bot.py
+import anthropic
+
+client = anthropic.Anthropic()
+
+# 人设：让它扮演一只可爱又有点傲娇的小猫
+persona = "你是一只可爱又有点傲娇的小猫，名叫团子。说话要软萌，偶尔在句尾加'喵'，喜欢卖萌，但也很关心和你聊天的主人。"
+
+messages = []
+print("小猫团子已经趴在键盘上啦！（输入'再见'结束）")
+
+while True:
+    user_says = input("你：")
+    if user_says == "再见":
+        print("团子：主人要走了吗…那团子先睡觉觉了喵～")
+        break
+
+    messages.append({"role": "user", "content": user_says})
+
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=300,
+        system=persona,          # 把人设告诉 AI
+        messages=messages,
+    )
+
+    reply = ""
+    for block in response.content:
+        if block.type == "text":
+            reply += block.text
+
+    print("团子：" + reply)
+    messages.append({"role": "assistant", "content": reply})</code></pre>
+</div><p>运行看看，它会全程用小猫的口气跟你说话！</p>
+<blockquote>
+<p>💡 小贴士：<code>system</code> 只需要设一次，它管着整场对话的&quot;风格&quot;。注意：<code>system</code> 是单独的参数，<strong>不要</strong>把人设塞进 <code>messages</code> 列表里。</p>
+</blockquote>
+<h2>动手改一改</h2>
+<p>把 <code>persona</code> 这段人设换掉，你的机器人就完全变了个&quot;人&quot;。试试这些：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># 一位耐心的数学老师
+persona = "你是一位非常耐心、温柔的初中数学老师。学生问问题时，你不直接给答案，而是一步步引导他自己想出来，多鼓励他。"
+
+# 一个爱押韵的说唱歌手
+persona = "你是一个酷酷的说唱歌手，回答任何问题都要押韵，句子简短带节奏感。"
+
+# 一个只会用 emoji 辅助表达的机器人
+persona = "你说话时每句话结尾都要配一个合适的 emoji 表情。"</code></pre>
+</div><p>同一套聊天代码，换一句人设，就能造出千奇百怪的机器人。<strong>这就是提示词（prompt）的威力——你怎么描述，AI 就怎么表现。</strong></p>
+<h2>常见错误</h2>
+<p><strong>1. 忘了把 AI 的回答存回 messages</strong></p>
+<p>如果你只 <code>append</code> 用户的话、忘了 <code>append</code> AI 的回答，机器人就会&quot;半失忆&quot;——它记得你说的，却不记得自己说过什么，对话会变得很奇怪。<strong>一定要一问一答都存进列表。</strong></p>
+<p><strong>2. 死循环出不来</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">while True:
+    user_says = input("你：")
+    # 忘了写 if ... break，永远退不出去！</code></pre>
+</div><p><code>while True</code> 是死循环，必须有 <code>break</code> 才能停。我们靠&quot;输入&#39;再见&#39;就 break&quot;来退出。（还记得第 5 章的安全提醒吗？）</p>
+<p><strong>3. 把 system 写进了 messages</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># 错误示范
+messages = [{"role": "system", "content": persona}]</code></pre>
+</div><p>在这套写法里，人设要用<strong>单独的 <code>system</code> 参数</strong>传，不要放进 <code>messages</code>。放错了可能报错或不生效。</p>
+<p><strong>4. 聊太久变慢、变贵</strong></p>
+<p>对话越长，<code>messages</code> 列表越大，每次发给 AI 的内容越多——会<strong>变慢</strong>，也<strong>更费钱</strong>。练习时聊几轮就好；真正的产品会用一些办法来&quot;精简旧对话&quot;，那是更进阶的话题了。</p>
+<h2>动手挑战</h2>
+<p><strong>★ 挑战一：定制你的专属机器人</strong>
+设计一个你自己的人设（你最喜欢的动漫角色？一个搞笑的外星人？），改 <code>persona</code>，和它聊上几轮。</p>
+<p><strong>★★ 挑战二：多几种结束方式</strong>
+现在只有输入&quot;再见&quot;能退出。改一改，让&quot;再见&quot;&quot;bye&quot;&quot;退出&quot;&quot;quit&quot;这几个词<strong>任意一个</strong>都能结束对话。（提示：用 <code>if user_says in [...]:</code> 或 <code>or</code>。）</p>
+<p><strong>★★★ 挑战三：给对话记笔记</strong>
+在聊天的同时，把每一句对话（谁说的、说了什么）也用 <code>print</code> 存进一个文本文件，或者在程序结束时，把整段对话完整回放一遍。（提示：你已经有 <code>messages</code> 列表了，结束时遍历它打印出来即可。）</p>
+<h2>本章小结</h2>
+<p>你做出了一个有记性、有个性的聊天机器人！回顾关键点：</p>
+<ul>
+<li>AI 本身<strong>没有记性</strong>，每次调用都是全新对话；<strong>记性靠我们的程序用列表维护</strong>。</li>
+<li>把每一句对话（<code>user</code> 和 <code>assistant</code>）都 <code>append</code> 进 <code>messages</code> 列表，每次把<strong>整个列表</strong>发给 AI。</li>
+<li>用 <strong><code>while</code> 循环</strong> 实现&quot;一直聊&quot;，用 <strong><code>break</code></strong>（如输入&quot;再见&quot;）来退出。</li>
+<li>用 <strong><code>system</code> 参数</strong>给 AI 设定<strong>人设</strong>，一句话就能让它变身不同角色。</li>
+<li>对话越长越慢越贵，练习时适度就好。</li>
+</ul>
+<p>下一章，我们要把 AI 塞进<strong>游戏</strong>里——做一个会自己出题、还能判断你答得对不对的&quot;智能出题官&quot;，让 AI 当你的游戏搭档。翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch13.html">← 第 13 章 AI 是什么</a>
+  <a class="nav-next" href="ch15.html">第 15 章 给游戏装上 AI →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

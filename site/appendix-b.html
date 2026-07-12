@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 B 报错速查表</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li class="active"><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 B 报错看不懂？速查表</h1>
+<p>写代码时，屏幕上突然冒出一大段红红的英文——很多人第一反应是心里一紧：&quot;我是不是很笨？&quot;</p>
+<p><strong>先说最重要的一句话：报错不是你笨，是电脑在帮你找问题。</strong></p>
+<p>想象你在写作文，老师用红笔圈出一个错别字。老师不是在骂你，而是在帮你改得更好。Python 的报错就是那支红笔：它发现了一个它看不懂的地方，于是停下来告诉你&quot;喂，这里好像不太对，你来看看&quot;。<strong>每一个程序员，包括写了几十年代码的高手，每天都在和报错打交道。</strong> 会看报错，是编程最有用的本领之一。</p>
+<p>这一节教你两件事：<strong>怎么读报错</strong>，以及一张<strong>常见报错速查表</strong>，遇到不懂的翻过来查就行。</p>
+<hr>
+<h2>第一招：报错要从下往上看</h2>
+<p>Python 的报错信息（英文叫 <strong>Traceback</strong>，意思是&quot;回溯、往回追查&quot;）经常有好几行，看起来吓人。但记住一个诀窍：</p>
+<blockquote>
+<p>小贴士：<strong>Traceback 从下往上看，最后一行最重要。</strong> 上面那些行是电脑在&quot;讲它一路是怎么走到出错这里的&quot;（对新手用处不大），而<strong>最后一行</strong>才直接告诉你：错的是什么类型、大概什么原因。先看最后一行，往往就够了。</p>
+</blockquote>
+<p>我们看个例子。假设你运行了这段代码：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">print("开始")
+print(score)</code></pre>
+</div><p>屏幕上会出现类似这样的一段：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Traceback (most recent call last):
+  File "hello.py", line 2, in &lt;module&gt;
+    print(score)
+NameError: name 'score' is not defined</code></pre>
+</div><p>别被前面几行吓到，我们<strong>从下往上</strong>拆开看：</p>
+<ul>
+<li><strong>最后一行</strong> <code>NameError: name &#39;score&#39; is not defined</code>：这是重点！<code>NameError</code> 是错误类型（名字错误），冒号后面是解释——&quot;名字 score 没有被定义过&quot;。也就是说，你用了一个电脑没见过的名字 <code>score</code>。</li>
+<li><strong>倒数第二、三行</strong> <code>File &quot;hello.py&quot;, line 2</code>：告诉你出错在 <strong>hello.py 文件的第 2 行</strong>。太贴心了，直接把出事地点报给你。</li>
+</ul>
+<p>所以读报错的顺口溜是：<strong>先看最后一行（错在哪类），再看行号（错在哪行），最后回去改代码。</strong> 就这么简单。</p>
+<div class="concept">
+<svg viewBox="0 0 540 190" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="20" y="20" width="500" height="150" rx="10" fill="#1b1b1b"/>
+  <text x="35" y="48" font-size="13" fill="#8a8a8a" font-family="monospace">Traceback (most recent call last):</text>
+  <text x="35" y="72" font-size="13" fill="#8a8a8a" font-family="monospace">  File "hello.py", line 2, in ...</text>
+  <text x="35" y="96" font-size="13" fill="#8a8a8a" font-family="monospace">    print(score)</text>
+  <text x="35" y="130" font-size="14" fill="#ff8a6b" font-family="monospace">NameError: name 'score' is not defined</text>
+  <path d="M300 145 L300 138" stroke="#3f9b5c" stroke-width="0"/>
+  <text x="300" y="160" text-anchor="middle" font-size="13" fill="#9fe3b0">↑ 先看这一行！最重要</text>
+</svg>
+<div class="caption">图 B-1　报错从下往上看，最后一行告诉你错误类型和原因</div>
+</div><hr>
+<h2>第二招：查速查表</h2>
+<p>知道了看最后一行，接下来只要认识<strong>冒号前那个错误类型的名字</strong>，就能大致猜到哪儿出了问题。下面这张表收了 9 个新手最常遇到的报错。<strong>遇到报错，先记下最后一行开头那个词，回来这里查。</strong></p>
+<table>
+<thead>
+<tr>
+<th>错误类型</th>
+<th>报错大概长啥样</th>
+<th>中文意思</th>
+<th>常见原因</th>
+<th>怎么修</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>SyntaxError</strong></td>
+<td><code>SyntaxError: invalid syntax</code></td>
+<td>语法错误</td>
+<td>代码写得电脑读不通：中文括号/引号、少了冒号 <code>:</code>、括号没配对</td>
+<td>把输入法切英文；检查 <code>( )</code>、<code>&quot; &quot;</code>、<code>:</code> 是否齐全、成对</td>
+</tr>
+<tr>
+<td><strong>NameError</strong></td>
+<td><code>NameError: name &#39;x&#39; is not defined</code></td>
+<td>名字没定义</td>
+<td>用了一个还没创建的变量；或函数名、变量名拼错了</td>
+<td>检查拼写；确认这个名字在<strong>使用之前</strong>已经赋过值</td>
+</tr>
+<tr>
+<td><strong>TypeError</strong></td>
+<td><code>TypeError: can only concatenate str (not &quot;int&quot;) to str</code></td>
+<td>类型不对</td>
+<td>把不同&quot;种类&quot;的数据硬凑一起，比如文字 <code>+</code> 数字</td>
+<td>用 <code>str()</code> 把数字变成文字，或用 <code>int()</code> 把文字变数字，再运算</td>
+</tr>
+<tr>
+<td><strong>ValueError</strong></td>
+<td><code>ValueError: invalid literal for int() with base 10: &#39;abc&#39;</code></td>
+<td>值不合适</td>
+<td>类型对但内容不行，比如想把 <code>&quot;abc&quot;</code> 变成整数</td>
+<td>检查要转换的内容是不是真的数字；输入前先验证</td>
+</tr>
+<tr>
+<td><strong>IndexError</strong></td>
+<td><code>IndexError: list index out of range</code></td>
+<td>下标越界</td>
+<td>列表里没那么多东西，你却去取第 5 个，可它只有 3 个</td>
+<td>记住下标从 <strong>0</strong> 开始；确认序号没超过列表长度</td>
+</tr>
+<tr>
+<td><strong>KeyError</strong></td>
+<td><code>KeyError: &#39;name&#39;</code></td>
+<td>键不存在</td>
+<td>字典里没有你要找的那个键（钥匙）</td>
+<td>检查键名拼写；用 <code>字典.get(键)</code> 取值可避免报错</td>
+</tr>
+<tr>
+<td><strong>IndentationError</strong></td>
+<td><code>IndentationError: expected an indented block</code></td>
+<td>缩进错误</td>
+<td>该缩进的地方没缩进，或缩进乱了（空格和 Tab 混用）</td>
+<td>冒号 <code>:</code> 下一行要缩进；全用空格（一般 4 个），别混 Tab</td>
+</tr>
+<tr>
+<td><strong>ModuleNotFoundError</strong></td>
+<td><code>ModuleNotFoundError: No module named &#39;xxx&#39;</code></td>
+<td>找不到模块</td>
+<td>你 <code>import</code> 的库还没装；或库名拼错</td>
+<td>在终端 <code>pip install 库名</code> 装上；检查名字拼写</td>
+</tr>
+<tr>
+<td><strong>ZeroDivisionError</strong></td>
+<td><code>ZeroDivisionError: division by zero</code></td>
+<td>除以零了</td>
+<td>做了 <code>÷ 0</code> 的运算，数学上不允许</td>
+<td>除之前先判断除数是不是 0，是 0 就特殊处理</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>小贴士：表里 <code>int</code>、<code>str</code>、<code>list</code> 这些词你现在可能还没全学到，没关系。等学到相应的章节，再回来看这张表会豁然开朗。<strong>这张表是拿来&quot;查&quot;的，不是拿来&quot;背&quot;的</strong>——收藏好，遇到报错翻过来对一对就行。</p>
+</blockquote>
+<hr>
+<h2>三个最常见报错，细讲一下</h2>
+<p>上面表格压缩得比较狠，这里把新手前几周最常撞到的三个，用例子展开讲。</p>
+<h3>SyntaxError（语法错误）——十有八九是符号问题</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">print("你好"）</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">SyntaxError: invalid character '）' (U+FF08)</code></pre>
+</div><p>这里的括号 <code>）</code> 是<strong>中文全角</strong>的，Python 只认英文半角 <code>)</code>。<strong>新手一大半的 SyntaxError 都是中文符号造成的。</strong> 写代码前把输入法切到英文，能躲掉无数坑。</p>
+<h3>NameError（名字没定义）——不是拼错，就是用早了</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">print(age)
+age = 13</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NameError: name 'age' is not defined</code></pre>
+</div><p>问题是：你在<strong>创建 <code>age</code> 之前</strong>就想用它。代码是从上往下运行的，第 1 行执行时 <code>age</code> 还不存在。把顺序换过来（先 <code>age = 13</code> 再 <code>print</code>）就好。另一种常见原因是单纯<strong>拼错了名字</strong>，比如变量叫 <code>player_name</code> 你却写成 <code>playername</code>。</p>
+<h3>IndentationError（缩进错误）——空白也是有意义的</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">if score &gt; 60:
+print("及格")</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">IndentationError: expected an indented block</code></pre>
+</div><p>Python 靠&quot;缩进&quot;（每行前面的空格）来判断哪些代码属于 <code>if</code> 里面。冒号 <code>:</code> 的下一行必须往右缩进（通常 4 个空格）。VS Code 一般会帮你自动缩，但如果你手动删过空格，就可能出这个错。</p>
+<blockquote>
+<p>小贴士：<strong>缩进只用空格，别用 Tab 键，更别空格和 Tab 混着用</strong>——它俩看起来一样，电脑却分得清清楚楚，混用会莫名其妙报错。VS Code 里按 Tab 键通常会自动变成空格，一般不用操心；真出问题时，检查是不是混用了。</p>
+</blockquote>
+<hr>
+<h2>遇到表里没有的报错怎么办？</h2>
+<p>编程世界里的报错成千上万，这张表只收了最常见的。碰到没见过的，试试这几招：</p>
+<ol>
+<li><strong>只看最后一行</strong>，把冒号后面那句英文，一个词一个词查一下意思，往往就懂大半了。</li>
+<li><strong>把最后一行原封不动地复制</strong>，去搜索引擎搜。全世界都有人踩过同一个坑，答案大概率现成。</li>
+<li><strong>看行号，回到那一行</strong>，仔细读读，八成能发现哪个符号、哪个名字不对劲。</li>
+<li><strong>问 AI 帮手</strong>：把报错信息发给 AI，让它用简单的话解释。（本书后面几章会教你怎么和 AI 对话。）</li>
+</ol>
+<blockquote>
+<p>小贴士：养成一个好习惯——<strong>报错出现时，先别急着改代码，先把最后一行读完。</strong> 花 10 秒读懂它，往往比瞎改 10 分钟管用。报错是你的朋友，不是敌人。</p>
+</blockquote>
+<hr>
+<p>记住这一节的两句话就够了：<strong>从下往上看，最后一行最重要；报错不是你笨，是电脑在帮你找问题。</strong> 带着这个心态，你会发现调试（找错、改错）甚至有点像破案的乐趣——而你，就是那个越来越厉害的侦探。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-a.html">← 附录 A 安装环境</a>
+  <a class="nav-next" href="appendix-c.html">附录 C 继续前进 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

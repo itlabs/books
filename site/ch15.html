@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 15 章 给游戏装上 AI</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li class="active"><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 15 章 给游戏装上 AI——会出题的智能出题官</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>前面你做过游戏，也学会了调用 AI。这一章把两者<strong>合体</strong>：做一个<strong>智能问答闯关游戏</strong>。题目不是你事先写死的，而是 <strong>AI 现场出</strong>的——每次玩都不一样；而且答完之后，还是 <strong>AI 来判断</strong>你答得对不对、给你讲解。</p>
+<p><strong>成品预览：</strong></p>
+<pre>选个主题（如：太空/动物/历史）：太空
+—— 第 1 题 ——
+太阳系中最大的行星是哪一颗？
+你的答案：木星
+✅ 答对了！木星是太阳系里体积最大的行星，一千多个地球才能填满它。
+当前得分：1 / 1</pre>
+</div><h2>为什么让 AI 出题这么厉害？</h2>
+<p>想想第 7 章的猜数字、第 9 章的石头剪刀布——那些游戏的&quot;内容&quot;都是<strong>你写死在代码里</strong>的。如果要出 100 道问答题，你就得一道道手写 100 道，累死了，而且玩几次就腻了，因为题目永远那几道。</p>
+<p>而 AI 出题完全不同：<strong>你只要说个主题，它就能源源不断地出新题</strong>，永远玩不腻。这就是 AI 给游戏带来的超能力——<strong>内容是&quot;活&quot;的</strong>。</p>
+<div class="concept">
+<svg viewBox="0 0 580 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="200" y="15" width="180" height="34" rx="8" fill="#e8f0fa" stroke="#2f6db3"/>
+  <text x="290" y="37" text-anchor="middle" font-size="13" fill="#2f6db3">① 让 AI 出一道题</text>  <rect x="200" y="68" width="180" height="34" rx="8" fill="#fff7ec" stroke="#f0a94b"/>
+  <text x="290" y="90" text-anchor="middle" font-size="13" fill="#a5762b">② 玩家输入答案</text>  <rect x="200" y="121" width="180" height="34" rx="8" fill="#fbe6dc" stroke="#e06a3b"/>
+  <text x="290" y="143" text-anchor="middle" font-size="13" fill="#a53f1c">③ 让 AI 判分+讲解</text>  <rect x="200" y="174" width="180" height="30" rx="8" fill="#eafaef" stroke="#3f9b5c"/>
+  <text x="290" y="194" text-anchor="middle" font-size="13" fill="#2f7a45">④ 记分，进入下一题</text>  <path d="M290 49 L290 66" stroke="#666" stroke-width="2" marker-end="url(#d)"/>
+  <path d="M290 102 L290 119" stroke="#666" stroke-width="2" marker-end="url(#d)"/>
+  <path d="M290 155 L290 172" stroke="#666" stroke-width="2" marker-end="url(#d)"/>
+  <path d="M200 189 C90 189 90 32 198 32" stroke="#3f9b5c" stroke-width="2" fill="none" marker-end="url(#dg)"/>
+  <text x="70" y="115" text-anchor="middle" font-size="12" fill="#3f9b5c" transform="rotate(-90 70 115)">循环下一题</text>
+  <defs>
+    <marker id="d" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#666"/></marker>
+    <marker id="dg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 14-1　智能问答游戏的主循环：AI 出题 → 玩家答 → AI 判分 → 记分 → 再来一题</div>
+</div><h2>第一步：让 AI 出一道题</h2>
+<p>我们先单独练一个&quot;出题&quot;的小工具。关键在于<strong>把要求说清楚</strong>——告诉 AI 主题是什么、只要题目本身、别把答案也说出来（不然就剧透了）。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># ask_question.py
+import anthropic
+
+client = anthropic.Anthropic()
+
+topic = "太空"
+
+# 把我们的要求写清楚，这段话叫"提示词（prompt）"
+prompt = f"请出一道关于「{topic}」的知识问答题，适合初中生。只输出题目本身，不要给出答案，不要加'题目：'之类的前缀。"
+
+response = client.messages.create(
+    model="claude-haiku-4-5",
+    max_tokens=150,
+    messages=[{"role": "user", "content": prompt}],
+)
+
+question = ""
+for block in response.content:
+    if block.type == "text":
+        question += block.text
+
+print("AI 出的题：", question)</code></pre>
+</div><p>注意那句 <code>prompt</code> 用了 <strong>f-string</strong>（第 2 章学的）把 <code>topic</code> 拼进去。这样只要换 <code>topic</code>，就能出不同主题的题。<strong>你对 AI 的要求越具体，它给的结果越合你意</strong>——这是使用 AI 的第一条黄金法则。</p>
+<h2>第二步：让 AI 判分</h2>
+<p>玩家答完，怎么知道对不对？我们<strong>再问一次 AI</strong>，把&quot;题目 + 玩家的答案&quot;一起发过去，让它当裁判。</p>
+<p>这里有个小技巧：我们让 AI 的回答<strong>以&quot;对&quot;或&quot;错&quot;开头</strong>，这样程序就能靠开头这个字判断得分，同时后面还能带上讲解给玩家看。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># judge.py
+import anthropic
+
+client = anthropic.Anthropic()
+
+question = "太阳系中最大的行星是哪一颗？"
+player_answer = "木星"
+
+prompt = f"""这是一道题：{question}
+玩家的答案是：{player_answer}
+
+请判断玩家答得对不对。如果对，回答以"对"字开头；如果错，回答以"错"字开头。
+然后用一两句话简短讲解正确答案，语气鼓励，适合初中生。"""
+
+response = client.messages.create(
+    model="claude-haiku-4-5",
+    max_tokens=200,
+    messages=[{"role": "user", "content": prompt}],
+)
+
+verdict = ""
+for block in response.content:
+    if block.type == "text":
+        verdict += block.text
+
+print(verdict)
+
+# 靠开头那个字判断得分
+if verdict.startswith("对"):
+    print("&gt;&gt; 记 1 分！")
+else:
+    print("&gt;&gt; 这题没得分，继续加油！")</code></pre>
+</div><blockquote>
+<p>💡 小贴士：让 AI 用固定格式开头（这里是&quot;对&quot;/&quot;错&quot;），程序就能&quot;读懂&quot;它的判断。这是一个很常用的技巧——<strong>给 AI 定一个好检查的回答格式</strong>。当然 AI 偶尔也会不完全照格式来，所以真正严谨的程序还会做更多检查，但对我们的游戏来说，这样已经够用又好玩了。</p>
+</blockquote>
+<h2>第三步：拼成完整游戏</h2>
+<p>把&quot;出题&quot;和&quot;判分&quot;两个工具，用第 5 章的 <code>for</code> 循环串起来，再加上记分，一个完整的游戏就诞生了。为了让代码整洁，我们用第 6 章学的<strong>函数</strong>，把&quot;出题&quot;和&quot;判分&quot;各包成一个函数。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># quiz_game.py
+import anthropic
+
+client = anthropic.Anthropic()
+
+
+def ask_ai(prompt):
+    """一个小助手函数：把 prompt 发给 AI，返回它的文字回答。"""
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=250,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = ""
+    for block in response.content:
+        if block.type == "text":
+            text += block.text
+    return text
+
+
+def make_question(topic):
+    """让 AI 出一道关于 topic 的题。"""
+    prompt = f"请出一道关于「{topic}」的知识问答题，适合初中生。只输出题目本身，不要给答案，不要加前缀。"
+    return ask_ai(prompt)
+
+
+def judge(question, answer):
+    """让 AI 判断答案对不对，返回它的评语（以'对'或'错'开头）。"""
+    prompt = f"""这是一道题：{question}
+玩家的答案是：{answer}
+请判断对错。对就以"对"开头，错就以"错"开头，然后用一两句话鼓励性地讲解正确答案。"""
+    return ask_ai(prompt)
+
+
+# ===== 游戏开始 =====
+print("🎯 欢迎来到 AI 智能问答闯关！")
+topic = input("选个主题（如：太空 / 动物 / 历史 / 电影）：")
+
+score = 0                      # 得分
+total = 3                      # 一共出几题
+
+for i in range(total):         # 循环出 total 道题
+    print(f"\n—— 第 {i + 1} 题 ——")
+    question = make_question(topic)
+    print(question)
+
+    answer = input("你的答案：")
+
+    verdict = judge(question, answer)
+    print(verdict)
+
+    if verdict.startswith("对"):
+        score += 1
+    print(f"当前得分：{score} / {i + 1}")
+
+# ===== 公布成绩 =====
+print(f"\n🏁 闯关结束！你答对了 {score} / {total} 题。")
+if score == total:
+    print("太厉害了，全对！你就是这个主题的小专家！🎉")
+elif score &gt;= total / 2:
+    print("不错哦，继续加油！")
+else:
+    print("没关系，多玩几次就越来越强啦！")</code></pre>
+</div><p>运行 <code>python quiz_game.py</code>，你就拥有了一个<strong>永远出新题、还会讲解</strong>的问答游戏。想玩历史就输历史，想玩动物就输动物，题目全是 AI 现编的！</p>
+<h2>拆开看看</h2>
+<p>这个游戏其实是把你学过的东西<strong>全用上了</strong>：</p>
+<ul>
+<li><strong>函数</strong>（第 6 章）：<code>ask_ai</code>、<code>make_question</code>、<code>judge</code> 把重复的活儿打包，代码干净好读。注意 <code>ask_ai</code> 被另外两个函数调用——函数可以调用函数。</li>
+<li><strong>f-string</strong>（第 2 章）：把 <code>topic</code>、<code>question</code>、<code>answer</code> 拼进提示词。</li>
+<li><strong>for 循环 + range</strong>（第 5 章）：控制出几道题。</li>
+<li><strong>if / elif / else</strong>（第 4 章）：判断得分、公布评语。</li>
+<li><strong>变量累加</strong>（第 5 章）：<code>score += 1</code> 记分。</li>
+<li><strong>input / print</strong>（第 3 章）：和玩家互动。</li>
+<li><strong>AI 调用</strong>（第 12、13 章）：让内容变&quot;活&quot;。</li>
+</ul>
+<p>看，你不是在学一堆孤立的知识点——它们最后会<strong>汇合成一个真正好玩的作品</strong>。这就是编程最迷人的地方。</p>
+<h2>常见错误</h2>
+<p><strong>1. AI 偶尔不按&quot;对/错&quot;开头</strong></p>
+<p>AI 不是每次都 100% 听话，可能回答&quot;这个答案是正确的……&quot;而不是&quot;对……&quot;开头，导致明明答对了却没记分。这不是你的 bug，是 AI 的特点。可以在提示词里<strong>再强调一遍格式</strong>（&quot;必须严格以&#39;对&#39;或&#39;错&#39;这个字开头&quot;），能改善很多。</p>
+<p><strong>2. 每题都要联网、要花一点点钱</strong></p>
+<p>这个游戏每出一题、每判一次分，都要&quot;打电话&quot;给 AI。所以玩的时候要联网，也会消耗一点点额度。把 <code>total</code> 设小一点（比如 3）练习就好。</p>
+<p><strong>3. 忘了 return，函数没把结果给出来</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def make_question(topic):
+    prompt = f"..."
+    ask_ai(prompt)      # 少了 return！</code></pre>
+</div><p>函数算完了却不 <code>return</code>，外面就拿不到结果，<code>question</code> 会变成 <code>None</code>。记得把结果 <code>return</code> 出去。（第 6 章讲过。）</p>
+<p><strong>4. 把 max_tokens 设太小</strong></p>
+<p>判分要带讲解，如果 <code>max_tokens</code> 太小（比如 20），讲解会被&quot;说一半就断掉&quot;。给判分留够长度（比如 200 以上）。</p>
+<h2>动手挑战</h2>
+<p><strong>★ 挑战一：加长闯关</strong>
+把 <code>total</code> 改成 5 或 10 题。想一想题目变多后，玩一局要花多长时间、多问几次 AI。</p>
+<p><strong>★★ 挑战二：难度选择</strong>
+在开始时多问一句玩家想要的难度（简单/普通/困难），把难度也拼进 <code>make_question</code> 的提示词里，让 AI 按难度出题。</p>
+<p><strong>★★★ 挑战三：出选择题</strong>
+改造 <code>make_question</code>，让 AI 出<strong>带 A/B/C/D 四个选项的选择题</strong>（在提示词里要求它给出题目和四个选项）。玩家输入 A/B/C/D 作答，再让 AI 判分。这样答案更好判断，游戏也更规范。</p>
+<h2>本章小结</h2>
+<p>你把 AI 装进了游戏，做出了一个内容永不重复的智能问答闯关！回顾一下：</p>
+<ul>
+<li>AI 能让游戏的<strong>内容变&quot;活&quot;</strong>——不用手写题库，说个主题就源源不断出新题。</li>
+<li>核心是写好<strong>提示词（prompt）</strong>：要求越具体（主题、格式、语气），AI 给的结果越合用。</li>
+<li>让 AI 用<strong>固定格式回答</strong>（如以&quot;对/错&quot;开头），程序就能&quot;读懂&quot;它、据此记分。</li>
+<li>用<strong>函数</strong>把&quot;出题&quot;&quot;判分&quot;&quot;调用 AI&quot;打包，代码更整洁；这一章综合用上了前面所有章的知识。</li>
+<li>AI 不是 100% 听话，偶尔不按格式来是正常现象，可以靠更明确的提示词改善。</li>
+</ul>
+<p>下一章是本书的<strong>压轴大项目</strong>：我们要做一个&quot;AI 故事工厂&quot;——你和 AI 一起，创作一个能根据你的选择走向不同结局的互动故事游戏。把这本书学的所有东西，来一次总动员！翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch14.html">← 第 14 章 会聊天的机器人</a>
+  <a class="nav-next" href="ch16.html">第 16 章 AI 故事工厂 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

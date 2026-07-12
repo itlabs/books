@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 章 列表、字典和函数</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li class="active"><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 6 章 列表、字典和函数——整理你的代码</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>前几章你学会了让程序记东西、做选择、重复干活。但到现在，一个变量只能装一样东西——想记全班同学的名字，难道要 40 个变量？这一章你会拿到三样强大的"整理工具"：<strong>列表</strong>帮你把一堆东西排好队，<strong>字典</strong>帮你给东西贴标签，<strong>函数</strong>帮你把常用代码打包成按钮。章末你会做一个"背单词卡片"小程序，把三样工具全用上。</p>
+<p><strong>成品预览：</strong></p>
+<pre>=== 背单词小程序 ===
+第 1 张：apple 是什么意思？苹果
+答对了！✔
+第 2 张：book 是什么意思？书
+答对了！✔
+一共 2 张卡片，你答对了 2 张，正确率 100%！</pre>
+</div><h2>列表：把一堆东西排成队</h2>
+<p>假设你要记住三种水果。用前面学的办法，得开三个变量：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="fruit1%20%3D%20%22%E8%8B%B9%E6%9E%9C%22%0Afruit2%20%3D%20%22%E9%A6%99%E8%95%89%22%0Afruit3%20%3D%20%22%E6%A9%99%E5%AD%90%22">fruit1 = "苹果"
+fruit2 = "香蕉"
+fruit3 = "橙子"</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>要是有 100 种水果呢？这也太笨了。这时候就该请出<strong>列表（list）</strong>——它像一个能装很多东西的<strong>长盒子</strong>，一格挨一格，把同类的东西排成一队：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20list_basic.py%0Afruits%20%3D%20%5B%22%E8%8B%B9%E6%9E%9C%22%2C%20%22%E9%A6%99%E8%95%89%22%2C%20%22%E6%A9%99%E5%AD%90%22%5D%20%20%20%23%20%E7%94%A8%E6%96%B9%E6%8B%AC%E5%8F%B7%EF%BC%8C%E5%85%83%E7%B4%A0%E4%B9%8B%E9%97%B4%E7%94%A8%E9%80%97%E5%8F%B7%E9%9A%94%E5%BC%80%0Aprint(fruits)"># list_basic.py
+fruits = ["苹果", "香蕉", "橙子"]   # 用方括号，元素之间用逗号隔开
+print(fruits)</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">['苹果', '香蕉', '橙子']</code></pre>
+</div><p>创建列表用<strong>方括号 <code>[ ]</code></strong>，里面的每样东西叫一个<strong>元素（element）</strong>，元素之间用逗号隔开。一个变量 <code>fruits</code>，就装下了全部三种水果。</p>
+<h2>用编号取出列表里的元素：索引</h2>
+<p>列表里每个元素都有一个<strong>编号</strong>，叫<strong>索引（index）</strong>。这里有个特别要记牢的规矩：</p>
+<blockquote>
+<p><strong>索引从 0 开始数，不是从 1！</strong> 第一个元素的编号是 0，第二个是 1，以此类推。</p>
+</blockquote>
+<div class="concept">
+<svg viewBox="0 0 560 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="25" text-anchor="middle" font-size="14" fill="#6b6459">fruits = ["苹果", "香蕉", "橙子"]</text>
+  <!-- 三个格子 -->
+  <rect x="90" y="55" width="120" height="60" rx="6" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <rect x="220" y="55" width="120" height="60" rx="6" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <rect x="350" y="55" width="120" height="60" rx="6" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="150" y="92" text-anchor="middle" font-size="16" fill="#333">苹果</text>
+  <text x="280" y="92" text-anchor="middle" font-size="16" fill="#333">香蕉</text>
+  <text x="410" y="92" text-anchor="middle" font-size="16" fill="#333">橙子</text>
+  <!-- 索引标签 -->
+  <text x="150" y="140" text-anchor="middle" font-size="15" fill="#e06a3b" font-weight="bold">索引 0</text>
+  <text x="280" y="140" text-anchor="middle" font-size="15" fill="#e06a3b" font-weight="bold">索引 1</text>
+  <text x="410" y="140" text-anchor="middle" font-size="15" fill="#e06a3b" font-weight="bold">索引 2</text>
+  <text x="150" y="158" text-anchor="middle" font-size="12" fill="#3f9b5c">fruits[0]</text>
+  <text x="280" y="158" text-anchor="middle" font-size="12" fill="#3f9b5c">fruits[1]</text>
+  <text x="410" y="158" text-anchor="middle" font-size="12" fill="#3f9b5c">fruits[2]</text>
+</svg>
+<div class="caption">图 6-1　列表就像一排编号的格子，编号（索引）从 0 开始；用 <code>fruits[编号]</code> 取出对应格子里的东西</div>
+</div><p>想取出某个元素，就在列表名后面用方括号写上它的索引：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code2">▶ 运行</button>
+    <button class="reset-btn" data-target="code2">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code2" data-original="%23%20list_index.py%0Afruits%20%3D%20%5B%22%E8%8B%B9%E6%9E%9C%22%2C%20%22%E9%A6%99%E8%95%89%22%2C%20%22%E6%A9%99%E5%AD%90%22%5D%0A%0Aprint(fruits%5B0%5D)%20%20%20%20%23%20%E7%AC%AC%E4%B8%80%E4%B8%AA%E5%85%83%E7%B4%A0%0Aprint(fruits%5B1%5D)%20%20%20%20%23%20%E7%AC%AC%E4%BA%8C%E4%B8%AA%E5%85%83%E7%B4%A0%0Aprint(fruits%5B2%5D)%20%20%20%20%23%20%E7%AC%AC%E4%B8%89%E4%B8%AA%E5%85%83%E7%B4%A0"># list_index.py
+fruits = ["苹果", "香蕉", "橙子"]
+
+print(fruits[0])    # 第一个元素
+print(fruits[1])    # 第二个元素
+print(fruits[2])    # 第三个元素</code></pre>
+  <div class="output" id="code2-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">苹果
+香蕉
+橙子</code></pre>
+</div><p>记住：<code>fruits[0]</code> 才是第一个&quot;苹果&quot;。这个&quot;从 0 开始&quot;是全世界初学者都要适应一阵的地方，别嫌它奇怪，习惯就好。</p>
+<h2>往列表里添东西：append</h2>
+<p>列表最方便的一点，是<strong>随时能往里加东西</strong>。用 <strong><code>append</code></strong>（英语&quot;添加&quot;）把新元素接到队尾：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code3">▶ 运行</button>
+    <button class="reset-btn" data-target="code3">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code3" data-original="%23%20list_append.py%0Afruits%20%3D%20%5B%22%E8%8B%B9%E6%9E%9C%22%2C%20%22%E9%A6%99%E8%95%89%22%5D%0Aprint(%22%E5%8A%A0%E4%B9%8B%E5%89%8D%EF%BC%9A%22%2C%20fruits)%0A%0Afruits.append(%22%E6%A9%99%E5%AD%90%22)%20%20%20%20%23%20%E5%9C%A8%E6%9C%AB%E5%B0%BE%E6%B7%BB%E5%8A%A0%E4%B8%80%E4%B8%AA%0Afruits.append(%22%E8%A5%BF%E7%93%9C%22)%20%20%20%20%23%20%E5%86%8D%E6%B7%BB%E5%8A%A0%E4%B8%80%E4%B8%AA%0Aprint(%22%E5%8A%A0%E4%B9%8B%E5%90%8E%EF%BC%9A%22%2C%20fruits)"># list_append.py
+fruits = ["苹果", "香蕉"]
+print("加之前：", fruits)
+
+fruits.append("橙子")    # 在末尾添加一个
+fruits.append("西瓜")    # 再添加一个
+print("加之后：", fruits)</code></pre>
+  <div class="output" id="code3-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">加之前： ['苹果', '香蕉']
+加之后： ['苹果', '香蕉', '橙子', '西瓜']</code></pre>
+</div><p><code>fruits.append(&quot;橙子&quot;)</code> 读作&quot;让 fruits 这个列表，把&#39;橙子&#39;添到末尾&quot;。中间那个点 <code>.</code> 你先理解成&quot;的&quot;——&quot;fruits 的 append 功能&quot;。列表可以从空开始，一点点往里加，这在写程序时特别常用。</p>
+<h2>遍历列表：一个一个拿出来处理</h2>
+<p>想把列表里每样东西都拿出来处理一遍（比如全打印出来），用上一章的 <code>for</code> 循环最合适。这叫**遍历（traverse）**列表：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code4">▶ 运行</button>
+    <button class="reset-btn" data-target="code4">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code4" data-original="%23%20list_loop.py%0Afruits%20%3D%20%5B%22%E8%8B%B9%E6%9E%9C%22%2C%20%22%E9%A6%99%E8%95%89%22%2C%20%22%E6%A9%99%E5%AD%90%22%5D%0A%0Afor%20fruit%20in%20fruits%3A%20%20%20%20%20%20%20%20%20%20%23%20%E6%8A%8A%20fruits%20%E9%87%8C%E7%9A%84%E5%85%83%E7%B4%A0%E4%B8%80%E4%B8%AA%E4%B8%AA%E6%8B%BF%E5%87%BA%E6%9D%A5%EF%BC%8C%E8%A3%85%E8%BF%9B%20fruit%0A%20%20%20%20print(f%22%E6%88%91%E7%88%B1%E5%90%83%7Bfruit%7D%22)"># list_loop.py
+fruits = ["苹果", "香蕉", "橙子"]
+
+for fruit in fruits:          # 把 fruits 里的元素一个个拿出来，装进 fruit
+    print(f"我爱吃{fruit}")</code></pre>
+  <div class="output" id="code4-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">我爱吃苹果
+我爱吃香蕉
+我爱吃橙子</code></pre>
+</div><p>注意这里 <code>for fruit in fruits</code>——它不再需要 <code>range</code>，而是<strong>直接从列表里一个个取元素</strong>。每转一圈，<code>fruit</code> 就变成列表里的下一样东西。这比用索引方便多了。</p>
+<h2>列表有多长：len</h2>
+<p>想知道列表里有几个元素，用 <strong><code>len</code></strong>（英语 length&quot;长度&quot;的缩写）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code5">▶ 运行</button>
+    <button class="reset-btn" data-target="code5">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code5" data-original="%23%20list_len.py%0Afruits%20%3D%20%5B%22%E8%8B%B9%E6%9E%9C%22%2C%20%22%E9%A6%99%E8%95%89%22%2C%20%22%E6%A9%99%E5%AD%90%22%5D%0Aprint(f%22%E4%B8%80%E5%85%B1%E6%9C%89%20%7Blen(fruits)%7D%20%E7%A7%8D%E6%B0%B4%E6%9E%9C%22)"># list_len.py
+fruits = ["苹果", "香蕉", "橙子"]
+print(f"一共有 {len(fruits)} 种水果")</code></pre>
+  <div class="output" id="code5-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">一共有 3 种水果</code></pre>
+</div><p><code>len()</code> 数出来是 3。小心：因为索引从 0 开始，长度为 3 的列表，最大索引是 <strong>2</strong>（就是 <code>len - 1</code>），可没有 <code>fruits[3]</code>。</p>
+<h2>字典：给每样东西贴上标签</h2>
+<p>列表用<strong>编号</strong>找东西。但有时编号不好用——比如记全班同学的分数，你更想用&quot;名字&quot;去查分数，而不是&quot;第 3 个同学&quot;。这时就该用<strong>字典（dict）</strong>。</p>
+<p>字典就像现实里的字典：你用一个<strong>词</strong>（叫<strong>键，key</strong>）去查它对应的<strong>解释</strong>（叫<strong>值，value</strong>）。它把数据存成一对一对的&quot;<strong>键值对</strong>&quot;：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code6">▶ 运行</button>
+    <button class="reset-btn" data-target="code6">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code6" data-original="%23%20dict_basic.py%0A%23%20%E8%AE%B0%E5%BD%95%E4%B8%89%E4%BD%8D%E5%90%8C%E5%AD%A6%E7%9A%84%E5%88%86%E6%95%B0%EF%BC%9A%E5%90%8D%E5%AD%97%E6%98%AF%E9%94%AE%EF%BC%8C%E5%88%86%E6%95%B0%E6%98%AF%E5%80%BC%0Ascores%20%3D%20%7B%22%E5%B0%8F%E6%98%8E%22%3A%2085%2C%20%22%E5%B0%8F%E7%BA%A2%22%3A%2092%2C%20%22%E5%B0%8F%E5%88%9A%22%3A%2078%7D%0Aprint(scores)"># dict_basic.py
+# 记录三位同学的分数：名字是键，分数是值
+scores = {"小明": 85, "小红": 92, "小刚": 78}
+print(scores)</code></pre>
+  <div class="output" id="code6-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">{'小明': 85, '小红': 92, '小刚': 78}</code></pre>
+</div><p>创建字典用<strong>花括号 <code>{ }</code></strong>，每一对里 <strong>键在前、值在后，中间用冒号 <code>:</code> 隔开</strong>，对与对之间用逗号。</p>
+<div class="concept">
+<svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="25" text-anchor="middle" font-size="14" fill="#6b6459">scores = {"小明": 85, "小红": 92, "小刚": 78}</text>
+  <!-- 三对键值 -->
+  <g>
+    <rect x="60" y="55" width="90" height="45" rx="8" fill="#fdeee8" stroke="#e06a3b" stroke-width="2"/>
+    <text x="105" y="83" text-anchor="middle" font-size="15" fill="#e06a3b">小明</text>
+    <path d="M152 77 L200 77" stroke="#2f6db3" stroke-width="2.5" marker-end="url(#a6)"/>
+    <rect x="205" y="55" width="70" height="45" rx="8" fill="#e8f0f8" stroke="#2f6db3" stroke-width="2"/>
+    <text x="240" y="83" text-anchor="middle" font-size="15" fill="#2f6db3">85</text>
+  </g>
+  <g>
+    <rect x="60" y="115" width="90" height="45" rx="8" fill="#fdeee8" stroke="#e06a3b" stroke-width="2"/>
+    <text x="105" y="143" text-anchor="middle" font-size="15" fill="#e06a3b">小红</text>
+    <path d="M152 137 L200 137" stroke="#2f6db3" stroke-width="2.5" marker-end="url(#a6)"/>
+    <rect x="205" y="115" width="70" height="45" rx="8" fill="#e8f0f8" stroke="#2f6db3" stroke-width="2"/>
+    <text x="240" y="143" text-anchor="middle" font-size="15" fill="#2f6db3">92</text>
+  </g>
+  <text x="105" y="45" text-anchor="middle" font-size="13" fill="#e06a3b" font-weight="bold">键 key</text>
+  <text x="240" y="45" text-anchor="middle" font-size="13" fill="#2f6db3" font-weight="bold">值 value</text>
+  <text x="400" y="110" font-size="13" fill="#3f9b5c">用键去查值：</text>
+  <text x="400" y="135" font-size="14" fill="#333" font-family="monospace">scores["小明"]</text>
+  <text x="400" y="158" font-size="14" fill="#333" font-family="monospace">→ 85</text>
+  <defs>
+    <marker id="a6" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6db3"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 6-2　字典把数据存成"键→值"的一对对；用键（如"小明"）就能查到它对应的值（85）</div>
+</div><h2>用键取值、增改</h2>
+<p>查字典，就用<strong>键</strong>去取<strong>值</strong>——在字典名后面用方括号写上键（注意不是索引编号，而是键本身）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code7">▶ 运行</button>
+    <button class="reset-btn" data-target="code7">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code7" data-original="%23%20dict_get.py%0Ascores%20%3D%20%7B%22%E5%B0%8F%E6%98%8E%22%3A%2085%2C%20%22%E5%B0%8F%E7%BA%A2%22%3A%2092%2C%20%22%E5%B0%8F%E5%88%9A%22%3A%2078%7D%0A%0Aprint(scores%5B%22%E5%B0%8F%E6%98%8E%22%5D)%20%20%20%20%20%20%20%20%20%20%23%20%E7%94%A8%E9%94%AE%22%E5%B0%8F%E6%98%8E%22%E6%9F%A5%E5%AE%83%E7%9A%84%E5%88%86%E6%95%B0%0Aprint(f%22%E5%B0%8F%E7%BA%A2%E8%80%83%E4%BA%86%20%7Bscores%5B'%E5%B0%8F%E7%BA%A2'%5D%7D%20%E5%88%86%22)"># dict_get.py
+scores = {"小明": 85, "小红": 92, "小刚": 78}
+
+print(scores["小明"])          # 用键"小明"查它的分数
+print(f"小红考了 {scores['小红']} 分")</code></pre>
+  <div class="output" id="code7-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">85
+小红考了 92 分</code></pre>
+</div><p>想<strong>改</strong>某个值，或<strong>加</strong>一对新的键值，都用同样的方括号写法：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code8">▶ 运行</button>
+    <button class="reset-btn" data-target="code8">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code8" data-original="%23%20dict_change.py%0Ascores%20%3D%20%7B%22%E5%B0%8F%E6%98%8E%22%3A%2085%2C%20%22%E5%B0%8F%E7%BA%A2%22%3A%2092%7D%0A%0Ascores%5B%22%E5%B0%8F%E6%98%8E%22%5D%20%3D%2090%20%20%20%20%20%20%20%20%20%23%20%E9%94%AE%E5%B7%B2%E5%AD%98%E5%9C%A8%20%E2%86%92%20%E4%BF%AE%E6%94%B9%E5%AE%83%E7%9A%84%E5%80%BC%0Ascores%5B%22%E5%B0%8F%E5%88%9A%22%5D%20%3D%2078%20%20%20%20%20%20%20%20%20%23%20%E9%94%AE%E4%B8%8D%E5%AD%98%E5%9C%A8%20%E2%86%92%20%E6%96%B0%E5%A2%9E%E4%B8%80%E5%AF%B9%0A%0Aprint(scores)"># dict_change.py
+scores = {"小明": 85, "小红": 92}
+
+scores["小明"] = 90         # 键已存在 → 修改它的值
+scores["小刚"] = 78         # 键不存在 → 新增一对
+
+print(scores)</code></pre>
+  <div class="output" id="code8-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">{'小明': 90, '小红': 92, '小刚': 78}</code></pre>
+</div><p>规律很简单：<code>字典[键] = 值</code> 这句话，如果键已经在字典里，就是<strong>修改</strong>；如果键还没有，就是<strong>新增</strong>。</p>
+<blockquote>
+<p>小贴士：列表和字典怎么选？如果你的数据讲究<strong>顺序</strong>、用<strong>编号</strong>取（比如排队名单、步骤清单），用列表；如果你想用一个<strong>名字/标签</strong>去查对应的信息（比如姓名查分数、单词查意思），用字典。</p>
+</blockquote>
+<h2>函数：把常用代码打包成一个按钮</h2>
+<p>假设程序里好几个地方都要打印一条漂亮的分割线：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">print("=" * 20)
+print("欢迎")
+print("=" * 20)
+# ……过一会儿又要一次
+print("=" * 20)
+print("再见")
+print("=" * 20)</code></pre>
+</div><p>同样的 <code>print(&quot;=&quot; * 20)</code> 抄来抄去，又累又容易错。有没有办法把它&quot;打包&quot;，用的时候喊一声就行？有——这就是<strong>函数（function）</strong>。</p>
+<p>其实你早就用过函数了：<code>print()</code>、<code>input()</code>、<code>len()</code> 都是函数。它们是 Python 内置的&quot;按钮&quot;，按一下就干一件事。现在，你要学会<strong>自己造按钮</strong>。</p>
+<p>用关键词 <strong><code>def</code></strong>（define&quot;定义&quot;的缩写）来定义一个函数：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code9">▶ 运行</button>
+    <button class="reset-btn" data-target="code9">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code9" data-original="%23%20func_basic.py%0Adef%20say_hello()%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%AE%9A%E4%B9%89%E4%B8%80%E4%B8%AA%E5%8F%AB%20say_hello%20%E7%9A%84%E5%87%BD%E6%95%B0%0A%20%20%20%20print(%22%E4%BD%A0%E5%A5%BD%EF%BC%81%22)%0A%20%20%20%20print(%22%E6%AC%A2%E8%BF%8E%E6%9D%A5%E5%AD%A6%20Python%EF%BC%81%22)%0A%0A%23%20%E5%AE%9A%E4%B9%89%E5%A5%BD%E4%B9%8B%E5%90%8E%EF%BC%8C%E7%94%A8%22%E5%87%BD%E6%95%B0%E5%90%8D()%22%E6%9D%A5%E8%B0%83%E7%94%A8%E5%AE%83%0Asay_hello()%0Asay_hello()%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%83%B3%E7%94%A8%E5%87%A0%E6%AC%A1%E5%B0%B1%E8%B0%83%E5%87%A0%E6%AC%A1"># func_basic.py
+def say_hello():              # 定义一个叫 say_hello 的函数
+    print("你好！")
+    print("欢迎来学 Python！")
+
+# 定义好之后，用"函数名()"来调用它
+say_hello()
+say_hello()                   # 想用几次就调几次</code></pre>
+  <div class="output" id="code9-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好！
+欢迎来学 Python！
+你好！
+欢迎来学 Python！</code></pre>
+</div><p>拆开看：</p>
+<ul>
+<li><strong><code>def say_hello():</code></strong> 定义一个名叫 <code>say_hello</code> 的函数，后面跟括号和冒号。</li>
+<li>缩进的部分是<strong>函数体</strong>——这个函数被调用时要执行的代码。</li>
+<li>光&quot;定义&quot;函数，它<strong>不会自己运行</strong>，就像按钮装好了没人按。要**调用（call）**它，写 <code>say_hello()</code> ——加上那对括号，才算&quot;按下按钮&quot;。</li>
+</ul>
+<h2>给函数传参数</h2>
+<p>上面的函数每次都说一样的话。想让它更灵活——比如跟不同的人打招呼——就给它加<strong>参数（parameter）</strong>，也就是&quot;调用时可以传进去的信息&quot;：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code10">▶ 运行</button>
+    <button class="reset-btn" data-target="code10">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code10" data-original="%23%20func_param.py%0Adef%20greet(name)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20name%20%E6%98%AF%E5%8F%82%E6%95%B0%EF%BC%8C%E5%83%8F%E4%B8%AA%E5%8D%A0%E4%BD%8D%E7%9A%84%E7%A9%BA%E7%9B%92%E5%AD%90%0A%20%20%20%20print(f%22%E4%BD%A0%E5%A5%BD%EF%BC%8C%7Bname%7D%EF%BC%81%22)%0A%0Agreet(%22%E5%B0%8F%E6%98%8E%22)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%8A%8A%22%E5%B0%8F%E6%98%8E%22%E4%BC%A0%E7%BB%99%20name%0Agreet(%22%E5%B0%8F%E7%BA%A2%22)"># func_param.py
+def greet(name):              # name 是参数，像个占位的空盒子
+    print(f"你好，{name}！")
+
+greet("小明")                 # 把"小明"传给 name
+greet("小红")</code></pre>
+  <div class="output" id="code10-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好，小明！
+你好，小红！</code></pre>
+</div><p>括号里的 <code>name</code> 是参数。调用时你在括号里给的东西（&quot;小明&quot;），就会装进 <code>name</code>，函数体里就能用它了。同一个函数，传不同的参数，就有不同的效果——这才叫灵活。</p>
+<h2>让函数返回结果：return</h2>
+<p>前面的函数只是&quot;打印&quot;。但更常见的是：让函数<strong>算出一个结果，交还给你</strong>，好让你接着用。这要用 <strong><code>return</code></strong>（英语&quot;返回&quot;）：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code11">▶ 运行</button>
+    <button class="reset-btn" data-target="code11">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code11" data-original="%23%20func_return.py%0Adef%20add(a%2C%20b)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%A4%E4%B8%AA%E5%8F%82%E6%95%B0%EF%BC%8C%E7%94%A8%E9%80%97%E5%8F%B7%E9%9A%94%E5%BC%80%0A%20%20%20%20result%20%3D%20a%20%2B%20b%0A%20%20%20%20return%20result%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%8A%8A%E7%BB%93%E6%9E%9C%E4%BA%A4%E5%9B%9E%E5%8E%BB%0A%0A%23%20%E5%87%BD%E6%95%B0%E8%BF%94%E5%9B%9E%E7%9A%84%E5%80%BC%EF%BC%8C%E5%8F%AF%E4%BB%A5%E5%AD%98%E8%BF%9B%E5%8F%98%E9%87%8F%EF%BC%8C%E4%B9%9F%E5%8F%AF%E4%BB%A5%E7%9B%B4%E6%8E%A5%E7%94%A8%0Atotal%20%3D%20add(3%2C%205)%0Aprint(f%223%20%E5%8A%A0%205%20%E7%AD%89%E4%BA%8E%20%7Btotal%7D%22)%0Aprint(f%2210%20%E5%8A%A0%2020%20%E7%AD%89%E4%BA%8E%20%7Badd(10%2C%2020)%7D%22)"># func_return.py
+def add(a, b):                # 两个参数，用逗号隔开
+    result = a + b
+    return result             # 把结果交回去
+
+# 函数返回的值，可以存进变量，也可以直接用
+total = add(3, 5)
+print(f"3 加 5 等于 {total}")
+print(f"10 加 20 等于 {add(10, 20)}")</code></pre>
+  <div class="output" id="code11-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">3 加 5 等于 8
+10 加 20 等于 30</code></pre>
+</div><p><code>return result</code> 的意思是&quot;把 <code>result</code> 送出函数，交给调用它的地方&quot;。有了 <code>return</code>，<code>add(3, 5)</code> 整个就<strong>代表 8 这个值</strong>，你可以像用普通数字一样用它。</p>
+<p><code>return</code> 和 <code>print</code> 的区别很多人搞混：<code>print</code> 只是<strong>显示在屏幕上</strong>，看完就没了；<code>return</code> 是把结果<strong>交回去让程序接着用</strong>。想让函数的结果参与后面的计算，就必须 <code>return</code>。</p>
+<h2>为什么要用函数？</h2>
+<p>你可能会想：不用函数也能写程序呀，干嘛多此一举？函数至少有三大好处：</p>
+<ol>
+<li><strong>不重复</strong>：一段代码写一次，到处调用，改起来也只改一处。</li>
+<li><strong>好理解</strong>：给一堆代码起个名字（比如 <code>check_answer</code>），别人一看名字就懂它干嘛，程序像搭积木一样清晰。</li>
+<li><strong>好分工</strong>：把大问题拆成一个个小函数，各管一摊，再拼起来——这是专业程序员写大程序的秘诀。</li>
+</ol>
+<p>记住一句话：<strong>当你发现某段代码要用好几次，或者想给一段逻辑起个名字时，就该把它写成函数。</strong></p>
+<h2>完整代码：背单词小程序</h2>
+<p>现在把列表、字典、函数<strong>全用上</strong>，做一个像模像样的背单词程序。它用字典存&quot;单词→中文意思&quot;，用列表把要背的单词排好队，再用函数把&quot;检查答案&quot;这段逻辑打包起来。新建 <code>word_card.py</code>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code12">▶ 运行</button>
+    <button class="reset-btn" data-target="code12">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code12" data-original="%23%20word_card.py%0A%0A%23%20%E7%94%A8%E5%AD%97%E5%85%B8%E5%AD%98%E5%8D%95%E8%AF%8D%E5%8D%A1%E7%89%87%EF%BC%9A%E9%94%AE%E6%98%AF%E8%8B%B1%E6%96%87%E5%8D%95%E8%AF%8D%EF%BC%8C%E5%80%BC%E6%98%AF%E4%B8%AD%E6%96%87%E6%84%8F%E6%80%9D%0Aword_bank%20%3D%20%7B%0A%20%20%20%20%22apple%22%3A%20%22%E8%8B%B9%E6%9E%9C%22%2C%0A%20%20%20%20%22book%22%3A%20%22%E4%B9%A6%22%2C%0A%20%20%20%20%22cat%22%3A%20%22%E7%8C%AB%22%2C%0A%7D%0A%0A%23%20%E7%94%A8%E5%88%97%E8%A1%A8%E5%86%B3%E5%AE%9A%E8%80%83%E5%93%AA%E4%BA%9B%E8%AF%8D%E3%80%81%E6%8C%89%E4%BB%80%E4%B9%88%E9%A1%BA%E5%BA%8F%E8%80%83%0Aquiz_list%20%3D%20%5B%22apple%22%2C%20%22book%22%2C%20%22cat%22%5D%0A%0A%0Adef%20check(word%2C%20user_answer)%3A%0A%20%20%20%20%22%22%22%E6%A3%80%E6%9F%A5%E4%B8%80%E4%B8%AA%E5%8D%95%E8%AF%8D%E7%AD%94%E5%BE%97%E5%AF%B9%E4%B8%8D%E5%AF%B9%EF%BC%8C%E7%AD%94%E5%AF%B9%E8%BF%94%E5%9B%9E%20True%EF%BC%8C%E7%AD%94%E9%94%99%E8%BF%94%E5%9B%9E%20False%22%22%22%0A%20%20%20%20correct%20%3D%20word_bank%5Bword%5D%20%20%20%20%20%20%23%20%E4%BB%8E%E5%AD%97%E5%85%B8%E6%9F%A5%E5%87%BA%E6%AD%A3%E7%A1%AE%E7%AD%94%E6%A1%88%0A%20%20%20%20if%20user_answer%20%3D%3D%20correct%3A%0A%20%20%20%20%20%20%20%20print(%22%E7%AD%94%E5%AF%B9%E4%BA%86%EF%BC%81%E2%9C%94%22)%0A%20%20%20%20%20%20%20%20return%20True%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(f%22%E7%AD%94%E9%94%99%E4%BA%86%EF%BC%8C%7Bword%7D%20%E7%9A%84%E6%84%8F%E6%80%9D%E6%98%AF%20%7Bcorrect%7D%22)%0A%20%20%20%20%20%20%20%20return%20False%0A%0A%0Aprint(%22%3D%3D%3D%20%E8%83%8C%E5%8D%95%E8%AF%8D%E5%B0%8F%E7%A8%8B%E5%BA%8F%20%3D%3D%3D%22)%0A%0Aright%20%3D%200%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%AE%B0%E5%BD%95%E7%AD%94%E5%AF%B9%E4%BA%86%E5%87%A0%E5%BC%A0%0Atotal%20%3D%20len(quiz_list)%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%80%E5%85%B1%E5%87%A0%E5%BC%A0%E5%8D%A1%E7%89%87%0A%0A%23%20%E9%81%8D%E5%8E%86%E5%88%97%E8%A1%A8%EF%BC%8C%E4%B8%80%E5%BC%A0%E4%B8%80%E5%BC%A0%E5%9C%B0%E8%80%83%0Afor%20i%20in%20range(total)%3A%0A%20%20%20%20word%20%3D%20quiz_list%5Bi%5D%0A%20%20%20%20answer%20%3D%20input(f%22%E7%AC%AC%20%7Bi%20%2B%201%7D%20%E5%BC%A0%EF%BC%9A%7Bword%7D%20%E6%98%AF%E4%BB%80%E4%B9%88%E6%84%8F%E6%80%9D%EF%BC%9F%22)%0A%20%20%20%20if%20check(word%2C%20answer)%3A%20%20%20%20%20%20%20%20%23%20%E8%B0%83%E7%94%A8%E5%87%BD%E6%95%B0%E6%A3%80%E6%9F%A5%EF%BC%8C%E9%A1%BA%E4%BE%BF%E6%8B%BF%E5%88%B0%E5%AF%B9%E9%94%99%0A%20%20%20%20%20%20%20%20right%20%3D%20right%20%2B%201%20%20%20%20%20%20%20%20%20%20%23%20%E7%AD%94%E5%AF%B9%E5%B0%B1%E5%8A%A0%E4%B8%80%E5%88%86%0A%0A%23%20%E7%AE%97%E5%87%BA%E6%AD%A3%E7%A1%AE%E7%8E%87%E5%B9%B6%E6%B1%87%E6%8A%A5%0Arate%20%3D%20int(right%20%2F%20total%20*%20100)%0Aprint(f%22%E4%B8%80%E5%85%B1%20%7Btotal%7D%20%E5%BC%A0%E5%8D%A1%E7%89%87%EF%BC%8C%E4%BD%A0%E7%AD%94%E5%AF%B9%E4%BA%86%20%7Bright%7D%20%E5%BC%A0%EF%BC%8C%E6%AD%A3%E7%A1%AE%E7%8E%87%20%7Brate%7D%25%EF%BC%81%22)"># word_card.py
+
+# 用字典存单词卡片：键是英文单词，值是中文意思
+word_bank = {
+    "apple": "苹果",
+    "book": "书",
+    "cat": "猫",
+}
+
+# 用列表决定考哪些词、按什么顺序考
+quiz_list = ["apple", "book", "cat"]
+
+
+def check(word, user_answer):
+    """检查一个单词答得对不对，答对返回 True，答错返回 False"""
+    correct = word_bank[word]      # 从字典查出正确答案
+    if user_answer == correct:
+        print("答对了！✔")
+        return True
+    else:
+        print(f"答错了，{word} 的意思是 {correct}")
+        return False
+
+
+print("=== 背单词小程序 ===")
+
+right = 0                          # 记录答对了几张
+total = len(quiz_list)             # 一共几张卡片
+
+# 遍历列表，一张一张地考
+for i in range(total):
+    word = quiz_list[i]
+    answer = input(f"第 {i + 1} 张：{word} 是什么意思？")
+    if check(word, answer):        # 调用函数检查，顺便拿到对错
+        right = right + 1          # 答对就加一分
+
+# 算出正确率并汇报
+rate = int(right / total * 100)
+print(f"一共 {total} 张卡片，你答对了 {right} 张，正确率 {rate}%！")</code></pre>
+  <div class="output" id="code12-out" hidden></div>
+</div><p>运行结果（下划线部分是你输入的）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 背单词小程序 ===
+第 1 张：apple 是什么意思？苹果
+答对了！✔
+第 2 张：book 是什么意思？书
+答对了！✔
+第 3 张：cat 是什么意思？狗
+答错了，cat 的意思是 猫
+一共 3 张卡片，你答对了 2 张，正确率 66%！</code></pre>
+</div><p>看看这个程序，本章三样工具配合得多好：</p>
+<ul>
+<li><strong>字典 <code>word_bank</code></strong> 存着每个单词的正确意思，用单词当键，一查就到。</li>
+<li><strong>列表 <code>quiz_list</code></strong> 决定考哪些词、什么顺序，用 <code>for</code> 遍历它，一张张考。</li>
+<li><strong>函数 <code>check</code></strong> 把&quot;对比答案、打印对错、返回结果&quot;这段逻辑打包，主程序里只要 <code>check(word, answer)</code> 一句就调用，干净利落。</li>
+</ul>
+<p>想加新单词？往字典和列表里各添一项就行，主程序一个字都不用改——这就是好结构的威力。</p>
+<blockquote>
+<p>小贴士：那个用三引号 <code>&quot;&quot;&quot;...&quot;&quot;&quot;</code> 写的句子叫<strong>文档字符串（docstring）</strong>，是专门给函数写的说明，放在函数体第一行，解释这个函数是干嘛的。它像注释一样不影响运行，但能让别人（和以后的你）秒懂函数的用途。</p>
+</blockquote>
+<h2>常见错误</h2>
+<p><strong>1. 列表索引越界</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">fruits = ["苹果", "香蕉", "橙子"]
+print(fruits[3])       # 想取第 4 个，可只有 3 个</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">IndexError: list index out of range</code></pre>
+</div><p><code>IndexError</code>（索引错误）表示编号超出了列表范围。3 个元素的列表，索引只有 0、1、2，没有 3。记住<strong>最大索引是 <code>len - 1</code></strong>。</p>
+<p><strong>2. 字典里查一个不存在的键</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">scores = {"小明": 85}
+print(scores["小红"])      # 字典里没有"小红"</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">KeyError: '小红'</code></pre>
+</div><p><code>KeyError</code>（键错误）表示字典里没有这个键。检查一下键名有没有拼错，或者这个键是不是还没加进去。</p>
+<p><strong>3. 定义了函数却忘了调用</strong></p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code13">▶ 运行</button>
+    <button class="reset-btn" data-target="code13">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code13" data-original="def%20say_hi()%3A%0A%20%20%20%20print(%22%E5%97%A8%EF%BC%81%22)%0A%23%20%E5%8F%AA%E5%AE%9A%E4%B9%89%EF%BC%8C%E6%B2%A1%E8%B0%83%E7%94%A8">def say_hi():
+    print("嗨！")
+# 只定义，没调用</code></pre>
+  <div class="output" id="code13-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none"></code></pre>
+</div><p>什么都不打印！因为函数只是&quot;定义好了&quot;，没人&quot;按按钮&quot;。得加上 <code>say_hi()</code> 才会执行。定义 ≠ 运行，别忘了那对调用的括号。</p>
+<p><strong>4. 函数忘了 return，结果拿不到</strong></p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code14">▶ 运行</button>
+    <button class="reset-btn" data-target="code14">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code14" data-original="def%20add(a%2C%20b)%3A%0A%20%20%20%20result%20%3D%20a%20%2B%20b%0A%20%20%20%20%23%20%E5%BF%98%E4%BA%86%20return%20result%0A%0Aprint(add(3%2C%205))">def add(a, b):
+    result = a + b
+    # 忘了 return result
+
+print(add(3, 5))</code></pre>
+  <div class="output" id="code14-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">None</code></pre>
+</div><p><code>None</code> 是 Python 里表示&quot;什么都没有&quot;的特殊值。函数算是算了，但没 <code>return</code>，结果没送出来，外面拿到的就是&quot;空&quot;。要拿结果，函数里必须 <code>return</code>。</p>
+<h2>动手挑战</h2>
+<p><strong>★ 挑战一：我的愿望清单</strong>
+用一个列表存下你的三个愿望，然后用 <code>for</code> 循环把它们一条条打印出来，每条前面标上编号（提示：可以用循环变量，或者一个从 1 开始的计数变量）。</p>
+<p><strong>★★ 挑战二：宠物名册</strong>
+用字典存几只宠物的信息（键是宠物名字，值是它的种类，比如 <code>&quot;旺财&quot;: &quot;狗&quot;</code>）。让用户输入一个名字，程序查字典告诉他这是什么动物；如果字典里没有，就提示&quot;查无此宠物&quot;。（提示：可以先用 <code>if 名字 in 字典:</code> 判断键在不在。）</p>
+<p><strong>★★★ 挑战三：班级成绩管家</strong>
+做一个小程序：用字典存全班同学的分数。写至少两个函数——一个 <code>add_student(name, score)</code> 往字典里加一名同学，一个 <code>average()</code> 算出全班平均分。再让程序打印出最高分是谁。（提示：遍历字典求平均和最大值；算平均要用到 <code>len</code>。）</p>
+<h2>本章小结</h2>
+<p>这一章你拿到了三样整理代码的利器，程序从此能又大又整齐。回顾要点：</p>
+<ul>
+<li><strong>列表（list）</strong> 用方括号 <code>[ ]</code> 创建，把一堆东西排成队；用<strong>索引</strong>取元素，<strong>索引从 0 开始</strong>。</li>
+<li>列表常用操作：<code>append()</code> 加元素、<code>len()</code> 求长度、用 <code>for</code> <strong>遍历</strong>每个元素。</li>
+<li><strong>字典（dict）</strong> 用花括号 <code>{ }</code> 创建，存&quot;<strong>键值对</strong>&quot;；用<strong>键</strong>取值 <code>d[键]</code>，<code>d[键] = 值</code> 可修改或新增。</li>
+<li>列表看<strong>顺序、用编号</strong>，字典看<strong>标签、用键</strong>，按需选用。</li>
+<li><strong>函数（def）</strong> 把常用代码打包成&quot;按钮&quot;：定义后要<strong>调用</strong>才运行；用<strong>参数</strong>传信息进去，用 <strong><code>return</code></strong> 把结果交出来。</li>
+<li>函数的好处：不重复、好理解、好分工。发现代码要重复用，就写成函数。</li>
+</ul>
+<p>到这里，本书的第一部分——Python 基础——就全部学完了！你已经掌握了变量、输入输出、条件判断、循环、列表字典函数，这些是<strong>所有程序的地基</strong>。你现在会的东西，足够写出很多有意思的小程序了。</p>
+<p>从下一章起，我们进入第二部分——<strong>用游戏学编程</strong>。第一个项目就是经典的<strong>猜数字游戏</strong>：电脑随机想一个数，你来猜，它提示你大了还是小了，看你几次能猜中。你会发现，把这一部分学的循环、条件、函数拼在一起，一个真正好玩的游戏就诞生了。准备好，我们要开始造游戏了！翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch05.html">← 第 5 章 循环</a>
+  <a class="nav-next" href="ch07.html">第 7 章 猜数字大作战 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

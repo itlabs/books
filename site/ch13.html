@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 AI 是什么</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li class="active"><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 13 章 AI 是什么？让程序连上大脑</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>从这一章开始，你的程序要变"聪明"了。你会让自己写的 Python 程序连上一个真正的 <strong>AI（人工智能）</strong>，然后问它一个问题、收到它的回答——就像给程序装了一个会思考的大脑。</p>
+<p><strong>成品预览：</strong></p>
+<pre>你问 AI：用一句话介绍一下你自己。
+AI 回答：你好！我是一个由 Anthropic 训练的 AI 助手，很高兴认识你，随时可以帮你解答问题、一起写代码或聊聊天。</pre>
+</div><p>前面 12 章，你已经会用 Python 做出好几个游戏了，包括一个完整的贪吃蛇。这一部分，我们要解锁一个全新的超能力：<strong>调用 AI</strong>。</p>
+<h2>AI 到底是什么？</h2>
+<p>你可能听过&quot;人工智能&quot;&quot;大模型&quot;&quot;ChatGPT&quot;&quot;Claude&quot;这些词。简单来说：</p>
+<p><strong>AI（Artificial Intelligence，人工智能）</strong> 是一种能&quot;读懂&quot;人类语言、并用人类语言回答的程序。我们这本书用到的是一种叫<strong>大语言模型（Large Language Model，简称 LLM）</strong> 的 AI。你可以把它想象成一个读过海量书籍和文章的&quot;超级学霸&quot;——你用文字问它，它就用文字答你。</p>
+<p>它能做的事非常多：回答问题、写文章、翻译、讲笑话、帮你检查代码、陪你玩游戏……而最神奇的地方是：<strong>这个&quot;大脑&quot;不在你的电脑里</strong>，它运行在很远的一台超级强大的服务器上。你的程序只要通过网络&quot;打个电话&quot;过去，把问题送过去，再把答案收回来就行了。</p>
+<div class="concept">
+<svg viewBox="0 0 580 190" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="15" y="60" width="160" height="70" rx="10" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="95" y="90" text-anchor="middle" font-size="14" fill="#2f6db3" font-weight="bold">你的 Python 程序</text>
+  <text x="95" y="112" text-anchor="middle" font-size="12" fill="#6b6459">（在你的电脑上）</text>  <rect x="405" y="55" width="160" height="80" rx="10" fill="#fbe6dc" stroke="#e06a3b" stroke-width="2"/>
+  <text x="485" y="85" text-anchor="middle" font-size="14" fill="#a53f1c" font-weight="bold">AI 大脑</text>
+  <text x="485" y="107" text-anchor="middle" font-size="12" fill="#6b6459">（远方的服务器）</text>  <path d="M180 80 L400 80" stroke="#3f9b5c" stroke-width="2.5" marker-end="url(#a2)"/>
+  <text x="290" y="72" text-anchor="middle" font-size="12" fill="#3f9b5c">① 把问题送过去</text>
+  <path d="M400 112 L180 112" stroke="#e06a3b" stroke-width="2.5" marker-end="url(#a3)"/>
+  <text x="290" y="130" text-anchor="middle" font-size="12" fill="#e06a3b">② 把答案收回来</text>
+  <text x="290" y="160" text-anchor="middle" font-size="12" fill="#6b6459">这段路走的是互联网（所以程序运行时要联网）</text>
+  <defs>
+    <marker id="a2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="a3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 12-1　你的程序通过互联网向远方的 AI 大脑一问一答</div>
+</div><p>这种&quot;打电话过去用它的能力&quot;的方式，有个专门的名字，叫 <strong>API（应用程序接口）</strong>。你不用懂 AI 内部是怎么工作的，就像你用微波炉不用懂里面的电路——你只要会按按钮（调用 API）就行。</p>
+<h2>我们要用的 AI：Claude</h2>
+<p>这本书里，我们用的 AI 叫 <strong>Claude（读作&quot;克劳德&quot;）</strong>，它是一家叫 <strong>Anthropic</strong> 的公司做的。Claude 很擅长聊天、写代码、讲道理，而且用起来对新手很友好。</p>
+<p>要让程序用上 Claude，需要三样东西：</p>
+<ol>
+<li><strong>一个&quot;钥匙&quot;</strong>：叫 <strong>API 密钥（API key）</strong>，是一长串字母数字。它证明&quot;是你在打这个电话&quot;。</li>
+<li><strong>一个工具包</strong>：一个叫 <code>anthropic</code> 的 Python 库，帮你把打电话的复杂细节都处理好。</li>
+<li><strong>联网</strong>：因为 AI 在远方，运行时电脑必须能上网。</li>
+</ol>
+<blockquote>
+<p>🔑 <strong>超级重要的安全提醒（请一定读）</strong>
+API 密钥就像你家的钥匙，或者你的银行卡密码——<strong>它是秘密，只能你自己知道</strong>。</p>
+<ul>
+<li><strong>绝对不要</strong>把密钥直接写在代码里，然后把代码发给别人、发到群里、传到网上（比如 GitHub）。</li>
+<li><strong>绝对不要</strong>把密钥截图分享。</li>
+<li>密钥可能和花钱有关（见下一节），泄露了可能被别人拿去乱用。
+本章后面会教你一种安全的做法：把密钥存在电脑的&quot;环境变量&quot;里，而不是写进代码。</li>
+</ul>
+</blockquote>
+<h2>关于花钱：请和家长或老师一起</h2>
+<p>调用 Claude 的 API 通常<strong>不是免费</strong>的——用得越多，费用越高（不过每次问答其实很便宜，常常是几分钱）。Anthropic 一般会给新账号一点免费额度试用。</p>
+<p>因为涉及注册账号和可能的费用，<strong>申请密钥这一步，请一定和你的家长或老师一起完成</strong>。让他们帮你：</p>
+<ol>
+<li>打开 Anthropic 的官网（<code>https://console.anthropic.com</code>），注册一个账号。</li>
+<li>在控制台里找到 &quot;API Keys&quot;，创建一个新密钥。</li>
+<li>把那串密钥<strong>复制并妥善保存</strong>（它通常只完整显示一次）。</li>
+</ol>
+<blockquote>
+<p>💡 小贴士：如果暂时拿不到密钥，也没关系。你可以先把这几章<strong>当故事读</strong>，理解 AI 编程是怎么回事；等条件具备了再动手。代码原理是一样的。</p>
+</blockquote>
+<h2>安装工具包</h2>
+<p>拿到密钥后，先装好 <code>anthropic</code> 工具包。打开终端（怎么打开见<a href="appendix-a.md">附录 A</a>），输入：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pip install anthropic</code></pre>
+</div><p>看到类似 <code>Successfully installed anthropic-...</code> 就装好了。</p>
+<h2>把密钥安全地告诉程序</h2>
+<p>我们不把密钥写进代码，而是存进电脑的<strong>环境变量（environment variable）</strong>——你可以理解成&quot;电脑的一个秘密抽屉&quot;，程序能悄悄打开它拿钥匙，但钥匙不会出现在代码里。</p>
+<p><strong>Windows（命令提示符）</strong>，运行程序前先输入（把后面那串换成你自己的密钥）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">set ANTHROPIC_API_KEY=你的密钥粘贴到这里</code></pre>
+</div><p><strong>Mac / Linux（终端）</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">export ANTHROPIC_API_KEY=你的密钥粘贴到这里</code></pre>
+</div><blockquote>
+<p>💡 小贴士：这样设置的密钥只在<strong>当前这个终端窗口</strong>有效，关掉窗口就没了。这其实更安全。每次要运行 AI 程序，就在同一个窗口里先设置、再运行。</p>
+</blockquote>
+<h2>第一个 AI 程序：问它一个问题</h2>
+<p>一切就绪，见证奇迹的时刻到了。新建 <code>first_ai.py</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># first_ai.py
+import anthropic   # 导入刚装好的工具包
+
+# 创建一个"客户端"，它会自动从环境变量里读取你的密钥
+client = anthropic.Anthropic()
+
+# 向 Claude 发一条消息
+response = client.messages.create(
+    model="claude-haiku-4-5",       # 用哪个 AI 型号（haiku 又快又便宜，适合练手）
+    max_tokens=200,                 # 最多让它回复多长（token 约等于字数上限）
+    messages=[
+        {"role": "user", "content": "用一句话介绍一下你自己。"}
+    ],
+)
+
+# 回复藏在 response.content 里，把文字取出来打印
+for block in response.content:
+    if block.type == "text":
+        print("AI 回答：", block.text)</code></pre>
+</div><p>设置好密钥后运行 <code>python first_ai.py</code>，你会看到 Claude 亲口（亲&quot;字&quot;）回答你！</p>
+<p>运行结果（每次可能略有不同，这很正常——AI 的回答不是固定的）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">AI 回答： 你好！我是 Claude，一个由 Anthropic 打造的 AI 助手，很高兴能帮你答疑解惑、一起写代码或聊天。</code></pre>
+</div><h2>拆开看看这段代码</h2>
+<p>这段代码有几个新面孔，我们一个个认识：</p>
+<ul>
+<li><strong><code>import anthropic</code></strong>：把工具包请进来，就像玩游戏前先加载模组。</li>
+<li><strong><code>client = anthropic.Anthropic()</code></strong>：创建一个&quot;客户端&quot;，理解成&quot;你手里的那部电话&quot;。括号里什么都没写，它就会自动去环境变量的秘密抽屉里找密钥。</li>
+<li><strong><code>client.messages.create(...)</code></strong>：真正&quot;拨号&quot;的一步。里面几个关键设置：<ul>
+<li><strong><code>model</code></strong>：选哪个 AI。<code>&quot;claude-haiku-4-5&quot;</code> 是又快又便宜的型号，最适合练习。等你想要更聪明的回答，可以换成更强的型号（比如 <code>&quot;claude-opus-4-8&quot;</code>），但它更贵、更慢。</li>
+<li><strong><code>max_tokens</code></strong>：限制回答的最大长度。<strong>token（词元）</strong> 是 AI 数长度的单位，你先粗略理解成&quot;字数上限&quot;。设 200 就够短问答用了。</li>
+<li><strong><code>messages</code></strong>：你要说的话。它是一个<strong>列表</strong>（还记得第 6 章的列表吗？），里面每条消息是一个<strong>字典</strong>，<code>&quot;role&quot;</code> 是谁说的（<code>&quot;user&quot;</code> 就是&quot;我，用户&quot;），<code>&quot;content&quot;</code> 是说的内容。</li>
+</ul>
+</li>
+<li><strong><code>response</code></strong>：AI 的完整回复，是个有点复杂的对象。</li>
+<li><strong><code>for block in response.content:</code></strong>：AI 的回复内容放在 <code>response.content</code> 里，可能分成好几&quot;块&quot;。我们遍历它，只挑出<strong>文字块</strong>（<code>block.type == &quot;text&quot;</code>），打印它的 <code>.text</code>。</li>
+</ul>
+<blockquote>
+<p>💡 小贴士：为什么要 <code>for</code> 循环 + <code>if</code> 判断才能拿到文字？因为 AI 的回复以后可能不只有文字（还可能有别的东西）。现在你只要记住这个&quot;取文字&quot;的固定写法就好：遍历 <code>response.content</code>，遇到 <code>type == &quot;text&quot;</code> 的就取它的 <code>.text</code>。</p>
+</blockquote>
+<h2>动手改一改</h2>
+<p>把 <code>messages</code> 里 <code>content</code> 的那句话，换成你想问的任何问题，运行看看：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># ask_ai.py
+import anthropic
+
+client = anthropic.Anthropic()
+
+response = client.messages.create(
+    model="claude-haiku-4-5",
+    max_tokens=300,
+    messages=[
+        {"role": "user", "content": "给我讲一个关于程序员的冷笑话。"}
+    ],
+)
+
+for block in response.content:
+    if block.type == "text":
+        print(block.text)</code></pre>
+</div><p>试试问它：&quot;帮我把&#39;早上好&#39;翻译成 5 种语言&quot;、&quot;用小学生能懂的话解释什么是黑洞&quot;、&quot;给我的小猫起 10 个可爱的名字&quot;……你会发现，同一段代码，换一句话，就能干完全不同的事。<strong>这就是 AI 编程的魔力：程序的能力，来自你和 AI 的对话。</strong></p>
+<h2>常见错误</h2>
+<p><strong>1. 没设置密钥就运行</strong></p>
+<p>报错大概长这样：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">AuthenticationError: 缺少 API 密钥 / could not resolve authentication</code></pre>
+</div><p>意思是程序没找到钥匙。检查：你是不是忘了在<strong>同一个终端窗口</strong>里先 <code>set</code> / <code>export</code> 密钥？密钥有没有粘贴完整？</p>
+<p><strong>2. 没装工具包</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">ModuleNotFoundError: No module named 'anthropic'</code></pre>
+</div><p><code>ModuleNotFoundError</code>（找不到模块）表示 <code>anthropic</code> 没装上。回去运行 <code>pip install anthropic</code>。</p>
+<p><strong>3. 没联网 / 网络不通</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">APIConnectionError: 连接失败 / Connection error</code></pre>
+</div><p>AI 在远方，运行时必须联网。检查一下网络。如果在校园网或用了某些网络，可能需要请老师帮忙。</p>
+<p><strong>4. 模型名字写错</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NotFoundError: model: ...</code></pre>
+</div><p>型号名字要一字不差，比如 <code>&quot;claude-haiku-4-5&quot;</code>。抄的时候别漏字符。</p>
+<h2>动手挑战</h2>
+<p><strong>★ 挑战一：你的 AI 百科</strong>
+写一个程序，问 AI 一个你真正好奇的问题（比如&quot;为什么天是蓝色的&quot;），把答案打印出来。</p>
+<p><strong>★★ 挑战二：换个型号比一比</strong>
+把同一个问题分别用 <code>claude-haiku-4-5</code> 问一次。然后（如果家长同意花一点点钱）把 <code>model</code> 改成 <code>&quot;claude-opus-4-8&quot;</code> 再问一次，比较两次回答有什么不同。想一想：更强的型号回答得更好吗？</p>
+<p><strong>★★★ 挑战三：控制回答长度</strong>
+把 <code>max_tokens</code> 从 200 改成 20，再改成 500，分别运行同一个问题。观察回答长度的变化。想一想 <code>max_tokens</code> 太小会发生什么？（提示：回答可能会被&quot;说到一半就断掉&quot;。）</p>
+<h2>本章小结</h2>
+<p>你的程序第一次连上了 AI 的大脑，这是一个巨大的里程碑！回顾一下：</p>
+<ul>
+<li><strong>AI / 大语言模型</strong>是能读懂人话、用人话回答的程序，它运行在远方的服务器上。</li>
+<li>我们通过 <strong>API</strong> 来&quot;打电话&quot;使用它，用的是 <strong>Claude</strong> 这个 AI。</li>
+<li>需要三样东西：<strong>API 密钥</strong>（秘密！）、<strong><code>anthropic</code> 工具包</strong>、<strong>联网</strong>。</li>
+<li><strong>密钥是秘密</strong>，绝不写进代码、绝不外传；我们把它存进<strong>环境变量</strong>这个秘密抽屉。</li>
+<li>申请密钥和花费问题，<strong>一定要和家长或老师一起</strong>。</li>
+<li>核心三步：<code>client = anthropic.Anthropic()</code> → <code>client.messages.create(model=..., max_tokens=..., messages=[...])</code> → 遍历 <code>response.content</code> 取出 <code>text</code>。</li>
+</ul>
+<p>下一章，我们要解决一个大问题：现在的程序只能问<strong>一句</strong>就结束。我们要让它变成一个<strong>能连续对话、还记得聊过什么</strong>的聊天机器人。翻页吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch12.html">← 第 12 章 贪吃蛇大作战</a>
+  <a class="nav-next" href="ch14.html">第 14 章 会聊天的机器人 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

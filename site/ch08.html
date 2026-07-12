@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 章 文字冒险游戏</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li class="active"><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 8 章 文字冒险游戏</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>这一章你要写一个<strong>文字冒险游戏</strong>——就像用文字讲故事，但故事怎么走由玩家说了算。你会走到一个神秘山洞前，每到一个岔路口，程序都让你选 <code>1</code> 还是 <code>2</code>：进洞还是绕路？点火把还是摸黑走？不同的选择通向完全不同的结局——有的抱得宝藏归，有的被大熊追着跑。我们会用<strong>函数</strong>把每个场景打包好，让整个剧情清清楚楚。</p>
+<p><strong>成品预览（下划线是你的选择）：</strong></p>
+<pre>你走到一个黑漆漆的山洞前，隐约听到里面有声音……
+1) 勇敢地走进去
+2) 绕道从旁边小路走
+你的选择（1/2）：1
+洞里很黑。你摸到墙上有一支火把。
+1) 点燃火把照路
+2) 摸黑继续往前
+你的选择（1/2）：1
+火光照亮了洞穴，你看见角落有一个闪光的宝箱！
+【结局】你带着满满一箱金币回家，成了村里的大英雄！🏆</pre>
+</div><p>上一章的猜数字，是电脑出题、你来猜。这一章反过来——<strong>你在故事里做主，程序根据你的选择往下讲</strong>。这靠的还是老朋友：<code>input()</code> 收集选择，<code>if / elif / else</code> 分岔路，<code>while</code> 让你能重玩。真正的新本事，是学会用<strong>函数</strong>把一大团剧情理得井井有条。</p>
+<h2>先做最小的一步：一个岔路口</h2>
+<p>任何冒险故事，最核心的动作就是&quot;给你几个选项，你挑一个&quot;。我们先把这一步做出来：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20one_choice.py%0Aprint(%22%E4%BD%A0%E8%B5%B0%E5%88%B0%E4%B8%80%E4%B8%AA%E9%BB%91%E6%BC%86%E6%BC%86%E7%9A%84%E5%B1%B1%E6%B4%9E%E5%89%8D%EF%BC%8C%E9%9A%90%E7%BA%A6%E5%90%AC%E5%88%B0%E9%87%8C%E9%9D%A2%E6%9C%89%E5%A3%B0%E9%9F%B3%E2%80%A6%E2%80%A6%22)%0Aprint(%221)%20%E5%8B%87%E6%95%A2%E5%9C%B0%E8%B5%B0%E8%BF%9B%E5%8E%BB%22)%0Aprint(%222)%20%E7%BB%95%E9%81%93%E4%BB%8E%E6%97%81%E8%BE%B9%E5%B0%8F%E8%B7%AF%E8%B5%B0%22)%0A%0Achoice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%0Aif%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20print(%22%E4%BD%A0%E6%B7%B1%E5%90%B8%E4%B8%80%E5%8F%A3%E6%B0%94%EF%BC%8C%E8%B5%B0%E8%BF%9B%E4%BA%86%E5%B1%B1%E6%B4%9E%E3%80%82%22)%0Aelif%20choice%20%3D%3D%20%222%22%3A%0A%20%20%20%20print(%22%E4%BD%A0%E7%BB%95%E5%BC%80%E5%B1%B1%E6%B4%9E%EF%BC%8C%E6%B2%BF%E7%9D%80%E5%B0%8F%E8%B7%AF%E8%B5%B0%E4%BA%86%E3%80%82%22)%0Aelse%3A%0A%20%20%20%20print(%22%E7%9C%8B%E4%B8%8D%E6%87%82%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%8C%E4%BD%A0%E5%9C%A8%E5%8E%9F%E5%9C%B0%E5%8F%91%E5%91%86%E4%BA%86%E5%8D%8A%E5%A4%A9%E3%80%82%22)"># one_choice.py
+print("你走到一个黑漆漆的山洞前，隐约听到里面有声音……")
+print("1) 勇敢地走进去")
+print("2) 绕道从旁边小路走")
+
+choice = input("你的选择（1/2）：")
+
+if choice == "1":
+    print("你深吸一口气，走进了山洞。")
+elif choice == "2":
+    print("你绕开山洞，沿着小路走了。")
+else:
+    print("看不懂你的选择，你在原地发呆了半天。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>注意 <code>choice == &quot;1&quot;</code> 里的 <code>&quot;1&quot;</code> <strong>带引号</strong>——因为 <code>input()</code> 拿到的是文字，玩家打的 <code>1</code> 是文字 <code>&quot;1&quot;</code>，不是数字。这里我们不比大小，只判断&quot;是不是这个选项&quot;，所以不用转成数字，直接按文字比就行。</p>
+<p><code>else</code> 那一支是在兜底：万一玩家手滑打了别的字符，程序也不会崩，而是好好回一句话。<strong>给玩家的输入留一条&quot;退路&quot;，是好游戏的基本礼貌。</strong></p>
+<h2>剧情越长越乱：请函数来帮忙</h2>
+<p>一个岔路口好写，可冒险故事有好多岔路口，每个岔路口下面又接着新的岔路口……如果全堆在一起，代码会变成一团乱麻，你自己都看不清哪段接哪段。</p>
+<p>这时候，上一部分学的**函数（function）**就该登场了。我们的思路是：<strong>把每一个场景写成一个函数</strong>。比如&quot;洞口&quot;是一个函数，&quot;洞里&quot;是一个函数，&quot;小路&quot;又是一个函数。玩家在洞口选了&quot;进洞&quot;，我们就调用&quot;洞里&quot;那个函数——就像翻到故事书的某一页。</p>
+<p>这么做的好处特别大：</p>
+<ul>
+<li>每个场景各管各的，一个函数就是一小段独立的剧情，改起来清清楚楚；</li>
+<li>场景之间靠&quot;调用&quot;连起来，剧情怎么流转一目了然；</li>
+<li>想加新场景，就多写一个函数，不会打乱原来的。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 580 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 洞口 -->
+  <rect x="215" y="15" width="150" height="42" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="290" y="41" text-anchor="middle" font-size="14" fill="#2f6db3" font-weight="bold">洞口 cave()</text>
+  <!-- 到洞里 -->
+  <path d="M255 57 L150 100" stroke="#e06a3b" stroke-width="2" marker-end="url(#a8)"/>
+  <text x="165" y="82" text-anchor="middle" font-size="12" fill="#e06a3b">选 1</text>
+  <!-- 到小路 -->
+  <path d="M325 57 L430 100" stroke="#e06a3b" stroke-width="2" marker-end="url(#a8)"/>
+  <text x="415" y="82" text-anchor="middle" font-size="12" fill="#e06a3b">选 2</text>
+  <!-- 洞里 -->
+  <rect x="70" y="103" width="160" height="42" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="150" y="129" text-anchor="middle" font-size="14" fill="#2f6db3" font-weight="bold">洞里 inside()</text>
+  <!-- 小路 -->
+  <rect x="350" y="103" width="160" height="42" rx="8" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="430" y="129" text-anchor="middle" font-size="14" fill="#2f6db3" font-weight="bold">小路 path()</text>
+  <!-- 洞里分支 -->
+  <path d="M110 145 L70 200" stroke="#e06a3b" stroke-width="2" marker-end="url(#a8)"/>
+  <text x="70" y="177" text-anchor="middle" font-size="12" fill="#e06a3b">选 1</text>
+  <path d="M190 145 L230 200" stroke="#e06a3b" stroke-width="2" marker-end="url(#a8)"/>
+  <text x="232" y="177" text-anchor="middle" font-size="12" fill="#e06a3b">选 2</text>
+  <!-- 结局们 -->
+  <rect x="10" y="203" width="115" height="40" rx="8" fill="#3f9b5c"/>
+  <text x="67" y="228" text-anchor="middle" font-size="12" fill="#fff">结局：得宝藏</text>
+  <rect x="175" y="203" width="115" height="40" rx="8" fill="#e06a3b"/>
+  <text x="232" y="228" text-anchor="middle" font-size="12" fill="#fff">结局：遇大熊</text>
+  <path d="M430 145 L430 200" stroke="#e06a3b" stroke-width="2" marker-end="url(#a8)"/>
+  <rect x="360" y="203" width="140" height="40" rx="8" fill="#3f9b5c"/>
+  <text x="430" y="228" text-anchor="middle" font-size="12" fill="#fff">结局：平安回家</text>
+  <text x="290" y="285" text-anchor="middle" font-size="12" fill="#6b6459">每个方框是一个函数（一个场景），箭头是玩家的选择把剧情引向哪里</text>
+  <defs>
+    <marker id="a8" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 8-1　剧情分支树：每个场景是一个函数，玩家的选择决定走哪条箭头</div>
+</div><h2>把一个场景写成函数</h2>
+<p>先看&quot;洞里&quot;这个场景怎么写成函数。<strong>函数就是给一段代码起个名字</strong>，以后喊这个名字，那段代码就会跑一遍。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20scene_function.py%0A%0Adef%20inside()%3A%0A%20%20%20%20%22%22%22%E6%B4%9E%E9%87%8C%E7%9A%84%E5%9C%BA%E6%99%AF%22%22%22%0A%20%20%20%20print(%22%E6%B4%9E%E9%87%8C%E5%BE%88%E9%BB%91%E3%80%82%E4%BD%A0%E6%91%B8%E5%88%B0%E5%A2%99%E4%B8%8A%E6%9C%89%E4%B8%80%E6%94%AF%E7%81%AB%E6%8A%8A%E3%80%82%22)%0A%20%20%20%20print(%221)%20%E7%82%B9%E7%87%83%E7%81%AB%E6%8A%8A%E7%85%A7%E8%B7%AF%22)%0A%20%20%20%20print(%222)%20%E6%91%B8%E9%BB%91%E7%BB%A7%E7%BB%AD%E5%BE%80%E5%89%8D%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20print(%22%E7%81%AB%E5%85%89%E7%85%A7%E4%BA%AE%E4%BA%86%E6%B4%9E%E7%A9%B4%EF%BC%8C%E4%BD%A0%E7%9C%8B%E8%A7%81%E8%A7%92%E8%90%BD%E6%9C%89%E4%B8%80%E4%B8%AA%E9%97%AA%E5%85%89%E7%9A%84%E5%AE%9D%E7%AE%B1%EF%BC%81%22)%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E5%B8%A6%E7%9D%80%E6%BB%A1%E6%BB%A1%E4%B8%80%E7%AE%B1%E9%87%91%E5%B8%81%E5%9B%9E%E5%AE%B6%EF%BC%8C%E6%88%90%E4%BA%86%E5%A4%A7%E8%8B%B1%E9%9B%84%EF%BC%81%F0%9F%8F%86%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E6%91%B8%E9%BB%91%E8%B5%B0%E7%9D%80%E8%B5%B0%E7%9D%80%EF%BC%8C%E4%BD%A0%E4%B8%80%E8%84%9A%E8%B8%A9%E7%A9%BA%EF%BC%8C%E6%8E%89%E8%BF%9B%E4%BA%86%E5%9D%91%E9%87%8C%E2%80%A6%E2%80%A6%22)%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E5%B9%B8%E5%A5%BD%E5%9D%91%E4%B8%8D%E6%B7%B1%EF%BC%8C%E4%BD%A0%E7%81%B0%E5%A4%B4%E5%9C%9F%E8%84%B8%E5%9C%B0%E7%88%AC%E5%9B%9E%E4%BA%86%E5%AE%B6%E3%80%82%22)%0A%0A%23%20%E5%96%8A%E4%B8%80%E5%A3%B0%E5%87%BD%E6%95%B0%E7%9A%84%E5%90%8D%E5%AD%97%EF%BC%8C%E8%BF%99%E4%B8%AA%E5%9C%BA%E6%99%AF%E5%B0%B1%E4%B8%8A%E6%BC%94%E4%BA%86%0Ainside()"># scene_function.py
+
+def inside():
+    """洞里的场景"""
+    print("洞里很黑。你摸到墙上有一支火把。")
+    print("1) 点燃火把照路")
+    print("2) 摸黑继续往前")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        print("火光照亮了洞穴，你看见角落有一个闪光的宝箱！")
+        print("【结局】你带着满满一箱金币回家，成了大英雄！🏆")
+    else:
+        print("摸黑走着走着，你一脚踩空，掉进了坑里……")
+        print("【结局】幸好坑不深，你灰头土脸地爬回了家。")
+
+# 喊一声函数的名字，这个场景就上演了
+inside()</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><ul>
+<li><code>def inside():</code> 定义了一个名叫 <code>inside</code>（英语&quot;里面&quot;）的函数。<code>def</code> 是 define（&quot;定义&quot;）的缩写。</li>
+<li>函数里面的代码要<strong>缩进</strong>（每行前面空几格），表示&quot;这些都归 inside 管&quot;。</li>
+<li>最下面的 <code>inside()</code> 是<strong>调用</strong>函数——不加它，函数只是被&quot;定义&quot;了却从没运行。<strong>定义是写菜谱，调用才是真正下厨。</strong></li>
+</ul>
+<p>运行它，你会发现和之前的岔路口一模一样。只不过现在这段剧情有了名字，被打包收好了。</p>
+<h2>让一个场景跳到另一个场景</h2>
+<p>真正神奇的地方来了：<strong>在一个函数里，可以调用另一个函数</strong>。玩家在洞口选了&quot;进洞&quot;，我们就在洞口函数里调用洞里函数——剧情就这样从一个场景流到了下一个场景。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code2">▶ 运行</button>
+    <button class="reset-btn" data-target="code2">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code2" data-original="%23%20scene_jump.py%0A%0Adef%20inside()%3A%0A%20%20%20%20%22%22%22%E6%B4%9E%E9%87%8C%E7%9A%84%E5%9C%BA%E6%99%AF%22%22%22%0A%20%20%20%20print(%22%E6%B4%9E%E9%87%8C%E5%BE%88%E9%BB%91%E3%80%82%E4%BD%A0%E6%91%B8%E5%88%B0%E5%A2%99%E4%B8%8A%E6%9C%89%E4%B8%80%E6%94%AF%E7%81%AB%E6%8A%8A%E3%80%82%22)%0A%20%20%20%20print(%221)%20%E7%82%B9%E7%87%83%E7%81%AB%E6%8A%8A%E7%85%A7%E8%B7%AF%22)%0A%20%20%20%20print(%222)%20%E6%91%B8%E9%BB%91%E7%BB%A7%E7%BB%AD%E5%BE%80%E5%89%8D%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20print(%22%E7%81%AB%E5%85%89%E7%85%A7%E4%BA%AE%E4%BA%86%E6%B4%9E%E7%A9%B4%EF%BC%8C%E4%BD%A0%E7%9C%8B%E8%A7%81%E4%B8%80%E4%B8%AA%E9%97%AA%E5%85%89%E7%9A%84%E5%AE%9D%E7%AE%B1%EF%BC%81%22)%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E6%8A%B1%E7%9D%80%E9%87%91%E5%B8%81%E5%9B%9E%E5%AE%B6%EF%BC%8C%E6%88%90%E4%BA%86%E5%A4%A7%E8%8B%B1%E9%9B%84%EF%BC%81%F0%9F%8F%86%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E5%9C%A8%E9%BB%91%E6%9A%97%E9%87%8C%E8%BF%B7%E4%BA%86%E8%B7%AF%EF%BC%8C%E5%A4%A9%E4%BA%AE%E6%89%8D%E6%91%B8%E5%87%BA%E6%9D%A5%E3%80%82%22)%0A%0Adef%20cave()%3A%0A%20%20%20%20%22%22%22%E6%B4%9E%E5%8F%A3%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%8C%E6%95%B4%E4%B8%AA%E6%95%85%E4%BA%8B%E4%BB%8E%E8%BF%99%E9%87%8C%E5%BC%80%E5%A7%8B%22%22%22%0A%20%20%20%20print(%22%E4%BD%A0%E8%B5%B0%E5%88%B0%E4%B8%80%E4%B8%AA%E9%BB%91%E6%BC%86%E6%BC%86%E7%9A%84%E5%B1%B1%E6%B4%9E%E5%89%8D%EF%BC%8C%E9%9A%90%E7%BA%A6%E5%90%AC%E5%88%B0%E9%87%8C%E9%9D%A2%E6%9C%89%E5%A3%B0%E9%9F%B3%E2%80%A6%E2%80%A6%22)%0A%20%20%20%20print(%221)%20%E5%8B%87%E6%95%A2%E5%9C%B0%E8%B5%B0%E8%BF%9B%E5%8E%BB%22)%0A%20%20%20%20print(%222)%20%E7%BB%95%E9%81%93%E4%BB%8E%E6%97%81%E8%BE%B9%E5%B0%8F%E8%B7%AF%E8%B5%B0%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20inside()%20%20%23%20%E8%BF%9B%E6%B4%9E%EF%BC%8C%E8%B7%B3%E5%88%B0%E6%B4%9E%E9%87%8C%E7%9A%84%E5%9C%BA%E6%99%AF%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E7%BB%95%E5%BC%80%E5%B1%B1%E6%B4%9E%EF%BC%8C%E5%B9%B3%E5%B9%B3%E5%AE%89%E5%AE%89%E5%9B%9E%E4%BA%86%E5%AE%B6%E3%80%82%22)%0A%0A%23%20%E6%95%85%E4%BA%8B%E4%BB%8E%E6%B4%9E%E5%8F%A3%E5%BC%80%E5%A7%8B%0Acave()"># scene_jump.py
+
+def inside():
+    """洞里的场景"""
+    print("洞里很黑。你摸到墙上有一支火把。")
+    print("1) 点燃火把照路")
+    print("2) 摸黑继续往前")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        print("火光照亮了洞穴，你看见一个闪光的宝箱！")
+        print("【结局】你抱着金币回家，成了大英雄！🏆")
+    else:
+        print("【结局】你在黑暗里迷了路，天亮才摸出来。")
+
+def cave():
+    """洞口的场景，整个故事从这里开始"""
+    print("你走到一个黑漆漆的山洞前，隐约听到里面有声音……")
+    print("1) 勇敢地走进去")
+    print("2) 绕道从旁边小路走")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        inside()  # 进洞，跳到洞里的场景
+    else:
+        print("【结局】你绕开山洞，平平安安回了家。")
+
+# 故事从洞口开始
+cave()</code></pre>
+  <div class="output" id="code2-out" hidden></div>
+</div><p>看 <code>cave()</code> 里的那行 <code>inside()</code>：玩家一旦选了&quot;进洞&quot;，程序立刻跳去执行 <code>inside</code> 函数，洞里的剧情就接着上演。你写故事的顺序（先写 inside 再写 cave）不重要，<strong>重要的是最后调用了哪个函数当起点</strong>——这里是 <code>cave()</code>。</p>
+<blockquote>
+<p>小贴士：函数必须<strong>先定义、后调用</strong>。所以我们把所有 <code>def</code> 都写在前面，把真正启动游戏的那行 <code>cave()</code> 放在最末尾。</p>
+</blockquote>
+<h2>完整的冒险游戏</h2>
+<p>现在把所有场景拼成一个完整的故事。我们还加了一个 <code>while</code> 循环，让玩家通关后能选择&quot;再玩一次&quot;——这样一个游戏就能反复玩，每次走不同的路。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code3">▶ 运行</button>
+    <button class="reset-btn" data-target="code3">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code3" data-original="%23%20adventure.py%20%E5%B1%B1%E6%B4%9E%E5%AF%BB%E5%AE%9D%20%E5%AE%8C%E6%95%B4%E7%89%88%0A%0Adef%20treasure_room()%3A%0A%20%20%20%20%22%22%22%E5%AE%9D%E8%97%8F%E5%AE%A4%EF%BC%9A%E6%9C%80%E6%B7%B1%E5%A4%84%E7%9A%84%E9%80%89%E6%8B%A9%22%22%22%0A%20%20%20%20print(%22%E7%81%AB%E5%85%89%E4%B8%8B%EF%BC%8C%E4%BD%A0%E7%9C%8B%E8%A7%81%E4%B8%80%E4%B8%AA%E5%AE%9D%E7%AE%B1%E5%92%8C%E4%B8%80%E6%89%87%E5%86%99%E7%9D%80'%E5%87%BA%E5%8F%A3'%E7%9A%84%E5%B0%8F%E9%97%A8%E3%80%82%22)%0A%20%20%20%20print(%221)%20%E6%89%93%E5%BC%80%E5%AE%9D%E7%AE%B1%22)%0A%20%20%20%20print(%222)%20%E7%9B%B4%E6%8E%A5%E4%BB%8E%E5%B0%8F%E9%97%A8%E7%A6%BB%E5%BC%80%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20print(%22%E7%AE%B1%E5%AD%90%E9%87%8C%E9%87%91%E5%B8%81%E5%93%97%E5%95%A6%E5%95%A6%E5%9C%B0%E6%B5%81%E5%87%BA%E6%9D%A5%EF%BC%81%22)%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E5%B8%A6%E7%9D%80%E6%BB%A1%E7%AE%B1%E9%87%91%E5%B8%81%E5%9B%9E%E5%AE%B6%EF%BC%8C%E6%88%90%E4%BA%86%E6%9D%91%E9%87%8C%E7%9A%84%E5%A4%A7%E8%8B%B1%E9%9B%84%EF%BC%81%F0%9F%8F%86%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E4%B8%A4%E6%89%8B%E7%A9%BA%E7%A9%BA%E4%BD%86%E5%B9%B3%E5%B9%B3%E5%AE%89%E5%AE%89%E5%9C%B0%E8%B5%B0%E5%87%BA%E4%BA%86%E5%B1%B1%E6%B4%9E%E3%80%82%22)%0A%0Adef%20inside()%3A%0A%20%20%20%20%22%22%22%E6%B4%9E%E9%87%8C%EF%BC%9A%E7%82%B9%E4%B8%8D%E7%82%B9%E7%81%AB%E6%8A%8A%22%22%22%0A%20%20%20%20print(%22%E6%B4%9E%E9%87%8C%E5%BE%88%E9%BB%91%E3%80%82%E4%BD%A0%E6%91%B8%E5%88%B0%E5%A2%99%E4%B8%8A%E6%9C%89%E4%B8%80%E6%94%AF%E7%81%AB%E6%8A%8A%E3%80%82%22)%0A%20%20%20%20print(%221)%20%E7%82%B9%E7%87%83%E7%81%AB%E6%8A%8A%E7%85%A7%E8%B7%AF%22)%0A%20%20%20%20print(%222)%20%E6%91%B8%E9%BB%91%E7%BB%A7%E7%BB%AD%E5%BE%80%E5%89%8D%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20treasure_room()%20%20%23%20%E7%82%B9%E4%BA%86%E7%81%AB%E6%8A%8A%EF%BC%8C%E7%9C%8B%E6%B8%85%E8%B7%AF%EF%BC%8C%E8%BF%9B%E5%85%A5%E5%AE%9D%E8%97%8F%E5%AE%A4%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E9%BB%91%E6%9A%97%E4%B8%AD%E4%BD%A0%E6%92%9E%E4%B8%8A%E4%B8%80%E5%A4%B4%E7%9D%A1%E8%A7%89%E7%9A%84%E5%A4%A7%E7%86%8A%EF%BC%8C%E6%92%92%E8%85%BF%E5%B0%B1%E8%B7%91%EF%BC%8C%E5%AE%9D%E8%97%8F%E6%B2%A1%E6%88%8F%E4%BA%86%EF%BC%81%F0%9F%90%BB%22)%0A%0Adef%20path()%3A%0A%20%20%20%20%22%22%22%E6%97%81%E8%BE%B9%E7%9A%84%E5%B0%8F%E8%B7%AF%22%22%22%0A%20%20%20%20print(%22%E5%B0%8F%E8%B7%AF%E5%B0%BD%E5%A4%B4%E6%98%AF%E4%B8%80%E6%9D%A1%E5%B0%8F%E6%BA%AA%EF%BC%8C%E6%BA%AA%E8%BE%B9%E6%9C%89%E5%8F%AA%E5%8F%97%E4%BC%A4%E7%9A%84%E5%B0%8F%E7%8B%90%E7%8B%B8%E3%80%82%22)%0A%20%20%20%20print(%221)%20%E5%81%9C%E4%B8%8B%E6%9D%A5%E5%B8%AE%E5%8A%A9%E5%B0%8F%E7%8B%90%E7%8B%B8%22)%0A%20%20%20%20print(%222)%20%E4%B8%8D%E7%AE%A1%E5%AE%83%EF%BC%8C%E7%BB%A7%E7%BB%AD%E8%B5%B6%E8%B7%AF%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20print(%22%E5%B0%8F%E7%8B%90%E7%8B%B8%E5%B8%A6%E4%BD%A0%E6%89%BE%E5%88%B0%E4%BA%86%E4%B8%80%E5%A4%84%E9%9A%90%E8%97%8F%E7%9A%84%E5%B1%B1%E6%B3%89%E5%92%8C%E9%87%8E%E6%9E%9C%E3%80%82%22)%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E5%92%8C%E5%B0%8F%E7%8B%90%E7%8B%B8%E6%88%90%E4%BA%86%E5%A5%BD%E6%9C%8B%E5%8F%8B%EF%BC%8C%E6%BB%A1%E8%BD%BD%E8%80%8C%E5%BD%92%E3%80%82%F0%9F%A6%8A%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E3%80%90%E7%BB%93%E5%B1%80%E3%80%91%E4%BD%A0%E7%8B%AC%E8%87%AA%E8%B5%B0%E5%9B%9E%E4%BA%86%E5%AE%B6%EF%BC%8C%E8%B7%AF%E4%B8%8A%E4%B8%80%E7%9B%B4%E5%9C%A8%E6%83%B3%E9%82%A3%E5%8F%AA%E5%B0%8F%E7%8B%90%E7%8B%B8%E3%80%82%22)%0A%0Adef%20cave()%3A%0A%20%20%20%20%22%22%22%E6%B4%9E%E5%8F%A3%EF%BC%9A%E6%95%B4%E4%B8%AA%E6%95%85%E4%BA%8B%E7%9A%84%E8%B5%B7%E7%82%B9%22%22%22%0A%20%20%20%20print(%22%E4%BD%A0%E8%B5%B0%E5%88%B0%E4%B8%80%E4%B8%AA%E9%BB%91%E6%BC%86%E6%BC%86%E7%9A%84%E5%B1%B1%E6%B4%9E%E5%89%8D%EF%BC%8C%E9%9A%90%E7%BA%A6%E5%90%AC%E5%88%B0%E9%87%8C%E9%9D%A2%E6%9C%89%E5%A3%B0%E9%9F%B3%E2%80%A6%E2%80%A6%22)%0A%20%20%20%20print(%221)%20%E5%8B%87%E6%95%A2%E5%9C%B0%E8%B5%B0%E8%BF%9B%E5%8E%BB%22)%0A%20%20%20%20print(%222)%20%E7%BB%95%E9%81%93%E4%BB%8E%E6%97%81%E8%BE%B9%E5%B0%8F%E8%B7%AF%E8%B5%B0%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%881%2F2%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20inside()%0A%20%20%20%20elif%20choice%20%3D%3D%20%222%22%3A%0A%20%20%20%20%20%20%20%20path()%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E4%BD%A0%E7%AB%99%E5%9C%A8%E5%8E%9F%E5%9C%B0%E7%8A%B9%E8%B1%AB%E4%BA%86%E5%A4%AA%E4%B9%85%EF%BC%8C%E5%A4%A9%E9%BB%91%E4%BA%86%EF%BC%8C%E5%8F%AA%E5%A5%BD%E5%9B%9E%E5%AE%B6%E3%80%82%22)%0A%0A%23%20%3D%3D%3D%3D%20%E6%B8%B8%E6%88%8F%E4%B8%BB%E5%BE%AA%E7%8E%AF%EF%BC%9A%E5%8F%AF%E4%BB%A5%E5%8F%8D%E5%A4%8D%E7%8E%A9%20%3D%3D%3D%3D%0Aprint(%22%3D%3D%3D%3D%3D%3D%20%E6%AC%A2%E8%BF%8E%E6%9D%A5%E5%88%B0%E3%80%8A%E5%B1%B1%E6%B4%9E%E5%AF%BB%E5%AE%9D%E3%80%8B%3D%3D%3D%3D%3D%3D%22)%0Aagain%20%3D%20%221%22%0Awhile%20again%20%3D%3D%20%221%22%3A%0A%20%20%20%20cave()%20%20%20%20%20%20%20%20%20%20%23%20%E7%8E%A9%E4%B8%80%E6%95%B4%E5%B1%80%EF%BC%8C%E4%BB%8E%E6%B4%9E%E5%8F%A3%E5%BC%80%E5%A7%8B%0A%20%20%20%20print(%22--------------------%22)%0A%20%20%20%20again%20%3D%20input(%22%E5%86%8D%E6%9D%A5%E4%B8%80%E6%AC%A1%E5%86%92%E9%99%A9%E5%90%97%EF%BC%9F%EF%BC%881%3D%E5%A5%BD%E5%95%8A%20%2F%20%E5%85%B6%E4%BB%96%3D%E4%B8%8D%E7%8E%A9%E4%BA%86%EF%BC%89%EF%BC%9A%22)%0A%0Aprint(%22%E8%B0%A2%E8%B0%A2%E6%B8%B8%E7%8E%A9%EF%BC%8C%E6%B1%9F%E6%B9%96%E5%86%8D%E8%A7%81%EF%BC%81%22)"># adventure.py 山洞寻宝 完整版
+
+def treasure_room():
+    """宝藏室：最深处的选择"""
+    print("火光下，你看见一个宝箱和一扇写着'出口'的小门。")
+    print("1) 打开宝箱")
+    print("2) 直接从小门离开")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        print("箱子里金币哗啦啦地流出来！")
+        print("【结局】你带着满箱金币回家，成了村里的大英雄！🏆")
+    else:
+        print("【结局】你两手空空但平平安安地走出了山洞。")
+
+def inside():
+    """洞里：点不点火把"""
+    print("洞里很黑。你摸到墙上有一支火把。")
+    print("1) 点燃火把照路")
+    print("2) 摸黑继续往前")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        treasure_room()  # 点了火把，看清路，进入宝藏室
+    else:
+        print("【结局】黑暗中你撞上一头睡觉的大熊，撒腿就跑，宝藏没戏了！🐻")
+
+def path():
+    """旁边的小路"""
+    print("小路尽头是一条小溪，溪边有只受伤的小狐狸。")
+    print("1) 停下来帮助小狐狸")
+    print("2) 不管它，继续赶路")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        print("小狐狸带你找到了一处隐藏的山泉和野果。")
+        print("【结局】你和小狐狸成了好朋友，满载而归。🦊")
+    else:
+        print("【结局】你独自走回了家，路上一直在想那只小狐狸。")
+
+def cave():
+    """洞口：整个故事的起点"""
+    print("你走到一个黑漆漆的山洞前，隐约听到里面有声音……")
+    print("1) 勇敢地走进去")
+    print("2) 绕道从旁边小路走")
+    choice = input("你的选择（1/2）：")
+    if choice == "1":
+        inside()
+    elif choice == "2":
+        path()
+    else:
+        print("你站在原地犹豫了太久，天黑了，只好回家。")
+
+# ==== 游戏主循环：可以反复玩 ====
+print("====== 欢迎来到《山洞寻宝》======")
+again = "1"
+while again == "1":
+    cave()          # 玩一整局，从洞口开始
+    print("--------------------")
+    again = input("再来一次冒险吗？（1=好啊 / 其他=不玩了）：")
+
+print("谢谢游玩，江湖再见！")</code></pre>
+  <div class="output" id="code3-out" hidden></div>
+</div><p>运行它玩几次，故意每次走不同的路，你会发现同一个程序能讲出好几个完全不同的故事。这就是分支剧情的魅力。</p>
+<p>拆开看这个游戏的骨架：</p>
+<ul>
+<li><strong>四个场景函数</strong>：<code>cave</code>、<code>inside</code>、<code>path</code>、<code>treasure_room</code>，各管一小段剧情，用调用彼此串起整棵故事树。</li>
+<li><strong>一个起点</strong>：最后那段代码里的 <code>cave()</code>，是整个冒险的入口。</li>
+<li><strong>一个主循环</strong>：<code>while again == &quot;1&quot;</code> 让玩家通关后能重玩；只要他还想玩，就再调一次 <code>cave()</code>。</li>
+</ul>
+<p>你有没有发现——<strong>这段完整代码，其实就是把图 8-1 那棵树&quot;翻译&quot;成了函数？</strong> 先画出剧情树，再照着树写函数，是设计文字游戏最省心的办法。</p>
+<blockquote>
+<p>小贴士：给函数起名要&quot;见名知意&quot;，<code>treasure_room</code>（宝藏室）一看就懂。你未来写大程序时，好名字能帮你省下大把读代码的时间。</p>
+</blockquote>
+<h2>常见错误</h2>
+<p><strong>1. 只定义了函数，忘了调用</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def cave():
+    print("你走到山洞前……")
+
+# 下面没有 cave()</code></pre>
+</div><p>运行后<strong>什么都不发生</strong>，屏幕空空。因为你只写了菜谱，没下厨。修法：在最后加一行 <code>cave()</code>。</p>
+<p><strong>2. 判断选项时忘了给数字加引号</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">choice = input("你的选择（1/2）：")
+if choice == 1:      # 这里的 1 是数字，choice 却是文字
+    print("进洞")</code></pre>
+</div><p>程序不报错，但<strong>永远进不了这一支</strong>——因为文字 <code>&quot;1&quot;</code> 永远不等于数字 <code>1</code>。修法：写成 <code>if choice == &quot;1&quot;:</code>，给 1 加上引号。</p>
+<p><strong>3. 函数里的代码没缩进</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def cave():
+print("你走到山洞前……")   # 没缩进</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">IndentationError: expected an indented block after function definition</code></pre>
+</div><p><code>IndentationError</code>（缩进错误）是说：<code>def</code> 这行冒号后面，函数的内容必须缩进。修法：把属于函数的每一行都往右缩进（通常按一下 Tab 或空四格）。</p>
+<p><strong>4. 调用了还没定义的函数</strong></p>
+<p>如果你把启动游戏的 <code>cave()</code> 写在了 <code>def cave():</code> <strong>前面</strong>，会报 <code>NameError: name &#39;cave&#39; is not defined</code>。记住：<strong>先定义，后调用</strong>，启动代码放最后。</p>
+<h2>动手挑战</h2>
+<p>在 <code>adventure.py</code> 的基础上扩展你的冒险世界。</p>
+<p><strong>★ 挑战一：加一个新结局</strong>
+在 <code>path()</code>（小路）里再加一个岔路口，写出至少一个新场景函数和新结局。让&quot;帮助小狐狸&quot;之后还能继续做选择。</p>
+<p><strong>★★ 挑战二：给玩家起个名字</strong>
+在游戏最开始用 <code>input()</code> 问玩家叫什么名字，存进变量，然后在剧情里用上它，比如&quot;勇敢的{name}走进了山洞&quot;。想想怎么把这个名字传进各个场景函数里（提示：可以用函数的参数）。</p>
+<p><strong>★★★ 挑战三：背包系统</strong>
+用一个列表当&quot;背包&quot;。玩家在某个场景捡到&quot;钥匙&quot;就把 <code>&quot;钥匙&quot;</code> 加进列表；到了另一个场景，用 <code>if &quot;钥匙&quot; in 背包:</code> 判断——有钥匙才能开另一扇门，通向隐藏的超级结局。这样玩家的选择就会&quot;影响到后面&quot;，故事更有深度！</p>
+<h2>本章小结</h2>
+<p>你写出了一个能讲无数个故事的分支游戏，还学会了用函数管理复杂剧情：</p>
+<ul>
+<li>文字冒险游戏的核心，就是不断&quot;给选项 → 收输入 → 按选择分岔&quot;，靠 <code>input</code> 加 <code>if/elif/else</code> 实现。</li>
+<li>比较 <code>input()</code> 拿到的选择时，数字选项也要<strong>当文字比</strong>，记得加引号：<code>choice == &quot;1&quot;</code>。</li>
+<li>把<strong>每个场景写成一个函数</strong>，能让庞大的剧情变得清清楚楚、好写好改。</li>
+<li>函数要<strong>先定义、后调用</strong>；在一个函数里调用另一个函数，就能让剧情从一个场景跳到下一个。</li>
+<li>用 <strong><code>while</code> 循环</strong>包住游戏，玩家就能&quot;再玩一次&quot;。</li>
+<li>设计诀窍：<strong>先画剧情分支树，再照着树写函数</strong>。</li>
+<li>别忘了给玩家的输入留 <code>else</code> 退路，程序才不会因为乱输入而尴尬。</li>
+</ul>
+<p>下一章，我们要做一个更&quot;手快&quot;的游戏——<strong>石头剪刀布</strong>！你和电脑同时出拳，程序当裁判判胜负，还会用记分板记下每一局的比分，玩够几局公布总冠军。我们会让电脑用 <code>random</code> 来&quot;随机出拳&quot;，还会用列表和字典来管理选项和分数。摩拳擦掌，准备开战！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch07.html">← 第 7 章 猜数字大作战</a>
+  <a class="nav-next" href="ch09.html">第 9 章 石头剪刀布 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

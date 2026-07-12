@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 石头剪刀布</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li class="active"><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>第 9 章 石头剪刀布与记分板</h1>
+<h2>本章你会做出什么</h2>
+<div class="goal-box">
+<p>这一章你要做一个<strong>石头剪刀布</strong>游戏，跟电脑对战！你出拳，电脑随机出拳，程序当裁判判出胜负，还会像真的比赛一样用<strong>记分板</strong>记下你和电脑各赢了几局。玩够几局，它会公布总比分，宣布谁是最终赢家。</p>
+<p><strong>成品预览（下划线是你的出拳）：</strong></p>
+<pre>第 1 局 —— 请出拳：
+1) 石头  2) 剪刀  3) 布
+你的选择：1
+你出【石头】，电脑出【剪刀】。你赢了这一局！
+当前比分  你 1 : 0 电脑<p>第 2 局 —— 请出拳：</p>
+<ol>
+<li>石头  2) 剪刀  3) 布
+你的选择：3
+你出【布】，电脑出【石头】。你赢了这一局！
+当前比分  你 2 : 0 电脑</pre></div></li>
+</ol>
+<p>前两章我们做了猜数字和文字冒险。这一章的石头剪刀布，会把你学过的本事来一次大集合：<code>random</code> 让电脑出拳、<strong>列表</strong>存三种拳、<strong>字典</strong>当记分板、<code>while</code> 循环玩多局、<code>if</code> 判断胜负。做完这个，你就是能独当一面的小游戏开发者了。</p>
+<h2>第一步：让电脑随机出拳</h2>
+<p>石头剪刀布有三种出法。我们先把它们放进一个**列表（list）**里——列表就像一个能装很多东西的收纳盒，东西排着队待在里面。</p>
+<p>然后请出上上一章认识的 <code>random</code> 工具箱。这次用的是它的另一个工具 <strong><code>random.choice</code></strong>（choice 是英语&quot;选择&quot;）：给它一个列表，它就<strong>随机从里面挑一个</strong>出来，就像从三张牌里随手抽一张。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20computer_move.py%0Aimport%20random%0A%0Amoves%20%3D%20%5B%22%E7%9F%B3%E5%A4%B4%22%2C%20%22%E5%89%AA%E5%88%80%22%2C%20%22%E5%B8%83%22%5D%20%20%23%20%E4%B8%89%E7%A7%8D%E6%8B%B3%EF%BC%8C%E8%A3%85%E8%BF%9B%E5%88%97%E8%A1%A8%0A%0A%23%20%E4%BB%8E%E5%88%97%E8%A1%A8%E9%87%8C%E9%9A%8F%E6%9C%BA%E6%8A%BD%E4%B8%80%E4%B8%AA%EF%BC%8C%E5%B0%B1%E6%98%AF%E7%94%B5%E8%84%91%E5%87%BA%E7%9A%84%E6%8B%B3%0Acomputer%20%3D%20random.choice(moves)%0Aprint(%22%E7%94%B5%E8%84%91%E5%87%BA%E4%BA%86%EF%BC%9A%22%2C%20computer)"># computer_move.py
+import random
+
+moves = ["石头", "剪刀", "布"]  # 三种拳，装进列表
+
+# 从列表里随机抽一个，就是电脑出的拳
+computer = random.choice(moves)
+print("电脑出了：", computer)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>多运行几次，电脑出的拳每次都不一样。<code>random.choice(moves)</code> 就是&quot;从 moves 这个盒子里，随机拿一个出来&quot;。</p>
+<div class="concept">
+<svg viewBox="0 0 560 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="90" y="30" text-anchor="middle" font-size="13" fill="#6b6459">列表 moves</text>
+  <rect x="20" y="40" width="70" height="45" rx="6" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="55" y="68" text-anchor="middle" font-size="15" fill="#2f6db3">石头</text>
+  <rect x="90" y="40" width="70" height="45" rx="6" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="125" y="68" text-anchor="middle" font-size="15" fill="#2f6db3">剪刀</text>
+  <rect x="160" y="40" width="70" height="45" rx="6" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="195" y="68" text-anchor="middle" font-size="15" fill="#2f6db3">布</text>
+  <ellipse cx="290" cy="63" rx="55" ry="35" fill="#e06a3b"/>
+  <text x="290" y="59" text-anchor="middle" font-size="13" fill="#fff">random</text>
+  <text x="290" y="76" text-anchor="middle" font-size="13" fill="#fff">.choice</text>
+  <path d="M232 63 L235 63" stroke="#6b6459" stroke-width="2"/>
+  <path d="M345 63 L420 63" stroke="#3f9b5c" stroke-width="3" marker-end="url(#a9)"/>
+  <text x="382" y="52" text-anchor="middle" font-size="12" fill="#3f9b5c">随机抽一个</text>
+  <rect x="425" y="40" width="90" height="45" rx="6" fill="#3f9b5c"/>
+  <text x="470" y="68" text-anchor="middle" font-size="16" fill="#fff" font-weight="bold">剪刀</text>
+  <text x="470" y="112" text-anchor="middle" font-size="12" fill="#6b6459">电脑这次出的拳</text>
+  <text x="125" y="130" text-anchor="middle" font-size="12" fill="#6b6459">三种拳排队待在列表里</text>
+  <defs>
+    <marker id="a9" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 9-1　random.choice 从列表里随机抽出一样，正好用来给电脑"出拳"</div>
+</div><h2>第二步：让玩家也出拳</h2>
+<p>玩家用数字选拳更方便：<code>1</code> 石头、<code>2</code> 剪刀、<code>3</code> 布。我们用 <code>input()</code> 收玩家的选择，再把数字对应到拳。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20player_move.py%0Amoves%20%3D%20%5B%22%E7%9F%B3%E5%A4%B4%22%2C%20%22%E5%89%AA%E5%88%80%22%2C%20%22%E5%B8%83%22%5D%0A%0Aprint(%221)%20%E7%9F%B3%E5%A4%B4%20%202)%20%E5%89%AA%E5%88%80%20%203)%20%E5%B8%83%22)%0Achoice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%9A%22)%0A%0Aif%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20player%20%3D%20%22%E7%9F%B3%E5%A4%B4%22%0Aelif%20choice%20%3D%3D%20%222%22%3A%0A%20%20%20%20player%20%3D%20%22%E5%89%AA%E5%88%80%22%0Aelif%20choice%20%3D%3D%20%223%22%3A%0A%20%20%20%20player%20%3D%20%22%E5%B8%83%22%0Aelse%3A%0A%20%20%20%20player%20%3D%20%22%E7%9F%B3%E5%A4%B4%22%20%20%20%23%20%E4%B9%B1%E8%BE%93%E5%85%A5%E5%B0%B1%E5%BD%93%E5%87%BA%E4%BA%86%E7%9F%B3%E5%A4%B4%EF%BC%8C%E4%BF%9D%E8%AF%81%E6%B8%B8%E6%88%8F%E4%B8%8D%E5%8D%A1%E4%BD%8F%0A%0Aprint(%22%E4%BD%A0%E5%87%BA%E4%BA%86%EF%BC%9A%22%2C%20player)"># player_move.py
+moves = ["石头", "剪刀", "布"]
+
+print("1) 石头  2) 剪刀  3) 布")
+choice = input("你的选择：")
+
+if choice == "1":
+    player = "石头"
+elif choice == "2":
+    player = "剪刀"
+elif choice == "3":
+    player = "布"
+else:
+    player = "石头"   # 乱输入就当出了石头，保证游戏不卡住
+
+print("你出了：", player)</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>这里也可以用一个更聪明的写法，直接从列表里取：玩家打 <code>1</code>，我们就取列表的第 1 个……不过列表是从 0 开始数的，所以要 <code>moves[int(choice) - 1]</code>。这一章我们先用清楚好懂的 <code>if/elif</code> 写法，等你熟了再试那种简洁写法。</p>
+<h2>第三步：判断谁赢了</h2>
+<p>这是游戏的&quot;大脑&quot;。石头剪刀布的规则你早就滚瓜烂熟：</p>
+<ul>
+<li><strong>石头</strong>砸<strong>剪刀</strong></li>
+<li><strong>剪刀</strong>剪<strong>布</strong></li>
+<li><strong>布</strong>包<strong>石头</strong></li>
+<li>出得一样，就是<strong>平局</strong></li>
+</ul>
+<p>我们把它翻译成 <code>if / elif / else</code>。先看&quot;平局&quot;最好判断——两人出的一样就是平。剩下的，就把玩家能赢的三种情况列出来：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code2">▶ 运行</button>
+    <button class="reset-btn" data-target="code2">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code2" data-original="%23%20judge.py%0Aplayer%20%3D%20%22%E7%9F%B3%E5%A4%B4%22%0Acomputer%20%3D%20%22%E5%89%AA%E5%88%80%22%0A%0Aif%20player%20%3D%3D%20computer%3A%0A%20%20%20%20print(%22%E5%B9%B3%E5%B1%80%EF%BC%81%22)%0Aelif%20(player%20%3D%3D%20%22%E7%9F%B3%E5%A4%B4%22%20and%20computer%20%3D%3D%20%22%E5%89%AA%E5%88%80%22)%20or%20%5C%0A%20%20%20%20%20(player%20%3D%3D%20%22%E5%89%AA%E5%88%80%22%20and%20computer%20%3D%3D%20%22%E5%B8%83%22)%20or%20%5C%0A%20%20%20%20%20(player%20%3D%3D%20%22%E5%B8%83%22%20and%20computer%20%3D%3D%20%22%E7%9F%B3%E5%A4%B4%22)%3A%0A%20%20%20%20print(%22%E4%BD%A0%E8%B5%A2%E4%BA%86%E8%BF%99%E4%B8%80%E5%B1%80%EF%BC%81%22)%0Aelse%3A%0A%20%20%20%20print(%22%E7%94%B5%E8%84%91%E8%B5%A2%E4%BA%86%E8%BF%99%E4%B8%80%E5%B1%80%EF%BC%81%22)"># judge.py
+player = "石头"
+computer = "剪刀"
+
+if player == computer:
+    print("平局！")
+elif (player == "石头" and computer == "剪刀") or \
+     (player == "剪刀" and computer == "布") or \
+     (player == "布" and computer == "石头"):
+    print("你赢了这一局！")
+else:
+    print("电脑赢了这一局！")</code></pre>
+  <div class="output" id="code2-out" hidden></div>
+</div><p>第二支的条件有点长，我们拆开看：它把玩家会赢的<strong>三种情况</strong>用 <code>or</code>（英语&quot;或者&quot;）连起来——只要<strong>其中任意一种</strong>成立，玩家就赢了。</p>
+<ul>
+<li><code>player == &quot;石头&quot; and computer == &quot;剪刀&quot;</code>：你石头砸它剪刀，赢；</li>
+<li><code>player == &quot;剪刀&quot; and computer == &quot;布&quot;</code>：你剪刀剪它布，赢；</li>
+<li><code>player == &quot;布&quot; and computer == &quot;石头&quot;</code>：你布包它石头，赢。</li>
+</ul>
+<p>行末那个 <code>\</code> 是&quot;这行还没写完，下一行接着&quot;的意思，只是为了让长条件换行看着舒服，你也可以全写在一行。</p>
+<blockquote>
+<p>想一想：为什么剩下的情况都归 <code>else</code>（电脑赢）？因为平局和&quot;你赢&quot;都已经被前面挑走了，剩下的必然是你输。<strong>把情况一层层筛掉，是判断胜负的常用思路。</strong></p>
+</blockquote>
+<h2>第四步：记分板——用字典记分</h2>
+<p>比赛得记分。我们用一个<strong>字典（dictionary）<strong>当记分板。字典就像一张贴着标签的储物柜：每样东西都有自己的&quot;标签&quot;（叫</strong>键</strong>），顺着标签就能找到对应的&quot;值&quot;。这里我们贴两个标签——<code>&quot;玩家&quot;</code> 和 <code>&quot;电脑&quot;</code>，值就是各自的得分。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code3">▶ 运行</button>
+    <button class="reset-btn" data-target="code3">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code3" data-original="%23%20scoreboard.py%0A%23%20%E8%AE%B0%E5%88%86%E6%9D%BF%EF%BC%9A%E4%B8%80%E5%BC%80%E5%A7%8B%E4%B8%A4%E8%BE%B9%E9%83%BD%E6%98%AF%200%20%E5%88%86%0Ascore%20%3D%20%7B%22%E7%8E%A9%E5%AE%B6%22%3A%200%2C%20%22%E7%94%B5%E8%84%91%22%3A%200%7D%0A%0A%23%20%E5%81%87%E8%AE%BE%E7%8E%A9%E5%AE%B6%E8%B5%A2%E4%BA%86%E4%B8%80%E5%B1%80%EF%BC%8C%E5%B0%B1%E7%BB%99%E7%8E%A9%E5%AE%B6%E9%82%A3%E6%A0%8F%E5%8A%A0%201%0Ascore%5B%22%E7%8E%A9%E5%AE%B6%22%5D%20%3D%20score%5B%22%E7%8E%A9%E5%AE%B6%22%5D%20%2B%201%0A%0Aprint(score)%0Aprint(%22%E7%8E%A9%E5%AE%B6%E5%BE%97%E5%88%86%EF%BC%9A%22%2C%20score%5B%22%E7%8E%A9%E5%AE%B6%22%5D)%0Aprint(%22%E7%94%B5%E8%84%91%E5%BE%97%E5%88%86%EF%BC%9A%22%2C%20score%5B%22%E7%94%B5%E8%84%91%22%5D)"># scoreboard.py
+# 记分板：一开始两边都是 0 分
+score = {"玩家": 0, "电脑": 0}
+
+# 假设玩家赢了一局，就给玩家那栏加 1
+score["玩家"] = score["玩家"] + 1
+
+print(score)
+print("玩家得分：", score["玩家"])
+print("电脑得分：", score["电脑"])</code></pre>
+  <div class="output" id="code3-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">{'玩家': 1, '电脑': 0}
+玩家得分： 1
+电脑得分： 0</code></pre>
+</div><ul>
+<li><code>score[&quot;玩家&quot;]</code> 就是顺着 <code>&quot;玩家&quot;</code> 这个标签，找到玩家的分数。</li>
+<li><code>score[&quot;玩家&quot;] = score[&quot;玩家&quot;] + 1</code> 是&quot;把玩家现在的分加 1，再存回去&quot;，和上一章计数器一个道理。</li>
+</ul>
+<p>用字典比用两个单独的变量 <code>player_score</code>、<code>computer_score</code> 更整齐——两边的分都收在同一个记分板里，一目了然。</p>
+<h2>完整的石头剪刀布游戏</h2>
+<p>零件齐了，拼成完整游戏！我们让玩家决定玩几局，用 <code>while</code> 循环一局一局打，每局判胜负、更新记分板，最后公布总比分。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code4">▶ 运行</button>
+    <button class="reset-btn" data-target="code4">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code4" data-original="%23%20rps_game.py%20%E7%9F%B3%E5%A4%B4%E5%89%AA%E5%88%80%E5%B8%83%20%E5%AE%8C%E6%95%B4%E7%89%88%0Aimport%20random%0A%0Amoves%20%3D%20%5B%22%E7%9F%B3%E5%A4%B4%22%2C%20%22%E5%89%AA%E5%88%80%22%2C%20%22%E5%B8%83%22%5D%0Ascore%20%3D%20%7B%22%E7%8E%A9%E5%AE%B6%22%3A%200%2C%20%22%E7%94%B5%E8%84%91%22%3A%200%7D%20%20%20%23%20%E8%AE%B0%E5%88%86%E6%9D%BF%0A%0Atotal%20%3D%20int(input(%22%E6%83%B3%E7%8E%A9%E5%87%A0%E5%B1%80%EF%BC%9F%E8%AF%B7%E8%BE%93%E5%85%A5%E5%B1%80%E6%95%B0%EF%BC%9A%22))%0A%0Around_no%20%3D%201%20%20%23%20%E7%8E%B0%E5%9C%A8%E6%98%AF%E7%AC%AC%E5%87%A0%E5%B1%80%0Awhile%20round_no%20%3C%3D%20total%3A%0A%20%20%20%20print(f%22%5Cn%E7%AC%AC%20%7Bround_no%7D%20%E5%B1%80%20%E2%80%94%E2%80%94%20%E8%AF%B7%E5%87%BA%E6%8B%B3%EF%BC%9A%22)%0A%20%20%20%20print(%221)%20%E7%9F%B3%E5%A4%B4%20%202)%20%E5%89%AA%E5%88%80%20%203)%20%E5%B8%83%22)%0A%20%20%20%20choice%20%3D%20input(%22%E4%BD%A0%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%9A%22)%0A%0A%20%20%20%20%23%20%E6%8A%8A%E7%8E%A9%E5%AE%B6%E7%9A%84%E6%95%B0%E5%AD%97%E9%80%89%E6%8B%A9%E5%8F%98%E6%88%90%E6%8B%B3%0A%20%20%20%20if%20choice%20%3D%3D%20%221%22%3A%0A%20%20%20%20%20%20%20%20player%20%3D%20%22%E7%9F%B3%E5%A4%B4%22%0A%20%20%20%20elif%20choice%20%3D%3D%20%222%22%3A%0A%20%20%20%20%20%20%20%20player%20%3D%20%22%E5%89%AA%E5%88%80%22%0A%20%20%20%20elif%20choice%20%3D%3D%20%223%22%3A%0A%20%20%20%20%20%20%20%20player%20%3D%20%22%E5%B8%83%22%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%E8%BE%93%E5%85%A5%E6%97%A0%E6%95%88%EF%BC%8C%E8%BF%99%E4%B8%80%E5%B1%80%E7%AE%97%E7%94%B5%E8%84%91%E8%B5%A2%EF%BC%81%22)%0A%20%20%20%20%20%20%20%20player%20%3D%20None%0A%0A%20%20%20%20%23%20%E7%94%B5%E8%84%91%E9%9A%8F%E6%9C%BA%E5%87%BA%E6%8B%B3%0A%20%20%20%20computer%20%3D%20random.choice(moves)%0A%0A%20%20%20%20if%20player%20is%20not%20None%3A%0A%20%20%20%20%20%20%20%20print(f%22%E4%BD%A0%E5%87%BA%E3%80%90%7Bplayer%7D%E3%80%91%EF%BC%8C%E7%94%B5%E8%84%91%E5%87%BA%E3%80%90%7Bcomputer%7D%E3%80%91%E3%80%82%22)%0A%20%20%20%20%20%20%20%20%23%20%E5%88%A4%E6%96%AD%E8%83%9C%E8%B4%9F%0A%20%20%20%20%20%20%20%20if%20player%20%3D%3D%20computer%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%E5%B9%B3%E5%B1%80%EF%BC%81%E8%BF%99%E4%B8%80%E5%B1%80%E4%B8%8D%E8%AE%A1%E5%88%86%E3%80%82%22)%0A%20%20%20%20%20%20%20%20elif%20(player%20%3D%3D%20%22%E7%9F%B3%E5%A4%B4%22%20and%20computer%20%3D%3D%20%22%E5%89%AA%E5%88%80%22)%20or%20%5C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20(player%20%3D%3D%20%22%E5%89%AA%E5%88%80%22%20and%20computer%20%3D%3D%20%22%E5%B8%83%22)%20or%20%5C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20(player%20%3D%3D%20%22%E5%B8%83%22%20and%20computer%20%3D%3D%20%22%E7%9F%B3%E5%A4%B4%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%E4%BD%A0%E8%B5%A2%E4%BA%86%E8%BF%99%E4%B8%80%E5%B1%80%EF%BC%81%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20score%5B%22%E7%8E%A9%E5%AE%B6%22%5D%20%2B%3D%201%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%E7%94%B5%E8%84%91%E8%B5%A2%E4%BA%86%E8%BF%99%E4%B8%80%E5%B1%80%EF%BC%81%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20score%5B%22%E7%94%B5%E8%84%91%22%5D%20%2B%3D%201%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%23%20%E7%8E%A9%E5%AE%B6%E4%B9%B1%E8%BE%93%E5%85%A5%EF%BC%8C%E7%9B%B4%E6%8E%A5%E5%88%A4%E7%94%B5%E8%84%91%E8%B5%A2%0A%20%20%20%20%20%20%20%20score%5B%22%E7%94%B5%E8%84%91%22%5D%20%2B%3D%201%0A%0A%20%20%20%20print(f%22%E5%BD%93%E5%89%8D%E6%AF%94%E5%88%86%20%20%E4%BD%A0%20%7Bscore%5B'%E7%8E%A9%E5%AE%B6'%5D%7D%20%3A%20%7Bscore%5B'%E7%94%B5%E8%84%91'%5D%7D%20%E7%94%B5%E8%84%91%22)%0A%20%20%20%20round_no%20%2B%3D%201%20%20%20%23%20%E8%BF%9B%E5%85%A5%E4%B8%8B%E4%B8%80%E5%B1%80%0A%0A%23%20%E6%89%80%E6%9C%89%E5%B1%80%E6%89%93%E5%AE%8C%EF%BC%8C%E5%85%AC%E5%B8%83%E6%80%BB%E6%88%90%E7%BB%A9%0Aprint(%22%5Cn%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%20%E6%AF%94%E8%B5%9B%E7%BB%93%E6%9D%9F%20%3D%3D%3D%3D%3D%3D%3D%3D%3D%3D%22)%0Aprint(f%22%E6%9C%80%E7%BB%88%E6%AF%94%E5%88%86%20%20%E4%BD%A0%20%7Bscore%5B'%E7%8E%A9%E5%AE%B6'%5D%7D%20%3A%20%7Bscore%5B'%E7%94%B5%E8%84%91'%5D%7D%20%E7%94%B5%E8%84%91%22)%0Aif%20score%5B%22%E7%8E%A9%E5%AE%B6%22%5D%20%3E%20score%5B%22%E7%94%B5%E8%84%91%22%5D%3A%0A%20%20%20%20print(%22%F0%9F%8F%86%20%E6%81%AD%E5%96%9C%E4%BD%A0%EF%BC%8C%E4%BD%A0%E6%98%AF%E6%9C%80%E7%BB%88%E8%B5%A2%E5%AE%B6%EF%BC%81%22)%0Aelif%20score%5B%22%E7%8E%A9%E5%AE%B6%22%5D%20%3C%20score%5B%22%E7%94%B5%E8%84%91%22%5D%3A%0A%20%20%20%20print(%22%E7%94%B5%E8%84%91%E8%B5%A2%E4%BA%86%E8%BF%99%E5%9C%BA%E6%AF%94%E8%B5%9B%EF%BC%8C%E5%86%8D%E6%9D%A5%E4%B8%80%E6%AC%A1%E6%8C%91%E6%88%98%E5%AE%83%E5%90%A7%EF%BC%81%22)%0Aelse%3A%0A%20%20%20%20print(%22%E5%B9%B3%E5%88%86%E7%A7%8B%E8%89%B2%EF%BC%8C%E4%BD%A0%E5%92%8C%E7%94%B5%E8%84%91%E6%89%93%E6%88%90%E5%B9%B3%E6%89%8B%EF%BC%81%22)"># rps_game.py 石头剪刀布 完整版
+import random
+
+moves = ["石头", "剪刀", "布"]
+score = {"玩家": 0, "电脑": 0}   # 记分板
+
+total = int(input("想玩几局？请输入局数："))
+
+round_no = 1  # 现在是第几局
+while round_no &lt;= total:
+    print(f"\n第 {round_no} 局 —— 请出拳：")
+    print("1) 石头  2) 剪刀  3) 布")
+    choice = input("你的选择：")
+
+    # 把玩家的数字选择变成拳
+    if choice == "1":
+        player = "石头"
+    elif choice == "2":
+        player = "剪刀"
+    elif choice == "3":
+        player = "布"
+    else:
+        print("输入无效，这一局算电脑赢！")
+        player = None
+
+    # 电脑随机出拳
+    computer = random.choice(moves)
+
+    if player is not None:
+        print(f"你出【{player}】，电脑出【{computer}】。")
+        # 判断胜负
+        if player == computer:
+            print("平局！这一局不计分。")
+        elif (player == "石头" and computer == "剪刀") or \
+             (player == "剪刀" and computer == "布") or \
+             (player == "布" and computer == "石头"):
+            print("你赢了这一局！")
+            score["玩家"] += 1
+        else:
+            print("电脑赢了这一局！")
+            score["电脑"] += 1
+    else:
+        # 玩家乱输入，直接判电脑赢
+        score["电脑"] += 1
+
+    print(f"当前比分  你 {score['玩家']} : {score['电脑']} 电脑")
+    round_no += 1   # 进入下一局
+
+# 所有局打完，公布总成绩
+print("\n========== 比赛结束 ==========")
+print(f"最终比分  你 {score['玩家']} : {score['电脑']} 电脑")
+if score["玩家"] &gt; score["电脑"]:
+    print("🏆 恭喜你，你是最终赢家！")
+elif score["玩家"] &lt; score["电脑"]:
+    print("电脑赢了这场比赛，再来一次挑战它吧！")
+else:
+    print("平分秋色，你和电脑打成平手！")</code></pre>
+  <div class="output" id="code4-out" hidden></div>
+</div><p>运行结果（玩 3 局的例子）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">想玩几局？请输入局数：3
+
+第 1 局 —— 请出拳：
+1) 石头  2) 剪刀  3) 布
+你的选择：1
+你出【石头】，电脑出【剪刀】。
+你赢了这一局！
+当前比分  你 1 : 0 电脑
+
+第 2 局 —— 请出拳：
+1) 石头  2) 剪刀  3) 布
+你的选择：2
+你出【剪刀】，电脑出【石头】。
+电脑赢了这一局！
+当前比分  你 1 : 1 电脑
+
+第 3 局 —— 请出拳：
+1) 石头  2) 剪刀  3) 布
+你的选择：3
+你出【布】，电脑出【石头】。
+你赢了这一局！
+当前比分  你 2 : 1 电脑
+
+========== 比赛结束 ==========
+最终比分  你 2 : 1 电脑
+🏆 恭喜你，你是最终赢家！</code></pre>
+</div><p>拆开看这个游戏的结构：</p>
+<ul>
+<li><strong>准备阶段</strong>：定义拳的列表 <code>moves</code>、记分板字典 <code>score</code>，问玩家要玩几局。</li>
+<li><strong>循环阶段</strong>：<code>while round_no &lt;= total</code> 让游戏打满指定局数。每一局都做三件事：收玩家出拳、电脑随机出拳、判胜负并记分。</li>
+<li><strong>收尾阶段</strong>：循环结束后公布总比分，比较两边的分决定冠军。</li>
+</ul>
+<p>一个真正的多局对战游戏，就这样成型了！</p>
+<blockquote>
+<p>小贴士：字符串里的 <code>\n</code> 是一个<strong>换行符</strong>，会让输出空出一行，比如 <code>print(f&quot;\n第 {round_no} 局&quot;)</code> 会先空一行再打印，让每局之间看着更清爽。</p>
+</blockquote>
+<h2>常见错误</h2>
+<p><strong>1. 字典的键写错或没加引号</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">score = {"玩家": 0, "电脑": 0}
+print(score[玩家])   # 玩家没加引号</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">NameError: name '玩家' is not defined</code></pre>
+</div><p><code>玩家</code> 不加引号，会被当成一个变量名。修法：键是文字，要加引号——<code>score[&quot;玩家&quot;]</code>。如果标签打错字（比如写成 <code>score[&quot;玩家们&quot;]</code>），则会报 <code>KeyError</code>，表示字典里没这个标签。</p>
+<p><strong>2. 忘了把局数用 <code>int()</code> 转成数字</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">total = input("想玩几局？")   # 少了 int()
+while round_no &lt;= total:      # 数字和文字比大小</code></pre>
+</div><p>报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">TypeError: '&lt;=' not supported between instances of 'int' and 'str'</code></pre>
+</div><p>和第 7 章一样的坑：<code>input()</code> 拿到的是文字，比大小前要用 <code>int()</code> 转成整数——<code>total = int(input(&quot;想玩几局？&quot;))</code>。</p>
+<p><strong>3. 胜负条件里 <code>and</code> 和 <code>or</code> 用反了</strong></p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># 想表达"石头砸剪刀"，却把 and 写成了 or
+if player == "石头" or computer == "剪刀":
+    print("你赢了")</code></pre>
+</div><p>这样只要玩家出石头（不管电脑出什么）就判赢，全乱套了。记住：<strong><code>and</code> 是&quot;两个都要成立&quot;，<code>or</code> 是&quot;有一个成立就行&quot;。</strong> 判断&quot;石头砸剪刀&quot;必须是&quot;我出石头<strong>并且</strong>它出剪刀&quot;，用 <code>and</code>。</p>
+<p><strong>4. 循环里忘了让局数增加</strong></p>
+<p>如果漏写了最后的 <code>round_no += 1</code>，<code>round_no</code> 永远是 1，<code>while</code> 条件永远成立，游戏会<strong>卡在第一局无限循环</strong>。这叫&quot;死循环&quot;。修法：确保循环里有一步让 <code>round_no</code> 变大，循环才能走到头。</p>
+<h2>动手挑战</h2>
+<p>在 <code>rps_game.py</code> 的基础上，把游戏做得更专业。</p>
+<p><strong>★ 挑战一：统计平局数</strong>
+在记分板字典里再加一个键 <code>&quot;平局&quot;</code>，每次平局就给它加 1，最后一起公布：你赢了几局、输了几局、平了几局。</p>
+<p><strong>★★ 挑战二：三局两胜</strong>
+不再固定局数，而是<strong>谁先赢满 2 局谁就夺冠</strong>，立刻结束比赛。（提示：把 <code>while</code> 的条件改成&quot;两边都还没到 2 分&quot;，或者在有人达到 2 分时用别的办法跳出循环。）</p>
+<p><strong>★★★ 挑战三：升级成&quot;石头剪刀布蜥蜴斯波克&quot;</strong>
+这是《生活大爆炸》里的加强版，一共五种手势，规则更多。把 <code>moves</code> 扩成五个，重新设计胜负判断。想想：当选项变多，长长的 <code>if</code> 条件会不会很难写？能不能用字典记下&quot;谁能赢谁&quot;，让判断更简洁？（这是个真正的挑战，做出来你就很厉害了！）</p>
+<h2>本章小结</h2>
+<p>你完成了一个有记分板的完整对战游戏，还把前面学的知识全用上了：</p>
+<ul>
+<li><strong><code>random.choice(列表)</code></strong> 从列表里随机抽一个，正好用来让电脑&quot;随机出拳&quot;。</li>
+<li>用<strong>列表</strong>存放一组同类选项（三种拳），代码更整齐。</li>
+<li>用<strong>字典</strong>当记分板，<code>{&quot;玩家&quot;: 0, &quot;电脑&quot;: 0}</code>，靠标签（键）存取每一方的分数，比零散的变量清楚。</li>
+<li>判断胜负时，用 <code>and</code>（并且）组合条件、用 <code>or</code>（或者）合并多种获胜情况；先筛掉平局和获胜，剩下的就是失败。</li>
+<li>用 <strong><code>while</code> 循环</strong>打多局，别忘了让局数每次增加，否则会死循环。</li>
+<li>游戏的通用结构：<strong>准备 → 循环对战 → 收尾公布</strong>。</li>
+</ul>
+<p>到这里，&quot;用游戏学编程&quot;这三章就圆满了——你已经能独立做出好几种小游戏。但你有没有发现，我们的游戏到现在还都是<strong>纯文字</strong>的？下一章要来点不一样的：我们请出一只会画画的小海龟 <strong>turtle</strong>！你只要发号施令——&quot;往前走&quot;&quot;向右转&quot;&quot;抬笔落笔&quot;，它就在屏幕上画出正方形、五角星、彩色螺旋，甚至一整幅图案。是时候让编程&quot;看得见&quot;了，翻页去见见这只神奇的小海龟吧！</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch08.html">← 第 8 章 文字冒险游戏</a>
+  <a class="nav-next" href="ch10.html">第 10 章 用海龟画图 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 D 换用别家 AI</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li class="active"><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 D 换用别家 AI：Bedrock / Gemini / OpenAI / 国产大模型</h1>
+<p>正文里我们一直用 Anthropic 的 <strong>Claude</strong>。但世界上厉害的 AI 不止一家——美国的 OpenAI（ChatGPT 背后的公司）、Google 的 <strong>Gemini</strong>，中国的 <strong>DeepSeek（深度求索）</strong>、<strong>智谱 GLM</strong>、<strong>Kimi（月之暗面）</strong> 都很强。这个附录教你：<strong>怎么把书里的代码，改成用这些 AI。</strong></p>
+<p>好消息是：<strong>换 AI 通常只要改几行</strong>，你学的编程思路完全不用变。</p>
+<blockquote>
+<p>⚠️ <strong>先读这条</strong>：申请任何一家的 API 密钥、可能产生的费用，都请<strong>和家长或老师一起</strong>完成。密钥永远是<strong>秘密</strong>，绝不写进代码、绝不外传——这条规矩对每一家都一样。所有密钥都用正文教过的<strong>环境变量</strong>方式保存。</p>
+</blockquote>
+<blockquote>
+<p>💡 <strong>关于型号名字会过时</strong>：AI 更新很快，下面写的型号名（如 <code>gpt-4o-mini</code>、<code>gemini-2.5-flash</code>）是本书写作时的。等你真正动手时，<strong>去对应官网的文档查一下当前最新、最便宜的型号名</strong>再填进去。base_url（服务器地址）则比较稳定。</p>
+</blockquote>
+<h2>一个关键发现：很多家共用同一套写法</h2>
+<p>这是本附录最重要的一句话：<strong>OpenAI、DeepSeek、智谱 GLM、Kimi，甚至 Google Gemini，都能用同一个叫 <code>openai</code> 的 Python 工具包来调用。</strong></p>
+<p>为什么？因为这些公司都提供了一种&quot;和 OpenAI 长得一样&quot;的接口（业内叫 <strong>OpenAI 兼容接口</strong>）。于是你只要换三样东西：</p>
+<div class="concept">
+<svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="180" y="15" width="200" height="34" rx="8" fill="#e8f0fa" stroke="#2f6db3"/>
+  <text x="280" y="37" text-anchor="middle" font-size="14" fill="#2f6db3" font-weight="bold">同一套 openai 代码</text>  <rect x="30" y="90" width="150" height="90" rx="10" fill="#fff7ec" stroke="#f0a94b" stroke-width="2"/>
+  <text x="105" y="112" text-anchor="middle" font-size="13" fill="#a5762b" font-weight="bold">只改 3 样东西</text>
+  <text x="105" y="134" text-anchor="middle" font-size="12" fill="#6b5638">① base_url 地址</text>
+  <text x="105" y="153" text-anchor="middle" font-size="12" fill="#6b5638">② api_key 密钥</text>
+  <text x="105" y="172" text-anchor="middle" font-size="12" fill="#6b5638">③ model 型号名</text>  <rect x="220" y="80" width="150" height="26" rx="6" fill="#eafaef" stroke="#3f9b5c"/>
+  <text x="295" y="98" text-anchor="middle" font-size="12" fill="#2f7a45">→ OpenAI</text>
+  <rect x="220" y="112" width="150" height="26" rx="6" fill="#eafaef" stroke="#3f9b5c"/>
+  <text x="295" y="130" text-anchor="middle" font-size="12" fill="#2f7a45">→ DeepSeek</text>
+  <rect x="220" y="144" width="150" height="26" rx="6" fill="#eafaef" stroke="#3f9b5c"/>
+  <text x="295" y="162" text-anchor="middle" font-size="12" fill="#2f7a45">→ GLM / Kimi / Gemini</text>  <rect x="410" y="112" width="140" height="26" rx="6" fill="#fbe6dc" stroke="#e06a3b"/>
+  <text x="480" y="130" text-anchor="middle" font-size="12" fill="#a53f1c">Claude / Bedrock 另讲</text>
+  <path d="M180 110 L218 100" stroke="#666" stroke-width="1.5" marker-end="url(#dd)"/>
+  <path d="M180 130 L218 125" stroke="#666" stroke-width="1.5" marker-end="url(#dd)"/>
+  <defs><marker id="dd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#666"/></marker></defs>
+</svg>
+<div class="caption">图 D-1　OpenAI、DeepSeek、GLM、Kimi、Gemini 共用同一套 openai 代码，只改地址、密钥、型号三处</div>
+</div><p>先装好这个工具包：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pip install openai</code></pre>
+</div><h2>通用模板：一份代码，换着用</h2>
+<p>下面这份代码是&quot;万能模板&quot;。<strong>它的骨架永远不变</strong>，你只需要按后面各家的表格，替换 <code>base_url</code>、<code>api_key</code>、<code>model</code> 三处。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># universal_ai.py —— 换 base_url/密钥/型号，就能用不同家的 AI
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="各家的地址填这里",                 # ① 换成对应服务商的地址
+    api_key=os.environ.get("MY_AI_KEY"),        # ② 从环境变量读密钥
+)
+
+response = client.chat.completions.create(
+    model="各家的型号名填这里",                   # ③ 换成对应型号
+    messages=[
+        {"role": "user", "content": "用一句话介绍一下你自己。"}
+    ],
+)
+
+# openai 这套取回答的写法，比 Claude 稍简单一点：
+print(response.choices[0].message.content)</code></pre>
+</div><blockquote>
+<p>💡 <strong>注意和 Claude 的两点不同</strong>：</p>
+<ol>
+<li>调用的是 <code>client.chat.completions.create(...)</code>（Claude 是 <code>client.messages.create(...)</code>）。</li>
+<li>取回答用 <code>response.choices[0].message.content</code>（Claude 要遍历 <code>response.content</code> 取 <code>text</code>）。
+<code>messages</code> 列表的写法（<code>{&quot;role&quot;: ..., &quot;content&quot;: ...}</code>）两边是一样的，多轮对话、<code>system</code> 人设的思路也一样——你正文学的全都用得上。</li>
+</ol>
+</blockquote>
+<h2>各家怎么填？（速查表）</h2>
+<p>下表是各家的地址和型号。<strong>密钥都去对应官网申请</strong>（记得和家长/老师一起）。</p>
+<table>
+<thead>
+<tr>
+<th>服务商</th>
+<th>base_url（地址）</th>
+<th>一个型号名（会更新，以官网为准）</th>
+<th>去哪申请密钥</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>DeepSeek 深度求索</strong></td>
+<td><code>https://api.deepseek.com</code></td>
+<td><code>deepseek-chat</code></td>
+<td>platform.deepseek.com</td>
+</tr>
+<tr>
+<td><strong>智谱 GLM</strong></td>
+<td><code>https://open.bigmodel.cn/api/paas/v4/</code></td>
+<td><code>glm-4-flash</code>（有免费型号！）</td>
+<td>open.bigmodel.cn</td>
+</tr>
+<tr>
+<td><strong>Kimi 月之暗面</strong></td>
+<td><code>https://api.moonshot.cn/v1</code></td>
+<td><code>moonshot-v1-8k</code></td>
+<td>platform.moonshot.cn</td>
+</tr>
+<tr>
+<td><strong>OpenAI</strong></td>
+<td>不用填（默认就是）</td>
+<td><code>gpt-4o-mini</code></td>
+<td>platform.openai.com</td>
+</tr>
+<tr>
+<td><strong>Google Gemini</strong></td>
+<td><code>https://generativelanguage.googleapis.com/v1beta/openai/</code></td>
+<td><code>gemini-2.5-flash</code></td>
+<td>Google AI Studio</td>
+</tr>
+</tbody></table>
+<p>下面挑几家给出完整例子。</p>
+<h3>DeepSeek（国内，性价比高）</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># deepseek_demo.py
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.deepseek.com",
+    api_key=os.environ.get("DEEPSEEK_API_KEY"),
+)
+
+response = client.chat.completions.create(
+    model="deepseek-chat",
+    messages=[{"role": "user", "content": "用一句话夸夸正在学编程的我。"}],
+)
+print(response.choices[0].message.content)</code></pre>
+</div><p>运行前先设置密钥（在同一个终端窗口）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">set DEEPSEEK_API_KEY=你的DeepSeek密钥</code></pre>
+</div><p>Mac/Linux 用 <code>export DEEPSEEK_API_KEY=...</code>。</p>
+<h3>智谱 GLM（有免费型号，最适合练手）</h3>
+<p>智谱有个 <code>glm-4-flash</code> 型号常常是<strong>免费</strong>的，特别适合学生反复练习，不用担心花钱。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># glm_demo.py
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://open.bigmodel.cn/api/paas/v4/",
+    api_key=os.environ.get("GLM_API_KEY"),
+)
+
+response = client.chat.completions.create(
+    model="glm-4-flash",                       # 常见的免费型号
+    messages=[{"role": "user", "content": "给我讲一个关于程序员的冷笑话。"}],
+)
+print(response.choices[0].message.content)</code></pre>
+</div><h3>Kimi（月之暗面）</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># kimi_demo.py
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.moonshot.cn/v1",
+    api_key=os.environ.get("KIMI_API_KEY"),
+)
+
+response = client.chat.completions.create(
+    model="moonshot-v1-8k",
+    messages=[{"role": "user", "content": "帮我给一只橘猫起 5 个可爱的名字。"}],
+)
+print(response.choices[0].message.content)</code></pre>
+</div><h3>Google Gemini（从 Google AI Studio 拿密钥）</h3>
+<p>Gemini 的密钥在 <strong>Google AI Studio</strong>（网址 <code>https://aistudio.google.com</code>）申请，通常有免费额度。申请步骤（和家长/老师一起）：</p>
+<ol>
+<li>用 Google 账号登录 <code>https://aistudio.google.com</code>。</li>
+<li>找到 &quot;Get API key&quot; / &quot;API 密钥&quot;，创建一个。</li>
+<li>复制保存好那串密钥。</li>
+</ol>
+<p>Gemini 也支持 OpenAI 兼容写法，所以还是那套模板：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># gemini_demo.py
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=os.environ.get("GEMINI_API_KEY"),
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",                  # 型号会更新，以官网为准
+    messages=[{"role": "user", "content": "用小学生能懂的话解释什么是彩虹。"}],
+)
+print(response.choices[0].message.content)</code></pre>
+</div><h3>OpenAI（ChatGPT 官方接口）</h3>
+<p>OpenAI 是这套写法的&quot;原厂&quot;，所以 <code>base_url</code> 都不用填：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># openai_demo.py
+import os
+from openai import OpenAI
+
+# 不写 base_url，默认就是 OpenAI 官方地址
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",                       # 又便宜又够用的型号
+    messages=[{"role": "user", "content": "推荐三本适合初中生的科普书。"}],
+)
+print(response.choices[0].message.content)</code></pre>
+</div><h2>把正文的项目改成用别家 AI</h2>
+<p>正文第 14—17 章的聊天机器人、AI 出题、故事工厂等，都是围绕 Claude 的 <code>client.messages.create</code> 写的。想改成上面这些 AI，只要做这几处&quot;翻译&quot;：</p>
+<table>
+<thead>
+<tr>
+<th>正文里的 Claude 写法</th>
+<th>换成 openai 那套</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>import anthropic</code></td>
+<td><code>from openai import OpenAI</code></td>
+</tr>
+<tr>
+<td><code>client = anthropic.Anthropic()</code></td>
+<td><code>client = OpenAI(base_url=..., api_key=...)</code></td>
+</tr>
+<tr>
+<td><code>client.messages.create(...)</code></td>
+<td><code>client.chat.completions.create(...)</code></td>
+</tr>
+<tr>
+<td><code>max_tokens=300</code>（必填）</td>
+<td>可省略；如需限制写 <code>max_tokens=300</code></td>
+</tr>
+<tr>
+<td><code>system=&quot;人设&quot;</code>（单独参数）</td>
+<td>放进 messages：<code>{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;人设&quot;}</code></td>
+</tr>
+<tr>
+<td>遍历 <code>response.content</code> 取 <code>text</code></td>
+<td><code>response.choices[0].message.content</code></td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>💡 注意 <code>system</code> 人设的位置不同：Claude 是单独的 <code>system=</code> 参数；openai 这套是把它作为 <code>messages</code> 列表里的<strong>第一条</strong>消息，<code>&quot;role&quot;</code> 写 <code>&quot;system&quot;</code>。多轮对话记忆的思路（把每句话 append 进 messages）两边完全一样。</p>
+</blockquote>
+<h2>进阶：AWS Bedrock（用亚马逊云调用 Claude）</h2>
+<p><strong>AWS Bedrock</strong> 是亚马逊云提供的 AI 服务，通过它也能用上 Claude（以及其他厂商的模型）。很多公司因为已经在用亚马逊云，就顺便用 Bedrock 调 Claude。</p>
+<p>Bedrock 的登录方式和前面都不同——它不用简单的 API 密钥，而是用<strong>亚马逊云账号（AWS 账号）的凭证</strong>，配置比较复杂，通常是公司或懂云服务的大人来搭。这里给你看一眼代码长什么样，理解&quot;原来还能这样连&quot;，具体配置请让熟悉 AWS 的老师或家长帮忙。</p>
+<p>Bedrock 用的是我们正文的老朋友 <code>anthropic</code> 工具包，但换一个专门的客户端：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># bedrock_demo.py —— 通过 AWS Bedrock 调用 Claude
+# 需要先装：pip install "anthropic[bedrock]"
+# 并且事先配置好 AWS 账号凭证（请让懂 AWS 的大人协助）
+from anthropic import AnthropicBedrock
+
+client = AnthropicBedrock(aws_region="us-east-1")   # 你所在的区域
+
+response = client.messages.create(
+    model="anthropic.claude-haiku-4-5",             # Bedrock 上的型号名带 anthropic. 前缀
+    max_tokens=300,
+    messages=[{"role": "user", "content": "你好，请介绍一下自己。"}],
+)
+
+for block in response.content:
+    if block.type == "text":
+        print(block.text)</code></pre>
+</div><blockquote>
+<p>💡 看出来了吗？Bedrock 上取回答的写法（遍历 <code>response.content</code> 取 <code>text</code>）和正文的 Claude <strong>一模一样</strong>——因为它本来就是 Claude，只是换了个&quot;入口&quot;。区别只在：客户端换成 <code>AnthropicBedrock</code>、要指定 <code>aws_region</code>、型号名带 <code>anthropic.</code> 前缀、登录靠 AWS 账号凭证。</p>
+</blockquote>
+<h2>该选哪一家？</h2>
+<p>给你几条实用建议：</p>
+<ul>
+<li><strong>想免费、零花费地练手</strong>：优先试 <strong>智谱 GLM 的 <code>glm-4-flash</code></strong>（常有免费额度），或用有免费额度的 <strong>Gemini</strong>。</li>
+<li><strong>在中国大陆、图方便稳定</strong>：<strong>DeepSeek、GLM、Kimi</strong> 这些国产的访问通常更顺畅，文档也是中文。</li>
+<li><strong>想用 ChatGPT 同款</strong>：用 <strong>OpenAI</strong>。</li>
+<li><strong>家里/学校已经在用亚马逊云</strong>：可以考虑 <strong>Bedrock</strong>。</li>
+<li><strong>就想用书里的 Claude</strong>：那就继续用正文的 <code>anthropic</code> 写法，最简单。</li>
+</ul>
+<p><strong>最重要的是</strong>：不管用哪家，你在这本书里学到的东西——变量、循环、函数、<code>messages</code> 列表、写好提示词、把密钥保密——<strong>全都通用</strong>。换 AI 就像换个牌子的电池，装电池的手电筒（你的程序）还是你亲手做的那个。</p>
+<blockquote>
+<p>🔑 <strong>最后再唠叨一遍</strong>：无论哪一家的密钥，都别写进代码、别发给别人、别传到网上。用完记得关掉终端窗口。安全第一。</p>
+</blockquote>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-c.html">← 附录 C 继续前进</a>
+  <span></span>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

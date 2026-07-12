@@ -1,0 +1,11 @@
+{
+  "name": "python-book-for-teens",
+  "version": "1.0.0",
+  "description": "《跟 Python 一起玩：从零开始，用游戏和 AI 学编程》——面向 7—9 年级学生的交互式编程书",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "marked": "^18.0.6"
+  }
+}

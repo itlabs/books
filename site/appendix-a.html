@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 A 安装环境</title>
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list"><li><a href="ch01.html">第 1 章 你好，世界！</a></li>
+<li><a href="ch02.html">第 2 章 变量与数据类型</a></li>
+<li><a href="ch03.html">第 3 章 输入与输出</a></li>
+<li><a href="ch04.html">第 4 章 条件判断</a></li>
+<li><a href="ch05.html">第 5 章 循环</a></li>
+<li><a href="ch06.html">第 6 章 列表、字典和函数</a></li>
+<li><a href="ch07.html">第 7 章 猜数字大作战</a></li>
+<li><a href="ch08.html">第 8 章 文字冒险游戏</a></li>
+<li><a href="ch09.html">第 9 章 石头剪刀布</a></li>
+<li><a href="ch10.html">第 10 章 用海龟画图</a></li>
+<li><a href="ch11.html">第 11 章 第一个游戏窗口</a></li>
+<li><a href="ch12.html">第 12 章 贪吃蛇大作战</a></li>
+<li><a href="ch13.html">第 13 章 AI 是什么</a></li>
+<li><a href="ch14.html">第 14 章 会聊天的机器人</a></li>
+<li><a href="ch15.html">第 15 章 给游戏装上 AI</a></li>
+<li><a href="ch16.html">第 16 章 AI 故事工厂</a></li>
+<li><a href="ch17.html">第 17 章 更多好玩的 AI 应用</a></li>
+<li class="active"><a href="appendix-a.html">附录 A 安装环境</a></li>
+<li><a href="appendix-b.html">附录 B 报错速查表</a></li>
+<li><a href="appendix-c.html">附录 C 继续前进</a></li>
+<li><a href="appendix-d.html">附录 D 换用别家 AI</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 A 安装 Python 和写代码的工具</h1>
+<p>这本书是网页版，几乎每段代码右上角都有绿色的 <strong>▶ 运行</strong> 按钮，你不用装任何东西也能一路学下去。但如果你想成为真正的程序员，就该在自己的电脑上装好 Python——就像学画画的人总要有属于自己的画笔和颜料。</p>
+<p>这一节我会手把手带你装好两样东西：</p>
+<ol>
+<li><strong>Python 本身</strong>（能运行代码的&quot;引擎&quot;）</li>
+<li><strong>VS Code 编辑器</strong>（写代码的&quot;文具&quot;）</li>
+</ol>
+<blockquote>
+<p>小贴士：这一节最适合和爸爸妈妈一起看。装软件时可能需要输入电脑的开机密码，或者点几下&quot;允许&quot;，有大人在旁边会顺利很多。整个过程大概 15 分钟，别着急，一步一步来。</p>
+</blockquote>
+<p>全书大部分内容 Windows 和 Mac（苹果电脑）都一样，遇到不一样的地方，我会分开写清楚。</p>
+<hr>
+<h2>第一步：下载并安装 Python</h2>
+<h3>1. 打开官网</h3>
+<p>用浏览器打开 Python 的官方网站：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">https://www.python.org</code></pre>
+</div><blockquote>
+<p>安全提醒：一定要从官方网站 <strong>python.org</strong> 下载，别在乱七八糟的网站上下&quot;Python 安装包&quot;，那些很可能带病毒。认准网址里的 <code>python.org</code>。</p>
+</blockquote>
+<p>把鼠标移到导航栏的 <strong>Downloads（下载）</strong> 上，网站通常会自动认出你的系统，给你一个大大的黄色按钮，比如&quot;Download Python 3.13.x&quot;。点它就开始下载。（<code>3.13.x</code> 里的 <code>x</code> 是小版本号，你看到的数字可能比这大，没关系，只要是 3 开头的最新版就行。）</p>
+<h3>2. Windows 用户：安装时务必勾选这一项！</h3>
+<p>下载完成后，双击那个 <code>.exe</code> 安装文件。安装窗口一打开，<strong>先别急着点&quot;Install Now&quot;！</strong></p>
+<p>请先看窗口<strong>最下面</strong>，有一个小方框：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">☑ Add python.exe to PATH</code></pre>
+</div><p>（意思是&quot;把 Python 加到 PATH 里&quot;。）</p>
+<p><strong>一定要把这个方框打上勾！</strong> 然后再点上面的 <strong>Install Now（现在安装）</strong>。</p>
+<blockquote>
+<p>小贴士：<strong>这一步是全书最容易出错、也最重要的一步。</strong> PATH 你可以理解成电脑的&quot;通讯录&quot;——勾了它，以后你在任何地方喊一声&quot;python&quot;，电脑都知道去哪儿找它。如果不勾，电脑就会一脸茫然地说&quot;我不认识 python 这个命令&quot;。很多新手卡在这里，所以我啰嗦提醒你：<strong>先勾 Add to PATH，再点 Install。</strong></p>
+</blockquote>
+<div class="concept">
+<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="20" y="20" width="480" height="160" rx="10" fill="#fff" stroke="#2f6db3" stroke-width="2"/>
+  <text x="260" y="50" text-anchor="middle" font-size="15" fill="#2f6db3" font-weight="bold">Python 安装窗口</text>
+  <rect x="150" y="70" width="220" height="30" rx="6" fill="#3f9b5c"/>
+  <text x="260" y="90" text-anchor="middle" font-size="13" fill="#fff">Install Now（先别点！）</text>
+  <rect x="45" y="140" width="18" height="18" rx="3" fill="#fff" stroke="#e06a3b" stroke-width="2"/>
+  <path d="M48 149 L52 154 L60 143" stroke="#e06a3b" stroke-width="3" fill="none"/>
+  <text x="72" y="154" font-size="13" fill="#333">Add python.exe to PATH　←　先勾这个！</text>
+</svg>
+<div class="caption">图 A-1　Windows 安装 Python：先勾中最下面的方框，再点安装</div>
+</div><p>安装完成后，点 <strong>Close（关闭）</strong> 就好。</p>
+<h3>3. Mac 用户：一路点&quot;继续&quot;就行</h3>
+<p>Mac 上简单得多：下载下来的是一个 <code>.pkg</code> 文件，双击它，然后一路点 <strong>继续（Continue）→ 同意 → 安装（Install）</strong>，中途可能要你输一次开机密码。装完关掉窗口即可。Mac 不需要你手动勾选什么，它会自动配置好。</p>
+<hr>
+<h2>第二步：验证 Python 装好了没</h2>
+<p>装完怎么知道成功了？我们让电脑自己报一下&quot;我几岁了&quot;（也就是版本号）。这要用到<strong>终端</strong>——一个可以直接给电脑打字下命令的黑框框。</p>
+<h3>怎么打开这个&quot;黑框框&quot;</h3>
+<p><strong>Windows：打开&quot;命令提示符&quot;</strong></p>
+<p>点开始菜单（屏幕左下角的窗户图标），直接用键盘打字 <code>cmd</code>，屏幕上会出现&quot;命令提示符&quot;，点它打开。你会看到一个黑色（或蓝色）的窗口，里面有一行字，光标在闪。</p>
+<p><strong>Mac：打开&quot;终端&quot;</strong></p>
+<p>按 <code>Command（⌘）+ 空格</code> 打开搜索框，输入 <code>终端</code> 或 <code>Terminal</code>，回车打开。</p>
+<blockquote>
+<p>小贴士：<strong>终端（Terminal）</strong> 和 Windows 的<strong>命令提示符（Command Prompt）</strong> 是一回事，都是&quot;你直接跟电脑打字对话&quot;的地方。本书后面说&quot;打开终端&quot;，Windows 同学就理解成&quot;打开命令提示符&quot;。它看起来很酷很黑客，其实一点都不难。</p>
+</blockquote>
+<h3>输入验证命令</h3>
+<p>在那个框框里，敲下面这行，然后按回车：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">python --version</code></pre>
+</div><p>如果一切正常，它会回你一行，比如：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Python 3.13.1</code></pre>
+</div><p>看到 <code>Python</code> 加一串数字，就说明<strong>你成功了！</strong> Python 已经住进你的电脑了。</p>
+<blockquote>
+<p>小贴士：Mac 用户如果上面这行没反应，试试把 <code>python</code> 换成 <code>python3</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">python3 --version</code></pre>
+</div><p>Mac 系统里 <code>python3</code> 才是我们刚装的那个。记住这个小区别就好。</p>
+</blockquote>
+<p>如果它没有报出版本号，而是说了句&quot;不是内部或外部命令&quot;之类的话——别慌，跳到本附录最后的&quot;常见安装问题&quot;看看。</p>
+<hr>
+<h2>第三步：安装 VS Code 编辑器</h2>
+<p>Python 是&quot;引擎&quot;，但你还需要一个舒服的地方<strong>写</strong>代码。我们用 <strong>VS Code</strong>（全名 Visual Studio Code），它免费、好用，全世界的程序员都在用，特别适合新手。</p>
+<blockquote>
+<p>小贴士：写代码为什么不用记事本或 Word？因为专业编辑器会<strong>给代码上色</strong>（不同的东西显示成不同颜色）、<strong>帮你对齐</strong>、<strong>发现拼写错误</strong>，就像一个随时在旁边的小助手。用它写代码，会舒服一百倍。</p>
+</blockquote>
+<h3>1. 下载安装</h3>
+<p>打开官网：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">https://code.visualstudio.com</code></pre>
+</div><p>点大大的下载按钮，选对应你系统的版本（网站一般会自动认出来）。</p>
+<ul>
+<li><strong>Windows</strong>：下载 <code>.exe</code>，双击，一路&quot;下一步&quot;。中间有个&quot;选择附加任务&quot;的界面，建议把&quot;添加到 PATH&quot;和几个&quot;添加右键菜单&quot;的勾都打上，方便以后使用。</li>
+<li><strong>Mac</strong>：下载的是压缩包，解压后会得到一个 <strong>Visual Studio Code</strong> 图标，把它<strong>拖进&quot;应用程序（Applications）&quot;文件夹</strong>，就算装好了。</li>
+</ul>
+<h3>2. 装中文界面</h3>
+<p>VS Code 默认是英文的，我们把它变成中文，看着更亲切。</p>
+<ol>
+<li>打开 VS Code。</li>
+<li>看左边一竖排图标，找到那个像<strong>四个小方块</strong>的图标（叫&quot;扩展 Extensions&quot;），点它。</li>
+<li>上方的搜索框里输入：<code>Chinese</code></li>
+<li>找到 <strong>&quot;Chinese (Simplified) 简体中文&quot;</strong> 这个扩展，点它旁边的蓝色 <strong>Install（安装）</strong> 按钮。</li>
+<li>装完右下角会弹出一个提示，问你要不要重启，点 <strong>Restart（重启）</strong>。重启后界面就变中文啦。</li>
+</ol>
+<h3>3. 装 Python 扩展</h3>
+<p>同样在&quot;扩展&quot;面板里：</p>
+<ol>
+<li>搜索框输入：<code>Python</code></li>
+<li>找到微软官方出的那个 <strong>Python</strong> 扩展（作者是 Microsoft，下载量最高、排最前面的那个），点 <strong>安装</strong>。</li>
+</ol>
+<p>这个扩展会让 VS Code&quot;看懂&quot;Python 代码：帮你上色、提示错误、还会给你一个方便的运行按钮。</p>
+<blockquote>
+<p>小贴士：扩展就像给手机装 App——给 VS Code 装上&quot;Python 扩展&quot;，它就多了懂 Python 的本领。装好这两个扩展就够开始了，别的以后需要再说。</p>
+</blockquote>
+<hr>
+<h2>第四步：新建文件、写代码、跑起来</h2>
+<p>万事俱备，我们来完整走一遍：从新建文件到看见结果。</p>
+<h3>1. 新建一个文件夹放你的代码</h3>
+<p>先在电脑上建一个专门放代码的文件夹，比如在&quot;文档&quot;里建一个叫 <code>python_code</code> 的文件夹。以后你写的程序都放这儿，整整齐齐。</p>
+<p>在 VS Code 里点 <strong>文件（File）→ 打开文件夹（Open Folder）</strong>，选中你刚建的这个文件夹打开。</p>
+<h3>2. 新建 .py 文件</h3>
+<p>在 VS Code 左边的文件列表区，把鼠标移上去会出现几个小图标，点那个**&quot;新建文件&quot;**的图标（一张带加号的纸），给文件起个名字：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">hello.py</code></pre>
+</div><blockquote>
+<p>小贴士：<strong>文件名一定要以 <code>.py</code> 结尾</strong>，这是在告诉电脑&quot;这是一份 Python 代码&quot;，就像图片以 <code>.jpg</code> 结尾一样。文件名用英文，别用空格，比如 <code>my_game.py</code> 就很好。</p>
+</blockquote>
+<h3>3. 写几行代码</h3>
+<p>在文件里敲下这一行（照第 1 章学的）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># hello.py
+print("你好，世界！")
+print("我的电脑装好 Python 啦！")</code></pre>
+</div><p>按 <code>Ctrl + S</code>（Mac 是 <code>⌘ + S</code>）保存。</p>
+<h3>4. 运行它——两种办法</h3>
+<p><strong>办法一：点运行按钮（最简单）</strong></p>
+<p>装了 Python 扩展后，VS Code 编辑器<strong>右上角</strong>会出现一个<strong>三角形的运行按钮 ▶</strong>。点它，代码就跑起来了。下方会弹出一个叫&quot;终端&quot;的小窗口，显示运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">你好，世界！
+我的电脑装好 Python 啦！</code></pre>
+</div><p><strong>办法二：在终端里用命令运行（更接近真实开发）</strong></p>
+<p>在 VS Code 里点 <strong>终端（Terminal）→ 新建终端（New Terminal）</strong>，打开底部的终端窗口，输入：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">python hello.py</code></pre>
+</div><p>（Mac 若不行就用 <code>python3 hello.py</code>。）回车，同样会看到结果。</p>
+<blockquote>
+<p>小贴士：<code>python hello.py</code> 这句话的意思是&quot;喊 Python 来，运行 hello.py 这个文件&quot;。运行前要确认终端当前就在文件所在的文件夹里——在 VS Code 里&quot;打开文件夹&quot;后新建的终端会自动待在正确的位置，所以推荐你就用 VS Code 里的终端。</p>
+</blockquote>
+<p>两种办法结果一样，你喜欢哪种用哪种。<strong>恭喜你，现在你有了一套完整的编程环境！</strong> 这本书剩下的所有代码，你都可以在这里亲手敲、亲手跑了。</p>
+<hr>
+<h2>常见安装问题</h2>
+<p>装软件遇到问题太正常了，几乎每个程序员都经历过。这里列几个最常见的，对号入座就行。</p>
+<h3>1.「&#39;python&#39; 不是内部或外部命令」（或 Mac 上「command not found: python」）</h3>
+<p>这是<strong>最常见</strong>的问题，几乎百分之百是因为——<strong>装 Python 时忘了勾&quot;Add Python to PATH&quot;</strong>。</p>
+<p>电脑不知道去哪儿找 python，所以喊它没反应。解决办法：</p>
+<ul>
+<li><strong>最省事的办法</strong>：重新运行一遍 Python 安装程序（就是那个 <code>.exe</code>），这次<strong>记得勾上最下面的&quot;Add python.exe to PATH&quot;</strong>，选择&quot;Modify（修改）&quot;或干脆重装一遍。装完<strong>关掉终端再重新打开</strong>（很重要，不然它记不住新设置），再试 <code>python --version</code>。</li>
+<li><strong>Mac 用户</strong>：先试试 <code>python3 --version</code>，Mac 上多数时候用 <code>python3</code> 就对了。</li>
+</ul>
+<blockquote>
+<p>小贴士：改完 PATH 一定要<strong>把终端/命令提示符窗口整个关掉，再重新开一个</strong>。终端只在打开的那一刻读一次&quot;通讯录&quot;，你中途改了它不知道，得重开才生效。这个小细节能省你半小时的抓狂。</p>
+</blockquote>
+<h3>2. 点了运行按钮，却弹出一堆看不懂的东西</h3>
+<p>先深呼吸。看看弹出的终端窗口<strong>最后一行</strong>，如果里面有 <code>Error</code>（错误）字样，那不是装的问题，而是代码本身有小毛病——翻到<a href="appendix-b.md">附录 B</a>，按报错类型查怎么修。报错不可怕，它是电脑在帮你找问题。</p>
+<h3>3. VS Code 找不到运行按钮 ▶</h3>
+<p>十有八九是 <strong>Python 扩展没装好</strong>。回到&quot;扩展&quot;面板（四个小方块图标），搜 <code>Python</code>，确认微软官方那个已经显示&quot;已安装&quot;。装好后可能要<strong>重启一下 VS Code</strong>（整个关掉再打开）才会出现运行按钮。</p>
+<h3>4. 下载特别慢</h3>
+<p>Python 和 VS Code 的官网服务器在国外，有时候下载会慢。可以：多等一会儿；或者换个网络（比如手机热点）试试；实在不行，让家长帮忙找找国内的镜像站，但<strong>认准是官方版本</strong>，别下到来路不明的安装包。</p>
+<hr>
+<p>搞定这些，你的&quot;编程工作台&quot;就搭好了。合上这一页，回到正文，去写属于你的程序吧。遇到装机的坎儿别灰心——能把工具装好，本身就是程序员的第一课，你已经通过了。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch17.html">← 第 17 章 更多好玩的 AI 应用</a>
+  <a class="nav-next" href="appendix-b.html">附录 B 报错速查表 →</a>
+</div>
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
