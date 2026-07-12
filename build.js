@@ -114,6 +114,12 @@ if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 const ASSET_DIR = path.join(OUT_DIR, "assets");
 if (!fs.existsSync(ASSET_DIR)) fs.mkdirSync(ASSET_DIR, { recursive: true });
 
+// 把 assets-src/ 里的样式和脚本复制到输出目录（每次构建都刷新，避免遗漏）
+const ASSET_SRC = path.join(ROOT, "assets-src");
+for (const f of fs.readdirSync(ASSET_SRC)) {
+  fs.copyFileSync(path.join(ASSET_SRC, f), path.join(ASSET_DIR, f));
+}
+
 // 目录侧边栏（每页共用）
 function buildToc(currentSlug) {
   const items = CHAPTERS.map(([slug, title]) => {
