@@ -6,3 +6,6 @@ node_modules/
 Thumbs.db
 *.log
 .vscode/
+
+# 分享用的打包产物
+*.zip

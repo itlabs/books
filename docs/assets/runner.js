@@ -2,6 +2,12 @@
 let pyodideReady = null;
 
 async function getPyodide() {
+  if (typeof loadPyodide === "undefined") {
+    // Pyodide 从 CDN 加载，没联网 / 访问不了 CDN 时会走到这里
+    throw new Error(
+      "无法加载 Python 运行环境（需要联网）。你可以先阅读代码，或按附录 A 在自己电脑上运行。",
+    );
+  }
   if (!pyodideReady) {
     pyodideReady = loadPyodide().then((py) => {
       // 用一个可替换的函数处理 print 输出
