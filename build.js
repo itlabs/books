@@ -1,4 +1,4 @@
-// build.js —— 把 chapters/*.md 转成交互式 HTML，输出到 site/
+// build.js —— 把 chapters/*.md 转成交互式 HTML，输出到 docs/
 // 用法：node build.js
 const fs = require("fs");
 const path = require("path");
@@ -6,7 +6,7 @@ const { marked } = require("marked");
 
 const ROOT = __dirname;
 const CH_DIR = path.join(ROOT, "chapters");
-const OUT_DIR = path.join(ROOT, "site");
+const OUT_DIR = path.join(ROOT, "docs");
 
 // ---- 章节顺序与标题（用于导航和目录）----
 const CHAPTERS = [
@@ -159,4 +159,4 @@ fs.writeFileSync(
   page("跟 Python 一起玩", indexBody, "", "", buildToc("index")),
 );
 
-console.log(`\n构建完成：共生成 ${built} 章 + 首页，输出在 site/`);
+console.log(`\n构建完成：共生成 ${built} 章 + 首页，输出在 docs/`);
