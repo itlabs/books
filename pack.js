@@ -6,8 +6,10 @@ const path = require("path");
 const os = require("os");
 
 const ROOT = __dirname;
-const FOLDER_NAME = "跟Python一起玩-离线版"; // 解压后读者看到的文件夹名
-const ZIP_NAME = "跟Python一起玩.zip";
+// 用纯英文的文件夹名和 zip 名：部分解压软件（尤其 Windows 自带、某些手机 App）
+// 会把 zip 内的中文路径解成乱码，导致 HTML 找不到 assets/vendor 而丢失排版。
+const FOLDER_NAME = "python-book-offline"; // 解压后读者看到的文件夹名
+const ZIP_NAME = "python-book-offline.zip";
 
 // 1. 先重新构建，保证打包的是最新内容
 console.log("① 正在构建最新网页……");
