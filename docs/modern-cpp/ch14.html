@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 14 章 STL 容器与迭代器</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li class="active"><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 14 章 STL 容器与迭代器</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你天天用 Java 的 <code>ArrayList</code> / <code>HashMap</code>、Python 的 <code>list</code> / <code>dict</code>。C++ 标准库（STL）提供对应的容器，但有两个你必须重新适应的点：容器是<strong>值类型</strong>（不是引用），以及一切遍历都建立在<strong>迭代器</strong>这个统一抽象之上。</p>
+<p>读完这一章，你会知道常用容器怎么对应你熟悉的数据结构、该在什么场景选哪个，以及迭代器这套"广义指针"如何把容器和下一章的算法连接起来。</p>
+</div><h2>容器速查：对应你已经会的东西</h2>
+<p>先给一张对照表，让你快速把 C++ 容器映射到已有的知识：</p>
+<table>
+<thead>
+<tr>
+<th>C++ 容器</th>
+<th>对应 Java</th>
+<th>对应 Python</th>
+<th>底层结构</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>std::vector&lt;T&gt;</code></td>
+<td><code>ArrayList&lt;T&gt;</code></td>
+<td><code>list</code></td>
+<td>动态数组</td>
+</tr>
+<tr>
+<td><code>std::array&lt;T, N&gt;</code></td>
+<td>定长数组</td>
+<td>—</td>
+<td>定长数组（栈上）</td>
+</tr>
+<tr>
+<td><code>std::map&lt;K,V&gt;</code></td>
+<td><code>TreeMap&lt;K,V&gt;</code></td>
+<td>—</td>
+<td>红黑树（有序）</td>
+</tr>
+<tr>
+<td><code>std::unordered_map&lt;K,V&gt;</code></td>
+<td><code>HashMap&lt;K,V&gt;</code></td>
+<td><code>dict</code></td>
+<td>哈希表</td>
+</tr>
+<tr>
+<td><code>std::set&lt;T&gt;</code></td>
+<td><code>TreeSet&lt;T&gt;</code></td>
+<td>—</td>
+<td>红黑树（有序）</td>
+</tr>
+<tr>
+<td><code>std::unordered_set&lt;T&gt;</code></td>
+<td><code>HashSet&lt;T&gt;</code></td>
+<td><code>set</code></td>
+<td>哈希表</td>
+</tr>
+<tr>
+<td><code>std::deque&lt;T&gt;</code></td>
+<td><code>ArrayDeque&lt;T&gt;</code></td>
+<td><code>collections.deque</code></td>
+<td>分段数组</td>
+</tr>
+<tr>
+<td><code>std::list&lt;T&gt;</code></td>
+<td><code>LinkedList&lt;T&gt;</code></td>
+<td>—</td>
+<td>双向链表</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>默认就用 <code>std::vector</code></strong>
+90% 的情况下 <code>vector</code> 是对的选择——即使你觉得"要频繁插入删除、也许链表更好"。原因是 <code>vector</code> 的内存连续、对 CPU 缓存极其友好，实际性能常常碾压理论上更优的链表。<strong>先用 <code>vector</code>，只有在测量证明它是瓶颈时才换别的。</strong>这条经验和你在 Java/Python 里"默认 ArrayList / list"是一致的，但在 C++ 里因为缓存效应更加突出。
+</div><h2>关键差异：容器是值，不是引用</h2>
+<p>这是从托管语言过来最需要重新适应的一点，也是第 3 章值语义的直接体现。在 Java / Python 里，容器变量是引用；在 C++ 里，<strong>容器变量就是容器本身</strong>，赋值和传参默认<strong>拷贝整个容器</strong>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiBhezEsIDIsIDN9O1xuICAgIHN0ZDo6dmVjdG9yPGludD4gYiA9IGE7ICAgICAgLy8g5ou36LSd5pW05Liq5a655Zmo77yBYiDlkowgYSDlrozlhajni6znq4tcblxuICAgIGJbMF0gPSA5OTsgICAgICAgICAgICAgICAgICAgLy8g5Y%2Bq5pS5IGJcbiAgICBzdGQ6OmNvdXQgPDwgXCJhWzBdID0gXCIgPDwgYVswXSA8PCAnXFxuJzsgICAvLyAx77yI5rKh6KKr5b2x5ZON77yJXG4gICAgc3RkOjpjb3V0IDw8IFwiYlswXSA9IFwiIDw8IGJbMF0gPDwgJ1xcbic7ICAgLy8gOTlcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; a{1, 2, 3};
+    std::vector&lt;int&gt; b = a;      // 拷贝整个容器！b 和 a 完全独立
+
+    b[0] = 99;                   // 只改 b
+    std::cout &lt;&lt; "a[0] = " &lt;&lt; a[0] &lt;&lt; '\n';   // 1（没被影响）
+    std::cout &lt;&lt; "b[0] = " &lt;&lt; b[0] &lt;&lt; '\n';   // 99
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="compare">
+<div class="known">
+<div class="compare-head">Java / Python：引用</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">var a = new ArrayList&lt;&gt;(List.of(1,2,3));
+var b = a;        // b、a 指向同一个 list
+b.set(0, 99);
+// a.get(0) 也变成 99</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++：值（深拷贝）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">std::vector&lt;int&gt; a{1,2,3};
+auto b = a;       // b 是 a 的独立副本
+b[0] = 99;
+// a[0] 仍是 1</code></pre>
+</div></div>
+</div><div class="warn">
+<strong>牢记：传容器给函数默认会拷贝</strong>
+<code>void f(std::vector&lt;int&gt; v)</code> 每次调用都<strong>拷贝整个容器</strong>——这是第 3 章讲过的性能陷阱。只读就用 <code>const std::vector&lt;int&gt;&amp;</code>，要改就用 <code>std::vector&lt;int&gt;&amp;</code>，要接管就按值传再 <code>std::move</code>。这条在容器上尤其重要，因为容器往往很大。
+</div><h2>vector：最常用的容器</h2>
+<p><code>std::vector</code> 是动态数组，日常操作和 Java <code>ArrayList</code> / Python <code>list</code> 类似：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiB2O1xuICAgIHYucHVzaF9iYWNrKDEwKTsgICAgICAgICAgIC8vIOWwvumDqOa3u%2BWKoFxuICAgIHYucHVzaF9iYWNrKDIwKTtcbiAgICB2LmVtcGxhY2VfYmFjaygzMCk7ICAgICAgICAvLyDljp%2FlnLDmnoTpgKDvvIjmr5QgcHVzaF9iYWNrIOWwkeS4gOasoeenu%2BWKqO%2B8jOingeS4i%2B%2B8iVxuXG4gICAgc3RkOjpjb3V0IDw8IFwi5aSn5bCPOiBcIiA8PCB2LnNpemUoKSA8PCAnXFxuJzsgICAgICAgIC8vIDNcbiAgICBzdGQ6OmNvdXQgPDwgXCLpppbkuKo6IFwiIDw8IHYuZnJvbnQoKSA8PCAnXFxuJzsgICAgICAgIC8vIDEwXG4gICAgc3RkOjpjb3V0IDw8IFwi5pyr5LiqOiBcIiA8PCB2LmJhY2soKSA8PCAnXFxuJzsgICAgICAgICAvLyAzMFxuICAgIHN0ZDo6Y291dCA8PCBcIuS4i%2BaghzI6IFwiIDw8IHZbMl0gPDwgJ1xcbic7ICAgICAgICAgICAgLy8gMzBcblxuICAgIGZvciAoaW50IHggOiB2KSBzdGQ6OmNvdXQgPDwgeCA8PCAnICc7ICAgICAgICAgICAgIC8vIOiMg%2BWbtCBmb3JcbiAgICBzdGQ6OmNvdXQgPDwgJ1xcbic7XG5cbiAgICB2LnBvcF9iYWNrKCk7ICAgICAgICAgICAgICAvLyDliKDmnKvlsL5cbiAgICBzdGQ6OmNvdXQgPDwgXCLliKDmnKvlsL7lkI7lpKflsI86IFwiIDw8IHYuc2l6ZSgpIDw8ICdcXG4nOyAgLy8gMlxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v;
+    v.push_back(10);           // 尾部添加
+    v.push_back(20);
+    v.emplace_back(30);        // 原地构造（比 push_back 少一次移动，见下）
+
+    std::cout &lt;&lt; "大小: " &lt;&lt; v.size() &lt;&lt; '\n';        // 3
+    std::cout &lt;&lt; "首个: " &lt;&lt; v.front() &lt;&lt; '\n';        // 10
+    std::cout &lt;&lt; "末个: " &lt;&lt; v.back() &lt;&lt; '\n';         // 30
+    std::cout &lt;&lt; "下标2: " &lt;&lt; v[2] &lt;&lt; '\n';            // 30
+
+    for (int x : v) std::cout &lt;&lt; x &lt;&lt; ' ';             // 范围 for
+    std::cout &lt;&lt; '\n';
+
+    v.pop_back();              // 删末尾
+    std::cout &lt;&lt; "删末尾后大小: " &lt;&lt; v.size() &lt;&lt; '\n';  // 2
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="note">
+<strong><code>emplace_back</code> vs <code>push_back</code></strong>
+<code>push_back(x)</code> 把已有对象拷贝/移动进容器；<code>emplace_back(args...)</code> 直接在容器内部<strong>用参数原地构造</strong>对象，省掉一次临时对象和移动。对构造成本高的类型，<code>emplace_back</code> 更高效。习惯上：要放的东西现成就 <code>push_back</code>，要现场构造就 <code>emplace_back</code>。
+</div><p>关于 vector 有个第 4 章提过的性能要点值得重申：如果你预先知道大概要放多少元素，用 <strong><code>reserve</code></strong> 一次性备好容量，能避免反复扩容搬移：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiB2O1xuICAgIHYucmVzZXJ2ZSgxMDAwKTsgICAgICAgICAgIC8vIOmihOeVmeWuuemHj%2B%2B8jOmBv%2BWFjei%2Fh%2Beoi%2BS4reWPjeWkjemHjeaWsOWIhumFjVxuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgMTAwMDsgKytpKSB2LnB1c2hfYmFjayhpKTtcblxuICAgIHN0ZDo6Y291dCA8PCBcInNpemU9XCIgPDwgdi5zaXplKCkgPDwgXCIgY2FwYWNpdHk%2BPVwiIDw8IHYuY2FwYWNpdHkoKSA8PCAnXFxuJztcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v;
+    v.reserve(1000);           // 预留容量，避免过程中反复重新分配
+    for (int i = 0; i &lt; 1000; ++i) v.push_back(i);
+
+    std::cout &lt;&lt; "size=" &lt;&lt; v.size() &lt;&lt; " capacity&gt;=" &lt;&lt; v.capacity() &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><h2>map 与 unordered_map：键值对</h2>
+<p>需要键值映射时，两个主力是 <code>std::map</code>（有序，红黑树）和 <code>std::unordered_map</code>（哈希表，平均更快但无序）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG1hcD5cbiNpbmNsdWRlIDxzdHJpbmc%2BXG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6bWFwPHN0ZDo6c3RyaW5nLCBpbnQ%2BIGFnZXM7XG4gICAgYWdlc1tcIkFsaWNlXCJdID0gMzA7ICAgICAgICAgICAgICAgICAgICAvLyDmj5LlhaUv6LWL5YC8XG4gICAgYWdlc1tcIkJvYlwiXSA9IDI1O1xuICAgIGFnZXMuZW1wbGFjZShcIkNhcm9sXCIsIDI4KTtcblxuICAgIC8vIOafpeaJvu%2B8mueUqCBmaW5k77yM5qOA5p%2Bl5piv5ZCm5ZG95LitXG4gICAgaWYgKGF1dG8gaXQgPSBhZ2VzLmZpbmQoXCJBbGljZVwiKTsgaXQgIT0gYWdlcy5lbmQoKSkge1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCJBbGljZTogXCIgPDwgaXQtPnNlY29uZCA8PCAnXFxuJzsgICAvLyBpdC0%2BZmlyc3Qg5piv6ZSu77yMLT5zZWNvbmQg5piv5YC8XG4gICAgfVxuXG4gICAgLy8gbWFwIOacieW6j%2B%2B8mumBjeWOhuiHquWKqOaMiemUruaOkuW6j%2B%2B8iEFsaWNlIDwgQm9iIDwgQ2Fyb2zvvIlcbiAgICBmb3IgKGNvbnN0IGF1dG8mIFtuYW1lLCBhZ2VdIDogYWdlcykgeyAgICAgICAgICAgICAgLy8g57uT5p6E5YyW57uR5a6a5ouG5byA6ZSu5YC8XG4gICAgICAgIHN0ZDo6Y291dCA8PCBuYW1lIDw8IFwiID0gXCIgPDwgYWdlIDw8ICdcXG4nO1xuICAgIH1cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;map&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::map&lt;std::string, int&gt; ages;
+    ages["Alice"] = 30;                    // 插入/赋值
+    ages["Bob"] = 25;
+    ages.emplace("Carol", 28);
+
+    // 查找：用 find，检查是否命中
+    if (auto it = ages.find("Alice"); it != ages.end()) {
+        std::cout &lt;&lt; "Alice: " &lt;&lt; it-&gt;second &lt;&lt; '\n';   // it-&gt;first 是键，-&gt;second 是值
+    }
+
+    // map 有序：遍历自动按键排序（Alice &lt; Bob &lt; Carol）
+    for (const auto&amp; [name, age] : ages) {              // 结构化绑定拆开键值
+        std::cout &lt;&lt; name &lt;&lt; " = " &lt;&lt; age &lt;&lt; '\n';
+    }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Alice: 30
+Alice = 30
+Bob = 25
+Carol = 28</code></pre>
+</div><div class="keypoint">
+<strong>map vs unordered_map，怎么选？</strong>
+<ul>
+<li><strong>要有序遍历、或按范围查询</strong> → <code>std::map</code>（红黑树，操作 O(log n)，遍历按键有序）。</li>
+<li><strong>只要快速增删查、不在乎顺序</strong> → <code>std::unordered_map</code>（哈希表，平均 O(1)）——它才是 Java <code>HashMap</code> / Python <code>dict</code> 的真正对应物。</li>
+</ul>
+两者接口几乎一样，换起来只改类型名。注意 <code>map[key]</code> 若键不存在会<strong>插入一个默认值</strong>（和 Python <code>dict</code> 的 <code>[]</code> 抛异常不同），只想查不想插就用 <code>find</code>。
+</div><p>两段代码里出现了两个现代语法糖，值得点名：</p>
+<ul>
+<li><strong>结构化绑定</strong> <code>auto [name, age] = ...</code>：一次把键值对（或结构体、tuple）拆成多个具名变量，类似 Python 的元组解包。</li>
+<li><strong>带初始化的 if</strong> <code>if (auto it = ...; it != end())</code>：把变量的作用域限制在 if 内，很适合&quot;查找 + 判断命中&quot;的模式。</li>
+</ul>
+<h2>迭代器：容器与算法之间的通用语言</h2>
+<p>现在讲 STL 的灵魂——<strong>迭代器（iterator）</strong>。它是一个&quot;广义的指针&quot;：指向容器中的某个元素，能解引用（<code>*it</code> 取值）、能前进（<code>++it</code> 到下一个）。每个容器都提供 <code>begin()</code>（指向首元素）和 <code>end()</code>（指向&quot;最后一个元素之后&quot;的位置）。</p>
+<div class="concept">
+<svg viewBox="0 0 520 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="60" y="55" width="60" height="40" fill="#eef6ff" stroke="#2b6cb0"/>
+  <rect x="120" y="55" width="60" height="40" fill="#eef6ff" stroke="#2b6cb0"/>
+  <rect x="180" y="55" width="60" height="40" fill="#eef6ff" stroke="#2b6cb0"/>
+  <rect x="240" y="55" width="60" height="40" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="90" y="80" text-anchor="middle" font-size="14" font-family="monospace">10</text>
+  <text x="150" y="80" text-anchor="middle" font-size="14" font-family="monospace">20</text>
+  <text x="210" y="80" text-anchor="middle" font-size="14" font-family="monospace">30</text>
+  <text x="270" y="80" text-anchor="middle" font-size="14" font-family="monospace">40</text>
+  <path d="M90 50 L90 35" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#i1)"/>
+  <text x="90" y="28" text-anchor="middle" font-size="12" fill="#2b6cb0" font-family="monospace">begin()</text>
+  <path d="M330 50 L330 35" stroke="#e0692f" stroke-width="1.5" marker-end="url(#i2)"/>
+  <text x="345" y="28" text-anchor="middle" font-size="12" fill="#e0692f" font-family="monospace">end()</text>
+  <rect x="300" y="55" width="60" height="40" fill="#fbecec" stroke="#e0692f" stroke-dasharray="4"/>
+  <text x="330" y="80" text-anchor="middle" font-size="11" fill="#e0692f">尾后</text>
+  <text x="200" y="125" text-anchor="middle" font-size="12" fill="#6b7280">++it 从 begin 前进到 end；到达 end 即遍历结束（end 不指向有效元素）</text>
+  <defs>
+    <marker id="i1" markerWidth="9" markerHeight="9" refX="4" refY="8" orient="auto"><path d="M0,8 L4,0 L8,8 Z" fill="#2b6cb0"/></marker>
+    <marker id="i2" markerWidth="9" markerHeight="9" refX="4" refY="8" orient="auto"><path d="M0,8 L4,0 L8,8 Z" fill="#e0692f"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 14-1　迭代器：begin() 指向首元素，end() 指向"尾后"（不是最后一个元素，而是它之后）。区间是左闭右开 [begin, end)</div>
+</div><div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiB2ezEwLCAyMCwgMzAsIDQwfTtcblxuICAgIC8vIOaYvuW8j%2BeUqOi%2FreS7o%2BWZqOmBjeWOhu%2B8iOiMg%2BWbtCBmb3Ig5YW25a6e5bCx5piv6L%2BZ5Liq55qE6K%2Bt5rOV57OW77yJXG4gICAgZm9yIChhdXRvIGl0ID0gdi5iZWdpbigpOyBpdCAhPSB2LmVuZCgpOyArK2l0KSB7XG4gICAgICAgIHN0ZDo6Y291dCA8PCAqaXQgPDwgJyAnOyAgICAgICAgLy8gKml0IOino%2BW8leeUqOWPluWFg%2Be0oOWAvFxuICAgIH1cbiAgICBzdGQ6OmNvdXQgPDwgJ1xcbic7XG5cbiAgICAvLyDov63ku6Plmajlg4%2FmjIfpkojkuIDmoLfog73lgZrnrpfmnK%2FvvIh2ZWN0b3Ig55qE6L%2Bt5Luj5Zmo5pSv5oyB6ZqP5py66K6%2F6Zeu77yJXG4gICAgYXV0byBpdCA9IHYuYmVnaW4oKTtcbiAgICBzdGQ6OmNvdXQgPDwgXCLnrKwz5Liq5YWD57SgOiBcIiA8PCAqKGl0ICsgMikgPDwgJ1xcbic7ICAgLy8gMzBcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v{10, 20, 30, 40};
+
+    // 显式用迭代器遍历（范围 for 其实就是这个的语法糖）
+    for (auto it = v.begin(); it != v.end(); ++it) {
+        std::cout &lt;&lt; *it &lt;&lt; ' ';        // *it 解引用取元素值
+    }
+    std::cout &lt;&lt; '\n';
+
+    // 迭代器像指针一样能做算术（vector 的迭代器支持随机访问）
+    auto it = v.begin();
+    std::cout &lt;&lt; "第3个元素: " &lt;&lt; *(it + 2) &lt;&lt; '\n';   // 30
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="keypoint">
+<strong>为什么迭代器如此重要</strong>
+迭代器是容器和<strong>算法</strong>之间的<strong>统一接口</strong>。<code>std::sort</code>、<code>std::find</code> 这些算法不关心你传的是 vector、array 还是别的什么——它们只要一对迭代器 <code>[begin, end)</code>，就能干活。这种"算法只认迭代器、不认具体容器"的解耦，是 STL 设计的精髓，也是下一章的主题。区间是<strong>左闭右开</strong> <code>[begin, end)</code>：<code>end()</code> 指向最后一个元素<em>之后</em>，不可解引用，只作"到此为止"的哨兵。
+</div><h2>动手：综合使用容器</h2>
+<p>下面这段程序用一个 <code>unordered_map</code> 统计词频，综合了本章的容器操作、结构化绑定、带初始化的 if。运行前先想想输出：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDx1bm9yZGVyZWRfbWFwPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8c3RkOjpzdHJpbmc%2BIHdvcmRze1wiYXBwbGVcIiwgXCJiYW5hbmFcIiwgXCJhcHBsZVwiLCBcImNoZXJyeVwiLCBcImJhbmFuYVwiLCBcImFwcGxlXCJ9O1xuXG4gICAgLy8g57uf6K6h6K%2BN6aKRXG4gICAgc3RkOjp1bm9yZGVyZWRfbWFwPHN0ZDo6c3RyaW5nLCBpbnQ%2BIGZyZXE7XG4gICAgZm9yIChjb25zdCBzdGQ6OnN0cmluZyYgdyA6IHdvcmRzKSB7XG4gICAgICAgICsrZnJlcVt3XTsgICAgICAgIC8vIOmUruS4jeWtmOWcqOaXtuWFiOm7mOiupOaPkuWFpSAw77yM5YaNICsrXG4gICAgfVxuXG4gICAgLy8g5p%2Bl6K%2Bi5p%2BQ5Liq6K%2BNXG4gICAgaWYgKGF1dG8gaXQgPSBmcmVxLmZpbmQoXCJhcHBsZVwiKTsgaXQgIT0gZnJlcS5lbmQoKSkge1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCJhcHBsZSDlh7rnjrDkuoYgXCIgPDwgaXQtPnNlY29uZCA8PCBcIiDmrKFcXG5cIjtcbiAgICB9XG5cbiAgICBzdGQ6OmNvdXQgPDwgXCLlhbHmnIkgXCIgPDwgZnJlcS5zaXplKCkgPDwgXCIg5Liq5LiN5ZCM55qE6K%2BNXFxuXCI7XG4gICAgcmV0dXJuIDA7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;unordered_map&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::vector&lt;std::string&gt; words{"apple", "banana", "apple", "cherry", "banana", "apple"};
+
+    // 统计词频
+    std::unordered_map&lt;std::string, int&gt; freq;
+    for (const std::string&amp; w : words) {
+        ++freq[w];        // 键不存在时先默认插入 0，再 ++
+    }
+
+    // 查询某个词
+    if (auto it = freq.find("apple"); it != freq.end()) {
+        std::cout &lt;&lt; "apple 出现了 " &lt;&lt; it-&gt;second &lt;&lt; " 次\n";
+    }
+
+    std::cout &lt;&lt; "共有 " &lt;&lt; freq.size() &lt;&lt; " 个不同的词\n";
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出（<code>unordered_map</code> 无序，只有前两行顺序固定）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">apple 出现了 3 次
+共有 3 个不同的词</code></pre>
+</div><p><code>++freq[w]</code> 是个惯用法：<code>freq[w]</code> 在键不存在时插入一个默认值 <code>0</code>，然后 <code>++</code> 加一——统计词频一行搞定。这段代码里，容器的值语义、哈希表查找、结构化访问全用上了。</p>
+<p>有了容器和迭代器这个基础，下一章我们就能引入 STL 的另一半——<strong>算法</strong>：<code>sort</code>、<code>find</code>、<code>transform</code> 这些&quot;只认迭代器&quot;的通用操作，以及 C++20 让它们脱胎换骨的 <strong>ranges</strong>。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>STL 容器对应你熟悉的结构：<code>vector</code>≈<code>ArrayList</code>/<code>list</code>，<code>unordered_map</code>≈<code>HashMap</code>/<code>dict</code>，<code>map</code>/<code>set</code> 是<strong>有序</strong>的红黑树版本。</li>
+<li><strong>默认用 <code>std::vector</code></strong>——内存连续、缓存友好，实际性能常胜过理论更优的结构。</li>
+<li>容器是<strong>值类型</strong>：赋值/传参默认<strong>拷贝整个容器</strong>；只读传 <code>const T&amp;</code>，别无意中拷贝大容器。</li>
+<li><code>map</code>（有序，O(log n)）vs <code>unordered_map</code>（哈希，平均 O(1)）；<code>map[key]</code> 缺键会<strong>插入默认值</strong>，只查用 <code>find</code>。</li>
+<li><strong>迭代器</strong>是&quot;广义指针&quot;：<code>begin()</code> 指首元素，<code>end()</code> 指<strong>尾后</strong>，区间<strong>左闭右开</strong> <code>[begin, end)</code>；<code>*it</code> 取值，<code>++it</code> 前进。</li>
+<li>迭代器是容器与<strong>算法</strong>之间的统一接口——这是下一章 STL 算法与 ranges 的基础。</li>
+<li>善用现代语法：<strong>结构化绑定</strong> <code>auto [k, v]</code>、<strong>带初始化的 if</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch13.html">← 第 13 章 编译期计算：constexpr 与 consteval</a>
+  <a class="nav-next" href="ch15.html">第 15 章 算法、range 与视图 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

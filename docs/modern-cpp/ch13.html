@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 编译期计算：constexpr 与 consteval</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li class="active"><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 13 章 编译期计算：constexpr 与 consteval</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章我给你看过一个让你印象深刻的例子：<code>square(9)</code> 编译后汇编里直接是 <code>81</code>，运行时一次乘法都没有。这一章讲清楚这背后的机制——<strong>编译期计算</strong>：让计算在<em>编译代码时</em>就完成，运行时直接用现成结果。</p>
+<p>Java / Python 里没有对应的东西（它们的常量折叠很有限，且不可编程）。读完你会理解 <code>constexpr</code>、<code>consteval</code> 到底在做什么，以及"把计算从运行期搬到编译期"能带来什么。</p>
+</div><h2>一个新维度：代码可以在编译期&quot;跑&quot;</h2>
+<p>先建立最核心的直觉。到目前为止，你默认所有代码都在<strong>运行时</strong>执行。但 C++ 有一条独特的能力：<strong>只要一个计算的输入在编译期就能确定，这个计算本身也可以在编译期完成。</strong></p>
+<p>看第 9 章埋下的伏笔——<code>const</code> 和 <code>constexpr</code> 的区别，现在展开：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgYSA9IDEwOyAgICAgICAgICAgICAvLyDlj6ror7vvvIzkvYblgLzlj6%2Fog73mnaXoh6rov5DooYzml7ZcbiAgICBjb25zdGV4cHIgaW50IGIgPSAzICogNDsgICAgICAvLyDnvJbor5HmnJ%2FlsLHnrpflh7ogMTJcblxuICAgIGludCBhcnJbYl07ICAgICAgICAgICAgICAgICAgIC8vIOKchSBiIOaYr%2Be8luivkeacn%2BW4uOmHj%2B%2B8jOiDveW9k%2BaVsOe7hOWkp%2BWwj1xuICAgIC8vIGludCBiYWRbYV07ICAgICAgICAgICAgICAgIC8vIOi%2FmeihjOaYr%2BWQpuWQiOazleWPluWGs%2BS6jiBhIOeahOadpea6kO%2B8m2NvbnN0ZXhwciDmiY3kv53or4Hlj6%2Fku6VcblxuICAgIHN0ZDo6Y291dCA8PCBiIDw8ICcgJyA8PCBzaXplb2YoYXJyKS9zaXplb2YoaW50KSA8PCAnXFxuJzsgICAvLyAxMiAxMlxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+int main() {
+    const int a = 10;             // 只读，但值可能来自运行时
+    constexpr int b = 3 * 4;      // 编译期就算出 12
+
+    int arr[b];                   // ✅ b 是编译期常量，能当数组大小
+    // int bad[a];                // 这行是否合法取决于 a 的来源；constexpr 才保证可以
+
+    std::cout &lt;&lt; b &lt;&lt; ' ' &lt;&lt; sizeof(arr)/sizeof(int) &lt;&lt; '\n';   // 12 12
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="keypoint">
+<strong>const vs constexpr，一句话说清</strong>
+<ul>
+<li><code>const</code>：<strong>运行期</strong>的只读承诺——"这个值定了就不改"，但它<em>什么时候</em>定下来可以是运行时。</li>
+<li><code>constexpr</code>：<strong>编译期</strong>的常量——"这个值在编译时就必须能算出来"。因此它能用在需要编译期常量的地方：数组大小、模板参数、<code>case</code> 标签等。</li>
+</ul>
+所有 <code>constexpr</code> 变量都隐含 <code>const</code>，反之不然。
+</div><h2>constexpr 函数：既能编译期跑，也能运行期跑</h2>
+<p>真正强大的是 <strong><code>constexpr</code> 函数</strong>——把一个函数标成 <code>constexpr</code>，它就获得了&quot;双重身份&quot;：<strong>输入是编译期常量时，在编译期求值；输入是运行时值时，就当普通函数在运行期跑。</strong></p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5jb25zdGV4cHIgbG9uZyBmYWN0b3JpYWwoaW50IG4pIHsgICAgICAvLyDkuIDkuKrlj6%2FnlKjkuo7nvJbor5HmnJ%2FnmoTlh73mlbBcbiAgICBsb25nIHJlc3VsdCA9IDE7XG4gICAgZm9yIChpbnQgaSA9IDI7IGkgPD0gbjsgKytpKSByZXN1bHQgKj0gaTtcbiAgICByZXR1cm4gcmVzdWx0O1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdGV4cHIgbG9uZyBmNSA9IGZhY3RvcmlhbCg1KTsgICAvLyDnvJbor5HmnJ%2Fnrpflh7ogMTIw77yM5aGe6L%2Bb56iL5bqPXG4gICAgc3RkOjpjb3V0IDw8IFwiNSEgPSBcIiA8PCBmNSA8PCAnXFxuJztcblxuICAgIGludCBuID0gNjtcbiAgICBzdGQ6OmNvdXQgPDwgXCI2ISA9IFwiIDw8IGZhY3RvcmlhbChuKSA8PCAnXFxuJzsgICAvLyBuIOaYr%2Bi%2FkOihjOaXtuWAvCDihpIg6L%2BQ6KGM5pyf6K6h566XXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+constexpr long factorial(int n) {      // 一个可用于编译期的函数
+    long result = 1;
+    for (int i = 2; i &lt;= n; ++i) result *= i;
+    return result;
+}
+
+int main() {
+    constexpr long f5 = factorial(5);   // 编译期算出 120，塞进程序
+    std::cout &lt;&lt; "5! = " &lt;&lt; f5 &lt;&lt; '\n';
+
+    int n = 6;
+    std::cout &lt;&lt; "6! = " &lt;&lt; factorial(n) &lt;&lt; '\n';   // n 是运行时值 → 运行期计算
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>同一个 <code>factorial</code>，第一次调用在编译期就算成了 <code>120</code>（存进可执行文件的常量区），第二次因为参数 <code>n</code> 是运行时变量，就退化成普通函数在运行时算。<strong>一份代码，两种执行时机。</strong></p>
+<div class="note">
+<strong>现代 C++ 的 constexpr 已经很能干</strong>
+早期（C++11）的 <code>constexpr</code> 函数限制极严，几乎只能写一个 return 语句。如今（C++14 起逐步放开）它支持循环、局部变量、分支、甚至在编译期使用 <code>std::vector</code> 和 <code>std::string</code>（C++20）。上面的 <code>factorial</code> 用了普通的 <code>for</code> 循环——这在编译期照样能跑。你可以像写普通函数一样写 constexpr 函数。
+</div><h2>眼见为实：汇编里没有计算</h2>
+<p>用汇编印证&quot;编译期算完了&quot;。下面两个函数，一个传编译期常量、一个传运行时参数，对比它们生成的代码：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiY29uc3RleHByIGxvbmcgZmFjdG9yaWFsKGludCBuKSB7XG4gICAgbG9uZyByID0gMTtcbiAgICBmb3IgKGludCBpID0gMjsgaSA8PSBuOyArK2kpIHIgKj0gaTtcbiAgICByZXR1cm4gcjtcbn1cblxubG9uZyBjb21waWxlVGltZSgpIHsgcmV0dXJuIGZhY3RvcmlhbCgxMCk7IH0gICAvLyDnvJbor5HmnJ%2FvvJrnm7TmjqXov5Tlm54gMzYyODgwMFxubG9uZyBydW5UaW1lKGludCBuKSB7IHJldHVybiBmYWN0b3JpYWwobik7IH0gICAgLy8g6L%2BQ6KGM5pyf77ya55yf55qE5b6q546v55u45LmYIiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">constexpr long factorial(int n) {
+    long r = 1;
+    for (int i = 2; i &lt;= n; ++i) r *= i;
+    return r;
+}
+
+long compileTime() { return factorial(10); }   // 编译期：直接返回 3628800
+long runTime(int n) { return factorial(n); }    // 运行期：真的循环相乘</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：</p>
+<ul>
+<li><code>compileTime</code> 的汇编里<strong>没有任何循环或乘法</strong>，直接 <code>mov</code> 一个常量 <code>3628800</code> 就返回——整个阶乘在编译时算完了。</li>
+<li><code>runTime</code> 里则有实实在在的循环和乘法指令——因为 <code>n</code> 要到运行时才知道。</li>
+</ul>
+<p>这就是第 1 章那个&quot;81&quot;现象的完整机制:<strong>当编译器能确定输入,它就替你把计算做掉,运行时零成本。</strong></p>
+<h2>consteval：强制&quot;必须&quot;在编译期</h2>
+<p><code>constexpr</code> 是&quot;<strong>可以</strong>在编译期&quot;，但不保证——传运行时参数它就退回运行期。有时你想要更强的保证：<strong>这个函数只允许在编译期调用</strong>。这就是 C++20 的 <strong><code>consteval</code></strong>（也叫&quot;立即函数&quot;）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5jb25zdGV2YWwgaW50IGFsd2F5c0NvbXBpbGVUaW1lKGludCB4KSB7ICAgLy8g5b%2BF6aG75Zyo57yW6K%2BR5pyf5rGC5YC8XG4gICAgcmV0dXJuIHggKiB4O1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdGV4cHIgaW50IGEgPSBhbHdheXNDb21waWxlVGltZSg1KTsgICAvLyDinIUg57yW6K%2BR5pyf77yMT0sg4oaSIDI1XG4gICAgc3RkOjpjb3V0IDw8IGEgPDwgJ1xcbic7XG5cbiAgICAvLyBpbnQgbiA9IDU7XG4gICAgLy8gaW50IGIgPSBhbHdheXNDb21waWxlVGltZShuKTsgICAgICAgICAgLy8g4p2MIG4g5piv6L%2BQ6KGM5pe25YC8IOKGkiDnvJbor5HplJnor69cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+consteval int alwaysCompileTime(int x) {   // 必须在编译期求值
+    return x * x;
+}
+
+int main() {
+    constexpr int a = alwaysCompileTime(5);   // ✅ 编译期，OK → 25
+    std::cout &lt;&lt; a &lt;&lt; '\n';
+
+    // int n = 5;
+    // int b = alwaysCompileTime(n);          // ❌ n 是运行时值 → 编译错误
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>consteval</code> 函数如果拿不到编译期常量，直接编译失败——它<strong>拒绝</strong>在运行期执行。</p>
+<div class="keypoint">
+<strong>constexpr 与 consteval 的分工</strong>
+<ul>
+<li><code>constexpr</code>：<strong>能</strong>编译期就编译期，<strong>不能</strong>就运行期。灵活，是日常首选。</li>
+<li><code>consteval</code>：<strong>必须</strong>编译期，否则报错。用于你想强制保证"这个计算绝不拖到运行时"的场景（如生成编译期查找表、编译期校验的工厂函数）。</li>
+</ul>
+还有个 <code>constinit</code>（较少用）：保证一个变量在编译期完成初始化，但它本身<em>不是</em> const，之后可以修改——用来避免"静态初始化顺序问题"。
+</div><h2>static_assert：把检查也搬到编译期</h2>
+<p>编译期计算配上 <strong><code>static_assert</code></strong>，能让你在<strong>编译时</strong>就验证条件——不满足直接编译失败，根本不会生成有问题的程序。这比运行时的 <code>assert</code> 早得多、也彻底得多：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5jb25zdGV4cHIgaW50IGJ1ZmZlclNpemUgPSAxMDI0O1xuXG4vLyDnvJbor5HmnJ%2FlsLHmo4Dmn6XnuqbmnZ%2FvvIzkuI3mu6HotrPliJnnvJbor5HkuI3ov4dcbnN0YXRpY19hc3NlcnQoYnVmZmVyU2l6ZSA%2BPSAyNTYsIFwi57yT5Yay5Yy65aSq5bCPXCIpO1xuc3RhdGljX2Fzc2VydChidWZmZXJTaXplICUgMiA9PSAwLCBcIue8k%2BWGsuWMuuWkp%2BWwj%2BW%2Fhemhu%2BaYr%2BWBtuaVsFwiKTtcblxuY29uc3RleHByIGludCBzcXVhcmUoaW50IHgpIHsgcmV0dXJuIHggKiB4OyB9XG5zdGF0aWNfYXNzZXJ0KHNxdWFyZSg4KSA9PSA2NCwgXCJzcXVhcmUg5a6e546w5pyJ6K%2BvXCIpOyAgIC8vIOe8luivkeacn%2BmqjOivgeWHveaVsOato%2BehruaAp1xuXG5pbnQgbWFpbigpIHtcbiAgICBzdGQ6OmNvdXQgPDwgXCLmiYDmnInnvJbor5HmnJ%2Fmo4Dmn6XpgJrov4fvvIxidWZmZXJTaXplID0gXCIgPDwgYnVmZmVyU2l6ZSA8PCAnXFxuJztcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+constexpr int bufferSize = 1024;
+
+// 编译期就检查约束，不满足则编译不过
+static_assert(bufferSize &gt;= 256, "缓冲区太小");
+static_assert(bufferSize % 2 == 0, "缓冲区大小必须是偶数");
+
+constexpr int square(int x) { return x * x; }
+static_assert(square(8) == 64, "square 实现有误");   // 编译期验证函数正确性
+
+int main() {
+    std::cout &lt;&lt; "所有编译期检查通过，bufferSize = " &lt;&lt; bufferSize &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>如果把第一个断言改成 <code>bufferSize &gt;= 4096</code>，程序<strong>根本编译不过</strong>，编译器会打印你写的错误信息 <code>&quot;缓冲区太小&quot;</code>。这是一种强大的&quot;左移&quot;——把本该运行时才暴露的问题，提前到编译期拦截。</p>
+<div class="note">
+<strong>你其实见过它的近亲</strong>
+第 12 章的 concepts，本质也是编译期检查（检查"类型满足约束"）。<code>static_assert</code> 则检查"编译期常量表达式为真"。它们共同体现了 C++ 的一个哲学：<strong>能在编译期确定的事，就别拖到运行期</strong>——错误越早发现越好，计算越早完成越省。
+</div><h2>编译期计算能做什么、不能做什么</h2>
+<div class="keypoint">
+<strong>编译期计算的价值</strong>
+<ul>
+<li><strong>零运行时成本</strong>：结果在编译时算好，运行时直接用——查找表、数学常量、配置推导等尤其受益。</li>
+<li><strong>更早的错误</strong>：配合 <code>static_assert</code>，把校验提前到编译期。</li>
+<li><strong>用在必须是常量的地方</strong>：数组大小、模板参数、枚举值等。</li>
+</ul>
+</div><p>但它有天然边界：编译期计算<strong>不能做依赖运行时信息的事</strong>——不能读文件、不能获取用户输入、不能调用非 <code>constexpr</code> 的函数、不能做真正的动态内存分配残留到运行期（编译期分配的必须在编译期释放）。道理很简单：编译时这些信息还不存在。</p>
+<div class="warn">
+<strong>别把什么都塞进编译期</strong>
+编译期计算虽好，但过度使用会拖慢<strong>编译</strong>速度（把运行时负担转移成了编译时负担），复杂的 constexpr/模板元编程还会让代码难读。经验法则：<strong>对"输入天然是编译期常量、且反复用到"的计算</strong>（查找表、固定配置、维度换算），编译期计算收益最大；对普通的运行时逻辑，老老实实运行期跑就好。
+</div><h2>动手：编译期生成一张查找表</h2>
+<p>编译期计算最经典的应用之一，是<strong>在编译时就把一张表算好</strong>，运行时零成本查表。下面用 constexpr 生成前 N 个平方数的表：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPGFycmF5PlxuXG4vLyDnvJbor5HmnJ%2FnlJ%2FmiJDvvJrliY0gTiDkuKrmlbDnmoTlubPmlrnooahcbnRlbXBsYXRlIDxpbnQgTj5cbmNvbnN0ZXhwciBzdGQ6OmFycmF5PGludCwgTj4gbWFrZVNxdWFyZVRhYmxlKCkge1xuICAgIHN0ZDo6YXJyYXk8aW50LCBOPiB0YWJsZXt9O1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTjsgKytpKSB0YWJsZVtpXSA9IGkgKiBpO1xuICAgIHJldHVybiB0YWJsZTtcbn1cblxuLy8g5pW05byg6KGo5Zyo57yW6K%2BR5pyf5bCx566X5aW977yM5a2Y6L%2Bb56iL5bqP55qE5bi46YeP5Yy6XG5jb25zdGV4cHIgYXV0byBzcXVhcmVzID0gbWFrZVNxdWFyZVRhYmxlPDEwPigpO1xuXG5pbnQgbWFpbigpIHtcbiAgICAvLyDnvJbor5HmnJ%2Fpqozor4HvvJrov5nlvKDooajnoa7lrp7lr7lcbiAgICBzdGF0aWNfYXNzZXJ0KHNxdWFyZXNbNV0gPT0gMjUpO1xuICAgIHN0YXRpY19hc3NlcnQoc3F1YXJlc1s5XSA9PSA4MSk7XG5cbiAgICBzdGQ6OmNvdXQgPDwgXCLnvJbor5HmnJ%2Fnrpflpb3nmoTlubPmlrnooajvvJpcIjtcbiAgICBmb3IgKGludCB4IDogc3F1YXJlcykgc3RkOjpjb3V0IDw8IHggPDwgJyAnO1xuICAgIHN0ZDo6Y291dCA8PCAnXFxuJztcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;array&gt;
+
+// 编译期生成：前 N 个数的平方表
+template &lt;int N&gt;
+constexpr std::array&lt;int, N&gt; makeSquareTable() {
+    std::array&lt;int, N&gt; table{};
+    for (int i = 0; i &lt; N; ++i) table[i] = i * i;
+    return table;
+}
+
+// 整张表在编译期就算好，存进程序的常量区
+constexpr auto squares = makeSquareTable&lt;10&gt;();
+
+int main() {
+    // 编译期验证：这张表确实对
+    static_assert(squares[5] == 25);
+    static_assert(squares[9] == 81);
+
+    std::cout &lt;&lt; "编译期算好的平方表：";
+    for (int x : squares) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">编译期算好的平方表：0 1 4 9 16 25 36 49 64 81</code></pre>
+</div><p>这张 <code>squares</code> 表<strong>在编译时就完全算好了</strong>，直接嵌进可执行文件——运行时那个循环只是在打印现成的值，一次乘法都没算。而两个 <code>static_assert</code> 保证了表的正确性在编译期就被验证。<strong>&quot;把工作从运行期搬到编译期&quot;，这就是最典型的样子。</strong></p>
+<p>第三部分（泛型与编译期）到此完整：模板给了你编译期的类型抽象，concepts 给了它约束，constexpr/consteval 给了你编译期的计算能力。接下来第四部分转向日常最高频的工具——标准库，从容器与迭代器开始。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>编译期计算</strong>：只要输入在编译期确定，计算就能在编译时完成，运行时直接用结果——零运行时成本。</li>
+<li><strong><code>const</code></strong>（运行期只读）vs <strong><code>constexpr</code></strong>（编译期常量）：后者能用于数组大小、模板参数等需要编译期常量的地方。</li>
+<li><strong><code>constexpr</code> 函数</strong>有双重身份：输入是编译期常量则编译期求值，否则退化为普通运行期函数。现代 constexpr 支持循环、分支、局部变量等。</li>
+<li><strong><code>consteval</code></strong> 强制函数只在编译期求值（拿不到编译期常量就报错）。</li>
+<li><strong><code>static_assert</code></strong> 把条件检查搬到编译期，不满足直接编译失败——错误&quot;左移&quot;。</li>
+<li>编译期计算不能依赖运行时信息（文件、输入等）；过度使用会拖慢编译，适合&quot;输入天然是常量且反复用到&quot;的计算。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch12.html">← 第 12 章 concepts 与约束：模板的类型系统</a>
+  <a class="nav-next" href="ch14.html">第 14 章 STL 容器与迭代器 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
