@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 15 章 算法、range 与视图</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li class="active"><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 15 章 算法、range 与视图</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章讲了容器和迭代器。这一章讲 STL 的另一半——<strong>算法</strong>：<code>sort</code>、<code>find</code>、<code>transform</code> 这些"只认迭代器、不认容器"的通用操作。然后是 C++20 的重头戏 <strong>ranges</strong>，它让这些算法用起来终于像 Java Stream / Python 推导式一样顺手，还带来了<strong>惰性视图</strong>和管道语法。</p>
+<p>读完你会知道："别自己写循环，用算法"这句 C++ 老话是什么意思，以及现代 ranges 如何把数据处理写成一条清晰的流水线。</p>
+</div><h2>经典 STL 算法：建立在迭代器上</h2>
+<p>回忆上一章的关键点：算法只要一对迭代器 <code>[begin, end)</code> 就能工作，不关心容器具体是什么。<code>&lt;algorithm&gt;</code> 头文件里有上百个这样的算法。先看最常用的几个：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxhbGdvcml0aG0%2BXG4jaW5jbHVkZSA8bnVtZXJpYz5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiB2ezUsIDIsIDgsIDEsIDksIDN9O1xuXG4gICAgc3RkOjpzb3J0KHYuYmVnaW4oKSwgdi5lbmQoKSk7ICAgICAgICAgICAgICAvLyDmjpLluo%2FvvIjljp%2FlnLDvvIlcbiAgICBmb3IgKGludCB4IDogdikgc3RkOjpjb3V0IDw8IHggPDwgJyAnO1xuICAgIHN0ZDo6Y291dCA8PCAnXFxuJzsgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIDEgMiAzIDUgOCA5XG5cbiAgICAvLyDmn6Xmib5cbiAgICBpZiAoYXV0byBpdCA9IHN0ZDo6ZmluZCh2LmJlZ2luKCksIHYuZW5kKCksIDgpOyBpdCAhPSB2LmVuZCgpKVxuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLmib7liLAgOO%2B8jOWcqOS4i%2BaghyBcIiA8PCAoaXQgLSB2LmJlZ2luKCkpIDw8ICdcXG4nO1xuXG4gICAgLy8g5rGC5ZKM77yIYWNjdW11bGF0ZSDlnKggPG51bWVyaWM%2B77yJXG4gICAgaW50IHN1bSA9IHN0ZDo6YWNjdW11bGF0ZSh2LmJlZ2luKCksIHYuZW5kKCksIDApO1xuICAgIHN0ZDo6Y291dCA8PCBcIuaAu%2BWSjDogXCIgPDwgc3VtIDw8ICdcXG4nOyAgICAgICAgLy8gMjhcblxuICAgIC8vIOiuoeaVsOa7oei2s%2BadoeS7tueahOWFg%2Be0oFxuICAgIGludCBiaWcgPSBzdGQ6OmNvdW50X2lmKHYuYmVnaW4oKSwgdi5lbmQoKSxcbiAgICAgICAgICAgICAgICAgICAgICAgICAgICBbXShpbnQgeCkgeyByZXR1cm4geCA%2BIDQ7IH0pOyAgIC8vIGxhbWJkYSDkvZzosJPor41cbiAgICBzdGQ6OmNvdXQgPDwgXCLlpKfkuo4gNCDnmoTmnIkgXCIgPDwgYmlnIDw8IFwiIOS4qlxcblwiOyAgICAgICAgICAgLy8gM1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;algorithm&gt;
+#include &lt;numeric&gt;
+
+int main() {
+    std::vector&lt;int&gt; v{5, 2, 8, 1, 9, 3};
+
+    std::sort(v.begin(), v.end());              // 排序（原地）
+    for (int x : v) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';                          // 1 2 3 5 8 9
+
+    // 查找
+    if (auto it = std::find(v.begin(), v.end(), 8); it != v.end())
+        std::cout &lt;&lt; "找到 8，在下标 " &lt;&lt; (it - v.begin()) &lt;&lt; '\n';
+
+    // 求和（accumulate 在 &lt;numeric&gt;）
+    int sum = std::accumulate(v.begin(), v.end(), 0);
+    std::cout &lt;&lt; "总和: " &lt;&lt; sum &lt;&lt; '\n';        // 28
+
+    // 计数满足条件的元素
+    int big = std::count_if(v.begin(), v.end(),
+                            [](int x) { return x &gt; 4; });   // lambda 作谓词
+    std::cout &lt;&lt; "大于 4 的有 " &lt;&lt; big &lt;&lt; " 个\n";           // 3
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="note">
+<strong>先认一下 lambda（下一章详讲）</strong>
+上面 <code>[](int x) { return x &gt; 4; }</code> 是一个 <strong>lambda 表达式</strong>——就地定义的匿名函数，和 Java 的 <code>x -&gt; x &gt; 4</code>、Python 的 <code>lambda x: x &gt; 4</code> 一个意思。<code>[]</code> 是捕获列表，<code>(int x)</code> 是参数，<code>{ ... }</code> 是函数体。很多算法接受这种"谓词"来定制行为。这里先会用，第 16 章讲透它的原理。
+</div><div class="keypoint">
+<strong>"别自己写循环"（No Raw Loops）</strong>
+C++ 社区有句名言：<strong>能用标准算法表达的，就别手写 for 循环。</strong><code>std::sort</code>、<code>std::find</code>、<code>std::count_if</code> 这些名字本身就说明了意图——读代码的人一眼看懂"这在排序 / 查找 / 计数"，而一个手写的 for 循环得逐行读才知道它在干嘛。算法还经过高度优化、不易写错边界。这和你在 Java 里优先用 Stream、Python 里优先用推导式和内置函数是同一个道理。
+</div><h2>经典算法的痛点：迭代器对太啰嗦</h2>
+<p>经典算法很强大，但有个明显的别扭：<strong>你几乎总是传 <code>v.begin(), v.end()</code></strong>——想对整个容器操作，却要每次手写这对迭代器。而且它们<strong>难以组合</strong>：想&quot;筛选出偶数，再各自平方，再排序&quot;，得用一串临时容器和多次调用，写起来很笨重。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 想：筛偶数 → 平方 → 排序。经典写法要好几步、还要临时容器
+std::vector&lt;int&gt; evens;
+std::copy_if(v.begin(), v.end(), std::back_inserter(evens),
+             [](int x){ return x % 2 == 0; });
+std::vector&lt;int&gt; squared;
+std::transform(evens.begin(), evens.end(), std::back_inserter(squared),
+               [](int x){ return x * x; });
+std::sort(squared.begin(), squared.end());
+// 三个算法、两个临时容器、六个迭代器…… 意图被淹没了</code></pre>
+</div><p>C++20 的 <strong>ranges</strong> 就是来解决这两个问题的。</p>
+<h2>ranges：直接对容器操作</h2>
+<p><code>&lt;ranges&gt;</code> 提供了算法的 <strong>ranges 版本</strong>（在 <code>std::ranges</code> 命名空间下），它们接受<strong>整个容器</strong>，不用再写 <code>begin(), end()</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxhbGdvcml0aG0%2BXG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6dmVjdG9yPGludD4gdns1LCAyLCA4LCAxLCA5LCAzfTtcblxuICAgIHN0ZDo6cmFuZ2VzOjpzb3J0KHYpOyAgICAgICAgICAgICAgICAgICAgICAgLy8g55u05o6l5Lyg5a655Zmo77yM5LiN55SoIHYuYmVnaW4oKSwgdi5lbmQoKVxuXG4gICAgZm9yIChpbnQgeCA6IHYpIHN0ZDo6Y291dCA8PCB4IDw8ICcgJztcbiAgICBzdGQ6OmNvdXQgPDwgJ1xcbic7ICAgICAgICAgICAgICAgICAgICAgICAgICAvLyAxIDIgMyA1IDggOVxuXG4gICAgYXV0byBpdCA9IHN0ZDo6cmFuZ2VzOjpmaW5kKHYsIDgpOyAgICAgICAgICAvLyDlkIzmoLfnm7TmjqXkvKDlrrnlmahcbiAgICBpZiAoaXQgIT0gdi5lbmQoKSlcbiAgICAgICAgc3RkOjpjb3V0IDw8IFwi5om%2B5YiwIDhcXG5cIjtcblxuICAgIGludCBiaWcgPSBzdGQ6OnJhbmdlczo6Y291bnRfaWYodiwgW10oaW50IHgpeyByZXR1cm4geCA%2BIDQ7IH0pO1xuICAgIHN0ZDo6Y291dCA8PCBcIuWkp%2BS6jiA0IOeahOaciSBcIiA8PCBiaWcgPDwgXCIg5LiqXFxuXCI7ICAgLy8gM1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;algorithm&gt;
+
+int main() {
+    std::vector&lt;int&gt; v{5, 2, 8, 1, 9, 3};
+
+    std::ranges::sort(v);                       // 直接传容器，不用 v.begin(), v.end()
+
+    for (int x : v) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';                          // 1 2 3 5 8 9
+
+    auto it = std::ranges::find(v, 8);          // 同样直接传容器
+    if (it != v.end())
+        std::cout &lt;&lt; "找到 8\n";
+
+    int big = std::ranges::count_if(v, [](int x){ return x &gt; 4; });
+    std::cout &lt;&lt; "大于 4 的有 " &lt;&lt; big &lt;&lt; " 个\n";   // 3
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>光是&quot;不用每次写迭代器对&quot;就已经清爽很多。但 ranges 真正的威力在<strong>视图</strong>和<strong>管道</strong>。</p>
+<h2>视图与管道：惰性的数据流水线</h2>
+<p><strong>视图（view）</strong> 是对某个数据序列的<strong>轻量、惰性</strong>的&quot;变换镜头&quot;——它不复制数据、不立即计算，只在你真正遍历时才逐个产出元素。多个视图能用管道运算符 <strong><code>|</code></strong> 串起来，读起来就像一条从左到右的流水线：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxyYW5nZXM%2BXG5cbm5hbWVzcGFjZSB2aWV3cyA9IHN0ZDo6dmlld3M7XG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6dmVjdG9yPGludD4gdnsxLCAyLCAzLCA0LCA1LCA2LCA3LCA4LCA5LCAxMH07XG5cbiAgICAvLyDmtYHmsLTnur%2FvvJrnrZvlgbbmlbAg4oaSIOWQhOiHquW5s%2BaWuSDihpIg5Y%2BW5YmNIDMg5LiqXG4gICAgYXV0byByZXN1bHQgPSB2XG4gICAgICAgIHwgdmlld3M6OmZpbHRlcihbXShpbnQgeCl7IHJldHVybiB4ICUgMiA9PSAwOyB9KSAgIC8vIDIgNCA2IDggMTBcbiAgICAgICAgfCB2aWV3czo6dHJhbnNmb3JtKFtdKGludCB4KXsgcmV0dXJuIHggKiB4OyB9KSAgICAgIC8vIDQgMTYgMzYgNjQgMTAwXG4gICAgICAgIHwgdmlld3M6OnRha2UoMyk7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8gNCAxNiAzNlxuXG4gICAgZm9yIChpbnQgeCA6IHJlc3VsdCkgc3RkOjpjb3V0IDw8IHggPDwgJyAnO1xuICAgIHN0ZDo6Y291dCA8PCAnXFxuJzsgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyA0IDE2IDM2XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;ranges&gt;
+
+namespace views = std::views;
+
+int main() {
+    std::vector&lt;int&gt; v{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+
+    // 流水线：筛偶数 → 各自平方 → 取前 3 个
+    auto result = v
+        | views::filter([](int x){ return x % 2 == 0; })   // 2 4 6 8 10
+        | views::transform([](int x){ return x * x; })      // 4 16 36 64 100
+        | views::take(3);                                    // 4 16 36
+
+    for (int x : result) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';                                       // 4 16 36
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>一眼就能顺着读：&quot;拿 v，筛出偶数，各自平方，取前三个&quot;。对比前面那段经典写法的临时容器地狱，高下立判。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java Stream / Python</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">v.stream()
+ .filter(x -&gt; x % 2 == 0)
+ .map(x -&gt; x * x)
+ .limit(3)
+ .toList();</code></pre>
+</div><div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%5Bx*x%20for%20x%20in%20v%20if%20x%252%3D%3D0%5D%5B%3A3%5D">[x*x for x in v if x%2==0][:3]</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++20 ranges</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">v | views::filter(isEven)
+  | views::transform(square)
+  | views::take(3);</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>视图是惰性的——这一点很关键</strong>
+上面的流水线在定义 <code>result</code> 时<strong>什么都没算</strong>。<code>filter</code>、<code>transform</code> 不会遍历整个 <code>v</code>、也不产生任何中间容器。只有当你在 <code>for</code> 循环里真正取元素时，数据才<strong>一个一个</strong>流过整条管道。<br>
+这带来两个好处：① <strong>零中间容器</strong>，省内存；② 配合 <code>take(3)</code> 这种"只要前几个"的操作，能<strong>提前停止</strong>——它算出 3 个就不再往下取，后面的元素根本不会被处理。这和 Java Stream、Python 生成器的惰性求值是一个思想。
+</div><h2>视图不拥有数据，只是&quot;看&quot;</h2>
+<p>视图这个名字很贴切——它是一副&quot;镜头&quot;，透过它看底层容器，但<strong>不拥有、不复制</strong>那些数据。这让视图极其轻量（拷贝一个视图很便宜），但也带来一个必须注意的点：</p>
+<div class="warn">
+<strong>视图不能比它所看的数据活得久</strong>
+视图内部只是引用（"指向"）底层容器。如果底层容器销毁了，视图就变成悬垂的——和第 4 章的悬垂引用是同一类问题。所以：<strong>别返回一个引用了局部容器的视图，也别在容器被修改/销毁后继续用旧视图。</strong>把视图当成"临时的观察管道"用完即弃，通常就安全。需要留存结果时，用下面的办法把它固化成容器。
+</div><h2>把视图结果收集成容器</h2>
+<p>视图是惰性的镜头，但很多时候你需要一个<strong>实实在在的容器</strong>来保存结果。C++23 提供了 <code>std::ranges::to</code>，C++20 则可以手动遍历填充。这里用兼容性最好的手动方式：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxyYW5nZXM%2BXG5cbm5hbWVzcGFjZSB2aWV3cyA9IHN0ZDo6dmlld3M7XG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6dmVjdG9yPGludD4gdnsxLCAyLCAzLCA0LCA1LCA2fTtcblxuICAgIGF1dG8gcGlwZWxpbmUgPSB2IHwgdmlld3M6OmZpbHRlcihbXShpbnQgeCl7IHJldHVybiB4ICUgMiA9PSAwOyB9KVxuICAgICAgICAgICAgICAgICAgICAgIHwgdmlld3M6OnRyYW5zZm9ybShbXShpbnQgeCl7IHJldHVybiB4ICogMTA7IH0pO1xuXG4gICAgLy8g5oqK5oOw5oCn6KeG5Zu%2B5Zu65YyW5oiQ5LiA5Liq55yf5q2j55qEIHZlY3RvclxuICAgIHN0ZDo6dmVjdG9yPGludD4gY29sbGVjdGVkKHBpcGVsaW5lLmJlZ2luKCksIHBpcGVsaW5lLmVuZCgpKTtcblxuICAgIHN0ZDo6Y291dCA8PCBcIuaUtumbhuWIsCBcIiA8PCBjb2xsZWN0ZWQuc2l6ZSgpIDw8IFwiIOS4quWFg%2Be0oDogXCI7XG4gICAgZm9yIChpbnQgeCA6IGNvbGxlY3RlZCkgc3RkOjpjb3V0IDw8IHggPDwgJyAnO1xuICAgIHN0ZDo6Y291dCA8PCAnXFxuJzsgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIDIwIDQwIDYwXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;ranges&gt;
+
+namespace views = std::views;
+
+int main() {
+    std::vector&lt;int&gt; v{1, 2, 3, 4, 5, 6};
+
+    auto pipeline = v | views::filter([](int x){ return x % 2 == 0; })
+                      | views::transform([](int x){ return x * 10; });
+
+    // 把惰性视图固化成一个真正的 vector
+    std::vector&lt;int&gt; collected(pipeline.begin(), pipeline.end());
+
+    std::cout &lt;&lt; "收集到 " &lt;&lt; collected.size() &lt;&lt; " 个元素: ";
+    for (int x : collected) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';                          // 20 40 60
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>collected</code> 是一个独立的、拥有自己数据的 <code>vector</code>——即使原来的 <code>v</code> 之后被销毁，它也安然无恙。<strong>规则很简单：流水线中间用视图（惰性、高效），需要保存结果时收集成容器（拥有、安全）。</strong></p>
+<h2>动手：用 ranges 写一条数据流水线</h2>
+<p>下面这段程序把一组学生成绩，筛出及格的、转成&quot;姓名: 等级&quot;、并统计人数。运行前先顺着管道读一遍，预测输出：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxzdHJpbmc%2BXG4jaW5jbHVkZSA8cmFuZ2VzPlxuI2luY2x1ZGUgPGFsZ29yaXRobT5cblxubmFtZXNwYWNlIHZpZXdzID0gc3RkOjp2aWV3cztcblxuc3RydWN0IFN0dWRlbnQgeyBzdGQ6OnN0cmluZyBuYW1lOyBpbnQgc2NvcmU7IH07XG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6dmVjdG9yPFN0dWRlbnQ%2BIHN0dWRlbnRze1xuICAgICAgICB7XCJBbGljZVwiLCA4NX0sIHtcIkJvYlwiLCA1OH0sIHtcIkNhcm9sXCIsIDkyfSxcbiAgICAgICAge1wiRGF2ZVwiLCA0M30sIHtcIkV2ZVwiLCA3Nn0sXG4gICAgfTtcblxuICAgIC8vIOWPiuagvOe6vyA2MO%2B8muetm%2BWHuuWPiuagvOeahO%2B8jOaYoOWwhOaIkCBcIuWnk%2BWQjSjliIbmlbApXCJcbiAgICBhdXRvIHBhc3NlZCA9IHN0dWRlbnRzXG4gICAgICAgIHwgdmlld3M6OmZpbHRlcihbXShjb25zdCBTdHVkZW50JiBzKXsgcmV0dXJuIHMuc2NvcmUgPj0gNjA7IH0pXG4gICAgICAgIHwgdmlld3M6OnRyYW5zZm9ybShbXShjb25zdCBTdHVkZW50JiBzKXtcbiAgICAgICAgICAgICAgcmV0dXJuIHMubmFtZSArIFwiKFwiICsgc3RkOjp0b19zdHJpbmcocy5zY29yZSkgKyBcIilcIjtcbiAgICAgICAgICB9KTtcblxuICAgIHN0ZDo6Y291dCA8PCBcIuWPiuagvOWQjeWNle%2B8mlxcblwiO1xuICAgIGZvciAoY29uc3Qgc3RkOjpzdHJpbmcmIGxpbmUgOiBwYXNzZWQpIHN0ZDo6Y291dCA8PCBcIiAgXCIgPDwgbGluZSA8PCAnXFxuJztcblxuICAgIC8vIHJhbmdlcyDniYjnrpfms5XvvJrnm7TmjqXnu5%2ForqHlj4rmoLzkurrmlbBcbiAgICBhdXRvIHBhc3NDb3VudCA9IHN0ZDo6cmFuZ2VzOjpjb3VudF9pZihzdHVkZW50cyxcbiAgICAgICAgICAgICAgICAgICAgICAgIFtdKGNvbnN0IFN0dWRlbnQmIHMpeyByZXR1cm4gcy5zY29yZSA%2BPSA2MDsgfSk7XG4gICAgc3RkOjpjb3V0IDw8IFwi5Y%2BK5qC8IFwiIDw8IHBhc3NDb3VudCA8PCBcIiDkurpcXG5cIjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;string&gt;
+#include &lt;ranges&gt;
+#include &lt;algorithm&gt;
+
+namespace views = std::views;
+
+struct Student { std::string name; int score; };
+
+int main() {
+    std::vector&lt;Student&gt; students{
+        {"Alice", 85}, {"Bob", 58}, {"Carol", 92},
+        {"Dave", 43}, {"Eve", 76},
+    };
+
+    // 及格线 60：筛出及格的，映射成 "姓名(分数)"
+    auto passed = students
+        | views::filter([](const Student&amp; s){ return s.score &gt;= 60; })
+        | views::transform([](const Student&amp; s){
+              return s.name + "(" + std::to_string(s.score) + ")";
+          });
+
+    std::cout &lt;&lt; "及格名单：\n";
+    for (const std::string&amp; line : passed) std::cout &lt;&lt; "  " &lt;&lt; line &lt;&lt; '\n';
+
+    // ranges 版算法：直接统计及格人数
+    auto passCount = std::ranges::count_if(students,
+                        [](const Student&amp; s){ return s.score &gt;= 60; });
+    std::cout &lt;&lt; "及格 " &lt;&lt; passCount &lt;&lt; " 人\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">及格名单：
+  Alice(85)
+  Carol(92)
+  Eve(76)</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">及格 3 人</code></pre>
+</div><p>这段代码没有一个手写的处理循环，意图却一目了然：筛选、转换、计数各由一个具名操作表达。<strong>这就是现代 C++ 处理数据的样子——声明式的流水线，而非命令式的循环。</strong></p>
+<p>算法和 ranges 都大量依赖 lambda 来定制行为。你已经用了它好几次，下一章就来彻底讲清楚：lambda 到底是什么、捕获是怎么回事、它和&quot;函数对象&quot;的关系，以及为什么它是零开销的。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>STL <strong>算法</strong>（<code>sort</code>/<code>find</code>/<code>transform</code>/<code>accumulate</code>/<code>count_if</code> 等）建立在迭代器上，只认区间 <code>[begin, end)</code>，不认具体容器。</li>
+<li>准则 <strong>&quot;别自己写循环&quot;</strong>：能用具名算法表达的就别手写 for，意图更清晰、更不易错——同 Java Stream / Python 推导式的思路。</li>
+<li>C++20 <strong>ranges</strong> 版算法直接接受整个容器，省掉 <code>begin(), end()</code>。</li>
+<li><strong>视图（views）</strong> 是惰性、不拥有数据的&quot;变换镜头&quot;，用管道 <code>|</code> 串成流水线（<code>filter</code>/<code>transform</code>/<code>take</code>…），零中间容器、可提前停止。</li>
+<li>视图<strong>不能比底层数据活得久</strong>（悬垂风险）；需要保存结果时<strong>收集成容器</strong>（如用迭代器区间构造 <code>vector</code>）。</li>
+<li>现代数据处理风格：中间用惰性视图，结果固化成拥有型容器——声明式流水线取代命令式循环。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch14.html">← 第 14 章 STL 容器与迭代器</a>
+  <a class="nav-next" href="ch16.html">第 16 章 lambda、函数对象与可调用体 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
