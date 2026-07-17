@@ -1,7 +1,7 @@
 {
-  "name": "python-book-for-teens",
-  "version": "1.0.0",
-  "description": "《跟 Python 一起玩：从零开始，用游戏和 AI 学编程》——面向 7—9 年级学生的交互式编程书",
+  "name": "tech-books",
+  "version": "2.0.0",
+  "description": "多本交互式技术书的单仓库：Markdown → 可运行代码的网页，发布到 GitHub Pages",
   "scripts": {
     "build": "node build.js",
     "pack": "node pack.js"

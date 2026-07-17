@@ -36,6 +36,9 @@ body {
 }
 .toc-title { font-size: 20px; font-weight: 700; padding: 8px 22px 14px; }
 .toc-title a { color: #fff; text-decoration: none; }
+.toc-home { padding: 0 22px 12px; }
+.toc-home a { color: #b8b3aa; text-decoration: none; font-size: 13px; }
+.toc-home a:hover { color: #fff; }
 .toc-list { list-style: none; margin: 0; padding: 0; }
 .toc-list li a {
   display: block;

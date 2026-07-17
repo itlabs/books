@@ -1,37 +1,34 @@
-// build.js —— 把 chapters/*.md 转成交互式 HTML，输出到 docs/
-// 用法：node build.js
+// build.js —— 把 books/<slug>/chapters/*.md 转成交互式 HTML，输出到 docs/<slug>/
+// 用法：
+//   node build.js            构建全部书 + 书架首页
+//   node build.js <slug>     只构建某一本（仍会刷新书架首页）
 const fs = require("fs");
 const path = require("path");
 const { marked } = require("marked");
 
 const ROOT = __dirname;
-const CH_DIR = path.join(ROOT, "chapters");
+const BOOKS_DIR = path.join(ROOT, "books");
 const OUT_DIR = path.join(ROOT, "docs");
+const SHARED_DIR = path.join(ROOT, "shared"); // 各书共用的 style.css / runner.js / vendor/
 
-// ---- 章节顺序与标题（用于导航和目录）----
-const CHAPTERS = [
-  ["ch01", "第 1 章 你好，世界！"],
-  ["ch02", "第 2 章 变量与数据类型"],
-  ["ch03", "第 3 章 输入与输出"],
-  ["ch04", "第 4 章 条件判断"],
-  ["ch05", "第 5 章 循环"],
-  ["ch06", "第 6 章 列表、字典和函数"],
-  ["ch07", "第 7 章 猜数字大作战"],
-  ["ch08", "第 8 章 文字冒险游戏"],
-  ["ch09", "第 9 章 石头剪刀布"],
-  ["ch10", "第 10 章 用海龟画图"],
-  ["ch11", "第 11 章 第一个游戏窗口"],
-  ["ch12", "第 12 章 贪吃蛇大作战"],
-  ["ch13", "第 13 章 AI 是什么"],
-  ["ch14", "第 14 章 会聊天的机器人"],
-  ["ch15", "第 15 章 给游戏装上 AI"],
-  ["ch16", "第 16 章 AI 故事工厂"],
-  ["ch17", "第 17 章 更多好玩的 AI 应用"],
-  ["appendix-a", "附录 A 安装环境"],
-  ["appendix-b", "附录 B 报错速查表"],
-  ["appendix-c", "附录 C 继续前进"],
-  ["appendix-d", "附录 D 换用别家 AI"],
-];
+// ---- 读取所有书的元数据（books/<slug>/book.json）----
+function loadBooks() {
+  return fs
+    .readdirSync(BOOKS_DIR, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter((slug) =>
+      fs.existsSync(path.join(BOOKS_DIR, slug, "book.json")),
+    )
+    .map((slug) => {
+      const meta = JSON.parse(
+        fs.readFileSync(path.join(BOOKS_DIR, slug, "book.json"), "utf8"),
+      );
+      meta.slug = meta.slug || slug;
+      meta.dir = path.join(BOOKS_DIR, slug);
+      return meta;
+    });
+}
 
 // ---- 自定义 marked 渲染：给代码块加"运行"按钮 ----
 // 约定：
@@ -75,7 +72,7 @@ renderer.code = function (token) {
 
 marked.setOptions({ renderer, breaks: false, gfm: true });
 
-// ---- HTML 页面模板 ----
+// ---- HTML 页面模板（书内页面：assets/vendor 都在本书目录下）----
 function page(title, bodyHtml, prevLink, nextLink, tocHtml) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -111,60 +108,163 @@ ${bodyHtml}
 </html>`;
 }
 
-// ---- 构建 ----
-if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
-const ASSET_DIR = path.join(OUT_DIR, "assets");
-if (!fs.existsSync(ASSET_DIR)) fs.mkdirSync(ASSET_DIR, { recursive: true });
-
-// 把 assets-src/ 里的样式和脚本复制到输出目录（每次构建都刷新，避免遗漏）
-const ASSET_SRC = path.join(ROOT, "assets-src");
-for (const f of fs.readdirSync(ASSET_SRC)) {
-  fs.copyFileSync(path.join(ASSET_SRC, f), path.join(ASSET_DIR, f));
+// 目录侧边栏（每本书内共用）
+function buildToc(book, currentSlug) {
+  const items = book.chapters
+    .map(([slug, title]) => {
+      const cls = slug === currentSlug ? ' class="active"' : "";
+      return `<li${cls}><a href="${slug}.html">${title}</a></li>`;
+    })
+    .join("\n");
+  return `<div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list">${items}</ul>`;
 }
 
-// 目录侧边栏（每页共用）
-function buildToc(currentSlug) {
-  const items = CHAPTERS.map(([slug, title]) => {
-    const cls = slug === currentSlug ? ' class="active"' : "";
-    return `<li${cls}><a href="${slug}.html">${title}</a></li>`;
-  }).join("\n");
-  return `<div class="toc-title"><a href="index.html">📘 目录</a></div><ul class="toc-list">${items}</ul>`;
-}
+// ---- 构建单本书 ----
+function buildBook(book) {
+  const outDir = path.join(OUT_DIR, book.slug);
+  const assetDir = path.join(outDir, "assets");
+  const vendorDir = path.join(outDir, "vendor");
+  fs.mkdirSync(assetDir, { recursive: true });
+  fs.mkdirSync(vendorDir, { recursive: true });
 
-let built = 0;
-CHAPTERS.forEach(([slug, title], i) => {
-  const mdPath = path.join(CH_DIR, slug + ".md");
-  if (!fs.existsSync(mdPath)) {
-    console.log("  跳过（还没写）：" + slug);
-    return;
+  // 复制共享资源到本书输出目录（每次构建都刷新，离线自洽）
+  for (const f of fs.readdirSync(SHARED_DIR)) {
+    const src = path.join(SHARED_DIR, f);
+    if (fs.statSync(src).isFile()) fs.copyFileSync(src, path.join(assetDir, f));
   }
-  blockId = 0;
-  const md = fs.readFileSync(mdPath, "utf8");
-  const body = marked.parse(md);
-  const prev = CHAPTERS[i - 1];
-  const next = CHAPTERS[i + 1];
-  const prevLink = prev
-    ? `<a class="nav-prev" href="${prev[0]}.html">← ${prev[1]}</a>`
-    : "";
-  const nextLink = next
-    ? `<a class="nav-next" href="${next[0]}.html">${next[1]} →</a>`
-    : "";
+  for (const f of fs.readdirSync(path.join(SHARED_DIR, "vendor"))) {
+    fs.copyFileSync(
+      path.join(SHARED_DIR, "vendor", f),
+      path.join(vendorDir, f),
+    );
+  }
+
+  const chDir = path.join(book.dir, "chapters");
+  let built = 0;
+  book.chapters.forEach(([slug, title], i) => {
+    const mdPath = path.join(chDir, slug + ".md");
+    if (!fs.existsSync(mdPath)) {
+      console.log("  跳过（还没写）：" + book.slug + "/" + slug);
+      return;
+    }
+    blockId = 0;
+    const md = fs.readFileSync(mdPath, "utf8");
+    const body = marked.parse(md);
+    const prev = book.chapters[i - 1];
+    const next = book.chapters[i + 1];
+    const prevLink = prev
+      ? `<a class="nav-prev" href="${prev[0]}.html">← ${prev[1]}</a>`
+      : "";
+    const nextLink = next
+      ? `<a class="nav-next" href="${next[0]}.html">${next[1]} →</a>`
+      : "";
+    fs.writeFileSync(
+      path.join(outDir, slug + ".html"),
+      page(title, body, prevLink, nextLink, buildToc(book, slug)),
+    );
+    built++;
+  });
+
+  // 本书首页（目录）：来自 books/<slug>/README.md
+  const readmePath = path.join(book.dir, "README.md");
+  if (fs.existsSync(readmePath)) {
+    const indexMd = fs.readFileSync(readmePath, "utf8");
+    // 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html
+    const indexBody = marked.parse(
+      indexMd.replace(/chapters\/([\w-]+)\.md/g, "$1.html"),
+    );
+    fs.writeFileSync(
+      path.join(outDir, "index.html"),
+      page(book.title, indexBody, "", "", buildToc(book, "index")),
+    );
+  }
+
+  // 离线阅读说明（随书打包）
   fs.writeFileSync(
-    path.join(OUT_DIR, slug + ".html"),
-    page(title, body, prevLink, nextLink, buildToc(slug)),
+    path.join(outDir, "READ-ME.txt"),
+    `《${book.title}》${book.subtitle ? "——" + book.subtitle : ""}\n` +
+      "=".repeat(40) +
+      "\n\n" +
+      "【怎么看这本书】\n" +
+      "双击打开 index.html，就能在浏览器里阅读整本书。左侧是目录，可点章节跳转。\n\n" +
+      "【功能说明】\n" +
+      "· 排版、文字、代码高亮、插图 —— 完全离线，不联网也能看。\n" +
+      "· 代码块右上角的绿色\"▶ 运行\"按钮 —— 需要联网（临时下载浏览器版 Python）。\n" +
+      "  第一次点击要等十几秒，请耐心。断网时点它会提示需要联网，不影响阅读。\n\n" +
+      "【推荐用最新版 Chrome / Edge 打开，阅读体验最好。】\n",
   );
-  built++;
-});
 
-// 首页（目录）
-const indexMd = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
-// 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html
-const indexBody = marked.parse(
-  indexMd.replace(/chapters\/([\w-]+)\.md/g, "$1.html"),
-);
-fs.writeFileSync(
-  path.join(OUT_DIR, "index.html"),
-  page("跟 Python 一起玩", indexBody, "", "", buildToc("index")),
-);
+  console.log(`  ✓ ${book.slug}：${built} 章 + 首页`);
+  return built;
+}
 
-console.log(`\n构建完成：共生成 ${built} 章 + 首页，输出在 docs/`);
+// ---- 书架首页 docs/index.html ----
+function buildShelf(books) {
+  const cards = books
+    .map((b) => {
+      const sub = b.subtitle ? `<p class="shelf-sub">${b.subtitle}</p>` : "";
+      const desc = b.description
+        ? `<p class="shelf-desc">${b.description}</p>`
+        : "";
+      return `<a class="shelf-card" href="${b.slug}/index.html">
+  <h2>${b.title}</h2>
+  ${sub}
+  ${desc}
+</a>`;
+    })
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>书架</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 0 auto; padding: 48px 20px; color: #24292f;
+    background: #f6f8fa; }
+  h1 { text-align: center; margin-bottom: 8px; }
+  .shelf-intro { text-align: center; color: #656d76; margin-bottom: 40px; }
+  .shelf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 20px; }
+  .shelf-card { display: block; padding: 24px; border-radius: 12px; background: #fff;
+    border: 1px solid #d0d7de; text-decoration: none; color: inherit;
+    transition: box-shadow .15s, transform .15s; }
+  .shelf-card:hover { box-shadow: 0 6px 20px rgba(0,0,0,.1); transform: translateY(-2px); }
+  .shelf-card h2 { margin: 0 0 6px; font-size: 20px; color: #0969da; }
+  .shelf-sub { margin: 0 0 10px; font-weight: 600; color: #24292f; }
+  .shelf-desc { margin: 0; color: #656d76; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>📚 书架</h1>
+<p class="shelf-intro">点击任意一本，开始阅读</p>
+<div class="shelf-grid">
+${cards}
+</div>
+</body>
+</html>`;
+  fs.writeFileSync(path.join(OUT_DIR, "index.html"), html);
+  // GitHub Pages：禁用 Jekyll，保证 assets/vendor 原样发布
+  fs.writeFileSync(path.join(OUT_DIR, ".nojekyll"), "");
+}
+
+// ---- 主流程 ----
+fs.mkdirSync(OUT_DIR, { recursive: true });
+const allBooks = loadBooks();
+const only = process.argv[2];
+const target = only ? allBooks.filter((b) => b.slug === only) : allBooks;
+
+if (only && target.length === 0) {
+  console.error(`找不到书：${only}（可选：${allBooks.map((b) => b.slug).join(", ")}）`);
+  process.exit(1);
+}
+
+console.log("正在构建：");
+target.forEach(buildBook);
+buildShelf(allBooks); // 书架始终列出全部书
+
+console.log(`\n构建完成：${target.length} 本书 + 书架首页，输出在 docs/`);
