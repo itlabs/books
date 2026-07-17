@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 章 错误处理：异常、错误码与 expected</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li class="active"><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 17 章 错误处理：异常、错误码与 expected</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>在 Java 里错误处理基本就是异常（还分受检/非受检），Python 里"用了就抛"。C++ 的选择更多元：<strong>异常</strong>、<strong>错误码</strong>、以及现代的 <strong><code>std::optional</code> / <code>std::expected</code></strong>——而且社区对"该用哪个"有真实的分歧。</p>
+<p>读完你会理解每种方式的取舍：异常如何与 RAII（第 5 章）配合、为什么有些 C++ 项目禁用异常、以及 C++23 的 <code>std::expected</code> 如何把"可能失败"编码进类型、逼你处理错误。</p>
+</div><h2>异常：和你熟悉的机制很像</h2>
+<p>C++ 有异常，<code>throw</code> / <code>try</code> / <code>catch</code> 的形态和 Java / Python 几乎一样：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0ZGV4Y2VwdD5cbiNpbmNsdWRlIDxzdHJpbmc%2BXG5cbmludCBkaXZpZGUoaW50IGEsIGludCBiKSB7XG4gICAgaWYgKGIgPT0gMCkgdGhyb3cgc3RkOjpydW50aW1lX2Vycm9yKFwi6Zmk5pWw5LiN6IO95Li66Zu2XCIpO1xuICAgIHJldHVybiBhIC8gYjtcbn1cblxuaW50IG1haW4oKSB7XG4gICAgdHJ5IHtcbiAgICAgICAgc3RkOjpjb3V0IDw8IGRpdmlkZSgxMCwgMikgPDwgJ1xcbic7ICAgLy8gNVxuICAgICAgICBzdGQ6OmNvdXQgPDwgZGl2aWRlKDEwLCAwKSA8PCAnXFxuJzsgICAvLyDmipvlvILluLhcbiAgICB9IGNhdGNoIChjb25zdCBzdGQ6OmV4Y2VwdGlvbiYgZSkgeyAgICAgICAgLy8g5oyJIGNvbnN0IOW8leeUqOaNleiOt1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLmjZXojrfplJnor686IFwiIDw8IGUud2hhdCgpIDw8ICdcXG4nO1xuICAgIH1cbiAgICBzdGQ6OmNvdXQgPDwgXCLnqIvluo%2Fnu6fnu61cXG5cIjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;stdexcept&gt;
+#include &lt;string&gt;
+
+int divide(int a, int b) {
+    if (b == 0) throw std::runtime_error("除数不能为零");
+    return a / b;
+}
+
+int main() {
+    try {
+        std::cout &lt;&lt; divide(10, 2) &lt;&lt; '\n';   // 5
+        std::cout &lt;&lt; divide(10, 0) &lt;&lt; '\n';   // 抛异常
+    } catch (const std::exception&amp; e) {        // 按 const 引用捕获
+        std::cout &lt;&lt; "捕获错误: " &lt;&lt; e.what() &lt;&lt; '\n';
+    }
+    std::cout &lt;&lt; "程序继续\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">5
+捕获错误: 除数不能为零
+程序继续</code></pre>
+</div><p>几个和 Java / Python 的差异值得点名：</p>
+<div class="keypoint">
+<strong>C++ 异常的几个特点</strong>
+<ul>
+<li><strong>可以抛任何类型</strong>——但约定俗成抛<strong>继承自 <code>std::exception</code></strong> 的对象（<code>runtime_error</code>、<code>logic_error</code> 等），这样能用 <code>e.what()</code> 拿到描述。</li>
+<li><strong>按 <code>const&</code> 捕获</strong>：<code>catch (const std::exception& e)</code>。按引用避免切片（第 18 章讲），基类引用能捕获所有派生异常。</li>
+<li><strong>没有"受检异常"</strong>：不像 Java 要在签名里声明 <code>throws</code>。C++ 不强制，好处是灵活，坏处是光看签名不知道一个函数会不会抛。</li>
+</ul>
+</div><h2>异常与 RAII：为什么 C++ 的异常是安全的</h2>
+<p>这是全章最重要的连接点，回扣第 5 章。你可能听过&quot;C++ 异常危险&quot;的说法——那是针对<strong>不用 RAII</strong>的老式代码。<strong>只要资源都由 RAII 对象持有，异常就是安全的</strong>：栈展开时，沿途每个局部对象的析构函数都会被调用，资源自动释放。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxtZW1vcnk%2BXG4jaW5jbHVkZSA8c3RkZXhjZXB0PlxuXG5zdHJ1Y3QgUmVzb3VyY2Uge1xuICAgIHN0ZDo6c3RyaW5nIG5hbWU7XG4gICAgUmVzb3VyY2Uoc3RkOjpzdHJpbmcgbikgOiBuYW1lKHN0ZDo6bW92ZShuKSkgeyBzdGQ6OmNvdXQgPDwgXCIgIOiOt%2BWPliBcIiA8PCBuYW1lIDw8ICdcXG4nOyB9XG4gICAgflJlc291cmNlKCkgeyBzdGQ6OmNvdXQgPDwgXCIgIOmHiuaUviBcIiA8PCBuYW1lIDw8ICdcXG4nOyB9XG59O1xuXG52b2lkIHJpc2t5KCkge1xuICAgIFJlc291cmNlIGEoXCLmlofku7ZcIik7XG4gICAgYXV0byBiID0gc3RkOjptYWtlX3VuaXF1ZTxSZXNvdXJjZT4oXCLlhoXlrZhcIik7ICAgIC8vIFJBSUkg5oyB5pyJXG4gICAgc3RkOjpjb3V0IDw8IFwiICDljbPlsIbmipvlvILluLhcXG5cIjtcbiAgICB0aHJvdyBzdGQ6OnJ1bnRpbWVfZXJyb3IoXCLlh7rplJnkuoZcIik7XG4gICAgc3RkOjpjb3V0IDw8IFwiICDov5nooYzkuI3miafooYxcXG5cIjtcbn0gICAvLyDmoIjlsZXlvIDvvJpi44CBYSDpgIbluo%2Foh6rliqjph4rmlL5cblxuaW50IG1haW4oKSB7XG4gICAgdHJ5IHtcbiAgICAgICAgcmlza3koKTtcbiAgICB9IGNhdGNoIChjb25zdCBzdGQ6OmV4Y2VwdGlvbiYgZSkge1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLmjZXojrc6IFwiIDw8IGUud2hhdCgpIDw8ICdcXG4nO1xuICAgIH1cbiAgICBzdGQ6OmNvdXQgPDwgXCLmsqHmnInms4TmvI9cXG5cIjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;memory&gt;
+#include &lt;stdexcept&gt;
+
+struct Resource {
+    std::string name;
+    Resource(std::string n) : name(std::move(n)) { std::cout &lt;&lt; "  获取 " &lt;&lt; name &lt;&lt; '\n'; }
+    ~Resource() { std::cout &lt;&lt; "  释放 " &lt;&lt; name &lt;&lt; '\n'; }
+};
+
+void risky() {
+    Resource a("文件");
+    auto b = std::make_unique&lt;Resource&gt;("内存");    // RAII 持有
+    std::cout &lt;&lt; "  即将抛异常\n";
+    throw std::runtime_error("出错了");
+    std::cout &lt;&lt; "  这行不执行\n";
+}   // 栈展开：b、a 逆序自动释放
+
+int main() {
+    try {
+        risky();
+    } catch (const std::exception&amp; e) {
+        std::cout &lt;&lt; "捕获: " &lt;&lt; e.what() &lt;&lt; '\n';
+    }
+    std::cout &lt;&lt; "没有泄漏\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  获取 文件
+  获取 内存
+  即将抛异常
+  释放 内存
+  释放 文件
+  捕获: 出错了
+  没有泄漏</code></pre>
+</div><p>异常抛出后，<code>b</code>（内存）、<code>a</code>（文件）逆序释放，一句清理代码都没写。<strong>这就是为什么&quot;RAII + 异常&quot;是 C++ 推荐的错误处理组合</strong>——异常负责传播错误，RAII 负责保证无论如何资源都被清理。</p>
+<div class="warn">
+<strong>析构函数绝不要抛异常</strong>
+如果一个异常正在栈展开，而此时某个析构函数又抛出<strong>第二个</strong>异常，程序会直接 <code>std::terminate</code> 崩溃。所以析构函数应当是 <code>noexcept</code> 的（默认就是），里面绝不能让异常逃逸。这是 C++ 异常安全的一条铁律。
+</div><h2>noexcept：承诺不抛异常</h2>
+<p><code>noexcept</code> 关键字标记一个函数<strong>不会抛异常</strong>。它既是给调用者的承诺，也是给编译器的优化线索：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5pbnQgc2FmZUFkZChpbnQgYSwgaW50IGIpIG5vZXhjZXB0IHsgICAvLyDmib%2For7rkuI3miptcbiAgICByZXR1cm4gYSArIGI7XG59XG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6Y291dCA8PCBzYWZlQWRkKDMsIDQpIDw8ICdcXG4nOyAgIC8vIDdcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+int safeAdd(int a, int b) noexcept {   // 承诺不抛
+    return a + b;
+}
+
+int main() {
+    std::cout &lt;&lt; safeAdd(3, 4) &lt;&lt; '\n';   // 7
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="note">
+<strong>noexcept 为什么重要（回扣第 7 章）</strong>
+还记得第 7 章移动构造函数写的 <code>noexcept</code> 吗？那不是装饰。<code>std::vector</code> 扩容时要把元素搬到新内存：如果元素的移动构造是 <code>noexcept</code> 的，它就放心用<strong>移动</strong>（快）；如果移动<em>可能</em>抛异常，vector 为了保证异常安全，只好退而用<strong>拷贝</strong>（慢）——因为移动到一半抛异常会导致数据处于损坏状态，无法回滚。所以：<strong>移动构造/移动赋值应尽量标 <code>noexcept</code></strong>，这直接影响容器性能。
+</div><h2>另一条路：把错误编码进返回值</h2>
+<p>异常适合&quot;真正异常&quot;的情况（罕见、严重）。但对<strong>预期内的失败</strong>（查找没命中、解析格式不对、文件可能不存在），每次都抛异常既慢又啰嗦。这时更好的方式是<strong>把&quot;可能失败&quot;编码进返回类型</strong>。</p>
+<h3>std::optional：可能有值，也可能没有</h3>
+<p><code>std::optional&lt;T&gt;</code> 表示&quot;一个也许存在的 T&quot;——对应&quot;查找可能没结果&quot;这类场景，比返回特殊值（<code>-1</code>、<code>nullptr</code>）清晰得多：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG9wdGlvbmFsPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuLy8g6L%2BU5ZueIG9wdGlvbmFs77ya5om%2B5Yiw6L%2BU5Zue5YC877yM5om%2B5LiN5Yiw6L%2BU5ZueXCLnqbpcIlxuc3RkOjpvcHRpb25hbDxpbnQ%2BIHBhcnNlUG9zaXRpdmUoY29uc3Qgc3RkOjpzdHJpbmcmIHMpIHtcbiAgICB0cnkge1xuICAgICAgICBpbnQgbiA9IHN0ZDo6c3RvaShzKTtcbiAgICAgICAgaWYgKG4gPiAwKSByZXR1cm4gbjsgICAgICAgIC8vIOacieWAvFxuICAgIH0gY2F0Y2ggKC4uLikge31cbiAgICByZXR1cm4gc3RkOjpudWxsb3B0OyAgICAgICAgICAgIC8vIOaXoOWAvFxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBmb3IgKGNvbnN0IHN0ZDo6c3RyaW5nJiBzIDoge3N0ZDo6c3RyaW5nKFwiNDJcIiksIHN0ZDo6c3RyaW5nKFwiLTNcIiksIHN0ZDo6c3RyaW5nKFwiYWJjXCIpfSkge1xuICAgICAgICBhdXRvIHJlc3VsdCA9IHBhcnNlUG9zaXRpdmUocyk7XG4gICAgICAgIGlmIChyZXN1bHQpIHsgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyDmo4Dmn6XmmK%2FlkKbmnInlgLxcbiAgICAgICAgICAgIHN0ZDo6Y291dCA8PCBzIDw8IFwiIC0%2BIFwiIDw8ICpyZXN1bHQgPDwgJ1xcbic7ICAgLy8gKnJlc3VsdCDlj5blgLxcbiAgICAgICAgfSBlbHNlIHtcbiAgICAgICAgICAgIHN0ZDo6Y291dCA8PCBzIDw8IFwiIC0%2BIOino%2BaekOWksei0pVxcblwiO1xuICAgICAgICB9XG4gICAgfVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;optional&gt;
+#include &lt;string&gt;
+
+// 返回 optional：找到返回值，找不到返回"空"
+std::optional&lt;int&gt; parsePositive(const std::string&amp; s) {
+    try {
+        int n = std::stoi(s);
+        if (n &gt; 0) return n;        // 有值
+    } catch (...) {}
+    return std::nullopt;            // 无值
+}
+
+int main() {
+    for (const std::string&amp; s : {std::string("42"), std::string("-3"), std::string("abc")}) {
+        auto result = parsePositive(s);
+        if (result) {                              // 检查是否有值
+            std::cout &lt;&lt; s &lt;&lt; " -&gt; " &lt;&lt; *result &lt;&lt; '\n';   // *result 取值
+        } else {
+            std::cout &lt;&lt; s &lt;&lt; " -&gt; 解析失败\n";
+        }
+    }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">42 -&gt; 42
+-3 -&gt; 解析失败
+abc -&gt; 解析失败</code></pre>
+</div><p><code>optional</code> 就像&quot;可能为空的盒子&quot;:用 <code>if (result)</code> 检查有没有值,用 <code>*result</code> 取值。它对应 Java 的 <code>Optional&lt;T&gt;</code>、以及 Python 里返回 <code>None</code> 的惯用法——但类型系统会提醒你&quot;这里可能没值&quot;。</p>
+<h3>std::expected：要么成功值，要么错误原因</h3>
+<p><code>optional</code> 的短板是:失败时只告诉你&quot;没有值&quot;,<strong>说不出为什么失败</strong>。C++23 的 <code>std::expected&lt;T, E&gt;</code> 补上了这点——它要么装着成功的 <code>T</code>,要么装着错误信息 <code>E</code>:</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPGV4cGVjdGVkPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuLy8g6L%2BU5ZueIGV4cGVjdGVk77ya5oiQ5Yqf57uZIGludO%2B8jOWksei0pee7memUmeivr%2BaPj%2Bi%2FsFxuc3RkOjpleHBlY3RlZDxpbnQsIHN0ZDo6c3RyaW5nPiBwYXJzZVBvc2l0aXZlKGNvbnN0IHN0ZDo6c3RyaW5nJiBzKSB7XG4gICAgdHJ5IHtcbiAgICAgICAgaW50IG4gPSBzdGQ6OnN0b2kocyk7XG4gICAgICAgIGlmIChuID4gMCkgcmV0dXJuIG47ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8g5oiQ5YqfXG4gICAgICAgIHJldHVybiBzdGQ6OnVuZXhwZWN0ZWQoXCLkuI3mmK%2FmraPmlbBcIik7ICAgICAgICAgICAgICAgIC8vIOWksei0pe%2B8jOW4puWOn%2BWboFxuICAgIH0gY2F0Y2ggKC4uLikge1xuICAgICAgICByZXR1cm4gc3RkOjp1bmV4cGVjdGVkKFwi5LiN5piv5ZCI5rOV5pWw5a2XXCIpO1xuICAgIH1cbn1cblxuaW50IG1haW4oKSB7XG4gICAgZm9yIChjb25zdCBzdGQ6OnN0cmluZyYgcyA6IHtzdGQ6OnN0cmluZyhcIjQyXCIpLCBzdGQ6OnN0cmluZyhcIi0zXCIpLCBzdGQ6OnN0cmluZyhcImFiY1wiKX0pIHtcbiAgICAgICAgYXV0byByZXN1bHQgPSBwYXJzZVBvc2l0aXZlKHMpO1xuICAgICAgICBpZiAocmVzdWx0KSB7XG4gICAgICAgICAgICBzdGQ6OmNvdXQgPDwgcyA8PCBcIiAtPiBcIiA8PCAqcmVzdWx0IDw8ICdcXG4nOyAgICAgICAgICAgLy8g5Y%2BW5oiQ5Yqf5YC8XG4gICAgICAgIH0gZWxzZSB7XG4gICAgICAgICAgICBzdGQ6OmNvdXQgPDwgcyA8PCBcIiAtPiDplJnor686IFwiIDw8IHJlc3VsdC5lcnJvcigpIDw8ICdcXG4nOyAgLy8g5Y%2BW6ZSZ6K%2BvXG4gICAgICAgIH1cbiAgICB9XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;expected&gt;
+#include &lt;string&gt;
+
+// 返回 expected：成功给 int，失败给错误描述
+std::expected&lt;int, std::string&gt; parsePositive(const std::string&amp; s) {
+    try {
+        int n = std::stoi(s);
+        if (n &gt; 0) return n;                              // 成功
+        return std::unexpected("不是正数");                // 失败，带原因
+    } catch (...) {
+        return std::unexpected("不是合法数字");
+    }
+}
+
+int main() {
+    for (const std::string&amp; s : {std::string("42"), std::string("-3"), std::string("abc")}) {
+        auto result = parsePositive(s);
+        if (result) {
+            std::cout &lt;&lt; s &lt;&lt; " -&gt; " &lt;&lt; *result &lt;&lt; '\n';           // 取成功值
+        } else {
+            std::cout &lt;&lt; s &lt;&lt; " -&gt; 错误: " &lt;&lt; result.error() &lt;&lt; '\n';  // 取错误
+        }
+    }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">42 -&gt; 42
+-3 -&gt; 错误: 不是正数
+abc -&gt; 错误: 不是合法数字</code></pre>
+</div><p><code>expected</code> 兼得两个世界:像返回值一样高效（无异常开销）、又能携带失败原因。用 <code>if (result)</code> 判断成败,<code>*result</code> 取成功值,<code>result.error()</code> 取错误。这是现代 C++ 处理&quot;预期内失败&quot;的首选,思路接近 Rust 的 <code>Result&lt;T, E&gt;</code>。</p>
+<div class="keypoint">
+<strong>三种"可能失败"的返回类型</strong>
+<ul>
+<li><code>std::optional&lt;T&gt;</code>：有值 / 无值。失败原因不重要时用。</li>
+<li><code>std::expected&lt;T, E&gt;</code>（C++23）：成功值 / 错误值。需要知道失败原因时用。</li>
+<li>裸的错误码（返回 <code>int</code>、<code>bool</code> + 输出参数）：老式 C 风格，现代代码尽量用上面两个替代——它们类型安全、无法被忽略。</li>
+</ul>
+</div><h2>异常 vs 返回值：到底用哪个？</h2>
+<p>这是 C++ 里有真实分歧的话题，给你一个务实的判断框架：</p>
+<div class="keypoint">
+<strong>选择的经验法则</strong>
+<ul>
+<li><strong>预期内的、常见的失败</strong>（查找未命中、输入格式错、文件可能不存在）→ 用 <code>optional</code> / <code>expected</code>。这些不是"异常"，是正常的程序分支。</li>
+<li><strong>罕见的、严重的、破坏了前提条件的错误</strong>（内存耗尽、不变量被违反、构造函数无法建立有效对象）→ 用<strong>异常</strong>。构造函数尤其只能靠异常报错（它没有返回值）。</li>
+<li><strong>性能极敏感或禁用异常的环境</strong>（游戏引擎、嵌入式、某些库）→ 全程用返回值。异常虽然"零成本"（不抛时无开销），但抛出时较慢，且有些团队因二进制体积、确定性等原因整体禁用它（<code>-fno-exceptions</code>）。</li>
+</ul>
+一句话：<strong>正常流程里可能发生的"失败"，用返回值；真正意外的"错误"，用异常。</strong>
+</div><div class="note">
+<strong>为什么 C++ 没有 Java 那样的"受检异常"</strong>
+Java 强制你在签名声明 <code>throws</code> 并处理。C++ 刻意没这么做——经验表明受检异常常导致"到处 catch 了又原样重抛"的噪音。C++ 的方向反而是：用 <code>expected</code> 把"可预期的失败"变成<strong>返回值</strong >（编译器逼你检查返回值），把异常留给"真正异常"的情况。这是两种不同的错误处理哲学。
+</div><h2>动手：同一个操作，两种错误处理风格</h2>
+<p>下面把&quot;安全除法&quot;分别用异常和 <code>expected</code> 实现，直观对比两种风格。运行前先预测输出：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPGV4cGVjdGVkPlxuI2luY2x1ZGUgPHN0ZGV4Y2VwdD5cbiNpbmNsdWRlIDxzdHJpbmc%2BXG5cbi8vIOmjjuagvOS4gO%2B8muW8guW4uFxuaW50IGRpdmlkZVRocm93KGludCBhLCBpbnQgYikge1xuICAgIGlmIChiID09IDApIHRocm93IHN0ZDo6cnVudGltZV9lcnJvcihcIumZpOmbtlwiKTtcbiAgICByZXR1cm4gYSAvIGI7XG59XG5cbi8vIOmjjuagvOS6jO%2B8mmV4cGVjdGVkXG5zdGQ6OmV4cGVjdGVkPGludCwgc3RkOjpzdHJpbmc%2BIGRpdmlkZUV4cGVjdGVkKGludCBhLCBpbnQgYikge1xuICAgIGlmIChiID09IDApIHJldHVybiBzdGQ6OnVuZXhwZWN0ZWQoXCLpmaTpm7ZcIik7XG4gICAgcmV0dXJuIGEgLyBiO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICAvLyDlvILluLjpo47moLzvvJrmraPluLjmtYHnqIvooqsgdHJ5L2NhdGNoIOWMheijuVxuICAgIHRyeSB7XG4gICAgICAgIGludCByMSA9IGRpdmlkZVRocm93KDEwLCAyKTsgICAgICAgIC8vIOWFiOaxguWAvO%2B8jOWGjeaJk%2BWNsFxuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLlvILluLjpo47moLw6IFwiIDw8IHIxIDw8ICdcXG4nO1xuICAgICAgICBpbnQgcjIgPSBkaXZpZGVUaHJvdygxMCwgMCk7ICAgICAgICAvLyDov5nph4zmipvlh7rvvIzkuIvkuIDooYzkuI3miafooYxcbiAgICAgICAgc3RkOjpjb3V0IDw8IFwi5byC5bi46aOO5qC8OiBcIiA8PCByMiA8PCAnXFxuJztcbiAgICB9IGNhdGNoIChjb25zdCBzdGQ6OmV4Y2VwdGlvbiYgZSkge1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLlvILluLjpo47moLzmjZXojrc6IFwiIDw8IGUud2hhdCgpIDw8ICdcXG4nO1xuICAgIH1cblxuICAgIC8vIGV4cGVjdGVkIOmjjuagvO%2B8mumUmeivr%2BWwseWcqOi%2FlOWbnuWAvOmHjO%2B8jOe6v%2BaAp%2BWkhOeQhlxuICAgIGZvciAoYXV0byBbYSwgYl0gOiB7c3RkOjpwYWlyezEwLCAyfSwgc3RkOjpwYWlyezEwLCAwfX0pIHtcbiAgICAgICAgYXV0byByID0gZGl2aWRlRXhwZWN0ZWQoYSwgYik7XG4gICAgICAgIGlmIChyKSBzdGQ6OmNvdXQgPDwgXCJleHBlY3RlZCDpo47moLw6IFwiIDw8ICpyIDw8ICdcXG4nO1xuICAgICAgICBlbHNlICAgc3RkOjpjb3V0IDw8IFwiZXhwZWN0ZWQg6aOO5qC86ZSZ6K%2BvOiBcIiA8PCByLmVycm9yKCkgPDwgJ1xcbic7XG4gICAgfVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;expected&gt;
+#include &lt;stdexcept&gt;
+#include &lt;string&gt;
+
+// 风格一：异常
+int divideThrow(int a, int b) {
+    if (b == 0) throw std::runtime_error("除零");
+    return a / b;
+}
+
+// 风格二：expected
+std::expected&lt;int, std::string&gt; divideExpected(int a, int b) {
+    if (b == 0) return std::unexpected("除零");
+    return a / b;
+}
+
+int main() {
+    // 异常风格：正常流程被 try/catch 包裹
+    try {
+        int r1 = divideThrow(10, 2);        // 先求值，再打印
+        std::cout &lt;&lt; "异常风格: " &lt;&lt; r1 &lt;&lt; '\n';
+        int r2 = divideThrow(10, 0);        // 这里抛出，下一行不执行
+        std::cout &lt;&lt; "异常风格: " &lt;&lt; r2 &lt;&lt; '\n';
+    } catch (const std::exception&amp; e) {
+        std::cout &lt;&lt; "异常风格捕获: " &lt;&lt; e.what() &lt;&lt; '\n';
+    }
+
+    // expected 风格：错误就在返回值里，线性处理
+    for (auto [a, b] : {std::pair{10, 2}, std::pair{10, 0}}) {
+        auto r = divideExpected(a, b);
+        if (r) std::cout &lt;&lt; "expected 风格: " &lt;&lt; *r &lt;&lt; '\n';
+        else   std::cout &lt;&lt; "expected 风格错误: " &lt;&lt; r.error() &lt;&lt; '\n';
+    }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">异常风格: 5
+异常风格捕获: 除零
+expected 风格: 5
+expected 风格错误: 除零</code></pre>
+</div><p>注意两种风格的<strong>代码形态差异</strong>：异常风格里，正常流程被 <code>try</code> 包住、错误跳到 <code>catch</code>（控制流有跳转）；<code>expected</code> 风格里，成功和失败都是普通返回值，处理是线性的、就在调用点旁边。对&quot;预期内可能失败&quot;的操作，后者往往更易读、也更高效。</p>
+<p>第四部分到此完整——容器、算法、lambda、错误处理，日常 C++ 编程的主要工具都覆盖了。接下来第五部分深入运行时与编译器的底层：从多态与 vtable 开始，看 C++ 如何实现面向对象，以及它和 Java 的默认虚函数有何不同。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 异常形态类似 Java / Python，但<strong>约定抛 <code>std::exception</code> 派生类</strong>、<strong>按 <code>const&amp;</code> 捕获</strong>、<strong>无受检异常</strong>。</li>
+<li><strong>RAII + 异常</strong>是安全组合：栈展开时局部对象自动析构，资源不泄漏（第 5 章）。<strong>析构函数绝不能抛异常</strong>。</li>
+<li><strong><code>noexcept</code></strong> 承诺不抛，是优化线索——移动构造标 <code>noexcept</code> 才能让容器扩容用移动而非拷贝（第 7 章）。</li>
+<li>对<strong>预期内的失败</strong>，把结果编码进返回类型：<strong><code>std::optional&lt;T&gt;</code></strong>（有/无值）、<strong><code>std::expected&lt;T, E&gt;</code></strong>（成功值/错误因，C++23）。</li>
+<li>选择准则：<strong>正常流程的&quot;失败&quot;用返回值，真正意外的&quot;错误&quot;用异常</strong>；构造失败只能用异常；性能敏感/禁异常环境全用返回值。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch16.html">← 第 16 章 lambda、函数对象与可调用体</a>
+  <a class="nav-next" href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

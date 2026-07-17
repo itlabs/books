@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 18 章 多态：虚函数、vtable 与静态多态</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li class="active"><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 18 章 多态：虚函数、vtable 与静态多态</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你在 Java 里写多态是本能：方法默认就是虚的，子类重写、父类引用调用，运行时分派到正确的实现。C++ 也能做同样的事，但有两个关键不同：多态<strong>不是默认的</strong>（要显式 <code>virtual</code>），而且 C++ 还有一种 Java 没有的<strong>静态多态</strong>（编译期完成，零开销）。</p>
+<p>读完你会理解虚函数背后的 <strong>vtable</strong> 机制（配汇编看个究竟）、为什么基类析构函数必须是虚的、以及运行时多态和编译期多态各自的取舍。</p>
+</div><h2>运行时多态：virtual 是显式的</h2>
+<p>先看 C++ 的动态多态，形态和 Java 类似——基类定义 <code>virtual</code> 方法，派生类 <code>override</code> 重写，通过基类指针/引用调用时分派到实际类型的实现：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG1lbW9yeT5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbnN0cnVjdCBTaGFwZSB7XG4gICAgdmlydHVhbCBkb3VibGUgYXJlYSgpIGNvbnN0ID0gMDsgICAgICAvLyDnuq%2FomZrlh73mlbDvvJo9IDAg6KGo56S6XCLmir3osaHvvIzmsqHmnInlrp7njrBcIlxuICAgIHZpcnR1YWwgflNoYXBlKCkgPSBkZWZhdWx0OyAgICAgICAgICAgLy8g6Jma5p6Q5p6E77yI5LiL5paH6Kej6YeK5Li65L2V5b%2BF6aG777yJXG59O1xuXG5zdHJ1Y3QgQ2lyY2xlIDogU2hhcGUge1xuICAgIGRvdWJsZSByO1xuICAgIENpcmNsZShkb3VibGUgcikgOiByKHIpIHt9XG4gICAgZG91YmxlIGFyZWEoKSBjb25zdCBvdmVycmlkZSB7IHJldHVybiAzLjE0MTU5ICogciAqIHI7IH0gICAvLyBvdmVycmlkZSDph43lhplcbn07XG5cbnN0cnVjdCBSZWN0YW5nbGUgOiBTaGFwZSB7XG4gICAgZG91YmxlIHcsIGg7XG4gICAgUmVjdGFuZ2xlKGRvdWJsZSB3LCBkb3VibGUgaCkgOiB3KHcpLCBoKGgpIHt9XG4gICAgZG91YmxlIGFyZWEoKSBjb25zdCBvdmVycmlkZSB7IHJldHVybiB3ICogaDsgfVxufTtcblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8c3RkOjp1bmlxdWVfcHRyPFNoYXBlPj4gc2hhcGVzO1xuICAgIHNoYXBlcy5wdXNoX2JhY2soc3RkOjptYWtlX3VuaXF1ZTxDaXJjbGU%2BKDIuMCkpO1xuICAgIHNoYXBlcy5wdXNoX2JhY2soc3RkOjptYWtlX3VuaXF1ZTxSZWN0YW5nbGU%2BKDMuMCwgNC4wKSk7XG5cbiAgICBmb3IgKGNvbnN0IGF1dG8mIHMgOiBzaGFwZXMpIHtcbiAgICAgICAgc3RkOjpjb3V0IDw8IFwi6Z2i56evOiBcIiA8PCBzLT5hcmVhKCkgPDwgJ1xcbic7ICAgLy8g5YiG5rS%2B5Yiw5a6e6ZmF57G75Z6LXG4gICAgfVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;memory&gt;
+#include &lt;vector&gt;
+
+struct Shape {
+    virtual double area() const = 0;      // 纯虚函数：= 0 表示"抽象，没有实现"
+    virtual ~Shape() = default;           // 虚析构（下文解释为何必须）
+};
+
+struct Circle : Shape {
+    double r;
+    Circle(double r) : r(r) {}
+    double area() const override { return 3.14159 * r * r; }   // override 重写
+};
+
+struct Rectangle : Shape {
+    double w, h;
+    Rectangle(double w, double h) : w(w), h(h) {}
+    double area() const override { return w * h; }
+};
+
+int main() {
+    std::vector&lt;std::unique_ptr&lt;Shape&gt;&gt; shapes;
+    shapes.push_back(std::make_unique&lt;Circle&gt;(2.0));
+    shapes.push_back(std::make_unique&lt;Rectangle&gt;(3.0, 4.0));
+
+    for (const auto&amp; s : shapes) {
+        std::cout &lt;&lt; "面积: " &lt;&lt; s-&gt;area() &lt;&lt; '\n';   // 分派到实际类型
+    }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">面积: 12.5664
+面积: 12</code></pre>
+</div><p>通过 <code>Shape*</code> 调用 <code>area()</code>，运行时自动分派到 <code>Circle::area</code> 或 <code>Rectangle::area</code>——这就是<strong>动态多态</strong>。几个 C++ 特有的点：</p>
+<div class="keypoint">
+<strong>C++ 多态与 Java 的关键差异</strong>
+<ul>
+<li><strong>多态不是默认的</strong>：只有标了 <code>virtual</code> 的函数才参与动态分派。Java 所有方法默认虚；C++ 默认<strong>非虚</strong>（普通函数调用，编译期定死，更快）。你要多态就得显式声明。</li>
+<li><strong>纯虚函数</strong> <code>= 0</code>：等价 Java 的抽象方法，使类成为抽象类，不能实例化。</li>
+<li><strong><code>override</code> 关键字</strong>：显式标注"我在重写基类虚函数"。强烈建议每次重写都写上——如果签名写错（没真正重写到），编译器会报错，挡住一类隐蔽 bug。</li>
+<li><strong>多态必须通过指针或引用</strong>（这里用 <code>unique_ptr</code>）——按值持有会"切片"，下文详述。</li>
+</ul>
+</div><h2>vtable：虚函数背后的机制</h2>
+<p>&quot;运行时如何知道该调 <code>Circle::area</code> 还是 <code>Rectangle::area</code>&quot;？答案是 <strong>vtable（虚函数表）</strong>。理解它，你就理解了 C++（以及大多数语言）实现多态的底层原理。</p>
+<div class="keypoint">
+<strong>vtable 机制一句话</strong>
+每个<strong>有虚函数的类</strong>，编译器为它生成一张 <strong>vtable</strong>——一个函数指针数组，装着该类各个虚函数的实际地址。每个<strong>对象</strong>则多存一个隐藏指针 <code>vptr</code>，指向自己类的 vtable。<br>
+调用 <code>s->area()</code> 时，运行时做的是：<strong>顺着对象的 vptr 找到 vtable，从中取出 area 的地址，跳过去执行</strong>。所以调哪个实现，取决于对象的 vptr 指向哪张表——而这在对象构造时就按其实际类型设好了。
+</div><div class="concept">
+<svg viewBox="0 0 540 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- Circle 对象 -->
+  <rect x="20" y="40" width="120" height="60" rx="6" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="80" y="30" text-anchor="middle" font-size="12" fill="#2b6cb0">Circle 对象</text>
+  <text x="80" y="62" text-anchor="middle" font-size="11" font-family="monospace">vptr ●</text>
+  <text x="80" y="84" text-anchor="middle" font-size="11" font-family="monospace">r = 2.0</text>
+  <!-- Rectangle 对象 -->
+  <rect x="20" y="140" width="120" height="60" rx="6" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="80" y="130" text-anchor="middle" font-size="12" fill="#2b6cb0">Rectangle 对象</text>
+  <text x="80" y="162" text-anchor="middle" font-size="11" font-family="monospace">vptr ●</text>
+  <text x="80" y="184" text-anchor="middle" font-size="11" font-family="monospace">w,h</text>
+  <!-- Circle vtable -->
+  <rect x="320" y="35" width="200" height="55" rx="6" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="420" y="25" text-anchor="middle" font-size="12" fill="#e0692f">Circle 的 vtable</text>
+  <text x="420" y="58" text-anchor="middle" font-size="11" font-family="monospace">area → Circle::area</text>
+  <text x="420" y="78" text-anchor="middle" font-size="11" font-family="monospace">~   → Circle::~</text>
+  <!-- Rectangle vtable -->
+  <rect x="320" y="145" width="200" height="55" rx="6" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="420" y="135" text-anchor="middle" font-size="12" fill="#e0692f">Rectangle 的 vtable</text>
+  <text x="420" y="168" text-anchor="middle" font-size="11" font-family="monospace">area → Rect::area</text>
+  <text x="420" y="188" text-anchor="middle" font-size="11" font-family="monospace">~   → Rect::~</text>
+  <path d="M105 58 L318 60" stroke="#e0692f" stroke-width="1.6" marker-end="url(#v1)"/>
+  <path d="M105 158 L318 168" stroke="#e0692f" stroke-width="1.6" marker-end="url(#v1)"/>
+  <text x="230" y="228" text-anchor="middle" font-size="11" fill="#6b7280">调用 area()：顺 vptr 找到 vtable → 取出 area 地址 → 跳转</text>
+  <defs><marker id="v1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0692f"/></marker></defs>
+</svg>
+<div class="caption">图 18-1　vtable 机制：每个对象带一个 vptr 指向其类的 vtable；虚调用经由 vtable 间接跳转到实际实现</div>
+</div><p>这套机制的<strong>代价</strong>是：虚调用比普通调用多一次间接寻址（查表），且通常无法被内联（编译期不知道实际类型）。这就是为什么 C++ 不把虚设为默认——<strong>你只在需要多态时才付这个代价</strong>。</p>
+<p>用汇编看虚调用和普通调用的区别。下面 <code>viaVirtual</code> 通过基类指针调虚函数，<code>direct</code> 直接调具体类型：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoic3RydWN0IEJhc2UgeyB2aXJ0dWFsIGludCBmKCkgY29uc3Q7IH07XG5zdHJ1Y3QgRGVyaXZlZCA6IEJhc2UgeyBpbnQgZigpIGNvbnN0IG92ZXJyaWRlOyB9O1xuXG5pbnQgdmlhVmlydHVhbChjb25zdCBCYXNlJiBiKSB7IHJldHVybiBiLmYoKTsgfSAgIC8vIOiZmuiwg%2BeUqO%2B8muafpSB2dGFibGVcbmludCBkaXJlY3QoY29uc3QgRGVyaXZlZCYgZCkgICB7IHJldHVybiBkLmYoKTsgfSAgIC8vIOS5n%2BWPr%2BiDveiiq%2BWOu%2BiZmuWMliIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">struct Base { virtual int f() const; };
+struct Derived : Base { int f() const override; };
+
+int viaVirtual(const Base&amp; b) { return b.f(); }   // 虚调用：查 vtable
+int direct(const Derived&amp; d)   { return d.f(); }   // 也可能被去虚化</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：<code>viaVirtual</code> 里能看到通过 vtable 的<strong>间接调用</strong>（先加载 vptr、再从表里取地址、<code>call</code> 那个地址）。而 <code>direct</code> 因为编译器确切知道类型是 <code>Derived</code>，常常能**去虚化（devirtualization）**成直接调用甚至内联——这是编译器的一项重要优化（第 19 章）。</p>
+<h2>为什么基类析构函数必须是 virtual</h2>
+<p>这是 C++ 多态里最重要的一条安全规则，也是最容易被忽略的坑。看前面 <code>Shape</code> 我特意写了 <code>virtual ~Shape()</code>。如果<strong>不写</strong> virtual 会怎样？</p>
+<div class="warn">
+<strong>通过基类指针 delete 派生对象，基类析构必须是 virtual</strong>
+当你 <code>delete</code> 一个 <code>Shape*</code>（实际指向 <code>Circle</code>）时：<br>
+· 若 <code>~Shape</code> 是 <strong>virtual</strong>：经 vtable 分派，先调 <code>~Circle</code> 再调 <code>~Shape</code>，正确清理。<br>
+· 若 <code>~Shape</code> <strong>非 virtual</strong>：只调用 <code>~Shape</code>，<code>Circle</code> 特有的成员<strong>不会被析构</strong>——资源泄漏，未定义行为。<br>
+铁律：<strong>一个类只要打算被继承并通过基类指针多态使用，它的析构函数就必须是 virtual。</strong>（用 <code>unique_ptr&lt;Shape&gt;</code> 时同理——它内部也是通过 <code>Shape*</code> 删除。）
+</div><h2>对象切片：值语义与多态的冲突</h2>
+<p>第 3 章讲过 C++ 默认值语义。多态却要求指针/引用——这两者相撞会产生一个 Java 程序员完全陌生的 bug：<strong>对象切片（slicing）</strong>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5zdHJ1Y3QgU2hhcGUge1xuICAgIHZpcnR1YWwgZG91YmxlIGFyZWEoKSBjb25zdCB7IHJldHVybiAwOyB9XG4gICAgdmlydHVhbCB%2BU2hhcGUoKSA9IGRlZmF1bHQ7XG59O1xuc3RydWN0IENpcmNsZSA6IFNoYXBlIHtcbiAgICBkb3VibGUgcjtcbiAgICBDaXJjbGUoZG91YmxlIHIpIDogcihyKSB7fVxuICAgIGRvdWJsZSBhcmVhKCkgY29uc3Qgb3ZlcnJpZGUgeyByZXR1cm4gMy4xNDE1OSAqIHIgKiByOyB9XG59O1xuXG52b2lkIGJ5VmFsdWUoU2hhcGUgcykgeyAgICAgICAgICAgICAgICAgICAgIC8vIOKdjCDmjInlgLzmjqXmlLbln7rnsbvvvJrlj5HnlJ%2FliIfniYdcbiAgICBzdGQ6OmNvdXQgPDwgXCLmjInlgLw6IFwiIDw8IHMuYXJlYSgpIDw8ICdcXG4nO1xufVxudm9pZCBieVJlZihjb25zdCBTaGFwZSYgcykgeyAgICAgICAgICAgICAgICAvLyDinIUg5oyJ5byV55So77ya5L%2Bd55WZ5aSa5oCBXG4gICAgc3RkOjpjb3V0IDw8IFwi5oyJ5byV55SoOiBcIiA8PCBzLmFyZWEoKSA8PCAnXFxuJztcbn1cblxuaW50IG1haW4oKSB7XG4gICAgQ2lyY2xlIGMoMi4wKTtcbiAgICBieVZhbHVlKGMpOyAgICAvLyBDaXJjbGUg6KKrXCLliIdcIuaIkCBTaGFwZe%2B8jGFyZWEoKSDosIPnmoTmmK8gU2hhcGUg54mI5pysIOKGkiAwXG4gICAgYnlSZWYoYyk7ICAgICAgLy8g5aSa5oCB5L%2Bd55WZ77yM6LCDIENpcmNsZTo6YXJlYSDihpIgMTIuNTY2NFxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+struct Shape {
+    virtual double area() const { return 0; }
+    virtual ~Shape() = default;
+};
+struct Circle : Shape {
+    double r;
+    Circle(double r) : r(r) {}
+    double area() const override { return 3.14159 * r * r; }
+};
+
+void byValue(Shape s) {                     // ❌ 按值接收基类：发生切片
+    std::cout &lt;&lt; "按值: " &lt;&lt; s.area() &lt;&lt; '\n';
+}
+void byRef(const Shape&amp; s) {                // ✅ 按引用：保留多态
+    std::cout &lt;&lt; "按引用: " &lt;&lt; s.area() &lt;&lt; '\n';
+}
+
+int main() {
+    Circle c(2.0);
+    byValue(c);    // Circle 被"切"成 Shape，area() 调的是 Shape 版本 → 0
+    byRef(c);      // 多态保留，调 Circle::area → 12.5664
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">按值: 0
+按引用: 12.5664</code></pre>
+</div><p><code>byValue(c)</code> 把一个 <code>Circle</code> <strong>拷贝成了 <code>Shape</code></strong>——派生部分（<code>r</code> 和 <code>Circle</code> 的行为）被&quot;切掉&quot;了，只留下基类的空壳，<code>area()</code> 返回基类版本的 <code>0</code>。</p>
+<div class="keypoint">
+<strong>切片：多态类型永远别按值传递</strong>
+按值传递基类会截断派生部分。所以<strong>多态对象一律通过指针或引用使用</strong>——<code>const Base&amp;</code> 传参、<code>unique_ptr&lt;Base&gt;</code> 存储。这也是为什么前面的 <code>shapes</code> 用的是 <code>vector&lt;unique_ptr&lt;Shape&gt;&gt;</code> 而不是 <code>vector&lt;Shape&gt;</code>。Java 没有这个问题，因为它的对象变量本就全是引用；C++ 的值语义让切片成为一个真实的陷阱。
+</div><h2>静态多态：编译期的多态，零开销</h2>
+<p>C++ 还有一种 Java 没有的多态——<strong>静态多态</strong>，用模板（第 11 章）在<strong>编译期</strong>实现&quot;同一段代码适配不同类型&quot;，完全不需要 vtable、不付运行时代价。</p>
+<p>回想第 11 章的鸭子类型：模板只要求类型支持用到的操作。所以&quot;对任何有 <code>area()</code> 的类型都能工作&quot;根本不需要继承：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG4vLyDkuI3pnIDopoHnu6fmib%2FjgIHkuI3pnIDopoEgdmlydHVhbO%2B8mue8luivkeacn%2BWkmuaAgVxuc3RydWN0IENpcmNsZSAgICB7IGRvdWJsZSBhcmVhKCkgY29uc3QgeyByZXR1cm4gMy4xNDE1OSAqIHIgKiByOyB9IGRvdWJsZSByOyB9O1xuc3RydWN0IFJlY3RhbmdsZSB7IGRvdWJsZSBhcmVhKCkgY29uc3QgeyByZXR1cm4gdyAqIGg7IH0gZG91YmxlIHcsIGg7IH07XG5cbi8vIOaooeadv%2B%2B8muWvueS7u%2BS9lVwi5pyJIGFyZWEoKVwi55qE57G75Z6L6YO96YCC55So77yM57yW6K%2BR5pyf5Li65q%2BP56eN57G75Z6L55Sf5oiQ5LiT5bGe5Luj56CBXG50ZW1wbGF0ZSA8dHlwZW5hbWUgU2hhcGU%2BXG52b2lkIHByaW50QXJlYShjb25zdCBTaGFwZSYgcykge1xuICAgIHN0ZDo6Y291dCA8PCBcIumdouenrzogXCIgPDwgcy5hcmVhKCkgPDwgJ1xcbic7ICAgLy8g55u05o6l6LCD55So77yM5pegIHZ0YWJsZe%2B8jOWPr%2BWGheiBlFxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBDaXJjbGUgY3suciA9IDIuMH07XG4gICAgUmVjdGFuZ2xlIHJ7LncgPSAzLjAsIC5oID0gNC4wfTtcbiAgICBwcmludEFyZWEoYyk7ICAgIC8vIOe8luivkeacn%2BehruWumuiwgyBDaXJjbGU6OmFyZWFcbiAgICBwcmludEFyZWEocik7ICAgIC8vIOe8luivkeacn%2BehruWumuiwgyBSZWN0YW5nbGU6OmFyZWFcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+// 不需要继承、不需要 virtual：编译期多态
+struct Circle    { double area() const { return 3.14159 * r * r; } double r; };
+struct Rectangle { double area() const { return w * h; } double w, h; };
+
+// 模板：对任何"有 area()"的类型都适用，编译期为每种类型生成专属代码
+template &lt;typename Shape&gt;
+void printArea(const Shape&amp; s) {
+    std::cout &lt;&lt; "面积: " &lt;&lt; s.area() &lt;&lt; '\n';   // 直接调用，无 vtable，可内联
+}
+
+int main() {
+    Circle c{.r = 2.0};
+    Rectangle r{.w = 3.0, .h = 4.0};
+    printArea(c);    // 编译期确定调 Circle::area
+    printArea(r);    // 编译期确定调 Rectangle::area
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">面积: 12.5664
+面积: 12</code></pre>
+</div><p><code>Circle</code> 和 <code>Rectangle</code> <strong>没有共同基类、没有 virtual</strong>，但 <code>printArea</code> 照样对两者都工作——因为模板在编译期为每种类型生成专属版本，<code>s.area()</code> 是直接调用，能被内联，<strong>零运行时开销</strong>。</p>
+<div class="keypoint">
+<strong>动态多态 vs 静态多态，怎么选？</strong>
+<ul>
+<li><strong>动态多态（virtual）</strong>：类型集合在<strong>运行时</strong>才确定时用——比如一个 <code>vector&lt;unique_ptr&lt;Shape&gt;&gt;</code> 要装运行时才决定的各种形状、或插件式架构。代价是虚调用开销。</li>
+<li><strong>静态多态（模板）</strong>：类型在<strong>编译期</strong>就已知时用——追求极致性能、能内联。代价是代码膨胀、错误信息复杂（第 11、12 章）。</li>
+</ul>
+一句话：<strong>运行时才知道类型 → 虚函数；编译期就知道类型 → 模板。</strong>
+</div><div class="note">
+<strong>CRTP：静态多态的进阶招式</strong>
+有一种叫 <strong>CRTP</strong>（奇异递归模板模式，Curiously Recurring Template Pattern）的技巧——让派生类把自己作为模板参数传给基类：<code>class Derived : Base&lt;Derived&gt;</code>。它能在编译期实现"基类调用派生类方法"的效果，达到虚函数的多态形态却零开销。这是高性能 C++ 库（如一些数学库、Eigen）的常见手法，属于进阶话题，知道有这么个东西即可。
+</div><h2>动手：对比切片与正确的多态</h2>
+<p>下面这段程序把动态多态、切片陷阱、正确用法放在一起。运行前先预测每行输出——尤其 <code>slice</code> 那次：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG1lbW9yeT5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbnN0cnVjdCBBbmltYWwge1xuICAgIHZpcnR1YWwgc3RkOjpzdHJpbmcgc291bmQoKSBjb25zdCB7IHJldHVybiBcIi4uLlwiOyB9XG4gICAgdmlydHVhbCB%2BQW5pbWFsKCkgPSBkZWZhdWx0O1xufTtcbnN0cnVjdCBEb2cgOiBBbmltYWwgeyBzdGQ6OnN0cmluZyBzb3VuZCgpIGNvbnN0IG92ZXJyaWRlIHsgcmV0dXJuIFwi5rGqXCI7IH0gfTtcbnN0cnVjdCBDYXQgOiBBbmltYWwgeyBzdGQ6OnN0cmluZyBzb3VuZCgpIGNvbnN0IG92ZXJyaWRlIHsgcmV0dXJuIFwi5Za1XCI7IH0gfTtcblxudm9pZCBieVNsaWNlKEFuaW1hbCBhKSB7IHN0ZDo6Y291dCA8PCBcIuWIh%2BeJhzogXCIgPDwgYS5zb3VuZCgpIDw8ICdcXG4nOyB9ICAgLy8g5YiH54mHXG52b2lkIGJ5UmVmKGNvbnN0IEFuaW1hbCYgYSkgeyBzdGQ6OmNvdXQgPDwgXCLlvJXnlKg6IFwiIDw8IGEuc291bmQoKSA8PCAnXFxuJzsgfVxuXG5pbnQgbWFpbigpIHtcbiAgICBEb2cgZDtcbiAgICBieVNsaWNlKGQpOyAgICAgIC8vIOWIh%2BeJhyDihpIgQW5pbWFsOjpzb3VuZCDihpIgXCIuLi5cIlxuICAgIGJ5UmVmKGQpOyAgICAgICAgLy8g5aSa5oCBIOKGkiBEb2c6OnNvdW5kIOKGkiBcIuaxqlwiXG5cbiAgICAvLyDmraPnoa7nmoTlpJrmgIHlrrnlmahcbiAgICBzdGQ6OnZlY3RvcjxzdGQ6OnVuaXF1ZV9wdHI8QW5pbWFsPj4gem9vO1xuICAgIHpvby5wdXNoX2JhY2soc3RkOjptYWtlX3VuaXF1ZTxEb2c%2BKCkpO1xuICAgIHpvby5wdXNoX2JhY2soc3RkOjptYWtlX3VuaXF1ZTxDYXQ%2BKCkpO1xuICAgIGZvciAoY29uc3QgYXV0byYgYSA6IHpvbykgc3RkOjpjb3V0IDw8IFwi5Yqo54mp5ZutOiBcIiA8PCBhLT5zb3VuZCgpIDw8ICdcXG4nO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;memory&gt;
+#include &lt;vector&gt;
+
+struct Animal {
+    virtual std::string sound() const { return "..."; }
+    virtual ~Animal() = default;
+};
+struct Dog : Animal { std::string sound() const override { return "汪"; } };
+struct Cat : Animal { std::string sound() const override { return "喵"; } };
+
+void bySlice(Animal a) { std::cout &lt;&lt; "切片: " &lt;&lt; a.sound() &lt;&lt; '\n'; }   // 切片
+void byRef(const Animal&amp; a) { std::cout &lt;&lt; "引用: " &lt;&lt; a.sound() &lt;&lt; '\n'; }
+
+int main() {
+    Dog d;
+    bySlice(d);      // 切片 → Animal::sound → "..."
+    byRef(d);        // 多态 → Dog::sound → "汪"
+
+    // 正确的多态容器
+    std::vector&lt;std::unique_ptr&lt;Animal&gt;&gt; zoo;
+    zoo.push_back(std::make_unique&lt;Dog&gt;());
+    zoo.push_back(std::make_unique&lt;Cat&gt;());
+    for (const auto&amp; a : zoo) std::cout &lt;&lt; "动物园: " &lt;&lt; a-&gt;sound() &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">切片: ...
+引用: 汪
+动物园: 汪
+动物园: 喵</code></pre>
+</div><p>第一行 <code>切片: ...</code> 就是把 <code>Dog</code> 按值传给 <code>Animal</code> 参数时派生部分被切掉的后果；改用引用（第二行）多态才保留。而 <code>zoo</code> 用 <code>unique_ptr&lt;Animal&gt;</code> 存储，遍历时正确分派到各自的 <code>sound()</code>——<strong>这是 C++ 里做运行时多态的标准姿势</strong>。</p>
+<p>第五部分继续深入底层。下一章我们把前面反复提到的&quot;编译器优化&quot;正式展开——内联、去虚化、RVO、循环优化，看编译器到底为你的代码做了多少事。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 动态多态需<strong>显式 <code>virtual</code></strong>（默认非虚，更快）；纯虚 <code>= 0</code> 是抽象方法；重写加 <code>override</code> 让编译器帮你查错。</li>
+<li>虚函数靠 <strong>vtable</strong> 实现：每个多态对象带 <code>vptr</code> 指向其类的虚函数表，虚调用经表间接跳转——代价是多一次寻址、通常不能内联。</li>
+<li><strong>基类析构函数必须是 <code>virtual</code></strong>（当通过基类指针删除派生对象时），否则派生部分不被析构，泄漏。</li>
+<li><strong>对象切片</strong>：多态类型按值传递会截断派生部分——多态对象一律用<strong>指针或引用</strong>（<code>const Base&amp;</code>、<code>unique_ptr&lt;Base&gt;</code>）。</li>
+<li><strong>静态多态</strong>（模板）在编译期实现多态，无 vtable、可内联、零开销——类型编译期已知时用；运行时才知类型则用虚函数。</li>
+<li>进阶手法 <strong>CRTP</strong> 能以静态多态达到虚函数的形态而零开销。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch17.html">← 第 17 章 错误处理：异常、错误码与 expected</a>
+  <a class="nav-next" href="ch19.html">第 19 章 编译器如何优化你的代码 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
