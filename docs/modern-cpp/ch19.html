@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 19 章 编译器如何优化你的代码</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li class="active"><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 19 章 编译器如何优化你的代码</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>全书用了十几次"🔬 看汇编"按钮，你已经零星见过编译器的手笔：<code>square(9)</code> 变成 <code>81</code>、拷贝被消除、模板被内联。这一章把这些正式串起来——<strong>编译器到底为你的代码做了哪些优化</strong>。</p>
+<p>这对 Java / Python 程序员是个新维度：那里的优化主要靠运行时的 JIT，你很难观察。C++ 的优化发生在编译期、结果就摆在汇编里。理解它，你才能写出"既清晰又快"的代码，也才能明白"零成本抽象"为什么成立。</p>
+</div><h2>一条总原则：as-if 规则</h2>
+<p>在看具体优化前，先建立统领全局的一条规则。编译器凭什么能把你的代码改得面目全非（消除拷贝、删掉循环、跳过函数调用）还不算出错？靠的是 <strong>as-if 规则</strong>：</p>
+<div class="keypoint">
+<strong>as-if 规则</strong>
+编译器可以对你的代码做<strong>任意变换</strong>，只要变换后程序的<strong>可观察行为</strong>不变（输出、对 <code>volatile</code> 变量的访问、文件/IO 等）。<br>
+换句话说：编译器不保证"按你写的一步步执行"，只保证"最终看到的结果和你写的一样"。它可以删掉、合并、重排任何不影响可观察结果的操作。这就是它敢做激进优化的法律依据。
+</div><p>所以你写的 C++ 是&quot;意图的描述&quot;，不是&quot;执行的脚本&quot;。编译器读懂意图，然后生成达到同样效果的最快代码。下面逐个看它的招式。</p>
+<h2>内联：消除函数调用的开销</h2>
+<p><strong>内联（inlining）</strong> 是最基础也最重要的优化：把一次函数调用<strong>直接替换成函数体</strong>，省掉调用的开销（跳转、传参、栈帧），更重要的是——内联后，函数体和调用点的代码能<strong>一起被进一步优化</strong>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiaW50IGFkZChpbnQgYSwgaW50IGIpIHsgcmV0dXJuIGEgKyBiOyB9XG5cbmludCBjb21wdXRlKCkge1xuICAgIHJldHVybiBhZGQoYWRkKDEsIDIpLCBhZGQoMywgNCkpOyAgIC8vIOS4ieasoeiwg%2BeUqFxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">int add(int a, int b) { return a + b; }
+
+int compute() {
+    return add(add(1, 2), add(3, 4));   // 三次调用
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>（<code>-O2</code>）：<code>compute</code> 里<strong>没有任何 <code>call</code> 指令</strong>，三次 <code>add</code> 全被内联，而且编译器进一步算出 <code>1+2+3+4 = 10</code>，直接返回 <code>10</code>。三次函数调用 + 三次加法，最终变成一个常量。</p>
+<div class="note">
+<strong>inline 关键字≠"请内联"</strong>
+现代编译器<strong>自主决定</strong>是否内联，<code>inline</code> 关键字对此几乎没有影响（它今天主要的作用是允许函数定义出现在多个翻译单元、绕过 ODR，见第 2 章）。是否内联由编译器权衡：小函数、调用频繁的倾向内联；大函数内联会导致代码膨胀，反而不内联。你不需要手动指挥它。
+</div><h2>常量折叠与传播</h2>
+<p>编译器会在编译期算掉所有能算的常量表达式（<strong>常量折叠</strong>），并把已知的常量值代入后续计算（<strong>常量传播</strong>）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiaW50IGNvbXB1dGUoKSB7XG4gICAgaW50IGEgPSAxMDtcbiAgICBpbnQgYiA9IDIwO1xuICAgIGludCBjID0gYSAqIGIgKyA1OyAgICAgIC8vIOWFqOaYr%2Be8luivkeacn%2BW3suefpVxuICAgIHJldHVybiBjICogMjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">int compute() {
+    int a = 10;
+    int b = 20;
+    int c = a * b + 5;      // 全是编译期已知
+    return c * 2;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>看汇编：整个函数体被折叠成 <code>return 410</code>——<code>10*20+5=205</code>，<code>205*2=410</code>，运行时一次运算都不做。这和第 13 章的 <code>constexpr</code> 是一回事，区别在于：<code>constexpr</code> 是你<strong>强制要求</strong>编译期计算，而常量折叠是编译器<strong>主动</strong>做的优化，连普通变量都会被它看穿。</p>
+<h2>拷贝消除与 RVO：值语义为何不慢</h2>
+<p>回扣第 3、7 章的核心承诺——值语义看似到处拷贝，实际上编译器把不必要的拷贝<strong>消除</strong>了。最重要的是<strong>返回值优化（RVO）</strong>：函数返回一个局部对象时，编译器直接在调用者的内存里构造它，不产生任何拷贝或移动。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuc3RydWN0IFRyYWNrZXIge1xuICAgIFRyYWNrZXIoKSB7IHN0ZDo6Y291dCA8PCBcIuaehOmAoFxcblwiOyB9XG4gICAgVHJhY2tlcihjb25zdCBUcmFja2VyJikgeyBzdGQ6OmNvdXQgPDwgXCLmi7fotJ1cXG5cIjsgfVxuICAgIFRyYWNrZXIoVHJhY2tlciYmKSBub2V4Y2VwdCB7IHN0ZDo6Y291dCA8PCBcIuenu%2BWKqFxcblwiOyB9XG59O1xuXG5UcmFja2VyIG1ha2UoKSB7XG4gICAgVHJhY2tlciB0OyAgICAgICAgIC8vIOaehOmAoFxuICAgIHJldHVybiB0OyAgICAgICAgICAvLyDnnIvkvLzopoHmi7fotJ0v56e75Yqo5Ye65Y67XG59XG5cbmludCBtYWluKCkge1xuICAgIFRyYWNrZXIgcmVzdWx0ID0gbWFrZSgpOyAgIC8vIOeci%2BS8vOWPiOimgeaLt%2Bi0nS%2Fnp7vliqjkuIDmrKFcbiAgICBzdGQ6OmNvdXQgPDwgXCLlrozmiJBcXG5cIjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+struct Tracker {
+    Tracker() { std::cout &lt;&lt; "构造\n"; }
+    Tracker(const Tracker&amp;) { std::cout &lt;&lt; "拷贝\n"; }
+    Tracker(Tracker&amp;&amp;) noexcept { std::cout &lt;&lt; "移动\n"; }
+};
+
+Tracker make() {
+    Tracker t;         // 构造
+    return t;          // 看似要拷贝/移动出去
+}
+
+int main() {
+    Tracker result = make();   // 看似又要拷贝/移动一次
+    std::cout &lt;&lt; "完成\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">构造
+完成</code></pre>
+</div><p>只有一次&quot;构造&quot;！按值语义的字面意思本该有若干次拷贝/移动，但编译器用 RVO 把 <code>t</code> 直接构造在了 <code>result</code> 的位置——<strong>零拷贝、零移动</strong>。</p>
+<div class="keypoint">
+<strong>RVO 是"零成本抽象"的关键支柱</strong>
+正因为有 RVO 和拷贝消除，你才能<strong>放心地按值返回大对象</strong>（第 4 章说"返回值而非返回引用"就是基于此）——写起来是清晰的值语义，跑起来没有拷贝开销。C++17 起，对"返回纯右值"（如 <code>return Tracker();</code>）的拷贝消除甚至是<strong>强制</strong>的，编译器必须省掉。这就是为什么现代 C++ 的惯用法是大大方方按值传递和返回，把优化交给编译器。
+</div><h2>去虚化：连虚函数都能优化掉</h2>
+<p>第 18 章说虚调用要查 vtable、通常不能内联。但当编译器能<strong>确定对象的实际类型</strong>时，它会做<strong>去虚化（devirtualization）</strong>——把虚调用变回直接调用，甚至内联：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoic3RydWN0IEJhc2UgeyB2aXJ0dWFsIGludCBmKCkgY29uc3QgeyByZXR1cm4gMTsgfSB9O1xuc3RydWN0IERlcml2ZWQgOiBCYXNlIHsgaW50IGYoKSBjb25zdCBvdmVycmlkZSB7IHJldHVybiA0MjsgfSB9O1xuXG5pbnQga25vd24oKSB7XG4gICAgRGVyaXZlZCBkO1xuICAgIHJldHVybiBkLmYoKTsgICAgICAgLy8g57G75Z6L56Gu5a6a5pivIERlcml2ZWQg4oaSIOWOu%2BiZmuWMlu%2B8jOebtOaOpeWGheiBlOi%2FlOWbniA0MlxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">struct Base { virtual int f() const { return 1; } };
+struct Derived : Base { int f() const override { return 42; } };
+
+int known() {
+    Derived d;
+    return d.f();       // 类型确定是 Derived → 去虚化，直接内联返回 42
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>看汇编：<code>known</code> 直接返回 <code>42</code>，没有 vtable 查找——编译器看出 <code>d</code> 确定是 <code>Derived</code>，把虚调用去虚化并内联了。这说明第 18 章&quot;虚函数有开销&quot;的说法有前提：<strong>只有当编译器无法确定实际类型时（如通过基类指针），才真正付查表代价</strong>；类型已知时，开销可能被优化掉。</p>
+<h2>死代码消除与循环优化</h2>
+<p>编译器还会删掉<strong>永远不会执行或结果没被用到的代码</strong>（死代码消除），并对循环做各种变换（展开、向量化、外提不变量）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiaW50IGRlYWRDb2RlKGludCB4KSB7XG4gICAgaW50IHVudXNlZCA9IHggKiA5OTk7ICAgLy8g57uT5p6c5rKh6KKr55So5YiwIOKGkiDliKDpmaRcbiAgICBpZiAoZmFsc2UpIHsgICAgICAgICAgICAvLyDmsLjov5zkuI3miJDnq4sg4oaSIOaVtOWdl%2BWIoOmZpFxuICAgICAgICByZXR1cm4gLTE7XG4gICAgfVxuICAgIHJldHVybiB4ICsgMTtcbn1cblxubG9uZyBsb29wU3VtKCkge1xuICAgIGxvbmcgc3VtID0gMDtcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IDEwMDsgKytpKSBzdW0gKz0gaTsgICAvLyDnvJbor5HmnJ%2Flj6%2Fnrpcg4oaSIOWPr%2BiDveebtOaOpeeul%2BWHuiA0OTUwXG4gICAgcmV0dXJuIHN1bTtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">int deadCode(int x) {
+    int unused = x * 999;   // 结果没被用到 → 删除
+    if (false) {            // 永远不成立 → 整块删除
+        return -1;
+    }
+    return x + 1;
+}
+
+long loopSum() {
+    long sum = 0;
+    for (int i = 0; i &lt; 100; ++i) sum += i;   // 编译期可算 → 可能直接算出 4950
+    return sum;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>看汇编：<code>deadCode</code> 里 <code>unused</code> 那行和 <code>if (false)</code> 块消失得无影无踪，只剩 <code>return x + 1</code>；<code>loopSum</code> 的循环常常被编译器<strong>直接算出结果 4950</strong>（循环边界和运算都是编译期已知的）。你写的循环，编译器可能根本不跑。</p>
+<div class="warn">
+<strong>不要为了"帮编译器"而牺牲可读性</strong>
+知道了这些优化，一个常见的误区是开始手写"微优化"——手动内联、用位运算代替乘除、缓存中间变量……<strong>绝大多数情况下这是徒劳甚至有害的</strong>：编译器做这些比你在行，而扭曲的代码反而可能<em>妨碍</em>它优化。正确姿势是：<strong>写清晰、直接、符合惯用法的代码，信任编译器</strong>。只有当性能剖析（profiling）确认某处是瓶颈时，才针对性优化——而且先看汇编确认编译器没做到你要的，再动手。
+</div><h2>优化级别：-O0 到 -O3</h2>
+<p>以上优化大多只在开启优化时才发生。编译器的优化级别用 <code>-O</code> 系列开关控制：</p>
+<table>
+<thead>
+<tr>
+<th>级别</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>-O0</code></td>
+<td>不优化（默认）。编译快、汇编忠实对应源码，适合<strong>调试</strong>。</td>
+</tr>
+<tr>
+<td><code>-O1</code></td>
+<td>基础优化。</td>
+</tr>
+<tr>
+<td><code>-O2</code></td>
+<td><strong>推荐的发布级别</strong>。开启绝大多数优化（内联、常量折叠、去虚化等），且不显著增加编译时间/体积。</td>
+</tr>
+<tr>
+<td><code>-O3</code></td>
+<td>更激进（更多循环展开、向量化）。有时更快，偶尔因代码膨胀反而变慢——需实测。</td>
+</tr>
+<tr>
+<td><code>-Os</code></td>
+<td>优化<strong>体积</strong>（嵌入式常用）。</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>关键认知：调试版和发布版是两个世界</strong>
+<code>-O0</code> 下你看到的汇编几乎逐行对应源码——所有拷贝都真的发生、所有函数都真的调用。<code>-O2</code> 下则如前面所见，大量代码被消除、合并、算掉。<br>
+所以：<strong>测性能一定要用 <code>-O2</code>（或更高）</strong>，用 <code>-O0</code> 测出来的"慢"毫无意义；而<strong>调试用 <code>-O0</code></strong>（或 <code>-Og</code>），因为优化后的代码和源码对不上，单步调试会乱跳。本书所有"看汇编"示例默认用 <code>-O2</code>，正是为了让你看到编译器的真实手笔。
+</div><h2>动手：亲手验证&quot;零成本抽象&quot;</h2>
+<p>这一章最好的练习就是对比。下面这个函数用了一整套高层抽象（lambda、algorithm、值语义），看起来&quot;开销很大&quot;。把它放进 Compiler Explorer，用 <strong>🔬 看汇编</strong> 并确保是 <code>-O2</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxudW1lcmljPlxuI2luY2x1ZGUgPGFsZ29yaXRobT5cblxuLy8g6auY5bGC5YaZ5rOV77ya5oq96LGh5bGC5bGC5Y%2Bg5Y%2BgXG5pbnQgc3VtT2ZTcXVhcmVzT2ZFdmVucygpIHtcbiAgICBzdGQ6OnZlY3RvcjxpbnQ%2BIHZ7MSwgMiwgMywgNCwgNSwgNn07XG4gICAgaW50IHRvdGFsID0gMDtcbiAgICBmb3IgKGludCB4IDogdikge1xuICAgICAgICBpZiAoeCAlIDIgPT0gMCkgdG90YWwgKz0geCAqIHg7XG4gICAgfVxuICAgIHJldHVybiB0b3RhbDsgICAvLyAywrIgKyA0wrIgKyA2wrIgPSA1NlxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;vector&gt;
+#include &lt;numeric&gt;
+#include &lt;algorithm&gt;
+
+// 高层写法：抽象层层叠叠
+int sumOfSquaresOfEvens() {
+    std::vector&lt;int&gt; v{1, 2, 3, 4, 5, 6};
+    int total = 0;
+    for (int x : v) {
+        if (x % 2 == 0) total += x * x;
+    }
+    return total;   // 2² + 4² + 6² = 56
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>看汇编你会发现：尽管源码里有 <code>vector</code>（堆分配）、循环、条件判断，编译器在 <code>-O2</code> 下能看穿整个计算是编译期确定的，很可能<strong>直接返回常量 <code>56</code></strong>——vector 的堆分配、循环、判断统统消失。</p>
+<div class="note">
+<strong>这就是"零成本抽象"的证据</strong>
+第 1 章承诺过：C++ 的高层抽象编译后往往和手写底层代码一样快。这里你亲眼看到了——写得清晰（用容器、循环表达意图）和跑得快（汇编里只剩一个常量）在 C++ 里不是二选一。前提是：<strong>开优化</strong>，并<strong>信任编译器</strong>。
+</div><p>理解了编译器这一层，你对 C++ 的心智模型就完整了：从源码、值语义、生命周期，到模板实例化、再到编译器的最终优化。第五部分还剩两块——并发（下一章），以及把全书知识熔于一炉的压轴项目：从零实现一个 <code>vector</code>。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>as-if 规则</strong>：编译器可任意变换代码，只要<strong>可观察行为</strong>不变——这是一切激进优化的依据。</li>
+<li><strong>内联</strong>消除调用开销并让调用点与函数体一起优化；<code>inline</code> 关键字不再是给编译器的内联指令。</li>
+<li><strong>常量折叠/传播</strong>在编译期算掉已知计算；<strong>拷贝消除/RVO</strong> 消除按值返回的拷贝，是&quot;零成本抽象&quot;和&quot;放心按值返回&quot;的基础（C++17 起部分强制）。</li>
+<li><strong>去虚化</strong>在类型可知时把虚调用变直接调用甚至内联——虚函数的开销只在类型不可知时才真正付出。</li>
+<li><strong>死代码消除、循环优化</strong>（展开/向量化/直接算出结果）进一步压缩代码。</li>
+<li>用 <strong><code>-O2</code></strong> 测性能和看真实汇编，用 <strong><code>-O0</code>/<code>-Og</code></strong> 调试；<strong>写清晰代码、信任编译器</strong>，只在 profiling 确认瓶颈后才手动优化。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch18.html">← 第 18 章 多态：虚函数、vtable 与静态多态</a>
+  <a class="nav-next" href="ch20.html">第 20 章 并发：线程、原子与内存模型 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 20 章 并发：线程、原子与内存模型</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li class="active"><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 20 章 并发：线程、原子与内存模型</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>Python 有 GIL，多线程受限；Java 有成熟的并发库和内存模型。C++ 的并发更"贴近金属"——没有 GIL（真并行）、没有运行时兜底，数据竞争的后果是<strong>未定义行为</strong>。但好消息是：你前面学的 RAII、值语义、所有权，在并发里全都用得上，而且是写对并发代码的关键。</p>
+<p>读完你会知道如何启动线程、如何用 RAII 安全地加锁、原子操作解决什么问题，以及"内存模型"这个听起来玄乎的东西到底在说什么。</p>
+</div><h2>启动线程</h2>
+<p><code>std::thread</code> 启动一个线程，构造时传入要执行的可调用体（函数、lambda——第 16 章）。主线程要么 <code>join()</code>（等它结束）、要么 <code>detach()</code>（放任它独立运行）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHRocmVhZD5cblxudm9pZCB3b3JrZXIoaW50IGlkKSB7XG4gICAgc3RkOjpjb3V0IDw8IFwi57q%2F56iLIFwiIDw8IGlkIDw8IFwiIOW3peS9nOS4rVxcblwiO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBzdGQ6OnRocmVhZCB0MSh3b3JrZXIsIDEpOyAgICAgICAgICAgICAgLy8g5Lyg5Ye95pWwICsg5Y%2BC5pWwXG4gICAgc3RkOjp0aHJlYWQgdDIoW117IHN0ZDo6Y291dCA8PCBcImxhbWJkYSDnur%2FnqItcXG5cIjsgfSk7ICAgLy8g5LygIGxhbWJkYVxuXG4gICAgdDEuam9pbigpOyAgICAgIC8vIOetiSB0MSDnu5PmnZ9cbiAgICB0Mi5qb2luKCk7ICAgICAgLy8g562JIHQyIOe7k%2Badn1xuICAgIHN0ZDo6Y291dCA8PCBcIuS4u%2Be6v%2Beoi%2Be7k%2Badn1xcblwiO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;thread&gt;
+
+void worker(int id) {
+    std::cout &lt;&lt; "线程 " &lt;&lt; id &lt;&lt; " 工作中\n";
+}
+
+int main() {
+    std::thread t1(worker, 1);              // 传函数 + 参数
+    std::thread t2([]{ std::cout &lt;&lt; "lambda 线程\n"; });   // 传 lambda
+
+    t1.join();      // 等 t1 结束
+    t2.join();      // 等 t2 结束
+    std::cout &lt;&lt; "主线程结束\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="warn">
+<strong>std::thread 析构前必须 join 或 detach</strong>
+如果一个 <code>std::thread</code> 对象销毁时它仍"可 join"（既没 join 也没 detach），程序会直接 <code>std::terminate</code> 崩溃。这是个容易忘的坑——尤其在有异常时（异常跳过了你的 <code>join()</code>）。C++20 给了更安全的选择：<strong><code>std::jthread</code></strong>，它的析构函数会自动 join（RAII！），下面就用它。
+</div><h2>jthread：RAII 版的线程</h2>
+<p><code>std::jthread</code>（C++20）是 <code>std::thread</code> 的 RAII 升级版——析构时自动 <code>join()</code>，你再也不会忘：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHRocmVhZD5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6dmVjdG9yPHN0ZDo6anRocmVhZD4gd29ya2VycztcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IDM7ICsraSkge1xuICAgICAgICB3b3JrZXJzLmVtcGxhY2VfYmFjayhbaV17IHN0ZDo6Y291dCA8PCBcImp0aHJlYWQgXCIgPDwgaSA8PCBcIiDlrozmiJBcXG5cIjsgfSk7XG4gICAgfVxuICAgIHN0ZDo6Y291dCA8PCBcIuW3suWQr%2BWKqOaJgOaciee6v%2Beoi1xcblwiO1xuICAgIC8vIOS4jeeUqOaJi%2BWGmSBqb2lu77yad29ya2VycyDph4znmoQganRocmVhZCDpgJDkuKrmnpDmnoTml7boh6rliqggam9pblxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;std::jthread&gt; workers;
+    for (int i = 0; i &lt; 3; ++i) {
+        workers.emplace_back([i]{ std::cout &lt;&lt; "jthread " &lt;&lt; i &lt;&lt; " 完成\n"; });
+    }
+    std::cout &lt;&lt; "已启动所有线程\n";
+    // 不用手写 join：workers 里的 jthread 逐个析构时自动 join
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>workers</code> 离开作用域时，每个 <code>jthread</code> 析构自动 join——这就是 RAII（第 5 章）应用到线程：<strong>&quot;清理&quot;（join）绑定到对象生命周期，绝不遗漏。</strong> 注意各线程打印的<strong>顺序不确定</strong>（谁先跑由调度器定），但程序保证所有线程都完成后才退出。</p>
+<h2>数据竞争：并发最危险的坑</h2>
+<p>现在讲并发的核心危险。当<strong>多个线程同时访问同一块数据、且至少一个在写</strong>，就构成<strong>数据竞争（data race）</strong>——在 C++ 里这是<strong>未定义行为</strong>，不是&quot;结果可能不对&quot;，而是&quot;什么都可能发生&quot;。</p>
+<p>看一个经典错误：两个线程同时给一个计数器加数。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHRocmVhZD5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbmludCBtYWluKCkge1xuICAgIGxvbmcgY291bnRlciA9IDA7ICAgICAgICAgICAgICAgICAgICAgICAgLy8g5YWx5Lqr5pWw5o2uXG5cbiAgICBhdXRvIHRhc2sgPSBbJmNvdW50ZXJdIHtcbiAgICAgICAgZm9yIChpbnQgaSA9IDA7IGkgPCAxMDAwMDA7ICsraSkgKytjb3VudGVyOyAgIC8vIOKdjCDlpJrnur%2FnqIvlkIzml7YgKyvvvIzmlbDmja7nq57kuolcbiAgICB9O1xuXG4gICAgc3RkOjp2ZWN0b3I8c3RkOjpqdGhyZWFkPiB0aHJlYWRzO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgNDsgKytpKSB0aHJlYWRzLmVtcGxhY2VfYmFjayh0YXNrKTtcbiAgICB0aHJlYWRzLmNsZWFyKCk7ICAgICAgICAgICAgICAgICAgICAgICAgIC8vIOetieaJgOaciee6v%2Beoi%2Be7k%2Badn%2B%2B8iOaekOaehOWNsyBqb2lu77yJXG5cbiAgICAvLyDmnJ%2FmnJsgNDAwMDAw77yM5L2G5Zug5pWw5o2u56ue5LqJ77yM5a6e6ZmF5Yeg5LmO5oC75piv5bCP5LqO5a6D77yM5LiU5q%2BP5qyh5LiN5ZCMXG4gICAgc3RkOjpjb3V0IDw8IFwiY291bnRlciA9IFwiIDw8IGNvdW50ZXIgPDwgXCIgKOacn%2BacmyA0MDAwMDApXFxuXCI7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+
+int main() {
+    long counter = 0;                        // 共享数据
+
+    auto task = [&amp;counter] {
+        for (int i = 0; i &lt; 100000; ++i) ++counter;   // ❌ 多线程同时 ++，数据竞争
+    };
+
+    std::vector&lt;std::jthread&gt; threads;
+    for (int i = 0; i &lt; 4; ++i) threads.emplace_back(task);
+    threads.clear();                         // 等所有线程结束（析构即 join）
+
+    // 期望 400000，但因数据竞争，实际几乎总是小于它，且每次不同
+    std::cout &lt;&lt; "counter = " &lt;&lt; counter &lt;&lt; " (期望 400000)\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>++counter</code> 看起来是一步，其实是&quot;读—改—写&quot;三步。两个线程交错执行时会互相覆盖，导致计数丢失。运行结果几乎总是小于 400000，且<strong>每次都不一样</strong>——这正是数据竞争的典型症状。</p>
+<div class="keypoint">
+<strong>为什么 <code>++counter</code> 不安全</strong>
+<code>++counter</code> 在机器层面是：① 从内存读到寄存器 → ② 寄存器 +1 → ③ 写回内存。两个线程可能都读到了同一个旧值（比如都读到 100），各自 +1 后都写回 101——本该是 102，却丢了一次。这类丢失在高频并发下大量发生。<strong>并发下，对共享可变数据的任何非同步访问都是错的。</strong>
+</div><p>解决数据竞争有两条路：<strong>互斥锁</strong>（保护临界区）和<strong>原子操作</strong>（让操作本身不可分割）。</p>
+<h2>互斥锁 + RAII：lock_guard</h2>
+<p>第 5 章你已经见过 <code>std::lock_guard</code>——用 RAII 管理互斥锁。这里正式用它保护共享数据：<strong>同一时刻只有一个线程能进入被锁保护的临界区</strong>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHRocmVhZD5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG4jaW5jbHVkZSA8bXV0ZXg%2BXG5cbmludCBtYWluKCkge1xuICAgIGxvbmcgY291bnRlciA9IDA7XG4gICAgc3RkOjptdXRleCBtO1xuXG4gICAgYXV0byB0YXNrID0gWyZjb3VudGVyLCAmbV0ge1xuICAgICAgICBmb3IgKGludCBpID0gMDsgaSA8IDEwMDAwMDsgKytpKSB7XG4gICAgICAgICAgICBzdGQ6OmxvY2tfZ3VhcmQ8c3RkOjptdXRleD4gbG9jayhtKTsgICAvLyDmnoTpgKDvvJrliqDplIHvvJvmnpDmnoTvvJroh6rliqjop6PplIFcbiAgICAgICAgICAgICsrY291bnRlcjsgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIOS4tOeVjOWMuu%2B8muWPl%2BS%2FneaKpO%2B8jOS4gOasoeWPquacieS4gOS4que6v%2Beoi1xuICAgICAgICB9XG4gICAgfTtcblxuICAgIHN0ZDo6dmVjdG9yPHN0ZDo6anRocmVhZD4gdGhyZWFkcztcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IDQ7ICsraSkgdGhyZWFkcy5lbXBsYWNlX2JhY2sodGFzayk7XG4gICAgdGhyZWFkcy5jbGVhcigpOyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyDnrYnlhajpg6jnu5PmnZ9cblxuICAgIHN0ZDo6Y291dCA8PCBcImNvdW50ZXIgPSBcIiA8PCBjb3VudGVyIDw8IFwiICjmnJ%2FmnJsgNDAwMDAwKVxcblwiO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+#include &lt;mutex&gt;
+
+int main() {
+    long counter = 0;
+    std::mutex m;
+
+    auto task = [&amp;counter, &amp;m] {
+        for (int i = 0; i &lt; 100000; ++i) {
+            std::lock_guard&lt;std::mutex&gt; lock(m);   // 构造：加锁；析构：自动解锁
+            ++counter;                             // 临界区：受保护，一次只有一个线程
+        }
+    };
+
+    std::vector&lt;std::jthread&gt; threads;
+    for (int i = 0; i &lt; 4; ++i) threads.emplace_back(task);
+    threads.clear();                               // 等全部结束
+
+    std::cout &lt;&lt; "counter = " &lt;&lt; counter &lt;&lt; " (期望 400000)\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">counter = 400000 (期望 400000)</code></pre>
+</div><p>这次结果<strong>确定是 400000</strong>。<code>lock_guard</code> 构造时锁住 <code>m</code>，离开 <code>{}</code> 时自动解锁——即使临界区里抛异常也保证解锁（第 5 章）。<strong>你不可能忘记解锁</strong>，这就是 RAII 在并发里的价值。</p>
+<div class="note">
+<strong>其他锁工具</strong>
+· <code>std::unique_lock</code>：比 <code>lock_guard</code> 灵活（能手动 lock/unlock、能配合条件变量），但稍重。<br>
+· <code>std::scoped_lock</code>（C++17）：能<strong>一次锁住多个互斥量</strong>且避免死锁，锁多个资源时用它。<br>
+默认用最简单的 <code>lock_guard</code>，需要额外能力时才升级。
+</div><h2>原子操作：无锁的轻量方案</h2>
+<p>对&quot;计数器 +1&quot;这种简单操作，加锁有点重。<strong><code>std::atomic&lt;T&gt;</code></strong> 提供<strong>原子操作</strong>——保证&quot;读—改—写&quot;作为一个不可分割的整体完成，无需显式加锁：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHRocmVhZD5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG4jaW5jbHVkZSA8YXRvbWljPlxuXG5pbnQgbWFpbigpIHtcbiAgICBzdGQ6OmF0b21pYzxsb25nPiBjb3VudGVyezB9OyAgICAgICAgICAgIC8vIOWOn%2BWtkOiuoeaVsOWZqFxuXG4gICAgYXV0byB0YXNrID0gWyZjb3VudGVyXSB7XG4gICAgICAgIGZvciAoaW50IGkgPSAwOyBpIDwgMTAwMDAwOyArK2kpICsrY291bnRlcjsgICAvLyDljp%2FlrZDoh6rlop7vvIzml6DmlbDmja7nq57kuolcbiAgICB9O1xuXG4gICAgc3RkOjp2ZWN0b3I8c3RkOjpqdGhyZWFkPiB0aHJlYWRzO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgNDsgKytpKSB0aHJlYWRzLmVtcGxhY2VfYmFjayh0YXNrKTtcbiAgICB0aHJlYWRzLmNsZWFyKCk7XG5cbiAgICBzdGQ6OmNvdXQgPDwgXCJjb3VudGVyID0gXCIgPDwgY291bnRlciA8PCBcIiAo5pyf5pybIDQwMDAwMClcXG5cIjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+#include &lt;atomic&gt;
+
+int main() {
+    std::atomic&lt;long&gt; counter{0};            // 原子计数器
+
+    auto task = [&amp;counter] {
+        for (int i = 0; i &lt; 100000; ++i) ++counter;   // 原子自增，无数据竞争
+    };
+
+    std::vector&lt;std::jthread&gt; threads;
+    for (int i = 0; i &lt; 4; ++i) threads.emplace_back(task);
+    threads.clear();
+
+    std::cout &lt;&lt; "counter = " &lt;&lt; counter &lt;&lt; " (期望 400000)\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">counter = 400000 (期望 400000)</code></pre>
+</div><p>同样得到正确的 400000，但代码更简洁、通常也更快——<code>++counter</code> 现在是一条原子指令，硬件保证它不可分割。</p>
+<div class="keypoint">
+<strong>互斥锁 vs 原子操作</strong>
+<ul>
+<li><strong>原子操作</strong>：适合<strong>单个变量</strong>的简单操作（计数器、标志位、指针交换）。轻量、无锁、通常最快。</li>
+<li><strong>互斥锁</strong>：适合保护<strong>一组相关数据</strong>或<strong>复合操作</strong>（比如"检查再修改"、更新多个字段）——这些没法用单个原子操作表达。</li>
+</ul>
+一句话：<strong>一个变量的简单更新用 atomic，一段复合逻辑或多个变量用 mutex。</strong>
+</div><h2>内存模型：为什么&quot;顺序&quot;在并发里不可靠</h2>
+<p>最后简单认识&quot;内存模型&quot;这个概念。它回答一个反直觉的问题：<strong>一个线程写入的顺序，另一个线程看到的会是同一个顺序吗？</strong> 答案是——<strong>不保证</strong>。</p>
+<div class="keypoint">
+<strong>编译器和 CPU 都会重排指令</strong>
+第 19 章讲过 as-if 规则：编译器可以重排指令，只要<strong>单线程</strong>可观察行为不变。CPU 为了性能也会乱序执行、缓存写入。在单线程里这些重排你永远察觉不到；但在<strong>多线程</strong>里，线程 A 眼中"先写 x 再写 y"，线程 B 看到的可能是"先 y 后 x"——因为那些优化只保证单线程的一致性。<br>
+<strong>内存模型</strong>就是一套规则，规定"在什么同步措施下，一个线程的写入才保证对另一个线程可见、且顺序可靠"。
+</div><p>好消息是：<strong>只要你正确使用 mutex 和 atomic，就不用直接和内存模型的复杂细节打交道</strong>——它们默认提供了足够强的顺序保证（顺序一致性）。<code>atomic</code> 默认的操作会建立线程间的&quot;同步点&quot;,确保数据可见性和顺序。</p>
+<div class="warn">
+<strong>不要碰 memory_order 的弱序，除非你真的知道自己在做什么</strong>
+<code>std::atomic</code> 允许你指定更弱的内存序（<code>memory_order_relaxed</code> 等）以榨取性能，这是并发编程里<strong>最难、最容易出错</strong>的领域——连专家都常写错。<strong>默认（顺序一致）几乎总是对的选择</strong>，只有在性能剖析证明它是瓶颈、且你透彻理解内存模型时，才考虑弱序。本书的立场：知道它存在，敬而远之。
+</div><h2>一个务实的并发建议</h2>
+<div class="keypoint">
+<strong>写并发代码的优先级</strong>
+<ol>
+<li><strong>最好不共享可变状态</strong>：能用消息传递、任务返回值（<code>std::future</code>）、或让每个线程处理独立数据，就别共享——没有共享就没有数据竞争。这也是值语义（独立副本）在并发里的价值。</li>
+<li><strong>必须共享时，用最简单的工具</strong>：简单计数/标志用 <code>atomic</code>，复合逻辑用 <code>mutex</code> + <code>lock_guard</code>。</li>
+<li><strong>用 RAII 管理一切</strong>：<code>jthread</code> 自动 join，<code>lock_guard</code> 自动解锁——让生命周期机制替你保证正确性。</li>
+<li><strong>远离手动内存序</strong>：默认顺序一致，别碰弱序。</li>
+</ol>
+</div><h2>动手：数据竞争 vs 正确同步</h2>
+<p>下面把&quot;未同步&quot;和&quot;用 atomic 同步&quot;放在一起对比。未同步版的结果每次运行都可能不同（且通常错误）；同步版稳定正确。运行几次感受差异：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHRocmVhZD5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG4jaW5jbHVkZSA8YXRvbWljPlxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgTiA9IDQsIFBFUiA9IDUwMDAwO1xuXG4gICAgLy8g5pyq5ZCM5q2l77ya5pWw5o2u56ue5LqJ77yM57uT5p6c5LiN5Y%2Bv6Z2gXG4gICAgbG9uZyByYWN5ID0gMDtcbiAgICB7XG4gICAgICAgIHN0ZDo6dmVjdG9yPHN0ZDo6anRocmVhZD4gdHM7XG4gICAgICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTjsgKytpKVxuICAgICAgICAgICAgdHMuZW1wbGFjZV9iYWNrKFsmcmFjeV17IGZvciAoaW50IGogPSAwOyBqIDwgUEVSOyArK2opICsrcmFjeTsgfSk7XG4gICAgfSAgIC8vIOetieWFqOmDqOe7k%2Badn1xuXG4gICAgLy8g5ZCM5q2l77yaYXRvbWlj77yM57uT5p6c56Gu5a6aXG4gICAgc3RkOjphdG9taWM8bG9uZz4gc2FmZXswfTtcbiAgICB7XG4gICAgICAgIHN0ZDo6dmVjdG9yPHN0ZDo6anRocmVhZD4gdHM7XG4gICAgICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTjsgKytpKVxuICAgICAgICAgICAgdHMuZW1wbGFjZV9iYWNrKFsmc2FmZV17IGZvciAoaW50IGogPSAwOyBqIDwgUEVSOyArK2opICsrc2FmZTsgfSk7XG4gICAgfVxuXG4gICAgc3RkOjpjb3V0IDw8IFwi5pyf5pyb5YC8OiAgIFwiIDw8IChsb25nKU4gKiBQRVIgPDwgJ1xcbic7XG4gICAgc3RkOjpjb3V0IDw8IFwiYXRvbWljOiAgIFwiIDw8IHNhZmUgPDwgXCIgICjmgLvmmK%2FmraPnoa4pXFxuXCI7XG4gICAgc3RkOjpjb3V0IDw8IFwicmFjeTogICAgIFwiIDw8IHJhY3kgPDwgXCIgICjpgJrluLjlgY%2FlsI%2FvvIzmr4%2FmrKHkuI3lkIwpXFxuXCI7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+#include &lt;atomic&gt;
+
+int main() {
+    const int N = 4, PER = 50000;
+
+    // 未同步：数据竞争，结果不可靠
+    long racy = 0;
+    {
+        std::vector&lt;std::jthread&gt; ts;
+        for (int i = 0; i &lt; N; ++i)
+            ts.emplace_back([&amp;racy]{ for (int j = 0; j &lt; PER; ++j) ++racy; });
+    }   // 等全部结束
+
+    // 同步：atomic，结果确定
+    std::atomic&lt;long&gt; safe{0};
+    {
+        std::vector&lt;std::jthread&gt; ts;
+        for (int i = 0; i &lt; N; ++i)
+            ts.emplace_back([&amp;safe]{ for (int j = 0; j &lt; PER; ++j) ++safe; });
+    }
+
+    std::cout &lt;&lt; "期望值:   " &lt;&lt; (long)N * PER &lt;&lt; '\n';
+    std::cout &lt;&lt; "atomic:   " &lt;&lt; safe &lt;&lt; "  (总是正确)\n";
+    std::cout &lt;&lt; "racy:     " &lt;&lt; racy &lt;&lt; "  (通常偏小，每次不同)\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>atomic</code> 那行<strong>总是</strong>打印 200000；<code>racy</code> 那行则通常小于 200000、且每次运行的值都不一样——<strong>你亲眼看到了未定义行为的数据竞争与正确同步的区别</strong>。（注：<code>racy</code> 是真正的数据竞争、属未定义行为，这里仅用于演示危害，真实代码绝不能这么写。）</p>
+<p>至此，C++ 语言与标准库的核心之旅就走完了：从心智模型、内存与生命周期、泛型与编译期、标准库、到运行时与编译器底层。最后一章，我们把这一路学到的东西全部用上——<strong>从零实现一个 <code>vector</code></strong>，让所有知识在一个真实的组件里融会贯通。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 并发是真并行（无 GIL）、无运行时兜底：<strong>数据竞争是未定义行为</strong>。</li>
+<li><code>std::thread</code> 析构前必须 <code>join</code>/<code>detach</code>；优先用 <strong><code>std::jthread</code></strong>（C++20），析构自动 join（RAII）。</li>
+<li><strong>数据竞争</strong>：多线程同时访问共享数据且至少一个在写。<code>++counter</code> 非原子，会丢更新。</li>
+<li>两种解法：<strong><code>mutex</code> + <code>lock_guard</code></strong>（RAII 自动解锁，保护临界区/复合操作）和 <strong><code>std::atomic</code></strong>（单变量简单操作，无锁更轻）。</li>
+<li><strong>内存模型</strong>：编译器/CPU 会重排，跨线程的顺序与可见性不保证——但正确用 mutex/atomic（默认顺序一致）就无需操心细节；<strong>远离手动弱内存序</strong>。</li>
+<li>优先级：<strong>尽量不共享可变状态</strong> &gt; 用最简单的同步工具 &gt; RAII 管理 &gt; 远离手动内存序。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch19.html">← 第 19 章 编译器如何优化你的代码</a>
+  <a class="nav-next" href="ch21.html">第 21 章 综合项目：从零实现一个 vector →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
