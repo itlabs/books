@@ -9,3 +9,6 @@ Thumbs.db
 
 # 分享用的打包产物
 *.zip
+
+# 章节代码校验脚本（开发用，不入库）
+books/*/.verify.sh

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 栈、堆与对象生命周期</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li class="active"><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 4 章 栈、堆与对象生命周期</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>在 Java / Python 里，"对象在哪、什么时候消失"是你几乎从不操心的问题——GC 全包了。在 C++ 里，这恰恰是你必须建立的直觉：<strong>一个对象是在栈上还是堆上？它什么时候诞生、什么时候销毁？</strong></p>
+<p>读完这一章，你会对"对象的生命周期"有一幅清晰的画面。这幅画面是下一章 RAII 的前提——只有先看清"对象何时销毁"，才能理解 C++ 如何靠它自动管理资源。</p>
+</div><h2>你其实一直活在&quot;全在堆上&quot;的世界</h2>
+<p>先看清你的起点。在 Java 里，除了 <code>int</code>、<code>double</code> 这些基本类型，<strong>所有对象都在堆上</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">Point p = new Point(1, 2);   // 对象在堆上，p 是栈上的一个引用</code></pre>
+</div><p>Python 更彻底——<strong>一切皆对象，全在堆上</strong>，连整数都是。你写 <code>x = 5</code>，<code>x</code> 只是一个指向堆中整数对象的名字。</p>
+<p>所以你从未真正区分过&quot;栈对象&quot;和&quot;堆对象&quot;，因为在你的世界里对象只住一个地方。C++ 把这两个地方都交给你，而且<strong>默认用栈</strong>。</p>
+<h2>两种存储：栈与堆</h2>
+<div class="concept">
+<svg viewBox="0 0 540 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 栈 -->
+  <text x="120" y="24" text-anchor="middle" font-size="15" fill="#2b6cb0" font-weight="bold">栈 (stack)</text>
+  <rect x="40" y="36" width="160" height="200" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <rect x="40" y="196" width="160" height="40" fill="#cfe4fa" stroke="#2b6cb0"/>
+  <text x="120" y="221" text-anchor="middle" font-size="13" font-family="monospace">main 的局部变量</text>
+  <rect x="40" y="156" width="160" height="40" fill="#dcecfb" stroke="#2b6cb0"/>
+  <text x="120" y="181" text-anchor="middle" font-size="13" font-family="monospace">f() 的局部变量</text>
+  <rect x="40" y="116" width="160" height="40" fill="#eaf3fd" stroke="#2b6cb0"/>
+  <text x="120" y="141" text-anchor="middle" font-size="13" font-family="monospace">g() 的局部变量</text>
+  <text x="120" y="102" text-anchor="middle" font-size="11" fill="#2b6cb0">↑ 调用越深，栈往上长</text>
+  <!-- 堆 -->
+  <text x="410" y="24" text-anchor="middle" font-size="15" fill="#e0692f" font-weight="bold">堆 (heap)</text>
+  <rect x="330" y="36" width="160" height="200" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <rect x="352" y="60" width="54" height="36" rx="4" fill="#ffe0cc" stroke="#e0692f"/>
+  <rect x="418" y="120" width="54" height="36" rx="4" fill="#ffe0cc" stroke="#e0692f"/>
+  <rect x="352" y="176" width="54" height="36" rx="4" fill="#ffe0cc" stroke="#e0692f"/>
+  <text x="410" y="248" text-anchor="middle" font-size="11" fill="#e0692f">按需分配，位置零散</text>
+  <!-- 说明 -->
+  <text x="265" y="120" text-anchor="middle" font-size="12" fill="#374151">自动</text>
+  <text x="265" y="138" text-anchor="middle" font-size="12" fill="#374151">↔</text>
+  <text x="265" y="156" text-anchor="middle" font-size="12" fill="#374151">手动/智能指针</text>
+</svg>
+<div class="caption">图 4-1　栈：随函数调用自动伸缩、后进先出、极快；堆：按需申请、位置零散、需要管理归还</div>
+</div><p><strong>栈</strong>是随函数调用自动管理的一块内存。每调用一个函数，就在栈上&quot;压入&quot;一帧，存放这个函数的局部变量；函数返回时，这一帧整个&quot;弹出&quot;，里面的局部变量随之销毁。你不需要做任何事，编译器全安排好了。栈分配快到几乎免费——就是移动一个指针。</p>
+<p><strong>堆</strong>是一大块可以按需申请的内存。你（或标准库容器）在需要时向它要一块，用完必须归还。堆灵活（大小可动态决定、生命周期可超出当前函数），但分配更慢，且<strong>谁申请、谁负责归还</strong>。</p>
+<h2>默认在栈上：这是 C++ 的常态</h2>
+<p>在 C++ 里，一个普通的局部变量定义，对象就<strong>直接建在栈上</strong>——没有 <code>new</code>，没有引用间接层：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5zdHJ1Y3QgUG9pbnQgeyBpbnQgeCwgeTsgfTtcblxuaW50IG1haW4oKSB7XG4gICAgUG9pbnQgcHsxLCAyfTsgICAgICAgICAgLy8gcCDlsLHmmK%2FmoIjkuIrnmoTkuIDkuKogUG9pbnQg5a%2B56LGh77yM5LiN5piv5byV55SoXG4gICAgc3RkOjpjb3V0IDw8IFwicC54ID0gXCIgPDwgcC54IDw8ICdcXG4nO1xuICAgIHN0ZDo6Y291dCA8PCBcInNpemVvZihwKSA9IFwiIDw8IHNpemVvZihwKSA8PCBcIiDlrZfoioJcXG5cIjtcbiAgICBzdGQ6OmNvdXQgPDwgXCImcCA9IFwiIDw8ICZwIDw8IFwiICAo5qCI5LiK55qE5Zyw5Z2AKVxcblwiO1xufSAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyBtYWluIOe7k%2Badn%2B%2B8jHAg6Ieq5Yqo6ZSA5q%2BBIiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+struct Point { int x, y; };
+
+int main() {
+    Point p{1, 2};          // p 就是栈上的一个 Point 对象，不是引用
+    std::cout &lt;&lt; "p.x = " &lt;&lt; p.x &lt;&lt; '\n';
+    std::cout &lt;&lt; "sizeof(p) = " &lt;&lt; sizeof(p) &lt;&lt; " 字节\n";
+    std::cout &lt;&lt; "&amp;p = " &lt;&lt; &amp;p &lt;&lt; "  (栈上的地址)\n";
+}                            // main 结束，p 自动销毁</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>对比一下你熟悉的写法差异——<strong>同样是&quot;创建一个对象&quot;,默认落点完全不同</strong>：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java：对象在堆</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">Point p = new Point(1, 2);
+// 必须 new
+// p 是引用，对象在堆上
+// GC 之后某刻回收</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++：默认在栈</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">Point p{1, 2};
+// 不需要 new
+// p 就是对象本身
+// 离开作用域立即销毁</code></pre>
+</div></div>
+</div><h2>生命周期：作用域说了算</h2>
+<p>栈对象的生命周期规则简单得惊人:<strong>从定义处诞生，到所属的 <code>{}</code> 作用域结束时销毁，顺序与诞生相反</strong>。这是 C++ 里最可靠的一条规律，请把它刻进直觉。</p>
+<p>下面这段程序用一个会&quot;喊出生死&quot;的类，把生命周期直接打印出来：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5zdHJ1Y3QgTm9pc3kge1xuICAgIGludCBpZDtcbiAgICBOb2lzeShpbnQgaSkgOiBpZChpKSB7IHN0ZDo6Y291dCA8PCBcIiAg5p6E6YCgICNcIiA8PCBpZCA8PCAnXFxuJzsgfVxuICAgIH5Ob2lzeSgpICAgICAgICAgICAgeyBzdGQ6OmNvdXQgPDwgXCIgIOaekOaehCAjXCIgPDwgaWQgPDwgJ1xcbic7IH1cbn07XG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6Y291dCA8PCBcIui%2Fm%2BWFpSBtYWluXFxuXCI7XG4gICAgTm9pc3kgYSgxKTtcbiAgICB7XG4gICAgICAgIHN0ZDo6Y291dCA8PCBcIui%2Fm%2BWFpeWGheWxguS9nOeUqOWfn1xcblwiO1xuICAgICAgICBOb2lzeSBiKDIpO1xuICAgICAgICBOb2lzeSBjKDMpO1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLnprvlvIDlhoXlsYLkvZznlKjln59cXG5cIjtcbiAgICB9ICAgICAgICAgICAgICAgICAgICAgICAvLyBi44CBYyDlnKjmraTplIDmr4HvvIjpgIbluo%2FvvJrlhYggYyDlkI4gYu%2B8iVxuICAgIHN0ZDo6Y291dCA8PCBcIuWbnuWIsCBtYWluXFxuXCI7XG59ICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8gYSDlnKjmraTplIDmr4EiLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+struct Noisy {
+    int id;
+    Noisy(int i) : id(i) { std::cout &lt;&lt; "  构造 #" &lt;&lt; id &lt;&lt; '\n'; }
+    ~Noisy()            { std::cout &lt;&lt; "  析构 #" &lt;&lt; id &lt;&lt; '\n'; }
+};
+
+int main() {
+    std::cout &lt;&lt; "进入 main\n";
+    Noisy a(1);
+    {
+        std::cout &lt;&lt; "进入内层作用域\n";
+        Noisy b(2);
+        Noisy c(3);
+        std::cout &lt;&lt; "离开内层作用域\n";
+    }                       // b、c 在此销毁（逆序：先 c 后 b）
+    std::cout &lt;&lt; "回到 main\n";
+}                           // a 在此销毁</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>运行输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">进入 main
+  构造 #1
+进入内层作用域
+  构造 #2
+  构造 #3
+离开内层作用域
+  析构 #3
+  析构 #2
+回到 main
+  析构 #1</code></pre>
+</div><p>两个关键点，请盯住：</p>
+<ol>
+<li><strong>销毁是自动的</strong>——没有一句 <code>delete</code>，<code>b</code>、<code>c</code> 在内层 <code>}</code> 处就销毁了，<code>a</code> 在 <code>main</code> 的 <code>}</code> 处销毁。</li>
+<li><strong>销毁是逆序的</strong>——先构造的后销毁（后进先出），因为它们是栈上的一叠。</li>
+</ol>
+<div class="keypoint">
+<strong>这就是 C++ 一切自动资源管理的物理基础</strong>
+"对象离开作用域时，它的析构函数<strong>确定地、立即地</strong>被调用"——这个保证是 Java / Python 给不了的（GC 只保证"未来某时"回收，且不保证及时）。下一章的 RAII 正是把这个铁律利用到极致：<strong>把资源的释放写进析构函数，资源就会随对象自动、准时地释放。</strong>
+</div><h2>什么时候才需要堆？</h2>
+<p>既然栈这么好，为什么还要堆？三种情况栈搞不定：</p>
+<ol>
+<li><strong>对象要活得比当前函数久</strong>——函数都返回了，它还得存在。</li>
+<li><strong>大小在运行时才知道</strong>——比如读入 n 个元素，n 是运行时才确定的。</li>
+<li><strong>对象太大</strong>——栈空间有限（通常几 MB），放不下巨型数据。</li>
+</ol>
+<p>这时才需要堆。但请记住第 1 章的告诫：现代 C++ <strong>几乎不直接写 <code>new</code> / <code>delete</code></strong>。堆分配被封装进了两样东西：</p>
+<ul>
+<li><strong>标准库容器</strong>（<code>std::vector</code>、<code>std::string</code> 等）：它们在内部用堆存元素，但对你表现为栈上的值对象；</li>
+<li><strong>智能指针</strong>（<code>std::unique_ptr</code>、<code>std::shared_ptr</code>，第 8 章细讲）：它们持有堆对象，并在自己销毁时自动释放。</li>
+</ul>
+<p>看栈上的 <code>vector</code> 如何悄悄使用堆：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiB2OyAgICAgICAgICAvLyB2IOacrOi6q%2BaYr%2BagiOWvueixoVxuICAgIHYucmVzZXJ2ZSgzKTtcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IDM7ICsraSkgdi5wdXNoX2JhY2soaSAqIDEwKTtcblxuICAgIHN0ZDo6Y291dCA8PCBcIiZ2ICAgICAgPSBcIiA8PCAmdiAgICAgIDw8IFwiICAodiDov5nkuKrlr7nosaHlnKjmoIjkuIopXFxuXCI7XG4gICAgc3RkOjpjb3V0IDw8IFwidi5kYXRhKCk9IFwiIDw8IHYuZGF0YSgpIDw8IFwiICAo5YWD57Sg5pWw57uE5Zyo5aCG5LiKKVxcblwiO1xuICAgIGZvciAoaW50IHggOiB2KSBzdGQ6OmNvdXQgPDwgeCA8PCAnICc7XG4gICAgc3RkOjpjb3V0IDw8ICdcXG4nO1xufSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIHYg5p6Q5p6E77ya5a6D6Ieq5YqoIGZyZWUg5o6J5aCG5LiK55qE5YWD57Sg5pWw57uEIiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v;          // v 本身是栈对象
+    v.reserve(3);
+    for (int i = 0; i &lt; 3; ++i) v.push_back(i * 10);
+
+    std::cout &lt;&lt; "&amp;v      = " &lt;&lt; &amp;v      &lt;&lt; "  (v 这个对象在栈上)\n";
+    std::cout &lt;&lt; "v.data()= " &lt;&lt; v.data() &lt;&lt; "  (元素数组在堆上)\n";
+    for (int x : v) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';
+}                                 // v 析构：它自动 free 掉堆上的元素数组</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>打印出来的两个地址通常相差很远——<code>&amp;v</code> 在栈区，<code>v.data()</code> 在堆区。而你从头到尾没写一句内存管理代码：<code>vector</code> 的析构函数替你把堆内存还了。这就是&quot;栈对象管理堆资源&quot;的 RAII 雏形。</p>
+<div class="concept">
+<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="30" y="50" width="150" height="70" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="105" y="40" text-anchor="middle" font-size="12" fill="#2b6cb0">栈</text>
+  <text x="105" y="78" text-anchor="middle" font-size="13" font-family="monospace">v</text>
+  <text x="105" y="100" text-anchor="middle" font-size="11" fill="#374151">{ 指针, 大小, 容量 }</text>
+  <rect x="330" y="50" width="160" height="70" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="410" y="40" text-anchor="middle" font-size="12" fill="#e0692f">堆</text>
+  <text x="410" y="90" text-anchor="middle" font-size="14" font-family="monospace">[0, 10, 20]</text>
+  <path d="M180 85 L328 85" stroke="#e0692f" stroke-width="2" marker-end="url(#h1)"/>
+  <text x="254" y="76" text-anchor="middle" font-size="11" fill="#e0692f">内部指针</text>
+  <text x="254" y="140" text-anchor="middle" font-size="11" fill="#6b7280">v 析构时，自动释放它指向的堆内存</text>
+  <defs><marker id="h1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0692f"/></marker></defs>
+</svg>
+<div class="caption">图 4-2　vector 是"栈上的小管家"：自己住栈上，管着堆上的元素数组，析构时替你归还</div>
+</div><h2>悬垂：把栈对象的地址带出作用域</h2>
+<p>理解了&quot;栈对象离开作用域即销毁&quot;，就能看懂 C++ 里一类经典 bug——<strong>返回局部对象的地址或引用</strong>。这在 Java / Python 里根本不可能发生（那里的对象只要还有引用就不会被回收），但 C++ 会让你实实在在踩到：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int&amp; dangling() {
+    int local = 42;
+    return local;      // ❌ 返回局部变量的引用
+}                      // local 在这里就销毁了
+
+int main() {
+    int&amp; r = dangling();
+    std::cout &lt;&lt; r &lt;&lt; '\n';   // 未定义行为：r 指向已销毁的对象
+}</code></pre>
+</div><p><code>local</code> 在 <code>dangling</code> 返回的瞬间就销毁了，<code>r</code> 绑定到一块已经不属于任何对象的内存——这叫<strong>悬垂引用（dangling reference）</strong>。</p>
+<div class="warn">
+<strong>C++ 不会拦着你，但编译器会警告</strong>
+这段代码是"未定义行为"：可能碰巧打印出 42，也可能崩溃，换个编译器/优化级别结果就变。好消息是现代编译器能识别这种模式——把上面的代码放进 Compiler Explorer，加上 <code>-Wall</code>，g++ / clang 会给出 <code>warning: reference to local variable 'local' returned</code>。<strong>永远不要忽略这类警告。</strong>正确做法是<em>返回值</em>（靠第 3 章讲的值语义 + RVO，没有性能损失），而不是返回局部对象的引用或地址。
+</div><h2>动手：把生命周期看个通透</h2>
+<p>下面这段程序把本章所有要点串在一起：栈对象、作用域、逆序销毁、以及容器如何在析构时清理堆。运行前，先在脑子里预测输出顺序：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cbiNpbmNsdWRlIDxzdHJpbmc%2BXG5cbnN0cnVjdCBUcmFja2VkIHtcbiAgICBzdGQ6OnN0cmluZyBuYW1lO1xuICAgIFRyYWNrZWQoc3RkOjpzdHJpbmcgbikgOiBuYW1lKHN0ZDo6bW92ZShuKSkge1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCLmnoTpgKAgXCIgPDwgbmFtZSA8PCAnXFxuJztcbiAgICB9XG4gICAgflRyYWNrZWQoKSB7IHN0ZDo6Y291dCA8PCBcIuaekOaehCBcIiA8PCBuYW1lIDw8ICdcXG4nOyB9XG59O1xuXG5pbnQgbWFpbigpIHtcbiAgICBUcmFja2VkIG91dGVyKFwi5aSW5bGCXCIpO1xuICAgIHtcbiAgICAgICAgVHJhY2tlZCBpbm5lcihcIuWGheWxglwiKTtcbiAgICAgICAgc3RkOjp2ZWN0b3I8VHJhY2tlZD4gYm94O1xuICAgICAgICBib3gucmVzZXJ2ZSgyKTsgICAgICAgICAgICAvLyDpooTnlZnlrrnph4%2FvvIzpgb%2FlhY3mianlrrnml7bnmoTpop3lpJbmkKznp7tcbiAgICAgICAgYm94LmVtcGxhY2VfYmFjayhcIuebkuS4rUFcIik7XG4gICAgICAgIGJveC5lbXBsYWNlX2JhY2soXCLnm5LkuK1CXCIpO1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCItLS0g5YaF5bGC5L2c55So5Z%2Bf5Y2z5bCG57uT5p2fIC0tLVxcblwiO1xuICAgIH0gICAvLyDlhYjmnpDmnoQgYm9477yI6L%2Be5ZCM5a6D6KOF55qE5YWD57Sg77yJ77yM5YaN5p6Q5p6EIGlubmVyXG4gICAgc3RkOjpjb3V0IDw8IFwiLS0tIOWbnuWIsOWkluWxgiAtLS1cXG5cIjtcbn0gICAgICAgLy8g5pyA5ZCO5p6Q5p6EIG91dGVyIiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+#include &lt;string&gt;
+
+struct Tracked {
+    std::string name;
+    Tracked(std::string n) : name(std::move(n)) {
+        std::cout &lt;&lt; "构造 " &lt;&lt; name &lt;&lt; '\n';
+    }
+    ~Tracked() { std::cout &lt;&lt; "析构 " &lt;&lt; name &lt;&lt; '\n'; }
+};
+
+int main() {
+    Tracked outer("外层");
+    {
+        Tracked inner("内层");
+        std::vector&lt;Tracked&gt; box;
+        box.reserve(2);            // 预留容量，避免扩容时的额外搬移
+        box.emplace_back("盒中A");
+        box.emplace_back("盒中B");
+        std::cout &lt;&lt; "--- 内层作用域即将结束 ---\n";
+    }   // 先析构 box（连同它装的元素），再析构 inner
+    std::cout &lt;&lt; "--- 回到外层 ---\n";
+}       // 最后析构 outer</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>运行输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">构造 外层
+构造 内层
+构造 盒中A
+构造 盒中B
+--- 内层作用域即将结束 ---
+析构 盒中A
+析构 盒中B
+析构 内层
+--- 回到外层 ---
+析构 外层</code></pre>
+</div><p>看两层规律：<strong>栈上的具名对象</strong>（<code>outer</code>、<code>inner</code>、<code>box</code>）严格按&quot;后构造先析构&quot;逆序销毁——所以内层的 <code>box</code> 先于 <code>inner</code> 销毁，<code>outer</code> 最后销毁。而 <code>box</code> 销毁时，会把它装着的元素一并析构（容器元素按下标顺序销毁，所以是先 A 后 B）。全过程自动，无需一句 <code>delete</code>。</p>
+<div class="note">
+<strong>那行 <code>box.reserve(2)</code> 是干嘛的？</strong>
+如果去掉它，你会在输出里看到<strong>多余</strong>的构造/析构：<code>vector</code> 装第二个元素时容量不够，会另开一块更大的堆内存，把已有元素搬过去、销毁旧的。这正是第 3 章"无意的拷贝"和第 7 章移动语义要解决的场景。<code>reserve</code> 提前备好容量，就没有这些搬移了——这里用它是为了让输出干净，聚焦生命周期本身。
+</div><p>搞清楚了&quot;对象何时诞生、何时销毁&quot;，我们就可以进入下一章：C++ 如何把这个铁律变成一套强大的资源管理武器——RAII。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>Java / Python 的对象几乎都在<strong>堆</strong>上；C++ 的对象<strong>默认在栈</strong>上，且变量就是对象本身（不是引用）。</li>
+<li><strong>栈</strong>：随函数调用自动伸缩、后进先出、极快、自动销毁；<strong>堆</strong>：按需申请、灵活、需要管理归还。</li>
+<li>栈对象的生命周期由<strong>作用域</strong>决定：定义处诞生，<code>}</code> 处销毁，顺序与构造<strong>相反</strong>。</li>
+<li>&quot;离开作用域即<strong>确定地、立即地</strong>调用析构函数&quot;是 C++ 的铁律，也是一切自动资源管理的基础。</li>
+<li>需要堆时（对象要活得更久 / 大小运行时定 / 太大），优先用<strong>容器</strong>和<strong>智能指针</strong>，而非裸 <code>new</code>/<code>delete</code>。</li>
+<li>返回局部对象的引用或地址会产生<strong>悬垂引用</strong>（未定义行为）；用返回值代替，靠值语义 + RVO 没有额外开销。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch03.html">← 第 3 章 值语义：变量就是对象本身</a>
+  <a class="nav-next" href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

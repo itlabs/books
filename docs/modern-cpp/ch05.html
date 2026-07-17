@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 章 RAII：没有 GC，如何自动清理</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li class="active"><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 5 章 RAII：没有 GC，如何自动清理</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章你确认了 C++ 的铁律：<strong>对象离开作用域时，析构函数确定地、立即地被调用。</strong>这一章讲 C++ 如何把这条铁律变成一件威力惊人的武器——<strong>RAII</strong>：把资源的获取与释放绑定到对象的生命周期上。</p>
+<p>读完你会明白，为什么没有 GC 的 C++ 反而能做到"几乎不用手动释放任何资源"，以及为什么 RAII 被认为是 C++ 最重要的设计思想。</p>
+</div><h2>先看没有 RAII 的世界有多痛</h2>
+<p>假设你要打开一个文件、用完关掉。用最原始的手动方式写，会是这样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">void process() {
+    FILE* f = std::fopen("data.txt", "r");
+    if (!f) return;
+
+    doSomething(f);      // 如果这里抛异常呢？
+    if (error) return;   // 如果从这里提前返回呢？
+
+    std::fclose(f);      // 只有"一路顺利走到这"才会执行
+}</code></pre>
+</div><p><code>fclose</code> 只在函数正常执行到最后一行时才被调用。但凡中途 <code>return</code>、或者 <code>doSomething</code> 抛了异常，<code>fclose</code> 就被跳过——文件句柄泄漏了。你熟悉这个问题：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java：try-with-resources</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">try (var f = new FileReader("data.txt")) {
+    doSomething(f);
+}   // 无论正常还是异常
+    // f.close() 都会被调用</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">Python：with 语句</div><div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="with%20open(%22data.txt%22)%20as%20f%3A%0A%20%20%20%20do_something(f)%0A%23%20%E6%97%A0%E8%AE%BA%E6%AD%A3%E5%B8%B8%E8%BF%98%E6%98%AF%E5%BC%82%E5%B8%B8%0A%23%20%E6%96%87%E4%BB%B6%E9%83%BD%E4%BC%9A%E8%A2%AB%E5%85%B3%E9%97%AD">with open("data.txt") as f:
+    do_something(f)
+# 无论正常还是异常
+# 文件都会被关闭</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div></div>
+</div><p>Java 和 Python 都发明了<strong>专门的语法</strong>（<code>try-with-resources</code>、<code>with</code>）来解决&quot;无论如何都要清理&quot;。C++ 的答案不一样——它不需要专门语法，因为<strong>每个对象的析构函数本来就&quot;无论如何都会被调用&quot;</strong>。</p>
+<h2>RAII：资源的生命周期 = 对象的生命周期</h2>
+<p>RAII 的全称是 <strong>Resource Acquisition Is Initialization</strong>（资源获取即初始化），但这个名字起得不好，容易让人抓不住重点。它真正的意思是：</p>
+<div class="keypoint">
+<strong>RAII 一句话</strong>
+把资源<strong>获取</strong>写进构造函数，把资源<strong>释放</strong>写进析构函数。于是资源的生命周期就和对象的生命周期<strong>绑定</strong>在了一起——对象一诞生就持有资源，对象一销毁就归还资源。而对象的销毁（上一章的铁律）是<strong>自动且确定</strong>的，所以资源的释放也就自动且确定了。
+</div><p>我们亲手写一个管理文件的 RAII 类，把上面那段脆弱的代码变得万无一失：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGNzdGRpbz5cbiNpbmNsdWRlIDxpb3N0cmVhbT5cblxuLy8g5LiA5Liq5pyA5bCP55qEIFJBSUkg5paH5Lu25YyF6KOF77ya5p6E6YCg5pe25omT5byA77yM5p6Q5p6E5pe25YWz6ZetXG5jbGFzcyBGaWxlIHtcbiAgICBzdGQ6OkZJTEUqIGZfO1xucHVibGljOlxuICAgIEZpbGUoY29uc3QgY2hhciogcGF0aCwgY29uc3QgY2hhciogbW9kZSkgOiBmXyhzdGQ6OmZvcGVuKHBhdGgsIG1vZGUpKSB7XG4gICAgICAgIHN0ZDo6Y291dCA8PCBcIiAgW0ZpbGVdIOaJk%2BW8gFxcblwiO1xuICAgIH1cbiAgICB%2BRmlsZSgpIHtcbiAgICAgICAgaWYgKGZfKSB7IHN0ZDo6ZmNsb3NlKGZfKTsgc3RkOjpjb3V0IDw8IFwiICBbRmlsZV0g5YWz6ZetXFxuXCI7IH1cbiAgICB9XG4gICAgc3RkOjpGSUxFKiBnZXQoKSBjb25zdCB7IHJldHVybiBmXzsgfVxuICAgIGJvb2wgb2soKSBjb25zdCB7IHJldHVybiBmXyAhPSBudWxscHRyOyB9XG59O1xuXG52b2lkIG1heVRocm93KGJvb2wgYm9vbSkge1xuICAgIEZpbGUgZihcIi9kZXYvbnVsbFwiLCBcIndcIik7ICAgICAgICAvLyDmnoTpgKDvvJrojrflj5botYTmupBcbiAgICBzdGQ6OmNvdXQgPDwgXCIgIOS9v%2BeUqOaWh%2BS7tuKAplxcblwiO1xuICAgIGlmIChib29tKSB0aHJvdyBzdGQ6OnJ1bnRpbWVfZXJyb3IoXCLlh7rplJnkuoZcIik7XG4gICAgc3RkOjpjb3V0IDw8IFwiICDmraPluLjnlKjlroxcXG5cIjtcbn0gICAvLyDml6DorrrmmK%2FlkKbmipvlvILluLjvvIxmIOemu%2BW8gOS9nOeUqOWfn%2BmDveS8muaekOaehCDihpIg5paH5Lu26KKr5YWz6ZetXG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6Y291dCA8PCBcIuato%2BW4uOi3r%2BW%2BhO%2B8mlxcblwiO1xuICAgIG1heVRocm93KGZhbHNlKTtcblxuICAgIHN0ZDo6Y291dCA8PCBcIuW8guW4uOi3r%2BW%2BhO%2B8mlxcblwiO1xuICAgIHRyeSB7IG1heVRocm93KHRydWUpOyB9XG4gICAgY2F0Y2ggKGNvbnN0IHN0ZDo6ZXhjZXB0aW9uJiBlKSB7IHN0ZDo6Y291dCA8PCBcIiAg5o2V6I6377yaXCIgPDwgZS53aGF0KCkgPDwgJ1xcbic7IH1cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;iostream&gt;
+
+// 一个最小的 RAII 文件包装：构造时打开，析构时关闭
+class File {
+    std::FILE* f_;
+public:
+    File(const char* path, const char* mode) : f_(std::fopen(path, mode)) {
+        std::cout &lt;&lt; "  [File] 打开\n";
+    }
+    ~File() {
+        if (f_) { std::fclose(f_); std::cout &lt;&lt; "  [File] 关闭\n"; }
+    }
+    std::FILE* get() const { return f_; }
+    bool ok() const { return f_ != nullptr; }
+};
+
+void mayThrow(bool boom) {
+    File f("/dev/null", "w");        // 构造：获取资源
+    std::cout &lt;&lt; "  使用文件…\n";
+    if (boom) throw std::runtime_error("出错了");
+    std::cout &lt;&lt; "  正常用完\n";
+}   // 无论是否抛异常，f 离开作用域都会析构 → 文件被关闭
+
+int main() {
+    std::cout &lt;&lt; "正常路径：\n";
+    mayThrow(false);
+
+    std::cout &lt;&lt; "异常路径：\n";
+    try { mayThrow(true); }
+    catch (const std::exception&amp; e) { std::cout &lt;&lt; "  捕获：" &lt;&lt; e.what() &lt;&lt; '\n'; }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>运行输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">正常路径：
+  [File] 打开
+  使用文件…
+  正常用完
+  [File] 关闭
+异常路径：
+  [File] 打开
+  使用文件…
+  [File] 关闭
+  捕获：出错了</code></pre>
+</div><p>盯住<strong>异常路径</strong>：<code>mayThrow(true)</code> 在中途抛了异常，&quot;正常用完&quot;那行没执行——但 <code>[File] 关闭</code> <strong>照样打印了</strong>。这就是 RAII 的魔力：异常在栈上向上传播时，会把沿途每一层作用域里的局部对象逐个析构，这个过程叫<strong>栈展开（stack unwinding）</strong>。文件在栈展开时被自动关闭，然后异常才继续往上抛。</p>
+<div class="concept">
+<svg viewBox="0 0 540 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="30" y="40" width="150" height="54" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="105" y="63" text-anchor="middle" font-size="13">构造函数</text>
+  <text x="105" y="82" text-anchor="middle" font-size="12" fill="#2b6cb0">获取资源</text>
+  <rect x="360" y="40" width="150" height="54" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="435" y="63" text-anchor="middle" font-size="13">析构函数</text>
+  <text x="435" y="82" text-anchor="middle" font-size="12" fill="#e0692f">释放资源</text>
+  <path d="M180 67 L358 67" stroke="#6b7280" stroke-width="2" marker-end="url(#r1)"/>
+  <text x="270" y="56" text-anchor="middle" font-size="12" fill="#374151">对象存活期间持有资源</text>
+  <text x="270" y="130" text-anchor="middle" font-size="12" fill="#3f9b5c">正常返回、提前 return、抛异常……</text>
+  <text x="270" y="150" text-anchor="middle" font-size="12" fill="#3f9b5c">任何离开作用域的方式，都会触发析构</text>
+  <defs><marker id="r1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker></defs>
+</svg>
+<div class="caption">图 5-1　RAII：资源在构造时获取、析构时释放；无论以何种方式离开作用域，释放都会发生</div>
+</div><h2>RAII 不只是关文件</h2>
+<p>一旦你抓住&quot;释放写进析构函数&quot;这个模式，会发现它能统一管理<strong>一切成对的获取/释放</strong>操作：</p>
+<table>
+<thead>
+<tr>
+<th>资源</th>
+<th>获取</th>
+<th>释放</th>
+<th>标准库里的 RAII 类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>堆内存</td>
+<td><code>new</code></td>
+<td><code>delete</code></td>
+<td><code>std::unique_ptr</code> / <code>std::vector</code></td>
+</tr>
+<tr>
+<td>文件</td>
+<td><code>fopen</code></td>
+<td><code>fclose</code></td>
+<td><code>std::fstream</code></td>
+</tr>
+<tr>
+<td>互斥锁</td>
+<td><code>lock</code></td>
+<td><code>unlock</code></td>
+<td><code>std::lock_guard</code></td>
+</tr>
+<tr>
+<td>线程</td>
+<td>启动</td>
+<td><code>join</code></td>
+<td><code>std::jthread</code></td>
+</tr>
+</tbody></table>
+<p>这也解释了上一章的伏笔：<code>std::vector</code> 就是一个管理&quot;堆上元素数组&quot;的 RAII 类——构造/扩容时向堆要内存，析构时还回去。<strong>你早就在用 RAII 了，只是现在知道了它的名字。</strong></p>
+<p>看标准库的 RAII 如何让&quot;加锁&quot;绝不会忘记解锁：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG11dGV4PlxuXG5zdGQ6Om11dGV4IG07XG5cbnZvaWQgc2FmZShpbnQgaWQpIHtcbiAgICBzdGQ6OmxvY2tfZ3VhcmQ8c3RkOjptdXRleD4gZ3VhcmQobSk7ICAgLy8g5p6E6YCg77ya5Yqg6ZSBXG4gICAgc3RkOjpjb3V0IDw8IFwi57q%2F56iLIFwiIDw8IGlkIDw8IFwiIOi%2Fm%2BWFpeS4tOeVjOWMulxcblwiO1xuICAgIC8vIOKApuKApuWNs%2BS9v%2Bi%2FmemHjOaKm%2BW8guW4uO%2B8jGd1YXJkIOaekOaehOaXtuS5n%2BS8muiHquWKqOino%2BmUgVxufSAgIC8vIGd1YXJkIOemu%2BW8gOS9nOeUqOWfn%2B%2B8muiHquWKqOino%2BmUgVxuXG5pbnQgbWFpbigpIHtcbiAgICBzYWZlKDEpO1xuICAgIHNhZmUoMik7XG4gICAgc3RkOjpjb3V0IDw8IFwi5a6M5oiQXFxuXCI7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;mutex&gt;
+
+std::mutex m;
+
+void safe(int id) {
+    std::lock_guard&lt;std::mutex&gt; guard(m);   // 构造：加锁
+    std::cout &lt;&lt; "线程 " &lt;&lt; id &lt;&lt; " 进入临界区\n";
+    // ……即使这里抛异常，guard 析构时也会自动解锁
+}   // guard 离开作用域：自动解锁
+
+int main() {
+    safe(1);
+    safe(2);
+    std::cout &lt;&lt; "完成\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>std::lock_guard</code> 构造时锁住互斥量，析构时解锁。你<strong>不可能忘记解锁</strong>，因为解锁不是你写的一句话，而是对象销毁的必然结果。对比 Java 里 <code>synchronized</code> 块或手动 <code>lock()</code>/<code>finally{unlock()}</code>——RAII 把这件事变成了不需要你操心的默认行为。</p>
+<h2>为什么这比 GC 更适合&quot;资源&quot;</h2>
+<p>这里要点破一个关键区别。GC 擅长管理<strong>内存</strong>,但对<strong>其他资源</strong>（文件、锁、连接、句柄）力不从心,原因是<strong>时机</strong>：</p>
+<div class="note">
+<strong>GC 回收是"未来某时"，RAII 释放是"此时此刻"</strong>
+Java 的 <code>finalize</code>、Python 的 <code>__del__</code> 都不保证<em>何时</em>运行——对象可能在最后一次使用后很久才被回收。对内存，这无所谓（反正内存够用）。但对<strong>稀缺资源</strong>就是灾难：一个数据库连接如果要等 GC 才释放，你的连接池很快就会枯竭。这正是 Java / Python 不得不额外发明 <code>try-with-resources</code> / <code>with</code> 的原因——GC 帮不上忙。<br>
+RAII 的释放和作用域结束是<strong>同一时刻</strong>，精确可预测。这就是为什么 C++ 用一套机制（对象生命周期）就统一解决了内存和所有其他资源的管理。
+</div><h2>一条现代 C++ 的铁律</h2>
+<p>RAII 直接推导出现代 C++ 最重要的一条编码准则：</p>
+<div class="keypoint">
+<strong>不要裸写 <code>new</code> / <code>delete</code></strong>
+每一次手动 <code>new</code> 都要求你在<em>所有</em>可能的退出路径上都记得 <code>delete</code>——包括异常路径，这几乎不可能做对。正确做法是让 RAII 对象替你持有资源：用 <code>std::vector</code>、<code>std::string</code> 管理动态数组，用 <code>std::unique_ptr</code>（第 8 章）管理单个堆对象。<strong>你负责表达"我要什么资源"，析构函数负责"什么时候还"。</strong>
+</div><h2>动手：亲眼看栈展开清理资源</h2>
+<p>下面这段程序有<strong>嵌套的 RAII 对象</strong>，并在最内层抛出异常。运行前先预测：异常抛出后，哪些&quot;释放&quot;会被打印，顺序如何？</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0ZGV4Y2VwdD5cblxuc3RydWN0IEd1YXJkIHtcbiAgICBzdGQ6OnN0cmluZyBuYW1lO1xuICAgIEd1YXJkKHN0ZDo6c3RyaW5nIG4pIDogbmFtZShzdGQ6Om1vdmUobikpIHsgc3RkOjpjb3V0IDw8IFwi6I635Y%2BWIFwiIDw8IG5hbWUgPDwgJ1xcbic7IH1cbiAgICB%2BR3VhcmQoKSB7IHN0ZDo6Y291dCA8PCBcIumHiuaUviBcIiA8PCBuYW1lIDw8ICdcXG4nOyB9XG59O1xuXG52b2lkIGlubmVyKCkge1xuICAgIEd1YXJkIGEoXCLotYTmupBBXCIpO1xuICAgIEd1YXJkIGIoXCLotYTmupBCXCIpO1xuICAgIHN0ZDo6Y291dCA8PCBcIuWNs%2BWwhuaKm%2BWHuuW8guW4uFxcblwiO1xuICAgIHRocm93IHN0ZDo6cnVudGltZV9lcnJvcihcImJvb21cIik7XG4gICAgc3RkOjpjb3V0IDw8IFwi6L%2BZ6KGM5rC46L%2Bc5LiN5Lya5omn6KGMXFxuXCI7XG59XG5cbmludCBtYWluKCkge1xuICAgIHRyeSB7XG4gICAgICAgIEd1YXJkIG91dGVyKFwi6LWE5rqQT3V0ZXJcIik7XG4gICAgICAgIGlubmVyKCk7XG4gICAgfSBjYXRjaCAoY29uc3Qgc3RkOjpleGNlcHRpb24mIGUpIHtcbiAgICAgICAgc3RkOjpjb3V0IDw8IFwi5o2V6I635byC5bi477yaXCIgPDwgZS53aGF0KCkgPDwgJ1xcbic7XG4gICAgfVxuICAgIHN0ZDo6Y291dCA8PCBcIueoi%2BW6j%2Be7p%2Be7re%2B8jOayoeacieazhOa8j1xcblwiO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;stdexcept&gt;
+
+struct Guard {
+    std::string name;
+    Guard(std::string n) : name(std::move(n)) { std::cout &lt;&lt; "获取 " &lt;&lt; name &lt;&lt; '\n'; }
+    ~Guard() { std::cout &lt;&lt; "释放 " &lt;&lt; name &lt;&lt; '\n'; }
+};
+
+void inner() {
+    Guard a("资源A");
+    Guard b("资源B");
+    std::cout &lt;&lt; "即将抛出异常\n";
+    throw std::runtime_error("boom");
+    std::cout &lt;&lt; "这行永远不会执行\n";
+}
+
+int main() {
+    try {
+        Guard outer("资源Outer");
+        inner();
+    } catch (const std::exception&amp; e) {
+        std::cout &lt;&lt; "捕获异常：" &lt;&lt; e.what() &lt;&lt; '\n';
+    }
+    std::cout &lt;&lt; "程序继续，没有泄漏\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">获取 资源Outer
+获取 资源A
+获取 资源B
+即将抛出异常
+释放 资源B
+释放 资源A
+释放 资源Outer
+捕获异常：boom
+程序继续，没有泄漏</code></pre>
+</div><p>异常从 <code>inner</code> 抛出，栈开始展开：先析构 <code>inner</code> 里的 <code>b</code>、<code>a</code>（逆序），再析构 <code>main</code> 里的 <code>outer</code>，然后异常才被 <code>catch</code> 捕获。<strong>三个资源全部被干净释放，没有一句手动清理代码。</strong> 这就是 C++ 在没有 GC 的情况下依然安全的根本原因。</p>
+<p>下一章我们回到第 6 章埋下的线索：当一个 RAII 对象被拷贝或移动时，它持有的资源该怎么办?这就引出了拷贝、移动与所有权。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>RAII</strong>：资源获取写进构造函数，资源释放写进析构函数——资源生命周期绑定到对象生命周期。</li>
+<li>因为析构在离开作用域时<strong>自动且确定</strong>地发生（哪怕是异常导致的<strong>栈展开</strong>），资源释放也就万无一失。</li>
+<li>RAII 统一管理一切成对的获取/释放：内存、文件、锁、线程、连接……你其实一直在用（<code>vector</code>、<code>string</code> 都是）。</li>
+<li>相比 GC，RAII 的释放时机<strong>精确可预测</strong>（&quot;此时此刻&quot;而非&quot;未来某时&quot;），所以更适合管理稀缺资源——这正是 Java / Python 还要额外提供 <code>try-with-resources</code> / <code>with</code> 的原因。</li>
+<li>现代 C++ 铁律：<strong>别裸写 <code>new</code>/<code>delete</code></strong>，让 RAII 对象（容器、智能指针）替你持有资源。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch04.html">← 第 4 章 栈、堆与对象生命周期</a>
+  <a class="nav-next" href="ch06.html">第 6 章 值类别：左值、右值与 std::move →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
