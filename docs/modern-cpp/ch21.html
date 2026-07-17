@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 21 章 综合项目：从零实现一个 vector</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li class="active"><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 21 章 综合项目：从零实现一个 vector</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>这是全书的收官。我们要从零实现一个能用的 <code>SimpleVector&lt;T&gt;</code>——一个动态数组。它会用上你这一路学到的<strong>几乎所有</strong>东西：模板、RAII、拷贝与移动、所有权、placement new、异常安全、noexcept。</p>
+<p>做完你会明白：<code>std::vector</code> 不是魔法。第 4 章说它是"栈上管理堆资源的小管家"，这一章你将亲手把这个管家造出来，让全书的知识在一个真实组件里融会贯通。</p>
+</div><h2>目标与设计</h2>
+<p>我们要实现的 <code>SimpleVector&lt;T&gt;</code> 支持：动态增长（<code>push_back</code>/<code>emplace_back</code>）、下标访问、拷贝与移动、范围 <code>for</code> 遍历。核心数据结构就三个字段——这正是第 4 章图 4-2 画过的&quot;小管家&quot;：</p>
+<div class="concept">
+<svg viewBox="0 0 520 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="30" y="45" width="170" height="80" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="115" y="35" text-anchor="middle" font-size="12" fill="#2b6cb0">SimpleVector（栈上）</text>
+  <text x="115" y="70" text-anchor="middle" font-size="12" font-family="monospace">data_ ●───────</text>
+  <text x="115" y="93" text-anchor="middle" font-size="12" font-family="monospace">size_ = 3</text>
+  <text x="115" y="113" text-anchor="middle" font-size="12" font-family="monospace">capacity_ = 4</text>
+  <rect x="320" y="55" width="170" height="55" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="405" y="45" text-anchor="middle" font-size="12" fill="#e0692f">堆上的元素数组</text>
+  <text x="405" y="88" text-anchor="middle" font-size="13" font-family="monospace">[10][20][30][ ]</text>
+  <path d="M200 80 L318 82" stroke="#e0692f" stroke-width="2" marker-end="url(#a)"/>
+  <text x="260" y="72" text-anchor="middle" font-size="10" fill="#6b7280">指针</text>
+  <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0692f"/></marker></defs>
+</svg>
+<div class="caption">图 21-1　SimpleVector 的结构：一个栈上的小对象（三个字段），管理一块堆上的元素数组</div>
+</div><ul>
+<li><strong><code>size_</code></strong>：当前元素个数。</li>
+<li><strong><code>capacity_</code></strong>：已分配的容量（≥ size_，留出增长空间）。</li>
+<li><strong><code>data_</code></strong>：指向堆上元素数组的指针。</li>
+</ul>
+<p>一个关键设计点：<strong>容量和元素个数要分开</strong>。如果每加一个元素就重新分配，性能会很差。所以我们预留容量，满了才扩容（通常翻倍），把平均插入成本摊薄到 O(1)。</p>
+<h2>第一块拼图：内存与元素分开管理</h2>
+<p>这是自己实现容器最烧脑、也最能体现 C++ 内存模型的一点。普通的 <code>new T[n]</code> 会<strong>立即构造 n 个 T 对象</strong>，但我们要的是&quot;先要一块够大的<strong>生内存</strong>，之后再逐个在里面构造元素&quot;——分配和构造必须<strong>分离</strong>。</p>
+<div class="keypoint">
+<strong>分配内存 ≠ 构造对象</strong>
+<ul>
+<li><code>::operator new(bytes)</code>：只<strong>分配一块原始字节</strong>，不构造任何对象（类似 C 的 <code>malloc</code>）。</li>
+<li><strong>placement new</strong> <code>new (ptr) T(args...)</code>：不分配内存，而是在<strong>已有的 ptr 位置上构造</strong>一个 T。</li>
+<li><code>ptr->~T()</code>：<strong>显式调用析构函数</strong>，销毁对象但不释放内存。</li>
+</ul>
+容器就是靠这三样，把"内存管理"和"对象生命周期"解耦——预留一大块内存，按需在其中构造/析构元素。这正是第 4 章"生命周期"和第 5 章"RAII"在库层面的底层实现。
+</div><h2>逐步构建：骨架 + 析构</h2>
+<p>先搭骨架——三个字段、内存分配辅助函数、以及负责清理的析构函数。析构要做两件事：<strong>先逐个析构元素，再释放内存</strong>（顺序不能反）。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG5ldz5cbiNpbmNsdWRlIDxjc3RkZGVmPlxuXG50ZW1wbGF0ZSA8dHlwZW5hbWUgVD5cbmNsYXNzIFNpbXBsZVZlY3RvciB7XG4gICAgVCogZGF0YV8gPSBudWxscHRyO1xuICAgIHN0ZDo6c2l6ZV90IHNpemVfID0gMDtcbiAgICBzdGQ6OnNpemVfdCBjYXBhY2l0eV8gPSAwO1xuXG4gICAgLy8g5Y%2Bq5YiG6YWN5Y6f5aeL5YaF5a2Y77yM5LiN5p6E6YCg5YWD57SgXG4gICAgc3RhdGljIFQqIGFsbG9jYXRlKHN0ZDo6c2l6ZV90IG4pIHtcbiAgICAgICAgcmV0dXJuIHN0YXRpY19jYXN0PFQqPig6Om9wZXJhdG9yIG5ldyhuICogc2l6ZW9mKFQpKSk7XG4gICAgfVxuICAgIHN0YXRpYyB2b2lkIGRlYWxsb2NhdGUoVCogcCkgeyA6Om9wZXJhdG9yIGRlbGV0ZShwKTsgfVxuXG5wdWJsaWM6XG4gICAgU2ltcGxlVmVjdG9yKCkgPSBkZWZhdWx0O1xuXG4gICAgflNpbXBsZVZlY3RvcigpIHtcbiAgICAgICAgZm9yIChzdGQ6OnNpemVfdCBpID0gMDsgaSA8IHNpemVfOyArK2kpIGRhdGFfW2ldLn5UKCk7ICAvLyAxKSDpgJDkuKrmnpDmnoTlhYPntKBcbiAgICAgICAgZGVhbGxvY2F0ZShkYXRhXyk7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8gMikg5YaN6YeK5pS%2B5YaF5a2YXG4gICAgfVxuXG4gICAgc3RkOjpzaXplX3Qgc2l6ZSgpIGNvbnN0IHsgcmV0dXJuIHNpemVfOyB9XG4gICAgc3RkOjpzaXplX3QgY2FwYWNpdHkoKSBjb25zdCB7IHJldHVybiBjYXBhY2l0eV87IH1cbn07XG5cbmludCBtYWluKCkge1xuICAgIFNpbXBsZVZlY3RvcjxpbnQ%2BIHY7ICAgLy8g56m6IHZlY3Rvcu%2B8jOaekOaehOaXtuS7gOS5iOS5n%2BS4jeeUqOWBmu%2B8iGRhdGFfIOS4uiBudWxscHRyIOS5n%2BWuieWFqO%2B8iVxuICAgIHN0ZDo6Y291dCA8PCBcInNpemU9XCIgPDwgdi5zaXplKCkgPDwgXCIgY2FwPVwiIDw8IHYuY2FwYWNpdHkoKSA8PCAnXFxuJztcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;new&gt;
+#include &lt;cstddef&gt;
+
+template &lt;typename T&gt;
+class SimpleVector {
+    T* data_ = nullptr;
+    std::size_t size_ = 0;
+    std::size_t capacity_ = 0;
+
+    // 只分配原始内存，不构造元素
+    static T* allocate(std::size_t n) {
+        return static_cast&lt;T*&gt;(::operator new(n * sizeof(T)));
+    }
+    static void deallocate(T* p) { ::operator delete(p); }
+
+public:
+    SimpleVector() = default;
+
+    ~SimpleVector() {
+        for (std::size_t i = 0; i &lt; size_; ++i) data_[i].~T();  // 1) 逐个析构元素
+        deallocate(data_);                                       // 2) 再释放内存
+    }
+
+    std::size_t size() const { return size_; }
+    std::size_t capacity() const { return capacity_; }
+};
+
+int main() {
+    SimpleVector&lt;int&gt; v;   // 空 vector，析构时什么也不用做（data_ 为 nullptr 也安全）
+    std::cout &lt;&lt; "size=" &lt;&lt; v.size() &lt;&lt; " cap=" &lt;&lt; v.capacity() &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>输出 <code>size=0 cap=0</code>。这个析构函数就是 RAII 的核心——只要 <code>SimpleVector</code> 离开作用域，它管理的堆内存和所有元素都被自动清理。<strong>这正是它比裸 <code>new[]</code>/<code>delete[]</code> 安全的原因。</strong></p>
+<h2>第二块拼图：扩容（reserve）</h2>
+<p><code>reserve</code> 是容器的心脏——申请更大的新内存，把现有元素<strong>搬</strong>过去，释放旧内存。&quot;搬&quot;这个字暗示了第 7 章的移动语义：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">void reserve(std::size_t newCap) {
+    if (newCap &lt;= capacity_) return;               // 只增不减
+    T* newData = allocate(newCap);                 // 1) 分配更大的新内存
+    for (std::size_t i = 0; i &lt; size_; ++i)
+        new (newData + i) T(std::move_if_noexcept(data_[i]));  // 2) 把元素搬到新内存
+    for (std::size_t i = 0; i &lt; size_; ++i) data_[i].~T();     // 3) 析构旧元素
+    deallocate(data_);                             // 4) 释放旧内存
+    data_ = newData;                               // 5) 接管新内存
+    capacity_ = newCap;
+}</code></pre>
+</div><div class="keypoint">
+<strong>为什么是 <code>move_if_noexcept</code> 而不是 <code>move</code>？</strong>
+搬移元素时，我们想用<strong>移动</strong>（快）而非拷贝。但有个异常安全的考量：如果搬到一半某个元素的移动构造<strong>抛了异常</strong>，旧数据可能已经被破坏、无法回滚。<br>
+<code>std::move_if_noexcept</code> 的策略是：如果 T 的移动构造是 <code>noexcept</code> 的（保证不抛），就移动；否则退而<strong>拷贝</strong>（拷贝失败时旧数据还完好，能安全回滚）。这就是第 17 章说的"移动构造标 <code>noexcept</code> 才能让容器扩容用移动"的底层机制——你现在看到它在库里是怎么用的了。
+</div><h2>第三块拼图：push_back 与 emplace_back</h2>
+<p>有了 <code>reserve</code>，添加元素就简单了：容量满了就翻倍扩容，然后在末尾用 placement new 构造新元素。<code>emplace_back</code> 用<strong>完美转发</strong>（第 11、16 章的可变参数模板）直接在容器内原地构造，<code>push_back</code> 只是它的两个便捷包装：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">void push_back(const T&amp; value) { emplace_back(value); }        // 拷贝进来
+void push_back(T&amp;&amp; value) { emplace_back(std::move(value)); }  // 移动进来
+
+template &lt;typename... Args&gt;
+T&amp; emplace_back(Args&amp;&amp;... args) {
+    if (size_ == capacity_)
+        reserve(capacity_ == 0 ? 1 : capacity_ * 2);  // 满了：翻倍（0 则起步为 1）
+    new (data_ + size_) T(std::forward&lt;Args&gt;(args)...);  // 原地构造
+    return data_[size_++];
+}</code></pre>
+</div><p><code>std::forward&lt;Args&gt;(args)...</code> 把参数<strong>原样</strong>（保持左值/右值属性，第 6 章值类别）转发给 T 的构造函数——这样 <code>emplace_back</code> 既能转发左值触发拷贝、也能转发右值触发移动，还能直接传构造参数原地构造，一份代码通吃。</p>
+<h2>亲眼观察扩容时发生了什么</h2>
+<p>把上面的部件组装起来，用第 10 章那种&quot;会报告生死&quot;的探针类型，观察 <code>emplace_back</code> 触发扩容时的移动与析构。这是理解容器行为最直观的方式：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG5ldz5cbiNpbmNsdWRlIDx1dGlsaXR5PlxuI2luY2x1ZGUgPGNzdGRkZWY%2BXG5cbnRlbXBsYXRlIDx0eXBlbmFtZSBUPlxuY2xhc3MgU2ltcGxlVmVjdG9yIHtcbiAgICBUKiBkYXRhXyA9IG51bGxwdHI7XG4gICAgc3RkOjpzaXplX3Qgc2l6ZV8gPSAwLCBjYXBhY2l0eV8gPSAwO1xuICAgIHN0YXRpYyBUKiBhbGxvY2F0ZShzdGQ6OnNpemVfdCBuKSB7IHJldHVybiBzdGF0aWNfY2FzdDxUKj4oOjpvcGVyYXRvciBuZXcobiAqIHNpemVvZihUKSkpOyB9XG4gICAgc3RhdGljIHZvaWQgZGVhbGxvY2F0ZShUKiBwKSB7IDo6b3BlcmF0b3IgZGVsZXRlKHApOyB9XG5wdWJsaWM6XG4gICAgU2ltcGxlVmVjdG9yKCkgPSBkZWZhdWx0O1xuICAgIH5TaW1wbGVWZWN0b3IoKSB7IGZvciAoc3RkOjpzaXplX3QgaT0wO2k8c2l6ZV87KytpKSBkYXRhX1tpXS5%2BVCgpOyBkZWFsbG9jYXRlKGRhdGFfKTsgfVxuICAgIHZvaWQgcmVzZXJ2ZShzdGQ6OnNpemVfdCBuYykge1xuICAgICAgICBpZiAobmMgPD0gY2FwYWNpdHlfKSByZXR1cm47XG4gICAgICAgIFQqIG5kID0gYWxsb2NhdGUobmMpO1xuICAgICAgICBmb3IgKHN0ZDo6c2l6ZV90IGk9MDtpPHNpemVfOysraSkgbmV3IChuZCtpKSBUKHN0ZDo6bW92ZV9pZl9ub2V4Y2VwdChkYXRhX1tpXSkpO1xuICAgICAgICBmb3IgKHN0ZDo6c2l6ZV90IGk9MDtpPHNpemVfOysraSkgZGF0YV9baV0uflQoKTtcbiAgICAgICAgZGVhbGxvY2F0ZShkYXRhXyk7IGRhdGFfID0gbmQ7IGNhcGFjaXR5XyA9IG5jO1xuICAgIH1cbiAgICB0ZW1wbGF0ZSA8dHlwZW5hbWUuLi4gQXJncz5cbiAgICB2b2lkIGVtcGxhY2VfYmFjayhBcmdzJiYuLi4gYXJncykge1xuICAgICAgICBpZiAoc2l6ZV8gPT0gY2FwYWNpdHlfKSByZXNlcnZlKGNhcGFjaXR5XyA9PSAwID8gMSA6IGNhcGFjaXR5XyAqIDIpO1xuICAgICAgICBuZXcgKGRhdGFfICsgc2l6ZV8pIFQoc3RkOjpmb3J3YXJkPEFyZ3M%2BKGFyZ3MpLi4uKTsgKytzaXplXztcbiAgICB9XG4gICAgc3RkOjpzaXplX3Qgc2l6ZSgpIGNvbnN0IHsgcmV0dXJuIHNpemVfOyB9XG4gICAgc3RkOjpzaXplX3QgY2FwYWNpdHkoKSBjb25zdCB7IHJldHVybiBjYXBhY2l0eV87IH1cbn07XG5cbnN0cnVjdCBQcm9iZSB7XG4gICAgaW50IGlkO1xuICAgIFByb2JlKGludCBpKSA6IGlkKGkpIHsgc3RkOjpjb3V0IDw8IFwiICDmnoTpgKAgI1wiIDw8IGlkIDw8ICdcXG4nOyB9XG4gICAgUHJvYmUoY29uc3QgUHJvYmUmIG8pIDogaWQoby5pZCkgeyBzdGQ6OmNvdXQgPDwgXCIgIOaLt%2Bi0nSAjXCIgPDwgaWQgPDwgJ1xcbic7IH1cbiAgICBQcm9iZShQcm9iZSYmIG8pIG5vZXhjZXB0IDogaWQoby5pZCkgeyBzdGQ6OmNvdXQgPDwgXCIgIOenu%2BWKqCAjXCIgPDwgaWQgPDwgJ1xcbic7IH1cbiAgICB%2BUHJvYmUoKSB7IHN0ZDo6Y291dCA8PCBcIiAg5p6Q5p6EICNcIiA8PCBpZCA8PCAnXFxuJzsgfVxufTtcblxuaW50IG1haW4oKSB7XG4gICAgU2ltcGxlVmVjdG9yPFByb2JlPiB2O1xuICAgIGZvciAoaW50IGkgPSAxOyBpIDw9IDM7ICsraSkge1xuICAgICAgICBzdGQ6OmNvdXQgPDwgXCJlbXBsYWNlX2JhY2soI1wiIDw8IGkgPDwgXCIpICBbc2l6ZT1cIiA8PCB2LnNpemUoKVxuICAgICAgICAgICAgICAgICAgPDwgXCIgY2FwPVwiIDw8IHYuY2FwYWNpdHkoKSA8PCBcIl1cXG5cIjtcbiAgICAgICAgdi5lbXBsYWNlX2JhY2soaSk7XG4gICAgfVxuICAgIHN0ZDo6Y291dCA8PCBcIue7k%2Badn%2B%2B8jOmAkOS4quaekOaehO%2B8mlxcblwiO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;new&gt;
+#include &lt;utility&gt;
+#include &lt;cstddef&gt;
+
+template &lt;typename T&gt;
+class SimpleVector {
+    T* data_ = nullptr;
+    std::size_t size_ = 0, capacity_ = 0;
+    static T* allocate(std::size_t n) { return static_cast&lt;T*&gt;(::operator new(n * sizeof(T))); }
+    static void deallocate(T* p) { ::operator delete(p); }
+public:
+    SimpleVector() = default;
+    ~SimpleVector() { for (std::size_t i=0;i&lt;size_;++i) data_[i].~T(); deallocate(data_); }
+    void reserve(std::size_t nc) {
+        if (nc &lt;= capacity_) return;
+        T* nd = allocate(nc);
+        for (std::size_t i=0;i&lt;size_;++i) new (nd+i) T(std::move_if_noexcept(data_[i]));
+        for (std::size_t i=0;i&lt;size_;++i) data_[i].~T();
+        deallocate(data_); data_ = nd; capacity_ = nc;
+    }
+    template &lt;typename... Args&gt;
+    void emplace_back(Args&amp;&amp;... args) {
+        if (size_ == capacity_) reserve(capacity_ == 0 ? 1 : capacity_ * 2);
+        new (data_ + size_) T(std::forward&lt;Args&gt;(args)...); ++size_;
+    }
+    std::size_t size() const { return size_; }
+    std::size_t capacity() const { return capacity_; }
+};
+
+struct Probe {
+    int id;
+    Probe(int i) : id(i) { std::cout &lt;&lt; "  构造 #" &lt;&lt; id &lt;&lt; '\n'; }
+    Probe(const Probe&amp; o) : id(o.id) { std::cout &lt;&lt; "  拷贝 #" &lt;&lt; id &lt;&lt; '\n'; }
+    Probe(Probe&amp;&amp; o) noexcept : id(o.id) { std::cout &lt;&lt; "  移动 #" &lt;&lt; id &lt;&lt; '\n'; }
+    ~Probe() { std::cout &lt;&lt; "  析构 #" &lt;&lt; id &lt;&lt; '\n'; }
+};
+
+int main() {
+    SimpleVector&lt;Probe&gt; v;
+    for (int i = 1; i &lt;= 3; ++i) {
+        std::cout &lt;&lt; "emplace_back(#" &lt;&lt; i &lt;&lt; ")  [size=" &lt;&lt; v.size()
+                  &lt;&lt; " cap=" &lt;&lt; v.capacity() &lt;&lt; "]\n";
+        v.emplace_back(i);
+    }
+    std::cout &lt;&lt; "结束，逐个析构：\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>运行输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">emplace_back(#1)  [size=0 cap=0]
+  构造 #1
+emplace_back(#2)  [size=1 cap=1]
+  移动 #1
+  析构 #1
+  构造 #2
+emplace_back(#3)  [size=2 cap=2]
+  移动 #1
+  移动 #2
+  析构 #1
+  析构 #2
+  构造 #3
+结束，逐个析构：
+  析构 #1
+  析构 #2
+  析构 #3</code></pre>
+</div><p>逐行读这个输出，容器的行为一览无余：</p>
+<ul>
+<li>加 <code>#1</code> 时容量 0→1，构造 <code>#1</code>；</li>
+<li>加 <code>#2</code> 时容量 1 满了→扩到 2，把 <code>#1</code> <strong>移动</strong>到新内存、<strong>析构</strong>旧的 <code>#1</code>，再构造 <code>#2</code>；</li>
+<li>加 <code>#3</code> 时容量 2 满了→扩到 4，把 <code>#1</code>、<code>#2</code> 移动过去、析构旧的，再构造 <code>#3</code>。</li>
+</ul>
+<p>因为 <code>Probe</code> 的移动构造标了 <code>noexcept</code>，<code>move_if_noexcept</code> 选择了<strong>移动</strong>而非拷贝——这就是第 17 章那条规则的实际后果。<strong>扩容有搬移成本</strong>，这也解释了为什么第 4、14 章反复建议：预先知道大小就先 <code>reserve</code>，避免反复扩容。</p>
+<h2>第四块拼图：拷贝与移动（Rule of Five）</h2>
+<p>因为 <code>SimpleVector</code> <strong>直接管理裸资源</strong>（<code>data_</code> 指针），它落入第 10 章的 <strong>Rule of Five</strong>——必须正确实现拷贝和移动，否则默认的浅拷贝会导致双重释放（第 7 章的灾难）。</p>
+<ul>
+<li><strong>拷贝构造</strong>：分配自己的新内存，深拷贝每个元素；</li>
+<li><strong>移动构造</strong>：接管对方的指针，把对方置空；</li>
+<li><strong>赋值</strong>：用一个漂亮的技巧 <strong>copy-and-swap</strong> 同时搞定拷贝赋值和移动赋值。</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 拷贝构造：深拷贝
+SimpleVector(const SimpleVector&amp; other)
+    : data_(allocate(other.capacity_)), size_(0), capacity_(other.capacity_) {
+    try {
+        for (; size_ &lt; other.size_; ++size_)
+            new (data_ + size_) T(other.data_[size_]);  // 逐个拷贝构造
+    } catch (...) {                    // 异常安全：构造到一半失败要清理已建的
+        for (std::size_t i = 0; i &lt; size_; ++i) data_[i].~T();
+        deallocate(data_);
+        throw;
+    }
+}
+
+// 移动构造：接管资源，置空对方（noexcept！）
+SimpleVector(SimpleVector&amp;&amp; other) noexcept
+    : data_(other.data_), size_(other.size_), capacity_(other.capacity_) {
+    other.data_ = nullptr;
+    other.size_ = other.capacity_ = 0;
+}
+
+// copy-and-swap：一个赋值运算符同时处理拷贝赋值和移动赋值
+SimpleVector&amp; operator=(SimpleVector other) noexcept {  // 按值传参！
+    swap(other);
+    return *this;
+}
+
+void swap(SimpleVector&amp; other) noexcept {
+    std::swap(data_, other.data_);
+    std::swap(size_, other.size_);
+    std::swap(capacity_, other.capacity_);
+}</code></pre>
+</div><div class="keypoint">
+<strong>copy-and-swap：一石二鸟的赋值</strong>
+注意 <code>operator=</code> 的参数是<strong>按值</strong>传的 <code>SimpleVector other</code>。这意味着：
+<ul>
+<li>赋值来源是<strong>左值</strong>时，按值传参触发<strong>拷贝构造</strong>，<code>other</code> 是一份副本；</li>
+<li>来源是<strong>右值</strong>时，触发<strong>移动构造</strong>，<code>other</code> 廉价接管。</li>
+</ul>
+然后只需把 <code>*this</code> 和这份 <code>other</code> 的内容 <code>swap</code> 一下——旧内容随 <code>other</code> 析构时自动清理。一个函数同时正确处理了拷贝赋值和移动赋值，还天然异常安全（副本先建好才交换）。这是 C++ 里非常经典的惯用法，把第 6、7 章的值类别与移动语义用到了极致。
+</div><h2>完整实现与试用</h2>
+<p>把五块拼图（骨架、reserve、emplace_back、拷贝/移动、访问接口）全部组装，再加上下标访问、<code>at</code>（带越界检查）、以及让范围 <code>for</code> 能工作的 <code>begin</code>/<code>end</code>（第 14 章：迭代器就是指针的泛化，对连续内存直接用 <code>T*</code> 即可）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG5ldz5cbiNpbmNsdWRlIDx1dGlsaXR5PlxuI2luY2x1ZGUgPHN0ZGV4Y2VwdD5cbiNpbmNsdWRlIDxjc3RkZGVmPlxuXG50ZW1wbGF0ZSA8dHlwZW5hbWUgVD5cbmNsYXNzIFNpbXBsZVZlY3RvciB7XG4gICAgVCogZGF0YV8gPSBudWxscHRyO1xuICAgIHN0ZDo6c2l6ZV90IHNpemVfID0gMDtcbiAgICBzdGQ6OnNpemVfdCBjYXBhY2l0eV8gPSAwO1xuXG4gICAgc3RhdGljIFQqIGFsbG9jYXRlKHN0ZDo6c2l6ZV90IG4pIHsgcmV0dXJuIHN0YXRpY19jYXN0PFQqPig6Om9wZXJhdG9yIG5ldyhuICogc2l6ZW9mKFQpKSk7IH1cbiAgICBzdGF0aWMgdm9pZCBkZWFsbG9jYXRlKFQqIHApIHsgOjpvcGVyYXRvciBkZWxldGUocCk7IH1cblxucHVibGljOlxuICAgIFNpbXBsZVZlY3RvcigpID0gZGVmYXVsdDtcblxuICAgIH5TaW1wbGVWZWN0b3IoKSB7XG4gICAgICAgIGZvciAoc3RkOjpzaXplX3QgaSA9IDA7IGkgPCBzaXplXzsgKytpKSBkYXRhX1tpXS5%2BVCgpO1xuICAgICAgICBkZWFsbG9jYXRlKGRhdGFfKTtcbiAgICB9XG5cbiAgICBTaW1wbGVWZWN0b3IoY29uc3QgU2ltcGxlVmVjdG9yJiBvdGhlcilcbiAgICAgICAgOiBkYXRhXyhhbGxvY2F0ZShvdGhlci5jYXBhY2l0eV8pKSwgc2l6ZV8oMCksIGNhcGFjaXR5XyhvdGhlci5jYXBhY2l0eV8pIHtcbiAgICAgICAgdHJ5IHtcbiAgICAgICAgICAgIGZvciAoOyBzaXplXyA8IG90aGVyLnNpemVfOyArK3NpemVfKVxuICAgICAgICAgICAgICAgIG5ldyAoZGF0YV8gKyBzaXplXykgVChvdGhlci5kYXRhX1tzaXplX10pO1xuICAgICAgICB9IGNhdGNoICguLi4pIHtcbiAgICAgICAgICAgIGZvciAoc3RkOjpzaXplX3QgaSA9IDA7IGkgPCBzaXplXzsgKytpKSBkYXRhX1tpXS5%2BVCgpO1xuICAgICAgICAgICAgZGVhbGxvY2F0ZShkYXRhXyk7XG4gICAgICAgICAgICB0aHJvdztcbiAgICAgICAgfVxuICAgIH1cblxuICAgIFNpbXBsZVZlY3RvcihTaW1wbGVWZWN0b3ImJiBvdGhlcikgbm9leGNlcHRcbiAgICAgICAgOiBkYXRhXyhvdGhlci5kYXRhXyksIHNpemVfKG90aGVyLnNpemVfKSwgY2FwYWNpdHlfKG90aGVyLmNhcGFjaXR5Xykge1xuICAgICAgICBvdGhlci5kYXRhXyA9IG51bGxwdHI7XG4gICAgICAgIG90aGVyLnNpemVfID0gb3RoZXIuY2FwYWNpdHlfID0gMDtcbiAgICB9XG5cbiAgICBTaW1wbGVWZWN0b3ImIG9wZXJhdG9yPShTaW1wbGVWZWN0b3Igb3RoZXIpIG5vZXhjZXB0IHsgc3dhcChvdGhlcik7IHJldHVybiAqdGhpczsgfVxuXG4gICAgdm9pZCBzd2FwKFNpbXBsZVZlY3RvciYgb3RoZXIpIG5vZXhjZXB0IHtcbiAgICAgICAgc3RkOjpzd2FwKGRhdGFfLCBvdGhlci5kYXRhXyk7XG4gICAgICAgIHN0ZDo6c3dhcChzaXplXywgb3RoZXIuc2l6ZV8pO1xuICAgICAgICBzdGQ6OnN3YXAoY2FwYWNpdHlfLCBvdGhlci5jYXBhY2l0eV8pO1xuICAgIH1cblxuICAgIHZvaWQgcmVzZXJ2ZShzdGQ6OnNpemVfdCBuZXdDYXApIHtcbiAgICAgICAgaWYgKG5ld0NhcCA8PSBjYXBhY2l0eV8pIHJldHVybjtcbiAgICAgICAgVCogbmV3RGF0YSA9IGFsbG9jYXRlKG5ld0NhcCk7XG4gICAgICAgIHN0ZDo6c2l6ZV90IGkgPSAwO1xuICAgICAgICB0cnkge1xuICAgICAgICAgICAgZm9yICg7IGkgPCBzaXplXzsgKytpKSBuZXcgKG5ld0RhdGEgKyBpKSBUKHN0ZDo6bW92ZV9pZl9ub2V4Y2VwdChkYXRhX1tpXSkpO1xuICAgICAgICB9IGNhdGNoICguLi4pIHtcbiAgICAgICAgICAgIGZvciAoc3RkOjpzaXplX3QgaiA9IDA7IGogPCBpOyArK2opIG5ld0RhdGFbal0uflQoKTtcbiAgICAgICAgICAgIGRlYWxsb2NhdGUobmV3RGF0YSk7XG4gICAgICAgICAgICB0aHJvdztcbiAgICAgICAgfVxuICAgICAgICBmb3IgKHN0ZDo6c2l6ZV90IGogPSAwOyBqIDwgc2l6ZV87ICsraikgZGF0YV9bal0uflQoKTtcbiAgICAgICAgZGVhbGxvY2F0ZShkYXRhXyk7XG4gICAgICAgIGRhdGFfID0gbmV3RGF0YTtcbiAgICAgICAgY2FwYWNpdHlfID0gbmV3Q2FwO1xuICAgIH1cblxuICAgIHRlbXBsYXRlIDx0eXBlbmFtZS4uLiBBcmdzPlxuICAgIFQmIGVtcGxhY2VfYmFjayhBcmdzJiYuLi4gYXJncykge1xuICAgICAgICBpZiAoc2l6ZV8gPT0gY2FwYWNpdHlfKSByZXNlcnZlKGNhcGFjaXR5XyA9PSAwID8gMSA6IGNhcGFjaXR5XyAqIDIpO1xuICAgICAgICBuZXcgKGRhdGFfICsgc2l6ZV8pIFQoc3RkOjpmb3J3YXJkPEFyZ3M%2BKGFyZ3MpLi4uKTtcbiAgICAgICAgcmV0dXJuIGRhdGFfW3NpemVfKytdO1xuICAgIH1cbiAgICB2b2lkIHB1c2hfYmFjayhjb25zdCBUJiB2KSB7IGVtcGxhY2VfYmFjayh2KTsgfVxuICAgIHZvaWQgcHVzaF9iYWNrKFQmJiB2KSB7IGVtcGxhY2VfYmFjayhzdGQ6Om1vdmUodikpOyB9XG4gICAgdm9pZCBwb3BfYmFjaygpIHsgZGF0YV9bLS1zaXplX10uflQoKTsgfVxuXG4gICAgVCYgb3BlcmF0b3JbXShzdGQ6OnNpemVfdCBpKSB7IHJldHVybiBkYXRhX1tpXTsgfVxuICAgIGNvbnN0IFQmIG9wZXJhdG9yW10oc3RkOjpzaXplX3QgaSkgY29uc3QgeyByZXR1cm4gZGF0YV9baV07IH1cbiAgICBUJiBhdChzdGQ6OnNpemVfdCBpKSB7XG4gICAgICAgIGlmIChpID49IHNpemVfKSB0aHJvdyBzdGQ6Om91dF9vZl9yYW5nZShcIue0ouW8lei2iueVjFwiKTtcbiAgICAgICAgcmV0dXJuIGRhdGFfW2ldO1xuICAgIH1cblxuICAgIHN0ZDo6c2l6ZV90IHNpemUoKSBjb25zdCB7IHJldHVybiBzaXplXzsgfVxuICAgIHN0ZDo6c2l6ZV90IGNhcGFjaXR5KCkgY29uc3QgeyByZXR1cm4gY2FwYWNpdHlfOyB9XG4gICAgYm9vbCBlbXB0eSgpIGNvbnN0IHsgcmV0dXJuIHNpemVfID09IDA7IH1cblxuICAgIFQqIGJlZ2luKCkgeyByZXR1cm4gZGF0YV87IH0gICAgICAgICAgICAgIC8vIOi%2FreS7o%2BWZqOWNs%2BaMh%2BmSiO%2B8iOi%2Fnue7reWGheWtmO%2B8iVxuICAgIFQqIGVuZCgpIHsgcmV0dXJuIGRhdGFfICsgc2l6ZV87IH1cbiAgICBjb25zdCBUKiBiZWdpbigpIGNvbnN0IHsgcmV0dXJuIGRhdGFfOyB9XG4gICAgY29uc3QgVCogZW5kKCkgY29uc3QgeyByZXR1cm4gZGF0YV8gKyBzaXplXzsgfVxufTtcblxuaW50IG1haW4oKSB7XG4gICAgU2ltcGxlVmVjdG9yPGludD4gdjtcbiAgICBmb3IgKGludCBpID0gMTsgaSA8PSA1OyArK2kpIHYucHVzaF9iYWNrKGkgKiAxMCk7XG5cbiAgICBzdGQ6OmNvdXQgPDwgXCJzaXplPVwiIDw8IHYuc2l6ZSgpIDw8IFwiIGNhcD1cIiA8PCB2LmNhcGFjaXR5KCkgPDwgJ1xcbic7XG4gICAgZm9yIChpbnQgeCA6IHYpIHN0ZDo6Y291dCA8PCB4IDw8ICcgJzsgICAgICAgICAvLyDojIPlm7QgZm9y77yI6Z2gIGJlZ2luL2VuZO%2B8iVxuICAgIHN0ZDo6Y291dCA8PCAnXFxuJztcblxuICAgIFNpbXBsZVZlY3RvcjxpbnQ%2BIGNvcHkgPSB2OyAgICAgICAgICAgICAgICAgICAgLy8g5ou36LSd5p6E6YCg77ya5rex5ou36LSdXG4gICAgY29weVswXSA9IDk5OTtcbiAgICBzdGQ6OmNvdXQgPDwgXCLmlLkgY29weSDlkI7vvJp2WzBdPVwiIDw8IHZbMF0gPDwgXCIgY29weVswXT1cIiA8PCBjb3B5WzBdIDw8ICdcXG4nO1xuXG4gICAgU2ltcGxlVmVjdG9yPGludD4gbW92ZWQgPSBzdGQ6Om1vdmUodik7ICAgICAgICAvLyDnp7vliqjmnoTpgKDvvJrmjqXnrqFcbiAgICBzdGQ6OmNvdXQgPDwgXCLnp7vliqjlkI7vvJptb3ZlZC5zaXplPVwiIDw8IG1vdmVkLnNpemUoKSA8PCBcIiB2LnNpemU9XCIgPDwgdi5zaXplKCkgPDwgJ1xcbic7XG5cbiAgICBtb3ZlZC5hdCgyKSA9IDMzMzsgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIOW4pui2iueVjOajgOafpeeahOiuv%2BmXrlxuICAgIHN0ZDo6Y291dCA8PCBcIm1vdmVkOiBcIjtcbiAgICBmb3IgKGludCB4IDogbW92ZWQpIHN0ZDo6Y291dCA8PCB4IDw8ICcgJztcbiAgICBzdGQ6OmNvdXQgPDwgJ1xcbic7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;new&gt;
+#include &lt;utility&gt;
+#include &lt;stdexcept&gt;
+#include &lt;cstddef&gt;
+
+template &lt;typename T&gt;
+class SimpleVector {
+    T* data_ = nullptr;
+    std::size_t size_ = 0;
+    std::size_t capacity_ = 0;
+
+    static T* allocate(std::size_t n) { return static_cast&lt;T*&gt;(::operator new(n * sizeof(T))); }
+    static void deallocate(T* p) { ::operator delete(p); }
+
+public:
+    SimpleVector() = default;
+
+    ~SimpleVector() {
+        for (std::size_t i = 0; i &lt; size_; ++i) data_[i].~T();
+        deallocate(data_);
+    }
+
+    SimpleVector(const SimpleVector&amp; other)
+        : data_(allocate(other.capacity_)), size_(0), capacity_(other.capacity_) {
+        try {
+            for (; size_ &lt; other.size_; ++size_)
+                new (data_ + size_) T(other.data_[size_]);
+        } catch (...) {
+            for (std::size_t i = 0; i &lt; size_; ++i) data_[i].~T();
+            deallocate(data_);
+            throw;
+        }
+    }
+
+    SimpleVector(SimpleVector&amp;&amp; other) noexcept
+        : data_(other.data_), size_(other.size_), capacity_(other.capacity_) {
+        other.data_ = nullptr;
+        other.size_ = other.capacity_ = 0;
+    }
+
+    SimpleVector&amp; operator=(SimpleVector other) noexcept { swap(other); return *this; }
+
+    void swap(SimpleVector&amp; other) noexcept {
+        std::swap(data_, other.data_);
+        std::swap(size_, other.size_);
+        std::swap(capacity_, other.capacity_);
+    }
+
+    void reserve(std::size_t newCap) {
+        if (newCap &lt;= capacity_) return;
+        T* newData = allocate(newCap);
+        std::size_t i = 0;
+        try {
+            for (; i &lt; size_; ++i) new (newData + i) T(std::move_if_noexcept(data_[i]));
+        } catch (...) {
+            for (std::size_t j = 0; j &lt; i; ++j) newData[j].~T();
+            deallocate(newData);
+            throw;
+        }
+        for (std::size_t j = 0; j &lt; size_; ++j) data_[j].~T();
+        deallocate(data_);
+        data_ = newData;
+        capacity_ = newCap;
+    }
+
+    template &lt;typename... Args&gt;
+    T&amp; emplace_back(Args&amp;&amp;... args) {
+        if (size_ == capacity_) reserve(capacity_ == 0 ? 1 : capacity_ * 2);
+        new (data_ + size_) T(std::forward&lt;Args&gt;(args)...);
+        return data_[size_++];
+    }
+    void push_back(const T&amp; v) { emplace_back(v); }
+    void push_back(T&amp;&amp; v) { emplace_back(std::move(v)); }
+    void pop_back() { data_[--size_].~T(); }
+
+    T&amp; operator[](std::size_t i) { return data_[i]; }
+    const T&amp; operator[](std::size_t i) const { return data_[i]; }
+    T&amp; at(std::size_t i) {
+        if (i &gt;= size_) throw std::out_of_range("索引越界");
+        return data_[i];
+    }
+
+    std::size_t size() const { return size_; }
+    std::size_t capacity() const { return capacity_; }
+    bool empty() const { return size_ == 0; }
+
+    T* begin() { return data_; }              // 迭代器即指针（连续内存）
+    T* end() { return data_ + size_; }
+    const T* begin() const { return data_; }
+    const T* end() const { return data_ + size_; }
+};
+
+int main() {
+    SimpleVector&lt;int&gt; v;
+    for (int i = 1; i &lt;= 5; ++i) v.push_back(i * 10);
+
+    std::cout &lt;&lt; "size=" &lt;&lt; v.size() &lt;&lt; " cap=" &lt;&lt; v.capacity() &lt;&lt; '\n';
+    for (int x : v) std::cout &lt;&lt; x &lt;&lt; ' ';         // 范围 for（靠 begin/end）
+    std::cout &lt;&lt; '\n';
+
+    SimpleVector&lt;int&gt; copy = v;                    // 拷贝构造：深拷贝
+    copy[0] = 999;
+    std::cout &lt;&lt; "改 copy 后：v[0]=" &lt;&lt; v[0] &lt;&lt; " copy[0]=" &lt;&lt; copy[0] &lt;&lt; '\n';
+
+    SimpleVector&lt;int&gt; moved = std::move(v);        // 移动构造：接管
+    std::cout &lt;&lt; "移动后：moved.size=" &lt;&lt; moved.size() &lt;&lt; " v.size=" &lt;&lt; v.size() &lt;&lt; '\n';
+
+    moved.at(2) = 333;                             // 带越界检查的访问
+    std::cout &lt;&lt; "moved: ";
+    for (int x : moved) std::cout &lt;&lt; x &lt;&lt; ' ';
+    std::cout &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>运行输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">size=5 cap=8
+10 20 30 40 50 
+改 copy 后：v[0]=10 copy[0]=999
+移动后：moved.size=5 v.size=0
+moved: 10 20 333 40 50 </code></pre>
+</div><p>逐条印证了全书的核心概念：容量按 1→2→4→8 翻倍增长；范围 <code>for</code> 靠 <code>begin</code>/<code>end</code> 工作；<code>copy = v</code> 是<strong>深拷贝</strong>（改 <code>copy</code> 不动 <code>v</code>）；<code>std::move(v)</code> 后 <code>v</code> 被<strong>清空</strong>（size 变 0，所有权转移给 <code>moved</code>）。<strong>你亲手造出了一个 vector。</strong></p>
+<h2>回望：这个 vector 用到了全书什么</h2>
+<div class="keypoint">
+<strong>一个容器，串起整本书</strong>
+<ul>
+<li><strong>模板</strong>（第 11 章）：<code>SimpleVector&lt;T&gt;</code> 对任意元素类型工作。</li>
+<li><strong>RAII</strong>（第 5 章）：析构函数自动清理内存和元素，无需手动 delete。</li>
+<li><strong>值语义与深拷贝</strong>（第 3 章）：拷贝得到独立副本。</li>
+<li><strong>移动语义与所有权</strong>（第 6、7 章）：移动转移资源、置空源；<code>move_if_noexcept</code> 择优搬移。</li>
+<li><strong>Rule of Five / copy-and-swap</strong>（第 10 章）：管理裸资源时正确实现五个特殊成员函数。</li>
+<li><strong>完美转发</strong>（第 11、16 章）：<code>emplace_back</code> 原地构造。</li>
+<li><strong>异常安全 / noexcept</strong>（第 17 章）：构造失败清理、noexcept 影响搬移策略。</li>
+<li><strong>迭代器</strong>（第 14 章）：<code>begin</code>/<code>end</code> 返回指针，接入范围 for 与标准算法。</li>
+</ul>
+真正的 <code>std::vector</code> 还处理了分配器、异常保证的更多细节、<code>iterator</code> 类型等，但<strong>骨架就是你手上这个</strong>。它不再是黑盒。
+</div><h2>全书结语</h2>
+<p>从第 1 章&quot;变量就是对象本身&quot;这一个观念出发，你一路走过了值语义、栈与堆、RAII、值类别与移动、所有权与智能指针、const、类设计、模板与 concepts、编译期计算、标准库、错误处理、多态与 vtable、编译器优化、并发，直到亲手实现一个容器。</p>
+<p>C++ 的难，从来不在语法，而在它把<strong>内存、生命周期、性能</strong>这些别的语言替你藏起来的东西，明明白白交到你手上。走完这一程，你手里的不只是一门新语言，而是一套能看穿&quot;程序到底如何运行&quot;的心智模型——这套模型,会让你回头看 Java 和 Python 时，也看得更深。</p>
+<p>接下来的附录是你的常备工具：环境搭建、术语对照、报错速查、以及继续前进的资源。欢迎随时回来查阅。<strong>祝你在 C++ 的世界里，写得清晰，也跑得飞快。</strong></p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>std::vector</code> 的核心是三个字段（<code>data_</code> / <code>size_</code> / <code>capacity_</code>）：一个栈上小对象管理一块堆数组，容量与元素数分开以摊薄插入成本。</li>
+<li>自己实现容器要<strong>分离内存分配与对象构造</strong>：<code>::operator new</code> 分配生内存，<strong>placement new</strong> 就地构造，显式 <code>~T()</code> 析构。</li>
+<li><strong><code>reserve</code></strong> 是心脏：分配更大内存、搬移元素、清理旧内存；用 <strong><code>move_if_noexcept</code></strong> 在移动与拷贝间择优（异常安全）。</li>
+<li>直接管理裸资源 → <strong>Rule of Five</strong>：正确实现拷贝/移动，<strong>copy-and-swap</strong> 用一个按值参数的 <code>operator=</code> 同时搞定拷贝赋值与移动赋值。</li>
+<li><code>emplace_back</code> 靠<strong>完美转发</strong>原地构造；<code>begin</code>/<code>end</code> 返回指针即成迭代器。</li>
+<li>这个 vector 串起了全书：模板、RAII、值语义、移动、所有权、异常安全、noexcept、迭代器——<code>std::vector</code> 不再是魔法。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch20.html">← 第 20 章 并发：线程、原子与内存模型</a>
+  <a class="nav-next" href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
