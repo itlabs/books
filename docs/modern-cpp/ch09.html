@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 const、常量性与不可变</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li class="active"><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 9 章 const、常量性与不可变</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>在 Java 里你有 <code>final</code>，在 Python 里你几乎没有真正的不可变约束。C++ 的 <code>const</code> 比这两者都强大得多——它不只是"这个变量不能改"，而是一套贯穿类型系统的<strong>常量性（const-correctness）</strong>机制，编译器会全程帮你把关。</p>
+<p>读完这一章，你会看懂 C++ 代码里满屏的 <code>const</code> 到底在说什么，知道 <code>const</code> 放在不同位置的不同含义，以及为什么"该加 const 的地方都加上"是专业 C++ 代码的标志。</p>
+</div><h2>const 不只是&quot;常量&quot;</h2>
+<p>先纠正一个来自其他语言的直觉。<code>const</code> 的字面意思是&quot;常量&quot;，但它在 C++ 里真正的含义是<strong>只读的承诺</strong>：通过这个名字，你不能修改所指的对象。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgbWF4ID0gMTAwO1xuICAgIC8vIG1heCA9IDIwMDsgICAgICAgICAvLyDinYwg57yW6K%2BR6ZSZ6K%2Bv77yaY29uc3Qg5a%2B56LGh5LiN6IO95L%2Bu5pS5XG4gICAgc3RkOjpjb3V0IDw8IG1heCA8PCAnXFxuJztcblxuICAgIGludCB4ID0gMTA7XG4gICAgY29uc3QgaW50JiByID0geDsgICAgIC8vIHIg5pivIHgg55qE5Y%2Bq6K%2B75Yir5ZCNXG4gICAgLy8gciA9IDIwOyAgICAgICAgICAgIC8vIOKdjCDkuI3og73pgJrov4cgciDmlLlcbiAgICB4ID0gMjA7ICAgICAgICAgICAgICAgLy8g4pyFIOS9hiB4IOiHquW3sei%2FmOaYr%2BiDveaUuVxuICAgIHN0ZDo6Y291dCA8PCByIDw8ICdcXG4nOyAgIC8vIDIw77yIciDnnIvliLDnmoTmmK8geCDnmoTlvZPliY3lgLzvvIlcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+int main() {
+    const int max = 100;
+    // max = 200;         // ❌ 编译错误：const 对象不能修改
+    std::cout &lt;&lt; max &lt;&lt; '\n';
+
+    int x = 10;
+    const int&amp; r = x;     // r 是 x 的只读别名
+    // r = 20;            // ❌ 不能通过 r 改
+    x = 20;               // ✅ 但 x 自己还是能改
+    std::cout &lt;&lt; r &lt;&lt; '\n';   // 20（r 看到的是 x 的当前值）
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>注意最后那组：<code>const int&amp; r = x</code> 是说&quot;<strong>通过 r</strong> 不能改&quot;，并不是说 x 变成了常量。<code>const</code> 约束的是<strong>访问路径</strong>，不一定是对象本身。这个区分是理解 const 的关键。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java：final</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">final int max = 100;
+// max = 200; 报错
+
+// final 只管"变量不能重新赋值"
+// 对象内部照样能改：
+final List&lt;Integer&gt; list = ...;
+list.add(1);  // ✅ 允许</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++：const 更深入</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">const int max = 100;
+// max = 200; 报错
+
+// const 能一路传递到成员：
+const std::vector&lt;int&gt; v = {1,2};
+// v.push_back(1); ❌ 不允许
+// const 对象只能调 const 方法</code></pre>
+</div></div>
+</div><p>关键差异:Java 的 <code>final</code> 只锁住&quot;变量不能改指向别的对象&quot;,对象内部随便改;C++ 的 <code>const</code> 会<strong>一路深入</strong>——一个 <code>const</code> 容器,你连往里加元素都不行。这种&quot;深&quot;的常量性是 C++ 类型安全的重要支柱。</p>
+<h2>const 与指针：位置决定含义</h2>
+<p><code>const</code> 和指针搭配时，位置不同、含义不同，这是初学者最容易绕晕的地方。只需记住一个口诀：<strong>从右往左读，<code>const</code> 修饰它左边的东西</strong>（左边没有时才修饰右边）。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5pbnQgbWFpbigpIHtcbiAgICBpbnQgYSA9IDEsIGIgPSAyO1xuXG4gICAgY29uc3QgaW50KiBwMSA9ICZhOyAgICAgICAgLy8g5oyH5ZCRIGNvbnN0IGludO%2B8muS4jeiDveaUuSAqcDHvvIzog73mlLkgcDEg5oyH5ZCRXG4gICAgcDEgPSAmYjsgICAgICAgICAgICAgICAgICAgLy8g4pyFIOaUueaMh%2BWQkVxuICAgIC8vICpwMSA9IDM7ICAgICAgICAgICAgICAgIC8vIOKdjCDkuI3og73mlLnmiYDmjIfnmoTlgLxcblxuICAgIGludCogY29uc3QgcDIgPSAmYTsgICAgICAgIC8vIGNvbnN0IOaMh%2BmSiO%2B8muiDveaUuSAqcDLvvIzkuI3og73mlLnmjIflkJFcbiAgICAqcDIgPSAxMDsgICAgICAgICAgICAgICAgICAvLyDinIUg5pS55omA5oyH55qE5YC8XG4gICAgLy8gcDIgPSAmYjsgICAgICAgICAgICAgICAgLy8g4p2MIOS4jeiDveaUueaMh%2BWQkVxuXG4gICAgY29uc3QgaW50KiBjb25zdCBwMyA9ICZhOyAgLy8g5Lik6ICF6YO95LiN6IO95pS5XG4gICAgc3RkOjpjb3V0IDw8IGEgPDwgJyAnIDw8ICpwMiA8PCAnXFxuJzsgICAvLyAxMCAxMFxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+int main() {
+    int a = 1, b = 2;
+
+    const int* p1 = &amp;a;        // 指向 const int：不能改 *p1，能改 p1 指向
+    p1 = &amp;b;                   // ✅ 改指向
+    // *p1 = 3;                // ❌ 不能改所指的值
+
+    int* const p2 = &amp;a;        // const 指针：能改 *p2，不能改指向
+    *p2 = 10;                  // ✅ 改所指的值
+    // p2 = &amp;b;                // ❌ 不能改指向
+
+    const int* const p3 = &amp;a;  // 两者都不能改
+    std::cout &lt;&lt; a &lt;&lt; ' ' &lt;&lt; *p2 &lt;&lt; '\n';   // 10 10
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="keypoint">
+<strong>从右往左读指针声明</strong>
+<ul>
+<li><code>const int* p</code> → "p is a pointer to <strong>const int</strong>"：所指的值是只读的，指针本身可变。</li>
+<li><code>int* const p</code> → "p is a <strong>const pointer</strong> to int"：指针是只读的（不能改指向），所指的值可变。</li>
+<li><code>const int* const p</code> → 两者都只读。</li>
+</ul>
+日常最常见的是第一种（<code>const int*</code>），用来表达"我借你这个对象看看，保证不改它"。
+</div><h2>const 引用：最常见的只读传参方式</h2>
+<p>回忆第 3 章的性能陷阱：按值传参会拷贝整个对象。解决方案就是 <strong><code>const T&amp;</code></strong>——按引用传递（不拷贝），同时用 <code>const</code> 承诺&quot;我不会改它&quot;。这是 C++ 里传递只读大对象的<strong>标准姿势</strong>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbi8vIOWPquivu%2BOAgeS4jeaLt%2Bi0ne%2B8muaXoumrmOaViOWPiOWuieWFqFxubG9uZyBzdW0oY29uc3Qgc3RkOjp2ZWN0b3I8aW50PiYgdikgeyAgIC8vIGNvbnN0IOW8leeUqO%2B8muS4jeaLt%2Bi0nei%2FmeS4qiB2ZWN0b3JcbiAgICBsb25nIHRvdGFsID0gMDtcbiAgICBmb3IgKGludCB4IDogdikgdG90YWwgKz0geDtcbiAgICAvLyB2LnB1c2hfYmFjaygwKTsgICAvLyDinYwgY29uc3Qg5L%2Bd6K%2BB5LqG5Ye95pWw5LiN5Lya5pS55Yqo5a6e5Y%2BCXG4gICAgcmV0dXJuIHRvdGFsO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBzdGQ6OnZlY3RvcjxpbnQ%2BIGRhdGF7MSwgMiwgMywgNCwgNX07XG4gICAgc3RkOjpjb3V0IDw8IHN1bShkYXRhKSA8PCAnXFxuJzsgICAgICAvLyAxNe%2B8jOS4lOayoeacieaLt%2Bi0nSBkYXRhXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+// 只读、不拷贝：既高效又安全
+long sum(const std::vector&lt;int&gt;&amp; v) {   // const 引用：不拷贝这个 vector
+    long total = 0;
+    for (int x : v) total += x;
+    // v.push_back(0);   // ❌ const 保证了函数不会改动实参
+    return total;
+}
+
+int main() {
+    std::vector&lt;int&gt; data{1, 2, 3, 4, 5};
+    std::cout &lt;&lt; sum(data) &lt;&lt; '\n';      // 15，且没有拷贝 data
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>const std::vector&lt;int&gt;&amp;</code> 兼得两个好处:<strong>没有拷贝开销</strong>(引用),且<strong>调用者放心</strong>(const 保证函数不会偷改自己的数据)。看到一个函数参数是 <code>const T&amp;</code>,你立刻知道:这是个只读的输入,而且传大对象也不亏。</p>
+<div class="note">
+<strong>传参的经验法则</strong>
+· 小对象（<code>int</code>、<code>double</code>、指针等）→ 直接<strong>按值</strong>传，拷贝比引用还便宜。<br>
+· 大对象、只读 → <strong><code>const T&</code></strong>。<br>
+· 需要修改实参 → <code>T&</code>（第 3 章）。<br>
+· 需要接管所有权 → 按值传 <code>T</code> 或传 <code>T&&</code>（配合移动，第 7 章）。
+</div><h2>const 成员函数：给方法贴上&quot;只读&quot;标签</h2>
+<p>类的成员函数也能标记为 <code>const</code>,写在参数列表后面。它的含义是:<strong>这个方法不会修改对象的状态</strong>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuY2xhc3MgQWNjb3VudCB7XG4gICAgc3RkOjpzdHJpbmcgb3duZXJfO1xuICAgIGxvbmcgYmFsYW5jZV87XG5wdWJsaWM6XG4gICAgQWNjb3VudChzdGQ6OnN0cmluZyBvd25lciwgbG9uZyBiYWxhbmNlKVxuICAgICAgICA6IG93bmVyXyhzdGQ6Om1vdmUob3duZXIpKSwgYmFsYW5jZV8oYmFsYW5jZSkge31cblxuICAgIC8vIGNvbnN0IOaIkOWRmOWHveaVsO%2B8muWPquivu%2B%2B8jOaJv%2BivuuS4jeaUueS7u%2BS9leaIkOWRmFxuICAgIGxvbmcgYmFsYW5jZSgpIGNvbnN0IHsgcmV0dXJuIGJhbGFuY2VfOyB9XG4gICAgY29uc3Qgc3RkOjpzdHJpbmcmIG93bmVyKCkgY29uc3QgeyByZXR1cm4gb3duZXJfOyB9XG5cbiAgICAvLyDpnZ4gY29uc3Qg5oiQ5ZGY5Ye95pWw77ya5Lya5L%2Bu5pS554q25oCBXG4gICAgdm9pZCBkZXBvc2l0KGxvbmcgYW1vdW50KSB7IGJhbGFuY2VfICs9IGFtb3VudDsgfVxufTtcblxuaW50IG1haW4oKSB7XG4gICAgQWNjb3VudCBhKFwiQWxpY2VcIiwgMTAwKTtcbiAgICBhLmRlcG9zaXQoNTApO1xuICAgIHN0ZDo6Y291dCA8PCBhLm93bmVyKCkgPDwgXCI6IFwiIDw8IGEuYmFsYW5jZSgpIDw8ICdcXG4nOyAgIC8vIEFsaWNlOiAxNTBcblxuICAgIGNvbnN0IEFjY291bnQgZnJvemVuKFwiQm9iXCIsIDk5OSk7ICAgLy8gY29uc3Qg5a%2B56LGhXG4gICAgc3RkOjpjb3V0IDw8IGZyb3plbi5iYWxhbmNlKCkgPDwgJ1xcbic7ICAgLy8g4pyFIOiDveiwgyBjb25zdCDmlrnms5VcbiAgICAvLyBmcm96ZW4uZGVwb3NpdCgxKTsgICAgICAgICAgICAgICAvLyDinYwgY29uc3Qg5a%2B56LGh5LiN6IO96LCD6Z2eIGNvbnN0IOaWueazlVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+class Account {
+    std::string owner_;
+    long balance_;
+public:
+    Account(std::string owner, long balance)
+        : owner_(std::move(owner)), balance_(balance) {}
+
+    // const 成员函数：只读，承诺不改任何成员
+    long balance() const { return balance_; }
+    const std::string&amp; owner() const { return owner_; }
+
+    // 非 const 成员函数：会修改状态
+    void deposit(long amount) { balance_ += amount; }
+};
+
+int main() {
+    Account a("Alice", 100);
+    a.deposit(50);
+    std::cout &lt;&lt; a.owner() &lt;&lt; ": " &lt;&lt; a.balance() &lt;&lt; '\n';   // Alice: 150
+
+    const Account frozen("Bob", 999);   // const 对象
+    std::cout &lt;&lt; frozen.balance() &lt;&lt; '\n';   // ✅ 能调 const 方法
+    // frozen.deposit(1);               // ❌ const 对象不能调非 const 方法
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>这里藏着 const 机制最重要的一环：</p>
+<div class="keypoint">
+<strong>const 对象只能调用 const 成员函数</strong>
+一个 <code>const Account</code>（或通过 <code>const Account&</code> 访问的对象），编译器<strong>只允许你调用它的 <code>const</code> 方法</strong>——因为非 const 方法可能改动状态，违背了 const 承诺。<br>
+这就是为什么"该标 const 的方法一定要标 const"：如果你忘了给 <code>balance()</code> 加 const，那么任何持有 <code>const Account&</code> 的代码（比如上面 <code>sum</code> 那种只读函数）就<strong>连查余额都做不到</strong>。const 正确性是会传染的——一处遗漏，处处受限。
+</div><h2>const 正确性：一种会传染的纪律</h2>
+<p>&quot;const 正确性（const-correctness）&quot;指的是:在每个&quot;本就不该修改&quot;的地方都老老实实加上 <code>const</code>——只读参数用 <code>const&amp;</code>,不改状态的方法标 <code>const</code>,不变的局部变量声明 <code>const</code>。</p>
+<p>它的价值有两层：</p>
+<ol>
+<li><strong>编译期防错</strong>:把&quot;我不打算改它&quot;写进类型,一旦不小心写了修改代码,编译器立刻报错——bug 在编译期就被挡住,而不是运行时。</li>
+<li><strong>自文档化</strong>:<code>const</code> 是给读代码的人看的契约。看到 <code>const T&amp;</code> 参数,不用读函数体就知道它不会改你的数据。</li>
+</ol>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG4vLyBjb25zdCDorqnnvJbor5HlmajmiJDkuLrkvaDnmoTmoKHlr7nlkZhcbmludCBmaXJzdEVsZW1lbnQoY29uc3QgaW50KiBhcnIsIGludCBuKSB7XG4gICAgaWYgKG4gPiAwKSB7XG4gICAgICAgIC8vIGFyclswXSA9IDk5OTsgICAgLy8g5LiH5LiA5omL5ruR5YaZ5LqG5L%2Bu5pS577yM57yW6K%2BR5Zmo56uL5Yi75oum5LiLXG4gICAgICAgIHJldHVybiBhcnJbMF07XG4gICAgfVxuICAgIHJldHVybiAtMTtcbn1cblxuaW50IG1haW4oKSB7XG4gICAgaW50IGRhdGFbXSA9IHsxMCwgMjAsIDMwfTtcbiAgICBzdGQ6OmNvdXQgPDwgZmlyc3RFbGVtZW50KGRhdGEsIDMpIDw8ICdcXG4nOyAgIC8vIDEwXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+// const 让编译器成为你的校对员
+int firstElement(const int* arr, int n) {
+    if (n &gt; 0) {
+        // arr[0] = 999;    // 万一手滑写了修改，编译器立刻拦下
+        return arr[0];
+    }
+    return -1;
+}
+
+int main() {
+    int data[] = {10, 20, 30};
+    std::cout &lt;&lt; firstElement(data, 3) &lt;&lt; '\n';   // 10
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="note">
+<strong>为什么 Java / Python 程序员容易忽略它</strong>
+Java 只有浅层的 <code>final</code>，Python 基本靠约定（下划线前缀、文档），你没有养成"处处标注只读"的习惯。但在 C++ 里，const 正确性是<strong>专业代码的基本要求</strong>：标准库全程贯彻 const，你的代码若不配合，就会在与标准库交互时处处别扭。建议从现在起养成习惯：<strong>默认加 const，只在确实需要修改时才去掉。</strong>
+</div><h2>const 与 constexpr 的一句话区别</h2>
+<p>你会在现代 C++ 里看到另一个相关的词 <code>constexpr</code>（第 13 章详讲），这里先厘清它和 <code>const</code> 的区别，免得混淆：</p>
+<div class="keypoint">
+<strong>const = 只读，constexpr = 编译期就能算出来</strong>
+<ul>
+<li><code>const</code>：运行期的只读承诺。值可以来自运行时（<code>const int n = readFromUser();</code> 合法）。</li>
+<li><code>constexpr</code>：更强——要求值在<strong>编译期</strong>就能确定。<code>constexpr int n = 3 * 4;</code> 会在编译时算好，可用于需要编译期常量的场景（如数组大小、模板参数）。</li>
+</ul>
+简单记：所有 <code>constexpr</code> 变量都隐含 <code>const</code>，但反之不然。日常先用好 <code>const</code>，编译期计算的话题留给第 13 章。
+</div><h2>动手：观察 const 如何在编译期拦截错误</h2>
+<p>下面这段程序演示 const 的三种典型用法。它能正常编译运行；但每个注释掉的 <code>// ❌</code> 行，只要放开任意一行，编译就会失败。动手试试放开它们，看看编译器给出的错误信息：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbmNsYXNzIEJvb2sge1xuICAgIHN0ZDo6c3RyaW5nIHRpdGxlXztcbiAgICBpbnQgcGFnZXNfO1xucHVibGljOlxuICAgIEJvb2soc3RkOjpzdHJpbmcgdCwgaW50IHApIDogdGl0bGVfKHN0ZDo6bW92ZSh0KSksIHBhZ2VzXyhwKSB7fVxuICAgIGNvbnN0IHN0ZDo6c3RyaW5nJiB0aXRsZSgpIGNvbnN0IHsgcmV0dXJuIHRpdGxlXzsgfSAgIC8vIOWPquivu%2BaWueazlVxuICAgIGludCBwYWdlcygpIGNvbnN0IHsgcmV0dXJuIHBhZ2VzXzsgfSAgICAgICAgICAgICAgICAgIC8vIOWPquivu%2BaWueazlVxuICAgIHZvaWQgYWRkUGFnZXMoaW50IG4pIHsgcGFnZXNfICs9IG47IH0gICAgICAgICAgICAgICAgIC8vIOS%2FruaUueaWueazlVxufTtcblxuLy8g5Y%2Bq6K%2B76YGN5Y6G77yaY29uc3Qg5byV55So5Lyg5Y%2BCICsg5Y%2Bq6LCDIGNvbnN0IOaWueazlVxudm9pZCBwcmludEFsbChjb25zdCBzdGQ6OnZlY3RvcjxCb29rPiYgYm9va3MpIHtcbiAgICBmb3IgKGNvbnN0IEJvb2smIGIgOiBib29rcykgeyAgICAgICAgICAgICAgICAgLy8gY29uc3Qg5byV55So77yM5LiN5ou36LSdXG4gICAgICAgIHN0ZDo6Y291dCA8PCBiLnRpdGxlKCkgPDwgXCIgKFwiIDw8IGIucGFnZXMoKSA8PCBcIiDpobUpXFxuXCI7XG4gICAgICAgIC8vIGIuYWRkUGFnZXMoMSk7ICAgLy8g4p2MIOaUvuW8gOS8muaKpemUme%2B8mmNvbnN0IOWvueixoeS4jeiDveiwg%2BmdniBjb25zdCDmlrnms5VcbiAgICB9XG4gICAgLy8gYm9va3MucHVzaF9iYWNrKC4uLik7IC8vIOKdjCDmlL7lvIDkvJrmiqXplJnvvJpjb25zdCDlrrnlmajkuI3og73kv67mlLlcbn1cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8Qm9vaz4gc2hlbGY7XG4gICAgc2hlbGYuZW1wbGFjZV9iYWNrKFwiQysrIOS5i%2Bi3r1wiLCAzMDApO1xuICAgIHNoZWxmLmVtcGxhY2VfYmFjayhcIueul%2BazleWvvOiuulwiLCAxMzAwKTtcblxuICAgIHByaW50QWxsKHNoZWxmKTtcblxuICAgIGNvbnN0IEJvb2sgZml4ZWQoXCLkuI3lj6%2Flj5jkuYvkuaZcIiwgMTAwKTtcbiAgICBzdGQ6OmNvdXQgPDwgZml4ZWQudGl0bGUoKSA8PCAnXFxuJzsgICAvLyDinIUgY29uc3Qg5a%2B56LGh6LCDIGNvbnN0IOaWueazle%2B8jE9LXG4gICAgLy8gZml4ZWQuYWRkUGFnZXMoMTApOyAgICAgICAgICAgICAgICAvLyDinYwg5pS%2B5byA5Lya5oql6ZSZXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+class Book {
+    std::string title_;
+    int pages_;
+public:
+    Book(std::string t, int p) : title_(std::move(t)), pages_(p) {}
+    const std::string&amp; title() const { return title_; }   // 只读方法
+    int pages() const { return pages_; }                  // 只读方法
+    void addPages(int n) { pages_ += n; }                 // 修改方法
+};
+
+// 只读遍历：const 引用传参 + 只调 const 方法
+void printAll(const std::vector&lt;Book&gt;&amp; books) {
+    for (const Book&amp; b : books) {                 // const 引用，不拷贝
+        std::cout &lt;&lt; b.title() &lt;&lt; " (" &lt;&lt; b.pages() &lt;&lt; " 页)\n";
+        // b.addPages(1);   // ❌ 放开会报错：const 对象不能调非 const 方法
+    }
+    // books.push_back(...); // ❌ 放开会报错：const 容器不能修改
+}
+
+int main() {
+    std::vector&lt;Book&gt; shelf;
+    shelf.emplace_back("C++ 之路", 300);
+    shelf.emplace_back("算法导论", 1300);
+
+    printAll(shelf);
+
+    const Book fixed("不可变之书", 100);
+    std::cout &lt;&lt; fixed.title() &lt;&lt; '\n';   // ✅ const 对象调 const 方法，OK
+    // fixed.addPages(10);                // ❌ 放开会报错
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>运行输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">C++ 之路 (300 页)
+算法导论 (1300 页)
+不可变之书</code></pre>
+</div><p>这段代码把本章的要点全用上了:<code>const&amp;</code> 只读传参、<code>const</code> 成员函数、<code>const</code> 对象。而那几个 <code>// ❌</code> 注释,正是 const 在编译期替你守住的边界——它们不是运行时才崩,而是<strong>根本编译不过</strong>。</p>
+<p>下一章我们把前面所有关于对象、拷贝、移动、所有权、const 的知识汇总起来,系统地讲如何设计一个类——构造、析构与那些决定拷贝/移动行为的&quot;特殊成员函数&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>const</code> 的本质是<strong>只读的承诺</strong>：约束的是&quot;通过这个名字/路径能否修改&quot;，不一定是对象本身。</li>
+<li>比 Java 的 <code>final</code> 更<strong>深</strong>：<code>const</code> 会一路传递到成员，<code>const</code> 容器连加元素都不行。</li>
+<li>指针与 const 搭配<strong>从右往左读</strong>：<code>const int*</code>（所指只读）vs <code>int* const</code>（指针只读）。</li>
+<li><strong><code>const T&amp;</code></strong> 是传递只读大对象的标准方式：无拷贝开销 + 不可修改的保证。</li>
+<li><strong>const 成员函数</strong>承诺不改对象状态；<strong>const 对象只能调 const 方法</strong>——所以该标 const 的方法务必标上。</li>
+<li><strong>const 正确性</strong>是会传染的纪律：默认加 const，编译器帮你在编译期挡住误改，同时让代码自文档化。</li>
+<li><code>const</code>（只读）与 <code>constexpr</code>（编译期可算）不同；所有 <code>constexpr</code> 隐含 <code>const</code>，反之不然。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch08.html">← 第 8 章 引用、指针与智能指针</a>
+  <a class="nav-next" href="ch10.html">第 10 章 类、构造与特殊成员函数 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

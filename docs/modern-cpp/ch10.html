@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 类、构造与特殊成员函数</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li class="active"><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 10 章 类、构造与特殊成员函数</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你早就会设计类——字段、方法、构造函数，这些概念 Java / Python 都有。这一章聚焦 C++ 类里<strong>你还不熟的那部分</strong>：初始化列表、以及决定对象如何被拷贝、移动、销毁的<strong>五个特殊成员函数</strong>。</p>
+<p>这一章把第 5、7、8 章的线索收拢成一条清晰的类设计准则：<strong>Rule of Zero / Three / Five</strong>。掌握它，你就知道什么时候该手写这些函数、什么时候一个都不用写（而且后者才是常态）。</p>
+</div><h2>构造函数与成员初始化列表</h2>
+<p>先看一个和 Java 不同的细节。C++ 构造函数初始化成员，应该用<strong>成员初始化列表</strong>（构造函数参数列表后、函数体前那段 <code>: 成员(值)</code>），而不是在函数体里赋值：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuY2xhc3MgUG9pbnQge1xuICAgIGludCB4XztcbiAgICBpbnQgeV87XG5wdWJsaWM6XG4gICAgLy8g5YaS5Y%2B35ZCO6Z2i5bCx5piv5oiQ5ZGY5Yid5aeL5YyW5YiX6KGoXG4gICAgUG9pbnQoaW50IHgsIGludCB5KSA6IHhfKHgpLCB5Xyh5KSB7XG4gICAgICAgIHN0ZDo6Y291dCA8PCBcIuaehOmAoCAoXCIgPDwgeF8gPDwgXCIsIFwiIDw8IHlfIDw8IFwiKVxcblwiO1xuICAgIH1cbiAgICBpbnQgeCgpIGNvbnN0IHsgcmV0dXJuIHhfOyB9XG4gICAgaW50IHkoKSBjb25zdCB7IHJldHVybiB5XzsgfVxufTtcblxuaW50IG1haW4oKSB7XG4gICAgUG9pbnQgcCgzLCA0KTtcbiAgICBzdGQ6OmNvdXQgPDwgcC54KCkgPDwgXCIsIFwiIDw8IHAueSgpIDw8ICdcXG4nO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+class Point {
+    int x_;
+    int y_;
+public:
+    // 冒号后面就是成员初始化列表
+    Point(int x, int y) : x_(x), y_(y) {
+        std::cout &lt;&lt; "构造 (" &lt;&lt; x_ &lt;&lt; ", " &lt;&lt; y_ &lt;&lt; ")\n";
+    }
+    int x() const { return x_; }
+    int y() const { return y_; }
+};
+
+int main() {
+    Point p(3, 4);
+    std::cout &lt;&lt; p.x() &lt;&lt; ", " &lt;&lt; p.y() &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="keypoint">
+<strong>为什么用初始化列表，而不是在函数体里赋值？</strong>
+成员在进入构造函数<strong>函数体之前</strong>就已经被初始化了。如果你在函数体里写 <code>x_ = x;</code>，成员其实经历了"先默认初始化、再赋值"两步；而初始化列表是<strong>直接用给定值构造</strong>，一步到位。<br>
+对 <code>int</code> 无所谓，但对有构造成本的成员（如 <code>std::string</code>、其他类对象）就有真实差别。而且有些成员<strong>必须</strong>用初始化列表：<code>const</code> 成员、引用成员、以及没有默认构造函数的类型——它们没有"先默认再赋值"的机会。<strong>习惯用初始化列表，总是对的。</strong>
+</div><div class="note">
+<strong>成员初始化顺序的坑</strong>
+成员的初始化顺序由它们在<strong>类中声明的顺序</strong>决定，<em>不是</em>由初始化列表里的书写顺序决定。如果 <code>y_</code> 的初始化依赖 <code>x_</code>，就要保证 <code>x_</code> 声明在前。把初始化列表的顺序写得和声明顺序一致，能避免这类隐蔽 bug（开 <code>-Wall</code> 时编译器也会警告顺序不一致）。
+</div><h2>五个特殊成员函数</h2>
+<p>有些成员函数即使你不写，编译器也会在需要时<strong>自动生成</strong>。它们统称&quot;特殊成员函数&quot;,一共五个,决定了一个对象如何被创建、复制、转移和销毁：</p>
+<div class="concept">
+<svg viewBox="0 0 540 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="20" y="30" width="240" height="150" rx="10" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="140" y="52" text-anchor="middle" font-size="13" fill="#2b6cb0" font-weight="bold">创建与销毁</text>
+  <text x="40" y="80" font-size="13" font-family="monospace">~T()          析构函数</text>
+  <text x="40" y="108" font-size="12" fill="#6b7280">（对象销毁时清理）</text>
+  <rect x="280" y="30" width="240" height="150" rx="10" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="400" y="52" text-anchor="middle" font-size="13" fill="#e0692f" font-weight="bold">拷贝与移动</text>
+  <text x="300" y="80" font-size="12.5" font-family="monospace">T(const T&)     拷贝构造</text>
+  <text x="300" y="104" font-size="12.5" font-family="monospace">T&amp; =(const T&amp;)  拷贝赋值</text>
+  <text x="300" y="132" font-size="12.5" font-family="monospace">T(T&amp;&amp;)          移动构造</text>
+  <text x="300" y="156" font-size="12.5" font-family="monospace">T&amp; =(T&amp;&amp;)       移动赋值</text>
+  <text x="140" y="150" text-anchor="middle" font-size="12.5" font-family="monospace">T()           默认构造</text>
+  <text x="140" y="170" text-anchor="middle" font-size="11" fill="#6b7280">（严格说默认构造不算"特殊五个"之一）</text>
+</svg>
+<div class="caption">图 10-1　五个特殊成员函数：一个析构 + 两个拷贝（构造/赋值）+ 两个移动（构造/赋值）</div>
+</div><ul>
+<li><strong>析构函数</strong> <code>~T()</code>：对象销毁时调用（第 4、5 章）。</li>
+<li><strong>拷贝构造</strong> <code>T(const T&amp;)</code> 和<strong>拷贝赋值</strong> <code>T&amp; operator=(const T&amp;)</code>：复制一个对象（第 7 章）。</li>
+<li><strong>移动构造</strong> <code>T(T&amp;&amp;)</code> 和<strong>移动赋值</strong> <code>T&amp; operator=(T&amp;&amp;)</code>：转移资源（第 7 章）。</li>
+</ul>
+<p>第 7 章你已经见过拷贝构造和移动构造的手写实现。这里的新知识是:<strong>它们作为一个整体互相关联</strong>,而这份关联催生了一条重要准则。</p>
+<h2>Rule of Zero：最好一个都别写</h2>
+<p>先说结论，也是现代 C++ 最推荐的做法：</p>
+<div class="keypoint">
+<strong>Rule of Zero（零之法则）</strong>
+如果你的类的每个成员都是"行为良好"的类型（标准库容器、智能指针、以及同样遵守此法则的类），那就<strong>一个特殊成员函数都不要写</strong>。编译器自动生成的五个版本会正确地逐成员拷贝、移动、析构——因为每个成员都知道如何管理自己。<br>
+你的类因此变得简短、正确、且自动获得高效的移动。<strong>这应该是你设计类的默认状态。</strong>
+</div><p>看一个遵守 Rule of Zero 的完整类——它管理着字符串和一个动态数组，却没有一句拷贝/移动/析构代码：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbi8vIOaIkOWRmOmDveaYr1wi6KGM5Li66Imv5aW9XCLnmoTnsbvlnosg4oaSIOaXoOmcgOWGmeS7u%2BS9leeJueauiuaIkOWRmOWHveaVsFxuY2xhc3MgUGxheWxpc3Qge1xuICAgIHN0ZDo6c3RyaW5nIG5hbWVfO1xuICAgIHN0ZDo6dmVjdG9yPHN0ZDo6c3RyaW5nPiBzb25nc187ICAgLy8g6Ieq5bex566h55CG5aCG5YaF5a2YXG5wdWJsaWM6XG4gICAgUGxheWxpc3Qoc3RkOjpzdHJpbmcgbmFtZSkgOiBuYW1lXyhzdGQ6Om1vdmUobmFtZSkpIHt9XG4gICAgdm9pZCBhZGQoc3RkOjpzdHJpbmcgc29uZykgeyBzb25nc18ucHVzaF9iYWNrKHN0ZDo6bW92ZShzb25nKSk7IH1cbiAgICBjb25zdCBzdGQ6OnN0cmluZyYgbmFtZSgpIGNvbnN0IHsgcmV0dXJuIG5hbWVfOyB9XG4gICAgc3RkOjpzaXplX3Qgc2l6ZSgpIGNvbnN0IHsgcmV0dXJuIHNvbmdzXy5zaXplKCk7IH1cbn07XG5cbmludCBtYWluKCkge1xuICAgIFBsYXlsaXN0IGEoXCLmnIDniLFcIik7XG4gICAgYS5hZGQoXCLmrYwxXCIpO1xuICAgIGEuYWRkKFwi5q2MMlwiKTtcblxuICAgIFBsYXlsaXN0IGIgPSBhOyAgICAgICAgICAgICAgLy8g6Ieq5Yqo5ou36LSd77yI5rex5ou36LSd77yMdmVjdG9yL3N0cmluZyDotJ%2FotKPvvIlcbiAgICBQbGF5bGlzdCBjID0gc3RkOjptb3ZlKGEpOyAgIC8vIOiHquWKqOenu%2BWKqO%2B8iOW7ieS7t%2B%2B8jHZlY3Rvci9zdHJpbmcg6LSf6LSj77yJXG5cbiAgICBzdGQ6OmNvdXQgPDwgYi5uYW1lKCkgPDwgXCI6IFwiIDw8IGIuc2l6ZSgpIDw8IFwiIOmmllxcblwiOyAgIC8vIOacgOeIsTogMiDpppZcbiAgICBzdGQ6OmNvdXQgPDwgYy5uYW1lKCkgPDwgXCI6IFwiIDw8IGMuc2l6ZSgpIDw8IFwiIOmmllxcblwiOyAgIC8vIOacgOeIsTogMiDpppZcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+// 成员都是"行为良好"的类型 → 无需写任何特殊成员函数
+class Playlist {
+    std::string name_;
+    std::vector&lt;std::string&gt; songs_;   // 自己管理堆内存
+public:
+    Playlist(std::string name) : name_(std::move(name)) {}
+    void add(std::string song) { songs_.push_back(std::move(song)); }
+    const std::string&amp; name() const { return name_; }
+    std::size_t size() const { return songs_.size(); }
+};
+
+int main() {
+    Playlist a("最爱");
+    a.add("歌1");
+    a.add("歌2");
+
+    Playlist b = a;              // 自动拷贝（深拷贝，vector/string 负责）
+    Playlist c = std::move(a);   // 自动移动（廉价，vector/string 负责）
+
+    std::cout &lt;&lt; b.name() &lt;&lt; ": " &lt;&lt; b.size() &lt;&lt; " 首\n";   // 最爱: 2 首
+    std::cout &lt;&lt; c.name() &lt;&lt; ": " &lt;&lt; c.size() &lt;&lt; " 首\n";   // 最爱: 2 首
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>拷贝、移动、析构全部由 <code>std::string</code> 和 <code>std::vector</code> 成员自己搞定，<code>Playlist</code> 自动继承了正确且高效的行为。<strong>这就是第 7 章&quot;把裸资源交给 RAII 类型持有&quot;建议的落地。</strong></p>
+<h2>Rule of Five：要写就五个一起写</h2>
+<p>那什么时候<strong>必须</strong>手写?只有当你的类<strong>直接</strong>管理裸资源（裸指针、文件句柄等）时——但即便那样，也有一条铁律：</p>
+<div class="warn">
+<strong>Rule of Five（五之法则）</strong>
+如果你手写了五个特殊成员函数中的<strong>任何一个</strong>（通常是因为你有裸资源，需要自定义析构），那么另外四个你<strong>都要认真考虑、通常也要一起提供</strong>。<br>
+原因：需要自定义析构，几乎总意味着"逐成员浅拷贝"是错的（会双重释放，见第 7 章）。这时如果你只写了析构、却放任编译器生成默认拷贝，就等于埋了一颗雷。<strong>要么五个都管好，要么（更好）用 Rule of Zero 让你根本不需要写。</strong>
+</div><p>它的历史前身是 <strong>Rule of Three</strong>（C++11 之前只有拷贝构造、拷贝赋值、析构三个）；C++11 加入移动语义后，扩展为五个。</p>
+<h2>= default 与 = delete：精确控制生成</h2>
+<p>C++11 给了你两个关键字，用来精确指挥编译器如何处理这些函数：</p>
+<ul>
+<li><strong><code>= default</code></strong>：明确要求编译器&quot;给我生成默认版本&quot;——比隐式生成更清晰地表达意图。</li>
+<li><strong><code>= delete</code></strong>：明确&quot;禁止&quot;某个函数,谁调用它就编译报错。</li>
+</ul>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPG1lbW9yeT5cblxuLy8g5LiA5LiqXCLni6zljaDjgIHkuI3lj6%2Fmi7fotJ3jgIHlj6%2Fnp7vliqhcIueahOWPpeafhOexu%2BWei1xuY2xhc3MgVW5pcXVlSGFuZGxlIHtcbiAgICBzdGQ6OnVuaXF1ZV9wdHI8aW50PiBkYXRhXztcbnB1YmxpYzpcbiAgICBVbmlxdWVIYW5kbGUoaW50IHYpIDogZGF0YV8oc3RkOjptYWtlX3VuaXF1ZTxpbnQ%2BKHYpKSB7fVxuXG4gICAgVW5pcXVlSGFuZGxlKGNvbnN0IFVuaXF1ZUhhbmRsZSYpID0gZGVsZXRlOyAgICAgICAgICAgICAvLyDnpoHmraLmi7fotJ1cbiAgICBVbmlxdWVIYW5kbGUmIG9wZXJhdG9yPShjb25zdCBVbmlxdWVIYW5kbGUmKSA9IGRlbGV0ZTsgIC8vIOemgeatouaLt%2Bi0nei1i%2BWAvFxuICAgIFVuaXF1ZUhhbmRsZShVbmlxdWVIYW5kbGUmJikgPSBkZWZhdWx0OyAgICAgICAgICAgICAgICAgLy8g5YWB6K6456e75Yqo77yI6buY6K6k5a6e546w77yJXG4gICAgVW5pcXVlSGFuZGxlJiBvcGVyYXRvcj0oVW5pcXVlSGFuZGxlJiYpID0gZGVmYXVsdDsgICAgICAvLyDlhYHorrjnp7vliqjotYvlgLxcblxuICAgIGludCB2YWx1ZSgpIGNvbnN0IHsgcmV0dXJuICpkYXRhXzsgfVxufTtcblxuaW50IG1haW4oKSB7XG4gICAgVW5pcXVlSGFuZGxlIGEoNDIpO1xuICAgIC8vIFVuaXF1ZUhhbmRsZSBiID0gYTsgICAgICAgICAgICAvLyDinYwg57yW6K%2BR6ZSZ6K%2Bv77ya5ou36LSd6KKrIGRlbGV0ZVxuICAgIFVuaXF1ZUhhbmRsZSBiID0gc3RkOjptb3ZlKGEpOyAgICAvLyDinIUg56e75Yqo6KKr5YWB6K64XG4gICAgc3RkOjpjb3V0IDw8IFwiYi52YWx1ZSA9IFwiIDw8IGIudmFsdWUoKSA8PCAnXFxuJzsgICAvLyA0MlxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;memory&gt;
+
+// 一个"独占、不可拷贝、可移动"的句柄类型
+class UniqueHandle {
+    std::unique_ptr&lt;int&gt; data_;
+public:
+    UniqueHandle(int v) : data_(std::make_unique&lt;int&gt;(v)) {}
+
+    UniqueHandle(const UniqueHandle&amp;) = delete;             // 禁止拷贝
+    UniqueHandle&amp; operator=(const UniqueHandle&amp;) = delete;  // 禁止拷贝赋值
+    UniqueHandle(UniqueHandle&amp;&amp;) = default;                 // 允许移动（默认实现）
+    UniqueHandle&amp; operator=(UniqueHandle&amp;&amp;) = default;      // 允许移动赋值
+
+    int value() const { return *data_; }
+};
+
+int main() {
+    UniqueHandle a(42);
+    // UniqueHandle b = a;            // ❌ 编译错误：拷贝被 delete
+    UniqueHandle b = std::move(a);    // ✅ 移动被允许
+    std::cout &lt;&lt; "b.value = " &lt;&lt; b.value() &lt;&lt; '\n';   // 42
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>这正是 <code>std::unique_ptr</code> 自己的设计方式——拷贝被 <code>delete</code>、移动被 <code>default</code>,从而在类型层面强制了&quot;独占所有权&quot;。你也可以用同样的手法,让自己的类型表达&quot;这个东西不可复制&quot;。</p>
+<div class="note">
+<strong>一个实用直觉：拷贝生成的自动抑制</strong>
+现代 C++ 有个规则：一旦你声明了析构函数或任何移动操作，编译器就<strong>不再自动生成移动操作</strong>（拷贝也可能被抑制）。这背后的哲学正是 Rule of Five——编译器在提醒你"既然你开始手动管理了，就请把该管的都管上"。这也是又一个"优先 Rule of Zero"的理由：让编译器全权处理，就不用记这些微妙规则。
+</div><h2>explicit：挡住意料之外的隐式转换</h2>
+<p>最后一个类设计的常用工具。一个能用单个参数调用的构造函数,默认会成为<strong>隐式转换</strong>的通道,有时会带来意外:</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5zdHJ1Y3QgTWV0ZXJzIHtcbiAgICBkb3VibGUgdmFsdWU7XG4gICAgZXhwbGljaXQgTWV0ZXJzKGRvdWJsZSB2KSA6IHZhbHVlKHYpIHt9ICAgLy8gZXhwbGljaXTvvJrnpoHmraLpmpDlvI%2FovazmjaJcbn07XG5cbnZvaWQgcHJpbnREaXN0YW5jZShNZXRlcnMgbSkge1xuICAgIHN0ZDo6Y291dCA8PCBtLnZhbHVlIDw8IFwiIOexs1xcblwiO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBwcmludERpc3RhbmNlKE1ldGVycygxMDApKTsgICAvLyDinIUg5pi%2B5byP5p6E6YCg77yM5riF5pmwXG4gICAgLy8gcHJpbnREaXN0YW5jZSgxMDApOyAgICAgICAgLy8g4p2MIOiLpeaXoCBleHBsaWNpdO%2B8jOi%2FmeS8muiiq%2BaChOaChOW9k%2BaIkCAxMDAg57GzXG4gICAgTWV0ZXJzIGQoNDIpO1xuICAgIHN0ZDo6Y291dCA8PCBkLnZhbHVlIDw8ICdcXG4nO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+struct Meters {
+    double value;
+    explicit Meters(double v) : value(v) {}   // explicit：禁止隐式转换
+};
+
+void printDistance(Meters m) {
+    std::cout &lt;&lt; m.value &lt;&lt; " 米\n";
+}
+
+int main() {
+    printDistance(Meters(100));   // ✅ 显式构造，清晰
+    // printDistance(100);        // ❌ 若无 explicit，这会被悄悄当成 100 米
+    Meters d(42);
+    std::cout &lt;&lt; d.value &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>如果没有 <code>explicit</code>，<code>printDistance(100)</code> 会编译通过——编译器悄悄把 <code>100</code> 转成 <code>Meters(100)</code>。这种隐式转换有时方便，但更多时候是 bug 温床。</p>
+<div class="keypoint">
+<strong>准则：单参数构造函数默认加 <code>explicit</code></strong>
+除非你<em>确实</em>想要隐式转换（少数情况，如自定义字符串类型想从 <code>const char*</code> 隐式构造），否则给单参数构造函数都加上 <code>explicit</code>。这能挡住一整类"参数被悄悄转换成了别的类型"的隐蔽错误。
+</div><h2>动手：观察 Rule of Zero 类的完整生命周期</h2>
+<p>下面这个类完全遵守 Rule of Zero，我们通过一个会&quot;报告生死&quot;的成员，观察拷贝、移动、析构如何被自动、正确地处理。运行前先预测输出：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG4jaW5jbHVkZSA8dXRpbGl0eT5cblxuLy8g5Lya5oql5ZGK6Ieq5bex6KKr5ou36LSdL%2Benu%2BWKqC%2FmnpDmnoTnmoTmjqLpkohcbnN0cnVjdCBQcm9iZSB7XG4gICAgc3RkOjpzdHJpbmcgdGFnO1xuICAgIFByb2JlKHN0ZDo6c3RyaW5nIHQpIDogdGFnKHN0ZDo6bW92ZSh0KSkgeyBzdGQ6OmNvdXQgPDwgXCIgIOaehOmAoCBcIiA8PCB0YWcgPDwgJ1xcbic7IH1cbiAgICBQcm9iZShjb25zdCBQcm9iZSYgbykgOiB0YWcoby50YWcpICAgICAgIHsgc3RkOjpjb3V0IDw8IFwiICDmi7fotJ0gXCIgPDwgdGFnIDw8ICdcXG4nOyB9XG4gICAgUHJvYmUoUHJvYmUmJiBvKSBub2V4Y2VwdCA6IHRhZyhzdGQ6Om1vdmUoby50YWcpKSB7IHN0ZDo6Y291dCA8PCBcIiAg56e75YqoIFwiIDw8IHRhZyA8PCAnXFxuJzsgfVxuICAgIH5Qcm9iZSgpIHsgc3RkOjpjb3V0IDw8IFwiICDmnpDmnoQgXCIgPDwgKHRhZy5lbXB0eSgpID8gXCIo5bey56e756m6KVwiIDogdGFnKSA8PCAnXFxuJzsgfVxufTtcblxuLy8g6YG15a6IIFJ1bGUgb2YgWmVyb%2B%2B8muS4jeWGmeS7u%2BS9leeJueauiuaIkOWRmOWHveaVsFxuY2xhc3MgQ29udGFpbmVyIHtcbiAgICBQcm9iZSBwcm9iZV87XG5wdWJsaWM6XG4gICAgQ29udGFpbmVyKHN0ZDo6c3RyaW5nIHQpIDogcHJvYmVfKHN0ZDo6bW92ZSh0KSkge31cbiAgICAvLyDmi7fotJ0v56e75YqoL%2BaekOaehOWFqOmDqOeUsee8luivkeWZqOaMieaIkOWRmOiHquWKqOeUn%2BaIkFxufTtcblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjpjb3V0IDw8IFwi5Yib5bu6IGMxOlxcblwiO1xuICAgIENvbnRhaW5lciBjMShcIkFcIik7XG5cbiAgICBzdGQ6OmNvdXQgPDwgXCLmi7fotJ0gYzEgLT4gYzI6XFxuXCI7XG4gICAgQ29udGFpbmVyIGMyID0gYzE7ICAgICAgICAgICAgICAgICAvLyDoh6rliqjmi7fotJ0g4oaSIOaIkOWRmCBQcm9iZSDooqvmi7fotJ1cblxuICAgIHN0ZDo6Y291dCA8PCBcIuenu%2BWKqCBjMSAtPiBjMzpcXG5cIjtcbiAgICBDb250YWluZXIgYzMgPSBzdGQ6Om1vdmUoYzEpOyAgICAgIC8vIOiHquWKqOenu%2BWKqCDihpIg5oiQ5ZGYIFByb2JlIOiiq%2Benu%2BWKqFxuXG4gICAgc3RkOjpjb3V0IDw8IFwi5L2c55So5Z%2Bf57uT5p2f77yI6YCG5bqP5p6Q5p6EIGMzLCBjMiwgYzHvvIk6XFxuXCI7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+#include &lt;utility&gt;
+
+// 会报告自己被拷贝/移动/析构的探针
+struct Probe {
+    std::string tag;
+    Probe(std::string t) : tag(std::move(t)) { std::cout &lt;&lt; "  构造 " &lt;&lt; tag &lt;&lt; '\n'; }
+    Probe(const Probe&amp; o) : tag(o.tag)       { std::cout &lt;&lt; "  拷贝 " &lt;&lt; tag &lt;&lt; '\n'; }
+    Probe(Probe&amp;&amp; o) noexcept : tag(std::move(o.tag)) { std::cout &lt;&lt; "  移动 " &lt;&lt; tag &lt;&lt; '\n'; }
+    ~Probe() { std::cout &lt;&lt; "  析构 " &lt;&lt; (tag.empty() ? "(已移空)" : tag) &lt;&lt; '\n'; }
+};
+
+// 遵守 Rule of Zero：不写任何特殊成员函数
+class Container {
+    Probe probe_;
+public:
+    Container(std::string t) : probe_(std::move(t)) {}
+    // 拷贝/移动/析构全部由编译器按成员自动生成
+};
+
+int main() {
+    std::cout &lt;&lt; "创建 c1:\n";
+    Container c1("A");
+
+    std::cout &lt;&lt; "拷贝 c1 -&gt; c2:\n";
+    Container c2 = c1;                 // 自动拷贝 → 成员 Probe 被拷贝
+
+    std::cout &lt;&lt; "移动 c1 -&gt; c3:\n";
+    Container c3 = std::move(c1);      // 自动移动 → 成员 Probe 被移动
+
+    std::cout &lt;&lt; "作用域结束（逆序析构 c3, c2, c1）:\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">创建 c1:
+  构造 A
+拷贝 c1 -&gt; c2:
+  拷贝 A
+移动 c1 -&gt; c3:
+  移动 A
+作用域结束（逆序析构 c3, c2, c1）:
+  析构 A
+  析构 A
+  析构 (已移空)</code></pre>
+</div><p><code>Container</code> 一行拷贝/移动/析构代码都没写，但它的成员 <code>Probe</code> 被正确地拷贝、移动、析构了——最后 <code>c1</code> 因为被移动过，其成员的 <code>tag</code> 已被移空，析构时打印 <code>(已移空)</code>（呼应第 6 章&quot;move 后有效但未指定&quot;）。<strong>这就是 Rule of Zero 的威力：正确性免费、且自动获得移动优化。</strong></p>
+<p>第二部分到此完整了：从值语义、生命周期、RAII、值类别、移动、所有权、引用与智能指针、const，一直到类的设计。你已经建立起 C++ 最核心的心智模型。接下来第三部分转向另一个维度——泛型与编译期，从模板开始。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>用<strong>成员初始化列表</strong>（<code>: 成员(值)</code>）初始化成员，而非函数体内赋值；<code>const</code>/引用/无默认构造的成员<strong>必须</strong>这样初始化。成员按<strong>声明顺序</strong>初始化。</li>
+<li><strong>五个特殊成员函数</strong>：析构、拷贝构造、拷贝赋值、移动构造、移动赋值——决定对象如何销毁、复制、转移。</li>
+<li><strong>Rule of Zero</strong>：成员都行为良好时，一个都别写，让编译器自动生成——<strong>类设计的默认状态</strong>。</li>
+<li><strong>Rule of Five</strong>：一旦手写了其中一个（通常因直接管理裸资源），另外四个都要一起管好——否则埋雷。</li>
+<li><strong><code>= default</code></strong> 显式要求生成默认版本，<strong><code>= delete</code></strong> 禁用某函数（如 <code>unique_ptr</code> 禁拷贝）。</li>
+<li><strong>单参数构造函数默认加 <code>explicit</code></strong>，挡住意料之外的隐式转换。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch09.html">← 第 9 章 const、常量性与不可变</a>
+  <a class="nav-next" href="ch11.html">第 11 章 模板：编译期的泛型 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
