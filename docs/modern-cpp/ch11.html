@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 11 章 模板：编译期的泛型</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li class="active"><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 11 章 模板：编译期的泛型</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你会用 Java 泛型 <code>List&lt;T&gt;</code>、也见过 Python 的"鸭子类型"。C++ 的<strong>模板</strong>看起来像 Java 泛型，本质却完全不同——它不是运行时的类型参数，而是<strong>编译期的代码生成器</strong>。</p>
+<p>读完这一章，你会理解模板到底是"怎么工作的"：为什么它能做到零开销、为什么模板代码几乎都写在头文件里、以及为什么模板的报错信息那么吓人（下一章的 concepts 正是来治这个的）。</p>
+</div><h2>先看一个模板长什么样</h2>
+<p>假设你要写一个&quot;取两者较大值&quot;的函数。不用模板，你得为每种类型各写一份：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int    maxOf(int a, int b)       { return a &gt; b ? a : b; }
+double maxOf(double a, double b) { return a &gt; b ? a : b; }
+// string、自定义类型……还要各写一遍，函数体一模一样</code></pre>
+</div><p>函数模板让你只写一份&quot;模具&quot;，类型留作参数：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxudGVtcGxhdGUgPHR5cGVuYW1lIFQ%2BICAgICAgICAgIC8vIFQg5piv57G75Z6L5Y%2BC5pWwXG5UIG1heE9mKFQgYSwgVCBiKSB7XG4gICAgcmV0dXJuIGEgPiBiID8gYSA6IGI7XG59XG5cbmludCBtYWluKCkge1xuICAgIHN0ZDo6Y291dCA8PCBtYXhPZigzLCA3KSA8PCAnXFxuJzsgICAgICAgICAgIC8vIFQgPSBpbnRcbiAgICBzdGQ6OmNvdXQgPDwgbWF4T2YoMi41LCAxLjUpIDw8ICdcXG4nOyAgICAgICAgLy8gVCA9IGRvdWJsZVxuICAgIHN0ZDo6Y291dCA8PCBtYXhPZjxzdGQ6OnN0cmluZz4oXCJhcHBsZVwiLCBcInBlYXJcIikgPDwgJ1xcbic7ICAgLy8gVCA9IHN0cmluZ1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+template &lt;typename T&gt;          // T 是类型参数
+T maxOf(T a, T b) {
+    return a &gt; b ? a : b;
+}
+
+int main() {
+    std::cout &lt;&lt; maxOf(3, 7) &lt;&lt; '\n';           // T = int
+    std::cout &lt;&lt; maxOf(2.5, 1.5) &lt;&lt; '\n';        // T = double
+    std::cout &lt;&lt; maxOf&lt;std::string&gt;("apple", "pear") &lt;&lt; '\n';   // T = string
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>一份 <code>maxOf</code> 模板，服务了 <code>int</code>、<code>double</code>、<code>string</code>。这一步和 Java 泛型看起来一样。但接下来就分道扬镳了。</p>
+<h2>核心区别：模板是&quot;编译期代码生成&quot;</h2>
+<p>这是本章最重要的一点，请务必建立正确直觉：</p>
+<div class="keypoint">
+<strong>模板不是一个函数，而是一个"生成函数的模具"</strong>
+当你写 <code>maxOf(3, 7)</code>，编译器看到实参是 <code>int</code>，就用 <code>T = int</code> <strong>生成一份真正的 <code>maxOf</code> 函数</strong>——就好像你手写了 <code>int maxOf(int, int)</code>。写 <code>maxOf(2.5, 1.5)</code> 时，它<strong>再生成一份</strong> <code>double</code> 版本。<br>
+这个"按用到的类型生成具体代码"的过程叫<strong>实例化（instantiation）</strong>。模板本身不产生任何机器码；只有被实例化出来的具体版本才会。
+</div><p>这套机制有个正式名字叫<strong>单态化（monomorphization）</strong>——每个用到的类型都生成一份专属代码。它和 Java 的做法恰好相反：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java 泛型：类型擦除</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">// 编译后 T 被"擦除"成 Object
+// 运行时只有一份字节码
+List&lt;Integer&gt; a = ...;
+List&lt;String&gt;  b = ...;
+// a 和 b 在运行时是同一个类
+// 泛型信息在运行期基本不存在</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++ 模板：单态化</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 编译期为每个类型生成专属代码
+std::vector&lt;int&gt;    a;
+std::vector&lt;string&gt; b;
+// 生成两份不同的、
+// 各自优化过的机器码
+// 运行期没有任何"泛型"痕迹</code></pre>
+</div></div>
+</div><p>用汇编亲眼验证&quot;生成了两份专属代码&quot;。下面的 <code>maxOf</code> 被 <code>int</code> 和 <code>double</code> 各实例化一次，编译器为它们生成了<strong>不同的指令</strong>（整数比较 vs 浮点比较）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoidGVtcGxhdGUgPHR5cGVuYW1lIFQ%2BXG5UIG1heE9mKFQgYSwgVCBiKSB7IHJldHVybiBhID4gYiA%2FIGEgOiBiOyB9XG5cbmludCAgICB1c2VJbnQoaW50IGEsIGludCBiKSAgICAgICAgICB7IHJldHVybiBtYXhPZihhLCBiKTsgfVxuZG91YmxlIHVzZURvdWJsZShkb3VibGUgYSwgZG91YmxlIGIpIHsgcmV0dXJuIG1heE9mKGEsIGIpOyB9IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">template &lt;typename T&gt;
+T maxOf(T a, T b) { return a &gt; b ? a : b; }
+
+int    useInt(int a, int b)          { return maxOf(a, b); }
+double useDouble(double a, double b) { return maxOf(a, b); }</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：<code>useInt</code> 里是整数比较指令、<code>useDouble</code> 里是浮点比较指令(如 <code>maxsd</code>)——两份独立的、各自最优的代码。没有 Java 那种&quot;擦除成 Object 再装箱拆箱&quot;的运行时开销。这就是模板的招牌特性——<strong>零开销抽象</strong>。</p>
+<div class="note">
+<strong>单态化的代价</strong>
+凡事有两面：为每个类型生成一份代码，意味着用得越多、生成的代码越多，可能导致可执行文件膨胀（code bloat）、编译变慢。这是 C++ 编译普遍比 Java 慢的重要原因之一。但换来的是运行期的极致性能——对 C++ 的目标领域（性能敏感场景），这个交易通常划算。
+</div><h2>模板参数不止是类型</h2>
+<p>模板参数除了类型（<code>typename T</code>），还能是<strong>编译期常量</strong>（非类型参数）。这在 Java 泛型里是没有的能力：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPGFycmF5PlxuXG4vLyBOIOaYr%2Be8luivkeacn%2BW4uOmHj%2BWPguaVsO%2B8jOS4jeaYr%2Bexu%2BWei1xudGVtcGxhdGUgPHR5cGVuYW1lIFQsIHN0ZDo6c2l6ZV90IE4%2BXG5UIHN1bShjb25zdCBzdGQ6OmFycmF5PFQsIE4%2BJiBhcnIpIHtcbiAgICBUIHRvdGFse307XG4gICAgZm9yIChjb25zdCBUJiB4IDogYXJyKSB0b3RhbCArPSB4O1xuICAgIHJldHVybiB0b3RhbDtcbn1cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjphcnJheTxpbnQsIDQ%2BIGF7MSwgMiwgMywgNH07XG4gICAgc3RkOjphcnJheTxkb3VibGUsIDM%2BIGJ7MS41LCAyLjUsIDMuMH07XG4gICAgc3RkOjpjb3V0IDw8IHN1bShhKSA8PCAnXFxuJzsgICAvLyAxMFxuICAgIHN0ZDo6Y291dCA8PCBzdW0oYikgPDwgJ1xcbic7ICAgLy8gN1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;array&gt;
+
+// N 是编译期常量参数，不是类型
+template &lt;typename T, std::size_t N&gt;
+T sum(const std::array&lt;T, N&gt;&amp; arr) {
+    T total{};
+    for (const T&amp; x : arr) total += x;
+    return total;
+}
+
+int main() {
+    std::array&lt;int, 4&gt; a{1, 2, 3, 4};
+    std::array&lt;double, 3&gt; b{1.5, 2.5, 3.0};
+    std::cout &lt;&lt; sum(a) &lt;&lt; '\n';   // 10
+    std::cout &lt;&lt; sum(b) &lt;&lt; '\n';   // 7
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>N</code> 是数组大小，在编译期就固定。<code>std::array&lt;int, 4&gt;</code> 和 <code>std::array&lt;int, 8&gt;</code> 是<strong>两个不同的类型</strong>——大小是类型的一部分。这种&quot;值也能当模板参数&quot;的能力，是 C++ 编译期计算（第 13 章）的基础。</p>
+<h2>类模板：给整个类做泛型</h2>
+<p>不只函数，整个类也能是模板。你天天用的 <code>std::vector&lt;T&gt;</code>、<code>std::unique_ptr&lt;T&gt;</code> 都是类模板。我们自己写一个极简的&quot;装一个值的盒子&quot;：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxudGVtcGxhdGUgPHR5cGVuYW1lIFQ%2BXG5jbGFzcyBCb3gge1xuICAgIFQgdmFsdWVfO1xucHVibGljOlxuICAgIGV4cGxpY2l0IEJveChUIHYpIDogdmFsdWVfKHN0ZDo6bW92ZSh2KSkge31cbiAgICBjb25zdCBUJiBnZXQoKSBjb25zdCB7IHJldHVybiB2YWx1ZV87IH1cbiAgICB2b2lkIHNldChUIHYpIHsgdmFsdWVfID0gc3RkOjptb3ZlKHYpOyB9XG59O1xuXG5pbnQgbWFpbigpIHtcbiAgICBCb3g8aW50PiBiaSg0Mik7XG4gICAgQm94PHN0ZDo6c3RyaW5nPiBicyhcImhlbGxvXCIpO1xuXG4gICAgc3RkOjpjb3V0IDw8IGJpLmdldCgpIDw8ICdcXG4nOyAgICAgIC8vIDQyXG4gICAgc3RkOjpjb3V0IDw8IGJzLmdldCgpIDw8ICdcXG4nOyAgICAgIC8vIGhlbGxvXG5cbiAgICBiaS5zZXQoMTAwKTtcbiAgICBzdGQ6OmNvdXQgPDwgYmkuZ2V0KCkgPDwgJ1xcbic7ICAgICAgLy8gMTAwXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+template &lt;typename T&gt;
+class Box {
+    T value_;
+public:
+    explicit Box(T v) : value_(std::move(v)) {}
+    const T&amp; get() const { return value_; }
+    void set(T v) { value_ = std::move(v); }
+};
+
+int main() {
+    Box&lt;int&gt; bi(42);
+    Box&lt;std::string&gt; bs("hello");
+
+    std::cout &lt;&lt; bi.get() &lt;&lt; '\n';      // 42
+    std::cout &lt;&lt; bs.get() &lt;&lt; '\n';      // hello
+
+    bi.set(100);
+    std::cout &lt;&lt; bi.get() &lt;&lt; '\n';      // 100
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="note">
+<strong>C++17 起：类模板参数常常能自动推导</strong>
+现代 C++ 里，很多时候连 <code>&lt;T&gt;</code> 都不用写。<code>Box bi(42);</code>（省略 <code>&lt;int&gt;</code>）编译器能从构造参数 <code>42</code> 推导出 <code>T = int</code>，这叫 CTAD（类模板参数推导）。函数模板则从一开始就支持这种推导——<code>maxOf(3, 7)</code> 不用写 <code>maxOf&lt;int&gt;</code>。
+</div><h2>隐式约束：C++ 版的&quot;鸭子类型&quot;</h2>
+<p>这里有个 Python 程序员会觉得眼熟、Java 程序员会觉得陌生的点。看回 <code>maxOf</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">template &lt;typename T&gt;
+T maxOf(T a, T b) { return a &gt; b ? a : b; }</code></pre>
+</div><p>它对 <code>T</code> 有什么要求？没有显式写任何约束，但代码里用了 <code>a &gt; b</code>——所以 <code>T</code> <strong>必须支持 <code>&gt;</code> 运算</strong>。这个要求是<strong>隐式</strong>的：只要你传进来的类型能用 <code>&gt;</code> 比较，模板就能实例化；不能比较，就报错。</p>
+<div class="keypoint">
+<strong>模板是"编译期的鸭子类型"</strong>
+模板不要求 <code>T</code> 实现某个接口或继承某个基类（不像 Java 的有界泛型 <code>&lt;T extends Comparable&gt;</code>）。它只要求：用到的操作 <code>T</code> 得支持。<strong>能嘎嘎叫，就是鸭子。</strong><br>
+好处是极其灵活——任何支持 <code>&gt;</code> 的类型都能用 <code>maxOf</code>，包括你自己定义的类型，无需事先声明"我实现了某接口"。坏处是：约束是隐式的、藏在函数体里，一旦用错类型，错误信息会非常糟糕。
+</div><p>亲眼看看&quot;用错类型&quot;有多惨。下面这段试图对一个没有 <code>&gt;</code> 运算的类型调用 <code>maxOf</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct Widget {};   // 没有定义 operator&gt;
+
+template &lt;typename T&gt;
+T maxOf(T a, T b) { return a &gt; b ? a : b; }
+
+int main() {
+    Widget x, y;
+    maxOf(x, y);    // ❌ 编译错误，但信息极其冗长难懂
+}</code></pre>
+</div><p>把它放进 Compiler Explorer 编译，你会看到一大坨错误——编译器在深入实例化 <code>maxOf&lt;Widget&gt;</code> 后，才在 <code>a &gt; b</code> 那里发现 <code>Widget</code> 不支持 <code>&gt;</code>，于是从实例化的最深处往外吐一长串上下文。<strong>报错发生在使用处的深层，而非&quot;你违反了约定&quot;的那一刻。</strong> 这正是模板长期以来最大的痛点，也是下一章 concepts 要解决的核心问题。</p>
+<h2>为什么模板通常整个写在头文件里</h2>
+<p>回忆第 2 章：每个 <code>.cpp</code> 独立编译，编译器只看当前翻译单元。现在把它和&quot;模板要在使用处实例化&quot;放在一起想：</p>
+<div class="keypoint">
+<strong>编译器必须在使用处看到模板的完整定义</strong>
+要实例化 <code>maxOf&lt;int&gt;</code>，编译器需要 <code>maxOf</code> 的<strong>完整函数体</strong>（才能生成代码）。如果模板的定义藏在另一个 <code>.cpp</code> 里，当前翻译单元只有声明、看不到函数体，就<strong>无法实例化</strong>——会得到链接错误。<br>
+所以模板的定义（不只是声明）通常<strong>整个放在头文件里</strong>，让每个使用它的翻译单元都能看到完整定义。这就是为什么打开 STL 头文件，满眼都是实现代码——它们全是模板，不得不如此。
+</div><p>这也解释了第 2 章埋的伏笔:普通函数&quot;声明在头文件、定义在 .cpp&quot;的分离模式,对模板不适用。模板是&quot;头文件里的完整实现&quot;,且受 ODR 的模板豁免(同一模板可在多个翻译单元实例化,链接器会合并)。</p>
+<h2>动手：观察实例化生成多份独立代码</h2>
+<p>下面这个模板类带一个静态计数器。因为每个 <code>T</code> 都生成一份<strong>独立</strong>的类，它们的静态成员也是<strong>各自独立</strong>的——这能直观证明&quot;每个类型一份专属代码&quot;：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxudGVtcGxhdGUgPHR5cGVuYW1lIFQ%2BXG5zdHJ1Y3QgQ291bnRlciB7XG4gICAgc3RhdGljIGlubGluZSBpbnQgY291bnQgPSAwOyAgICAvLyDmr4%2FkuKrlrp7kvovljJbnmoQgVCDlkITmnInkuIDku71cbiAgICBDb3VudGVyKCkgeyArK2NvdW50OyB9XG59O1xuXG5pbnQgbWFpbigpIHtcbiAgICBDb3VudGVyPGludD4gYSwgYiwgYzsgICAgICAgICAgIC8vIENvdW50ZXI8aW50Pjo6Y291bnQg5rao5YiwIDNcbiAgICBDb3VudGVyPHN0ZDo6c3RyaW5nPiB4LCB5OyAgICAgIC8vIENvdW50ZXI8c3RyaW5nPjo6Y291bnQg5rao5YiwIDJcblxuICAgIHN0ZDo6Y291dCA8PCBcIkNvdW50ZXI8aW50PiAgICDliJvlu7rkuoYgXCIgPDwgQ291bnRlcjxpbnQ%2BOjpjb3VudCA8PCBcIiDkuKpcXG5cIjtcbiAgICBzdGQ6OmNvdXQgPDwgXCJDb3VudGVyPHN0cmluZz4g5Yib5bu65LqGIFwiIDw8IENvdW50ZXI8c3RkOjpzdHJpbmc%2BOjpjb3VudCA8PCBcIiDkuKpcXG5cIjtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+template &lt;typename T&gt;
+struct Counter {
+    static inline int count = 0;    // 每个实例化的 T 各有一份
+    Counter() { ++count; }
+};
+
+int main() {
+    Counter&lt;int&gt; a, b, c;           // Counter&lt;int&gt;::count 涨到 3
+    Counter&lt;std::string&gt; x, y;      // Counter&lt;string&gt;::count 涨到 2
+
+    std::cout &lt;&lt; "Counter&lt;int&gt;    创建了 " &lt;&lt; Counter&lt;int&gt;::count &lt;&lt; " 个\n";
+    std::cout &lt;&lt; "Counter&lt;string&gt; 创建了 " &lt;&lt; Counter&lt;std::string&gt;::count &lt;&lt; " 个\n";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Counter&lt;int&gt;    创建了 3 个
+Counter&lt;string&gt; 创建了 2 个</code></pre>
+</div><p>两个计数器互不相干——因为 <code>Counter&lt;int&gt;</code> 和 <code>Counter&lt;std::string&gt;</code> 是编译器生成的<strong>两个完全不同的类</strong>，各有各的静态成员。这就是单态化最直观的证据：模板不是一个类，而是&quot;生成了多个类的模具&quot;。</p>
+<p>模板给了你无约束的灵活性，但也带来了&quot;隐式约束 + 恐怖报错&quot;的代价。下一章的 <strong>concepts</strong> 正是现代 C++ 的解药：把那些藏在函数体里的隐式要求，变成写在签名上的、编译器能友好检查的显式约束。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>模板是<strong>编译期的代码生成器</strong>，不是运行时的类型参数：用到某类型时，编译器<strong>实例化</strong>出一份该类型的专属代码。</li>
+<li>这叫<strong>单态化</strong>，与 Java 泛型的<strong>类型擦除</strong>相反：C++ 为每个类型生成独立、各自优化的机器码，<strong>零运行时开销</strong>（代价是代码膨胀、编译变慢）。</li>
+<li>模板参数可以是类型（<code>typename T</code>），也可以是<strong>编译期常量</strong>（如 <code>std::array&lt;T, N&gt;</code> 的 <code>N</code>）。</li>
+<li>类和函数都能做模板；C++17 起类模板参数常能自动推导（CTAD）。</li>
+<li>模板对类型的约束是<strong>隐式的鸭子类型</strong>：用到什么操作，类型就得支持什么——灵活，但用错时报错冗长难懂。</li>
+<li>因为要在使用处实例化，模板的<strong>完整定义通常放在头文件里</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch10.html">← 第 10 章 类、构造与特殊成员函数</a>
+  <a class="nav-next" href="ch12.html">第 12 章 concepts 与约束：模板的类型系统 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
