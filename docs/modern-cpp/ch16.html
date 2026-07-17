@@ -145,6 +145,27 @@ public:
     }
 };</pre>
 所以：<strong>捕获列表 = 这个类的成员</strong>（按值捕获→值成员，按引用捕获→引用成员），<strong>lambda 体 = <code>operator()</code></strong>。"调用 lambda"就是调用这个对象的 <code>operator()</code>。这解释了一切——为什么捕获有值/引用之分（成员的存储方式）、为什么默认只读（<code>operator()</code> 默认 const）、为什么零开销（就是个普通对象的成员函数调用，能被内联）。
+</div><div class="concept">
+<svg viewBox="0 0 540 175" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- lambda 源码 -->
+  <rect x="15" y="55" width="210" height="60" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="120" y="45" text-anchor="middle" font-size="12" fill="#e0692f">你写的 lambda</text>
+  <text x="120" y="80" text-anchor="middle" font-size="11" font-family="monospace">[factor](int x){</text>
+  <text x="120" y="100" text-anchor="middle" font-size="11" font-family="monospace">  return x * factor; }</text>
+  <!-- 生成的类 -->
+  <rect x="315" y="30" width="210" height="115" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="420" y="22" text-anchor="middle" font-size="12" fill="#2b6cb0">编译器生成的匿名类</text>
+  <text x="325" y="52" font-size="10.5" font-family="monospace">class 匿名 {</text>
+  <text x="335" y="72" font-size="10.5" font-family="monospace" fill="#e0692f">int factor;  // 捕获→成员</text>
+  <text x="325" y="92" font-size="10.5" font-family="monospace">public:</text>
+  <text x="335" y="110" font-size="10.5" font-family="monospace" fill="#3f9b5c">operator()(int x) const</text>
+  <text x="335" y="127" font-size="10.5" font-family="monospace" fill="#3f9b5c">  // 体→调用运算符</text>
+  <text x="325" y="142" font-size="10.5" font-family="monospace">};</text>
+  <path d="M225 85 L313 85" stroke="#6b7280" stroke-width="1.8" marker-end="url(#l)"/>
+  <text x="269" y="76" text-anchor="middle" font-size="10" fill="#6b7280">等价于</text>
+  <defs><marker id="l" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker></defs>
+</svg>
+<div class="caption">图 16-1　lambda 的真身：编译器把它变成一个匿名类——捕获变量成为成员，函数体成为 operator()。这解释了值/引用捕获、默认只读、以及零开销</div>
 </div><p>这也说明 lambda 和第 11 章的模板一样是<strong>零开销抽象</strong>:把 lambda 传给 <code>std::sort</code>,编译器知道确切的类型,能把那次 <code>operator()</code> 调用完全内联进排序循环——和你手写比较代码一样快,没有任何间接调用的开销。</p>
 <h2>std::function：统一存放&quot;任何可调用体&quot;</h2>
 <p>每个 lambda 都是一个<strong>独一无二的匿名类型</strong>(哪怕两个 lambda 长得一模一样,类型也不同)。这带来一个问题:如果你想把 lambda 存进变量、放进容器、或作为函数返回类型,却写不出它的类型名怎么办?</p>

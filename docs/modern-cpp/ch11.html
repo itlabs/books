@@ -98,6 +98,30 @@ std::vector&lt;string&gt; b;
 // 各自优化过的机器码
 // 运行期没有任何"泛型"痕迹</code></pre>
 </div></div>
+</div><div class="concept">
+<svg viewBox="0 0 540 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 模板模具 -->
+  <rect x="185" y="18" width="170" height="46" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="270" y="38" text-anchor="middle" font-size="12" fill="#3f9b5c">模板（一份"模具"）</text>
+  <text x="270" y="56" text-anchor="middle" font-size="12" font-family="monospace">maxOf&lt;T&gt;</text>
+  <!-- 三个实例化 -->
+  <rect x="20" y="120" width="150" height="60" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="95" y="142" text-anchor="middle" font-size="12" fill="#2b6cb0">maxOf&lt;int&gt;</text>
+  <text x="95" y="162" text-anchor="middle" font-size="10" fill="#6b7280">整数比较指令</text>
+  <rect x="195" y="120" width="150" height="60" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="270" y="142" text-anchor="middle" font-size="12" fill="#2b6cb0">maxOf&lt;double&gt;</text>
+  <text x="270" y="162" text-anchor="middle" font-size="10" fill="#6b7280">浮点比较指令</text>
+  <rect x="370" y="120" width="150" height="60" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="445" y="142" text-anchor="middle" font-size="12" fill="#2b6cb0">maxOf&lt;string&gt;</text>
+  <text x="445" y="162" text-anchor="middle" font-size="10" fill="#6b7280">字符串比较</text>
+  <!-- 箭头 -->
+  <path d="M240 66 L110 118" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#m1)"/>
+  <path d="M270 66 L270 116" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#m1)"/>
+  <path d="M300 66 L430 118" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#m1)"/>
+  <text x="270" y="100" text-anchor="middle" font-size="11" fill="#6b7280">编译器按用到的类型，各生成一份专属代码</text>
+  <defs><marker id="m1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2b6cb0"/></marker></defs>
+</svg>
+<div class="caption">图 11-1　单态化：模板是一份模具，用到几种类型就实例化出几份独立的、各自优化的代码（对比 Java 全程只有一份擦除后的字节码）</div>
 </div><p>用汇编亲眼验证&quot;生成了两份专属代码&quot;。下面的 <code>maxOf</code> 被 <code>int</code> 和 <code>double</code> 各实例化一次，编译器为它们生成了<strong>不同的指令</strong>（整数比较 vs 浮点比较）：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">C++</span>
