@@ -181,6 +181,29 @@ pre[class*="language-"] { padding: 16px 14px; font-size: 15px; }
   border-radius: 12px; padding: 20px 24px; margin: 20px 0;
 }
 
+/* ===== 双栏对照（左：你熟悉的 Java/Python；右：C++） ===== */
+.compare {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0;
+}
+.compare > div { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.compare .compare-head {
+  padding: 7px 14px; font-size: 13px; font-weight: 700; letter-spacing: .3px; color: #fff;
+}
+.compare .known .compare-head { background: #6b7280; }   /* 你已知的语言 */
+.compare .cpp-side .compare-head { background: #2b6cb0; } /* C++ */
+.compare .code-block { margin: 0; border-radius: 0; box-shadow: none; }
+@media (max-width: 720px) { .compare { grid-template-columns: 1fr; } }
+
+/* ===== 提示 / 注意 / 陷阱 框 ===== */
+.note, .warn, .keypoint {
+  margin: 20px 0; padding: 14px 18px; border-radius: 8px;
+  border-left: 4px solid; font-size: 15px;
+}
+.note { background: #eff6ff; border-color: #3b82f6; }
+.warn { background: #fff7ed; border-color: #f97316; }
+.keypoint { background: #f0fdf4; border-color: #22c55e; }
+.note strong, .warn strong, .keypoint strong { display: block; margin-bottom: 4px; }
+
 /* 章节间导航 */
 .chapter-nav {
   display: flex; justify-content: space-between; gap: 16px;

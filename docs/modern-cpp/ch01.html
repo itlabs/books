@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 章 你已经会编程了——那 C++ 到底不一样在哪</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li class="active"><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 拷贝、移动与所有权</a></li>
+<li><a href="ch07.html">第 7 章 引用、指针与智能指针</a></li>
+<li><a href="ch08.html">第 8 章 const、常量性与不可变</a></li>
+<li><a href="ch09.html">第 9 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch10.html">第 10 章 模板：编译期的泛型</a></li>
+<li><a href="ch11.html">第 11 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch12.html">第 12 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch13.html">第 13 章 STL 容器与迭代器</a></li>
+<li><a href="ch14.html">第 14 章 算法、range 与视图</a></li>
+<li><a href="ch15.html">第 15 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch16.html">第 16 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch17.html">第 17 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch18.html">第 18 章 编译器如何优化你的代码</a></li>
+<li><a href="ch19.html">第 19 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch20.html">第 20 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 1 章 你已经会编程了——那 C++ 到底不一样在哪</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你会写 Java 或 Python，理解类、泛型、异常、并发。这一章不教你任何语法，而是先讲清一件事：<strong>当你从托管语言走进 C++，真正改变的不是关键字，而是"变量是什么"这个最底层的假设。</strong></p>
+<p>读完这一章，你会明白后面每一章为什么这么安排，也会知道该带着哪几个问题往下读。</p>
+</div><h2>先说结论：变量的含义变了</h2>
+<p>在 Java 和 Python 里，你写了无数遍这样的代码：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">Point a = new Point(1, 2);
+Point b = a;
+b.x = 99;
+System.out.println(a.x);   // 99</code></pre>
+</div><p>你早就知道结果是 <code>99</code>，而且从不觉得奇怪：<code>a</code> 和 <code>b</code> 是同一个对象的两个名字。变量装的不是对象，而是<strong>指向对象的引用</strong>。对象活在堆上，由垃圾回收器决定什么时候销毁。</p>
+<p>现在看 C++ 里&quot;长得几乎一样&quot;的代码：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuc3RydWN0IFBvaW50IHsgaW50IHgsIHk7IH07XG5cbmludCBtYWluKCkge1xuICAgIFBvaW50IGF7MSwgMn07XG4gICAgUG9pbnQgYiA9IGE7ICAgICAgLy8g5rOo5oSP77ya6L%2BZ6YeM5Y%2BR55Sf5LqG5LuA5LmI77yfXG4gICAgYi54ID0gOTk7XG4gICAgc3RkOjpjb3V0IDw8IGEueCA8PCAnXFxuJzsgICAvLyDovpPlh7ogMe%2B8jOS4jeaYryA5OVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+struct Point { int x, y; };
+
+int main() {
+    Point a{1, 2};
+    Point b = a;      // 注意：这里发生了什么？
+    b.x = 99;
+    std::cout &lt;&lt; a.x &lt;&lt; '\n';   // 输出 1，不是 99
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开上面的 <strong>🔗 在 Compiler Explorer 打开</strong> 亲自跑一遍——结果是 <code>1</code>。</p>
+<p>差别不在语法（两段代码几乎一模一样），而在<strong>赋值这个动作的含义</strong>：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java / Python 的心智模型</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">Point b = a;
+// b 和 a 指向同一个对象
+// 复制的是"引用"（一个地址）</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++ 的心智模型</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">Point b = a;
+// b 是一个全新的对象
+// a 的内容被逐字节拷贝进 b</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>本书第一个、也是最重要的一个观念</strong>
+在 Java / Python 里，变量默认是对象的<strong>引用</strong>；在 C++ 里，变量默认<strong>就是对象本身</strong>。<code>b = a</code> 不是"让 b 也指向 a"，而是"造一个新对象，把 a 复制过来"。这叫<strong>值语义（value semantics）</strong>。
+</div><p>这一个差别，会像多米诺骨牌一样推倒你对很多事情的默认预期：函数传参会不会改动原对象？两个变量会不会互相影响？对象什么时候被销毁？拷贝一个大容器贵不贵？——在 C++ 里，答案常常和你的直觉相反。<strong>第 3 章</strong>会把值语义彻底讲透，它是全书的地基。</p>
+<h2>第二个大不同：没有 GC，但也几乎不用手动释放</h2>
+<p>托管语言的另一根支柱是垃圾回收。你 <code>new</code> 一个对象，然后……就不管了。GC 会在某个你不关心的时刻回收它。</p>
+<p>C++ 没有垃圾回收器。但请<strong>先放下</strong>你可能听过的那个刻板印象——&quot;写 C++ 就是到处 <code>new</code> / <code>delete</code>，一不小心就内存泄漏&quot;。那是上世纪的 C++。</p>
+<p>现代 C++ 的做法是把资源的生命周期<strong>绑定到对象的生命周期</strong>上：对象诞生时获取资源，对象销毁时自动释放。这套机制叫 <strong>RAII</strong>，是 C++ 最核心的设计思想，没有之一。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;vector&gt;
+#include &lt;string&gt;
+
+void demo() {
+    std::vector&lt;std::string&gt; names;   // 在栈上诞生
+    names.push_back("Alice");         // 内部在堆上分配内存
+    names.push_back("Bob");
+}   // demo 结束：names 被销毁，它持有的堆内存被自动释放
+    // 没有 GC，也没有一句 delete</code></pre>
+</div><p><code>names</code> 是一个栈上的局部变量。当 <code>demo()</code> 返回、<code>names</code> 离开作用域时，它的<strong>析构函数</strong>自动运行，把内部在堆上分配的内存还回去。你没写 <code>delete</code>，也不会泄漏。</p>
+<div class="note">
+<strong>类比：这其实很像你熟悉的东西</strong>
+Java 的 try-with-resources、Python 的 <code>with</code> 语句，都是"离开作用域自动清理"的思路。区别在于：在那些语言里，这是<strong>你要特意为资源（文件、锁）加的语法</strong>；而在 C++ 里，这是<strong>每一个对象的默认行为</strong>。<strong>第 5 章</strong>专门讲 RAII。
+</div><h2>第三个大不同：很多事情发生在&quot;运行之前&quot;</h2>
+<p>Java 和 Python 也要编译（<code>.class</code> 字节码、<code>.pyc</code>），但你通常把它当成一个黑箱：源码进去，能跑的东西出来。运行时的 JIT、解释器才是主角。</p>
+<p>C++ 把大量工作<strong>前移到了编译期</strong>。编译器不只是翻译代码，它还会：</p>
+<ul>
+<li>把泛型（模板）在编译期<strong>实例化</strong>成一份份具体类型的代码；</li>
+<li>在编译期就<strong>算出</strong>一些常量的值（<code>constexpr</code>）；</li>
+<li>做激进的<strong>优化</strong>：内联、消除拷贝、把循环展开甚至整段算掉。</li>
+</ul>
+<p>这意味着：读懂 C++，很多时候要读懂<strong>编译器对你的代码做了什么</strong>。这也是为什么本书几乎每段代码都给了一个 <strong>🔬 看汇编 / 编译器处理</strong> 的入口。举个例子——下面这个函数，编译器会直接算出结果，运行时什么都不算：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiY29uc3RleHByIGludCBzcXVhcmUoaW50IHgpIHsgcmV0dXJuIHggKiB4OyB9XG5cbmludCBtYWluKCkge1xuICAgIHJldHVybiBzcXVhcmUoOSk7ICAgLy8g57yW6K%2BR5Zmo55u05o6l55Sf5oiQIFwicmV0dXJuIDgxXCJcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">constexpr int square(int x) { return x * x; }
+
+int main() {
+    return square(9);   // 编译器直接生成 "return 81"
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开&quot;看汇编&quot;，你会看到 <code>main</code> 里根本没有乘法指令，只有一个 <code>81</code>。这种&quot;代码在编译期就跑完了&quot;的能力，是 Java / Python 给不了你的。<strong>第 12 章</strong>（编译期计算）和<strong>第 18 章</strong>（编译器优化）会带你深入。</p>
+<h2>那 C++ 换来了什么？</h2>
+<p>既然要放弃 GC 的省心、接受值语义的&quot;反直觉&quot;，图什么？</p>
+<ul>
+<li><strong>可预测、可控的性能</strong>：没有 GC 停顿，对象在栈上还是堆上、拷贝还是移动，都由你精确决定。</li>
+<li><strong>零成本抽象（zero-overhead abstraction）</strong>：高层抽象（模板、RAII、range）编译后往往和手写底层代码一样快。你不必在&quot;写得优雅&quot;和&quot;跑得快&quot;之间二选一。</li>
+<li><strong>确定性的资源管理</strong>：对象销毁的时刻是确定的，所以文件、锁、连接的释放时机也是确定的——不用等 GC 心情好。</li>
+</ul>
+<p>这也是为什么在游戏引擎、数据库、高频交易、操作系统、编译器本身这些地方，C++ 至今不可替代。</p>
+<h2>这本书怎么帮你完成切换</h2>
+<p>你不缺编程能力，缺的是一套新的心智模型。所以本书的策略始终是<strong>对照</strong>：先用一段你熟悉的 Java / Python 建立锚点，再看 C++ 怎么做、为什么这么做。</p>
+<p>全书的路线：</p>
+<ol>
+<li><strong>换心智模型</strong>（第 1–2 章）：先建立值语义的直觉，再看清&quot;源码怎么变成能跑的程序&quot;。</li>
+<li><strong>对象、内存与生命周期</strong>（第 3–9 章，<strong>核心</strong>）：值语义、栈与堆、RAII、拷贝与移动、指针与所有权、const、类。这一部分立住了，C++ 就不再神秘。</li>
+<li><strong>泛型与编译期</strong>（第 10–12 章）：模板、concepts、constexpr——C++ 泛型和 Java 泛型是两个世界。</li>
+<li><strong>标准库的现代用法</strong>（第 13–16 章）：容器、算法与 range、lambda、错误处理。</li>
+<li><strong>深入运行时与编译器</strong>（第 17–20 章）：多态与 vtable、编译器优化、并发与内存模型，最后从零实现一个 <code>vector</code> 把所有知识串起来。</li>
+</ol>
+<div class="note">
+<strong>本书默认现代 C++（C++20 / C++23）</strong>
+如果你以前翻过老的 C++ 教程，看到过 <code>new</code>/<code>delete</code> 满天飞、裸指针到处传的写法——请把那些暂时忘掉。本书教的是<strong>今天专业团队实际在写的 C++</strong>：以值和 RAII 为默认，裸 <code>new</code>/<code>delete</code> 几乎不出现。
+</div><h2>动手：把心智模型的差别跑出来</h2>
+<p>光看不够。下面这段程序把本章的第一个观念做成了可运行的实验。点开 <strong>🔗 在 Compiler Explorer 打开</strong>，先猜输出，再运行对答案：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuc3RydWN0IEJveCB7IGludCB2YWx1ZTsgfTtcblxudm9pZCB0cnlUb01vZGlmeShCb3ggYikgeyAgIC8vIOazqOaEj%2B%2B8muaMieWAvOS8oOWPglxuICAgIGIudmFsdWUgPSA5OTk7ICAgICAgICAgIC8vIOaUueeahOaYr%2BS4gOS7veaLt%2Bi0nVxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBCb3ggb3JpZ2luYWx7MX07XG4gICAgQm94IGNvcHkgPSBvcmlnaW5hbDsgICAgLy8g5YC86K%2Bt5LmJ77yaY29weSDmmK%2Fni6znq4vnmoTmlrDlr7nosaFcbiAgICBjb3B5LnZhbHVlID0gNDI7XG5cbiAgICB0cnlUb01vZGlmeShvcmlnaW5hbCk7ICAvLyBvcmlnaW5hbCDkvJrooqvmlLnlkJfvvJ9cblxuICAgIHN0ZDo6Y291dCA8PCBcIm9yaWdpbmFsLnZhbHVlID0gXCIgPDwgb3JpZ2luYWwudmFsdWUgPDwgJ1xcbic7XG4gICAgc3RkOjpjb3V0IDw8IFwiY29weS52YWx1ZSAgICAgPSBcIiA8PCBjb3B5LnZhbHVlIDw8ICdcXG4nO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+struct Box { int value; };
+
+void tryToModify(Box b) {   // 注意：按值传参
+    b.value = 999;          // 改的是一份拷贝
+}
+
+int main() {
+    Box original{1};
+    Box copy = original;    // 值语义：copy 是独立的新对象
+    copy.value = 42;
+
+    tryToModify(original);  // original 会被改吗？
+
+    std::cout &lt;&lt; "original.value = " &lt;&lt; original.value &lt;&lt; '\n';
+    std::cout &lt;&lt; "copy.value     = " &lt;&lt; copy.value &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>如果你带着 Java / Python 的直觉，可能会预期 <code>original</code> 被 <code>tryToModify</code> 改成了 <code>999</code>。但输出是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">original.value = 1
+copy.value     = 42</code></pre>
+</div><p><code>copy = original</code> 造了独立的新对象，所以改 <code>copy</code> 不影响 <code>original</code>；<code>tryToModify</code> 按值接收参数，改的也只是一份拷贝。<strong>在 C++ 里，&quot;复制&quot;是默认行为，&quot;共享&quot;才需要你特意用引用或指针去要求</strong>——这和你熟悉的语言正好相反。</p>
+<p>搞清楚了这一点，我们就可以进入下一章：先看清一段 C++ 源码是怎么变成一个能运行的程序的。这不只是背景知识——理解编译与链接模型，能帮你读懂 C++ 里一大半令人困惑的报错。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 变量默认<strong>是对象本身</strong>（值语义），不是引用；<code>b = a</code> 是拷贝，不是共享。</li>
+<li>没有 GC，但通过 <strong>RAII</strong> 把资源生命周期绑定到对象生命周期，几乎不用手动释放。</li>
+<li>大量工作发生在<strong>编译期</strong>：模板实例化、常量计算、激进优化——读 C++ 常常要读懂编译器做了什么。</li>
+<li>换来的是<strong>可预测的性能</strong>、<strong>零成本抽象</strong>和<strong>确定性的资源管理</strong>。</li>
+<li>本书用<strong>对照</strong>的方式，帮你把 Java / Python 的心智模型平滑切换到 C++。</li>
+</ul>
+
+<div class="chapter-nav">
+  <span></span>
+  <a class="nav-next" href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

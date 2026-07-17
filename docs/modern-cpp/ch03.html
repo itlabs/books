@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 章 值语义：变量就是对象本身</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li class="active"><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 拷贝、移动与所有权</a></li>
+<li><a href="ch07.html">第 7 章 引用、指针与智能指针</a></li>
+<li><a href="ch08.html">第 8 章 const、常量性与不可变</a></li>
+<li><a href="ch09.html">第 9 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch10.html">第 10 章 模板：编译期的泛型</a></li>
+<li><a href="ch11.html">第 11 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch12.html">第 12 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch13.html">第 13 章 STL 容器与迭代器</a></li>
+<li><a href="ch14.html">第 14 章 算法、range 与视图</a></li>
+<li><a href="ch15.html">第 15 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch16.html">第 16 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch17.html">第 17 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch18.html">第 18 章 编译器如何优化你的代码</a></li>
+<li><a href="ch19.html">第 19 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch20.html">第 20 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 3 章 值语义：变量就是对象本身</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章抛出了本书最重要的一句话：<strong>C++ 变量默认是对象本身，不是引用。</strong>这一章把它彻底讲透——你会真正理解 <code>b = a</code> 为什么是拷贝、函数传参默认发生了什么、以及为什么这套"值语义"是 C++ 一切内存管理的起点。</p>
+<p>这是全书的认知拐点。这一章立住了，后面的栈/堆、RAII、移动、所有权都会顺理成章。</p>
+</div><h2>两种世界观：引用语义 vs 值语义</h2>
+<p>你在 Java / Python 里习惯的，叫<strong>引用语义（reference semantics）</strong>：变量是一个指向对象的&quot;把手&quot;，对象本身住在别处（堆上）。</p>
+<div class="concept">
+<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 栈上的两个引用 -->
+  <rect x="30" y="40" width="90" height="40" rx="6" fill="#fff" stroke="#6b7280" stroke-width="2"/>
+  <text x="75" y="30" text-anchor="middle" font-size="13" fill="#6b7280" font-family="monospace">a</text>
+  <text x="75" y="65" text-anchor="middle" font-size="13" fill="#374151">引用</text>
+  <rect x="30" y="110" width="90" height="40" rx="6" fill="#fff" stroke="#6b7280" stroke-width="2"/>
+  <text x="75" y="100" text-anchor="middle" font-size="13" fill="#6b7280" font-family="monospace">b</text>
+  <text x="75" y="135" text-anchor="middle" font-size="13" fill="#374151">引用</text>
+  <!-- 堆上的对象 -->
+  <rect x="330" y="70" width="150" height="60" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="405" y="95" text-anchor="middle" font-size="14" fill="#111" font-family="monospace">Point{99, 2}</text>
+  <text x="405" y="150" text-anchor="middle" font-size="12" fill="#6b7280">堆上唯一的一个对象</text>
+  <!-- 箭头都指向同一个对象 -->
+  <path d="M120 60 L328 90" stroke="#2b6cb0" stroke-width="2" marker-end="url(#a1)"/>
+  <path d="M120 130 L328 110" stroke="#2b6cb0" stroke-width="2" marker-end="url(#a1)"/>
+  <defs><marker id="a1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2b6cb0"/></marker></defs>
+</svg>
+<div class="caption">图 3-1　引用语义（Java / Python）：a 和 b 是两个把手，指向堆上同一个对象。改一个，另一个"也变了"</div>
+</div><p>C++ 默认是<strong>值语义（value semantics）</strong>：变量直接<strong>就是</strong>那块存着数据的内存。两个变量是两块独立的内存。</p>
+<div class="concept">
+<svg viewBox="0 0 520 190" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="90" y="40" width="150" height="55" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="165" y="30" text-anchor="middle" font-size="13" fill="#2b6cb0" font-family="monospace">a</text>
+  <text x="165" y="73" text-anchor="middle" font-size="14" fill="#111" font-family="monospace">Point{1, 2}</text>
+  <rect x="290" y="40" width="150" height="55" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="365" y="30" text-anchor="middle" font-size="13" fill="#2b6cb0" font-family="monospace">b</text>
+  <text x="365" y="73" text-anchor="middle" font-size="14" fill="#111" font-family="monospace">Point{99, 2}</text>
+  <text x="265" y="140" text-anchor="middle" font-size="12" fill="#6b7280">两块独立的内存，各存一个完整的对象。改 b 不影响 a</text>
+  <text x="265" y="165" text-anchor="middle" font-size="12" fill="#3f9b5c">b = a 时，a 的内容被逐字节拷贝进 b</text>
+</svg>
+<div class="caption">图 3-2　值语义（C++）：a 和 b 各自是一个完整的对象，互不相干</div>
+</div><p>同一段代码，在两种世界观下结果完全不同：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">Java：引用语义</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">java</span></div>
+  <pre class="line-numbers"><code class="language-java">Point a = new Point(1, 2);
+Point b = a;
+b.x = 99;
+// a.x 也变成 99
+// 因为 a、b 是同一个对象</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">C++：值语义</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">Point a{1, 2};
+Point b = a;
+b.x = 99;
+// a.x 仍是 1
+// 因为 b 是 a 的一份独立拷贝</code></pre>
+</div></div>
+</div><p>自己跑一遍确认：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuc3RydWN0IFBvaW50IHsgaW50IHgsIHk7IH07XG5cbmludCBtYWluKCkge1xuICAgIFBvaW50IGF7MSwgMn07XG4gICAgUG9pbnQgYiA9IGE7ICAgICAvLyDmi7fotJ3vvJpiIOaYr%2BaWsOWvueixoVxuICAgIGIueCA9IDk5OyAgICAgICAgLy8g5Y%2Bq5pS5IGJcblxuICAgIHN0ZDo6Y291dCA8PCBcImEueCA9IFwiIDw8IGEueCA8PCAnXFxuJzsgICAvLyAxXG4gICAgc3RkOjpjb3V0IDw8IFwiYi54ID0gXCIgPDwgYi54IDw8ICdcXG4nOyAgIC8vIDk5XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+struct Point { int x, y; };
+
+int main() {
+    Point a{1, 2};
+    Point b = a;     // 拷贝：b 是新对象
+    b.x = 99;        // 只改 b
+
+    std::cout &lt;&lt; "a.x = " &lt;&lt; a.x &lt;&lt; '\n';   // 1
+    std::cout &lt;&lt; "b.x = " &lt;&lt; b.x &lt;&lt; '\n';   // 99
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><h2><code>=</code> 到底做了什么</h2>
+<p>在 C++ 里，一个变量定义式 <code>Point b = a;</code> 里的 <code>=</code>，做的是<strong>用 a 初始化 b</strong>——它会把 <code>a</code> 里每个成员的值拷贝一份到 <code>b</code>。对 <code>Point</code> 这种简单结构，就是把 8 个字节（两个 <code>int</code>）原样复制过去。</p>
+<p>这引出一个关键区分，也是初学者最容易混淆的地方：</p>
+<div class="keypoint">
+<strong>初始化 vs 赋值——两个 <code>=</code> 不是一回事</strong>
+<ul>
+<li><code>Point b = a;</code>&nbsp; 这是<strong>初始化</strong>：b 刚诞生，用 a 的内容把它建起来（调用<em>拷贝构造函数</em>）。</li>
+<li><code>b = a;</code>&nbsp; （b 已存在）这是<strong>赋值</strong>：把已经存在的 b 的内容替换成 a 的（调用<em>拷贝赋值运算符</em>）。</li>
+</ul>
+第 9 章会讲这两个函数怎么自定义，现在只需记住：<strong>两种情况都在拷贝，都不会让 b 变成 a 的别名。</strong>
+</div><h2>函数传参：默认也是拷贝</h2>
+<p>值语义最容易&quot;咬&quot;到人的地方，是函数传参。在 Java / Python 里，你把一个对象传进函数，函数内部拿到的是同一个对象的引用，改它会影响外面。在 C++ 里，<strong>默认按值传递——函数拿到的是一份拷贝</strong>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuc3RydWN0IFBvaW50IHsgaW50IHgsIHk7IH07XG5cbnZvaWQgbW92ZVJpZ2h0KFBvaW50IHApIHsgICAvLyDmjInlgLzvvJpwIOaYr%2BWunuWPgueahOS4gOS7veaLt%2Bi0nVxuICAgIHAueCArPSAxMDA7ICAgICAgICAgICAgIC8vIOaUueeahOaYr%2BaLt%2Bi0ne%2B8jOWklumdoueci%2BS4jeWIsFxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBQb2ludCBhezEsIDJ9O1xuICAgIG1vdmVSaWdodChhKTtcbiAgICBzdGQ6OmNvdXQgPDwgYS54IDw8ICdcXG4nOyAgIC8vIOS7jeaYryAxXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+struct Point { int x, y; };
+
+void moveRight(Point p) {   // 按值：p 是实参的一份拷贝
+    p.x += 100;             // 改的是拷贝，外面看不到
+}
+
+int main() {
+    Point a{1, 2};
+    moveRight(a);
+    std::cout &lt;&lt; a.x &lt;&lt; '\n';   // 仍是 1
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>想让函数真的改到外面的对象，你得<strong>显式要求</strong>用引用（第 7 章细讲），加一个 <code>&amp;</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuc3RydWN0IFBvaW50IHsgaW50IHgsIHk7IH07XG5cbnZvaWQgbW92ZVJpZ2h0KFBvaW50JiBwKSB7ICAvLyDmjInlvJXnlKjvvJpwIOWwseaYr%2BWklumdoumCo%2BS4quWvueixoVxuICAgIHAueCArPSAxMDA7XG59XG5cbmludCBtYWluKCkge1xuICAgIFBvaW50IGF7MSwgMn07XG4gICAgbW92ZVJpZ2h0KGEpO1xuICAgIHN0ZDo6Y291dCA8PCBhLnggPDwgJ1xcbic7ICAgLy8g5Y%2BY5oiQIDEwMVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+struct Point { int x, y; };
+
+void moveRight(Point&amp; p) {  // 按引用：p 就是外面那个对象
+    p.x += 100;
+}
+
+int main() {
+    Point a{1, 2};
+    moveRight(a);
+    std::cout &lt;&lt; a.x &lt;&lt; '\n';   // 变成 101
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="note">
+<strong>方向反过来了</strong>
+在 Java / Python 里，"共享"是默认，"拷贝"要你特意做（<code>clone()</code>、<code>copy.deepcopy()</code>）。在 C++ 里，<strong>"拷贝"是默认，"共享"才要你特意用 <code>&</code> 或指针去要求</strong>。这个方向的翻转，是你切换心智模型时最需要盯住的一点。
+</div><h2>值语义不是&quot;浅拷贝&quot;——它拷贝整个对象</h2>
+<p>这里要特别澄清一个 Java / Python 程序员极易踩的坑。在那些语言里，&quot;拷贝一个对象&quot;往往是浅的：拷贝了引用，内部的数组、列表还是共享的。</p>
+<p>C++ 的值语义是<strong>深</strong>的（对于设计良好的类型而言）：拷贝一个 <code>std::vector</code>，会把它内部的<strong>所有元素</strong>也拷贝一份到新的内存里。两个 vector 从此完全独立。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHZlY3Rvcj5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjp2ZWN0b3I8aW50PiBhezEsIDIsIDN9O1xuICAgIHN0ZDo6dmVjdG9yPGludD4gYiA9IGE7ICAgLy8g5ou36LSd5pW05Liq5pWw57uE5YaF5a6577yM5LiN5piv5YWx5Lqr5bqV5bGCXG5cbiAgICBiWzBdID0gOTk7ICAgICAgICAgICAgICAgIC8vIOWPquaUuSBiXG5cbiAgICBzdGQ6OmNvdXQgPDwgXCJhWzBdID0gXCIgPDwgYVswXSA8PCAnXFxuJzsgICAvLyAxXG4gICAgc3RkOjpjb3V0IDw8IFwiYlswXSA9IFwiIDw8IGJbMF0gPDwgJ1xcbic7ICAgLy8gOTlcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; a{1, 2, 3};
+    std::vector&lt;int&gt; b = a;   // 拷贝整个数组内容，不是共享底层
+
+    b[0] = 99;                // 只改 b
+
+    std::cout &lt;&lt; "a[0] = " &lt;&lt; a[0] &lt;&lt; '\n';   // 1
+    std::cout &lt;&lt; "b[0] = " &lt;&lt; b[0] &lt;&lt; '\n';   // 99
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="concept">
+<svg viewBox="0 0 540 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- a -->
+  <rect x="30" y="30" width="70" height="34" rx="6" fill="#fff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="65" y="22" text-anchor="middle" font-size="13" fill="#2b6cb0" font-family="monospace">a</text>
+  <text x="65" y="52" text-anchor="middle" font-size="12" fill="#374151">vector</text>
+  <rect x="150" y="24" width="130" height="46" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="215" y="52" text-anchor="middle" font-size="14" fill="#111" font-family="monospace">[1, 2, 3]</text>
+  <path d="M100 47 L148 47" stroke="#2b6cb0" stroke-width="2" marker-end="url(#c1)"/>
+  <!-- b -->
+  <rect x="30" y="130" width="70" height="34" rx="6" fill="#fff" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="65" y="122" text-anchor="middle" font-size="13" fill="#3f9b5c" font-family="monospace">b</text>
+  <text x="65" y="152" text-anchor="middle" font-size="12" fill="#374151">vector</text>
+  <rect x="150" y="124" width="130" height="46" rx="6" fill="#eefbf1" stroke="#3f9b5c"/>
+  <text x="215" y="152" text-anchor="middle" font-size="14" fill="#111" font-family="monospace">[99, 2, 3]</text>
+  <path d="M100 147 L148 147" stroke="#3f9b5c" stroke-width="2" marker-end="url(#c2)"/>
+  <text x="400" y="90" text-anchor="middle" font-size="12" fill="#6b7280">拷贝时，底层数组的每个</text>
+  <text x="400" y="108" text-anchor="middle" font-size="12" fill="#6b7280">元素都被复制到新内存</text>
+  <text x="400" y="130" text-anchor="middle" font-size="12" fill="#3f9b5c">两个数组彼此独立</text>
+  <defs>
+    <marker id="c1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="c2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 3-3　拷贝一个 vector 会连底层元素一起复制，得到两个完全独立的数组</div>
+</div><p>这正是值语义强大又危险的地方：它给你<strong>独立、无别名、可预测</strong>的对象，代价是<strong>拷贝可能很贵</strong>。拷贝一个装了一百万个元素的 vector，就是实打实地复制一百万个元素。</p>
+<div class="warn">
+<strong>性能陷阱：无意的拷贝</strong>
+因为拷贝是默认行为，一不小心就会拷贝一个大对象。最常见的是这两种：
+<ul>
+<li>按值传参：<code>void process(std::vector&lt;int&gt; data)</code> —— 每次调用都拷贝整个 vector。想只读就用 <code>const std::vector&lt;int&gt;&amp;</code>。</li>
+<li>循环里 <code>for (auto x : container)</code> —— 每轮拷贝一个元素。想只读就用 <code>for (const auto&amp; x : container)</code>。</li>
+</ul>
+C++ 后来引入的<strong>移动语义</strong>（第 6 章）正是为了在"该转移而非拷贝"时避免这种开销。
+</div><h2>编译器视角：拷贝真的发生了吗？</h2>
+<p>值语义听起来到处在拷贝，性能岂不很差？这里有个漂亮的地方：<strong>编译器会消除掉没有意义的拷贝</strong>。</p>
+<p>看这个返回一个大对象的函数。按值语义的字面意思，<code>make()</code> 里的 <code>p</code> 要拷贝一份返回，再拷贝一份给 <code>result</code>——两次拷贝。但现代编译器会做<strong>返回值优化（RVO）</strong>，直接在 <code>result</code> 的内存里构造对象，一次拷贝都不发生：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoic3RydWN0IFBvaW50IHsgaW50IHgsIHk7IH07XG5cblBvaW50IG1ha2UoKSB7XG4gICAgUG9pbnQgcHsxLCAyfTtcbiAgICByZXR1cm4gcDsgICAgICAgIC8vIOeci%2BS8vOimgeaLt%2Bi0nei%2FlOWbnlxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBQb2ludCByZXN1bHQgPSBtYWtlKCk7ICAgLy8g55yL5Ly85Y%2BI5ou36LSd5LiA5qyhXG4gICAgcmV0dXJuIHJlc3VsdC54ICsgcmVzdWx0Lnk7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">struct Point { int x, y; };
+
+Point make() {
+    Point p{1, 2};
+    return p;        // 看似要拷贝返回
+}
+
+int main() {
+    Point result = make();   // 看似又拷贝一次
+    return result.x + result.y;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：你会发现根本没有拷贝的痕迹，编译器直接算出了 <code>3</code>。这就是第 1 章说的&quot;零成本抽象&quot;——<strong>值语义在源码层面给你清晰的语义，编译器在底层把不必要的开销抹掉</strong>。第 6 章和第 18 章会深入这套机制。</p>
+<div class="note">
+<strong>为什么 C++ 选择值语义作为默认？</strong>
+因为值语义带来<strong>局部推理</strong>的能力：看到一个 <code>Point a</code>，你就知道它是一个独立的对象，不会因为别处某个隐藏的别名而被偷偷改掉。没有别名，就没有一大类并发 bug 和"谁动了我的对象"的调试噩梦。C++ 的立场是：默认给你安全的独立性，需要共享时你再显式地要——而不是反过来。
+</div><h2>动手：把三种语义并排看清</h2>
+<p>下面这段程序把&quot;拷贝独立&quot;&quot;引用共享&quot;&quot;按值传参&quot;三件事放在一起。点开运行前，先逐行预测每个输出：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5zdHJ1Y3QgQ291bnRlciB7IGludCBuID0gMDsgfTtcblxudm9pZCBieVZhbHVlKENvdW50ZXIgYykgIHsgYy5uICs9IDE7IH0gICAvLyDmi7fotJ3vvIzkuI3lvbHlk43lpJbpnaJcbnZvaWQgYnlSZWYoQ291bnRlciYgYykgICB7IGMubiArPSAxOyB9ICAgLy8g5byV55So77yM5pS55Yiw5aSW6Z2iXG5cbmludCBtYWluKCkge1xuICAgIENvdW50ZXIgYTtcbiAgICBDb3VudGVyIGIgPSBhOyAgICAgIC8vIOaLt%2Bi0ne%2B8mmIg54us56uLXG4gICAgYi5uID0gMTA7XG5cbiAgICBieVZhbHVlKGEpOyAgICAgICAgIC8vIGEg5Lya5Y%2BY5ZCX77yfXG4gICAgc3RkOjpjb3V0IDw8IFwiYWZ0ZXIgYnlWYWx1ZTogYS5uID0gXCIgPDwgYS5uIDw8ICdcXG4nO1xuXG4gICAgYnlSZWYoYSk7ICAgICAgICAgICAvLyBhIOS8muWPmOWQl%2B%2B8n1xuICAgIHN0ZDo6Y291dCA8PCBcImFmdGVyIGJ5UmVmOiAgIGEubiA9IFwiIDw8IGEubiA8PCAnXFxuJztcblxuICAgIHN0ZDo6Y291dCA8PCBcImIubiA9IFwiIDw8IGIubiA8PCAnXFxuJztcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+struct Counter { int n = 0; };
+
+void byValue(Counter c)  { c.n += 1; }   // 拷贝，不影响外面
+void byRef(Counter&amp; c)   { c.n += 1; }   // 引用，改到外面
+
+int main() {
+    Counter a;
+    Counter b = a;      // 拷贝：b 独立
+    b.n = 10;
+
+    byValue(a);         // a 会变吗？
+    std::cout &lt;&lt; "after byValue: a.n = " &lt;&lt; a.n &lt;&lt; '\n';
+
+    byRef(a);           // a 会变吗？
+    std::cout &lt;&lt; "after byRef:   a.n = " &lt;&lt; a.n &lt;&lt; '\n';
+
+    std::cout &lt;&lt; "b.n = " &lt;&lt; b.n &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">after byValue: a.n = 0
+after byRef:   a.n = 1
+b.n = 10</code></pre>
+</div><p>如果这三行你都预测对了，说明值语义的直觉已经建立起来了。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 默认<strong>值语义</strong>：变量就是对象本身，两个变量是两块独立内存。</li>
+<li><code>=</code> 是<strong>拷贝</strong>（初始化用拷贝构造，赋值用拷贝赋值运算符），不是让变量互为别名。</li>
+<li>函数传参<strong>默认按值（拷贝）</strong>；要改到外面的对象，需显式用引用 <code>&amp;</code>。方向和 Java / Python 相反：拷贝是默认，共享要特意要求。</li>
+<li>值语义是<strong>深</strong>的：拷贝容器会连元素一起复制，得到完全独立的对象——强大但可能很贵。</li>
+<li>无意的拷贝是常见性能陷阱；<strong>移动语义</strong>（第 6 章）用来避免它。</li>
+<li>编译器会用 <strong>RVO</strong> 等手段消除不必要的拷贝，让值语义成为&quot;零成本抽象&quot;。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch02.html">← 第 2 章 从源码到可执行：编译、链接与翻译单元</a>
+  <a class="nav-next" href="ch04.html">第 4 章 栈、堆与对象生命周期 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
