@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 章 从源码到可执行：编译、链接与翻译单元</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li class="active"><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 2 章 从源码到可执行：编译、链接与翻译单元</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>在 Java / Python 里，"把代码跑起来"基本是个黑箱：<code>import</code> 一下就能用别的模块，运行时自会找到它们。C++ 的模型完全不同——它把工作切成<strong>编译</strong>和<strong>链接</strong>两个独立阶段，而这两个阶段各有各的报错。</p>
+<p>读完这一章，你会理解一段 <code>.cpp</code> 是怎么变成可执行文件的，能一眼分清"编译错误"和"链接错误"，也会明白为什么 C++ 有头文件、以及 <code>#include</code> 到底干了什么。这些知识能帮你读懂 C++ 里一大半令人困惑的报错。</p>
+</div><h2>你熟悉的模型 vs C++ 的模型</h2>
+<p>先对照一下。在 Python 里，你 <code>import utils</code>，解释器在运行时找到 <code>utils.py</code> 并加载它。在 Java 里，你用 <code>import com.foo.Bar</code>，编译器和 JVM 靠类路径（classpath）在编译期和运行期解析符号。两种语言里，<strong>&quot;我引用的东西定义在哪&quot;这件事，工具链在很晚的时候才需要拍板</strong>。</p>
+<p>C++ 走的是一条更古老、更&quot;分而治之&quot;的路：</p>
+<div class="keypoint">
+<strong>C++ 的核心事实：每个 .cpp 文件是独立编译的</strong>
+编译器一次只看<strong>一个</strong> <code>.cpp</code> 文件，把它单独翻译成一个目标文件（<code>.o</code>），<strong>完全不知道其他 .cpp 的存在</strong>。等所有 <code>.cpp</code> 都各自编译完，再由<strong>链接器</strong>把这些目标文件拼到一起、解析彼此的引用，最终生成一个可执行文件。<br>
+"编译"和"链接"是两个独立的阶段，由不同的工具负责，产生不同类型的错误。
+</div><h2>四个阶段：一段代码的旅程</h2>
+<p>从 <code>.cpp</code> 到可执行文件，要经过四步。理解它们，报错就不再神秘：</p>
+<div class="concept">
+<svg viewBox="0 0 560 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="10" y="50" width="95" height="50" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="57" y="72" text-anchor="middle" font-size="12">① 预处理</text>
+  <text x="57" y="90" text-anchor="middle" font-size="10" fill="#6b7280">展开 #include</text>
+  <rect x="130" y="50" width="95" height="50" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="177" y="72" text-anchor="middle" font-size="12">② 编译</text>
+  <text x="177" y="90" text-anchor="middle" font-size="10" fill="#6b7280">→ 汇编代码</text>
+  <rect x="250" y="50" width="95" height="50" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="297" y="72" text-anchor="middle" font-size="12">③ 汇编</text>
+  <text x="297" y="90" text-anchor="middle" font-size="10" fill="#6b7280">→ 目标文件 .o</text>
+  <rect x="370" y="50" width="105" height="50" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="422" y="72" text-anchor="middle" font-size="12">④ 链接</text>
+  <text x="422" y="90" text-anchor="middle" font-size="10" fill="#6b7280">拼接 + 解析符号</text>
+  <rect x="495" y="55" width="55" height="40" rx="8" fill="#eefbf1" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="522" y="79" text-anchor="middle" font-size="11">可执行</text>
+  <path d="M105 75 L128 75" stroke="#6b7280" stroke-width="1.6" marker-end="url(#s1)"/>
+  <path d="M225 75 L248 75" stroke="#6b7280" stroke-width="1.6" marker-end="url(#s1)"/>
+  <path d="M345 75 L368 75" stroke="#6b7280" stroke-width="1.6" marker-end="url(#s1)"/>
+  <path d="M475 75 L493 75" stroke="#6b7280" stroke-width="1.6" marker-end="url(#s1)"/>
+  <text x="240" y="30" text-anchor="middle" font-size="11" fill="#2b6cb0">前三步：每个 .cpp 独立进行</text>
+  <text x="470" y="30" text-anchor="middle" font-size="11" fill="#e0692f">最后一步：把大家拼起来</text>
+  <defs><marker id="s1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker></defs>
+</svg>
+<div class="caption">图 2-1　从源码到可执行文件的四个阶段。前三步针对单个 .cpp，第四步（链接）把所有目标文件合起来</div>
+</div><ol>
+<li><strong>预处理（preprocessing）</strong>：处理所有 <code>#</code> 开头的指令。<code>#include</code> 被<strong>原样替换</strong>成对应头文件的全部内容，宏被展开。产物是一个巨大的、纯粹的 <code>.cpp</code>。</li>
+<li><strong>编译（compilation）</strong>：把预处理后的源码翻译成汇编代码。语法错误、类型错误都在这一步被抓出来。</li>
+<li><strong>汇编（assembly）</strong>：把汇编代码转成机器码，打包成<strong>目标文件</strong>（<code>.o</code> / <code>.obj</code>）。</li>
+<li><strong>链接（linking）</strong>：把所有目标文件、以及用到的库拼在一起，解析每个&quot;用到但不在本文件定义&quot;的符号，生成最终可执行文件。</li>
+</ol>
+<p>一条 <code>g++ main.cpp -o app</code> 命令其实一口气跑完了这四步。用 godbolt 或加 <code>-S</code> 参数，你能看到第 ② 步产出的汇编——这正是本书&quot;🔬 看汇编&quot;按钮做的事。</p>
+<h2>翻译单元：编译器眼里的&quot;一个文件&quot;</h2>
+<p>第 ① 步预处理之后得到的那个&quot;展开了所有 include 的完整源码&quot;，有个正式名字叫<strong>翻译单元（translation unit）</strong>。这是编译器处理的基本单位。</p>
+<div class="keypoint">
+<strong>一个 .cpp + 它 include 的所有内容 = 一个翻译单元</strong>
+编译器每次只吃一个翻译单元，把它编译成一个 <code>.o</code>。它对其他翻译单元里有什么<strong>一无所知</strong>。<br>
+这就带来一个根本问题：如果 <code>a.cpp</code> 想调用定义在 <code>b.cpp</code> 里的函数，编译 <code>a.cpp</code> 时编译器根本看不到那个函数——它怎么知道该函数存不存在、参数对不对？
+</div><p>答案就是 C++ 的<strong>声明 / 定义分离</strong>机制，也是头文件存在的全部理由。</p>
+<h2>声明 vs 定义：C++ 报错的分水岭</h2>
+<p>这是本章最重要的一对概念，请务必分清：</p>
+<ul>
+<li><strong>声明（declaration）</strong>：告诉编译器&quot;有这么个东西，它长这样&quot;——名字、类型、函数签名。不产生实体。</li>
+<li><strong>定义（definition）</strong>：真正给出实体——函数的函数体、变量的存储。</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int add(int a, int b);            // 声明：只说"有个 add 函数，签名如此"
+int add(int a, int b) { return a + b; }   // 定义：给出函数体</code></pre>
+</div><p>编译一个翻译单元时，<strong>只要有声明，编译器就满意了</strong>——它相信&quot;这东西的定义在别处，链接器会找到&quot;。于是编译能通过。真正去核对&quot;定义到底在不在&quot;的，是<strong>链接器</strong>。</p>
+<p>这就精确地划出了两类错误的分界：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">编译错误（编译阶段）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int x = "hello";  // 类型不匹配
+foo(;             // 语法错误
+undeclared_var++; // 用了没声明的名字</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">链接错误（链接阶段）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 声明了、也用了，
+// 但整个程序里
+// 找不到定义：
+int add(int, int);   // 有声明
+int r = add(1, 2);   // 用了
+// 却没人写函数体
+// → undefined reference</code></pre>
+</div></div>
+</div><div class="note">
+<strong>一眼分辨两类报错</strong>
+· <strong>编译错误</strong>："expected ';'"、"'x' was not declared"、"no matching function"、"cannot convert"——都是<em>单个文件内部</em>说不通，在编译阶段报出。<br>
+· <strong>链接错误</strong>：最典型的就是 <code>undefined reference to 'foo'</code>（找不到定义）和 <code>multiple definition of 'foo'</code>（定义重复了）。它们在<em>拼接多个文件</em>时才暴露，来自链接器（报错里常出现 <code>ld</code> 或 <code>collect2</code>）。<br>
+搞混这两者，是初学 C++ 调试时最大的时间黑洞。附录 C 会给出一份完整的报错速查。
+</div><h2>头文件：把声明&quot;共享&quot;给多个翻译单元</h2>
+<p>现在能理解头文件了。如果 <code>a.cpp</code> 要调用 <code>b.cpp</code> 里的 <code>add</code>，<code>a.cpp</code> 必须先<strong>看到 <code>add</code> 的声明</strong>。与其在每个用到它的文件里手抄一遍声明，不如把声明写进一个<strong>头文件</strong>，让大家 <code>#include</code> 它——<code>#include</code> 会在预处理阶段把那份声明原样粘贴进来。</p>
+<p>典型的三文件结构是这样分工的：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// ---- math.h：放声明，给别人 include ----
+int add(int a, int b);      // 只有声明
+
+// ---- math.cpp：放定义，编译成 math.o ----
+#include "math.h"
+int add(int a, int b) { return a + b; }   // 唯一的定义
+
+// ---- main.cpp：include 头文件拿到声明，编译成 main.o ----
+#include "math.h"
+int main() { return add(1, 2); }</code></pre>
+</div><p>编译时 <code>math.cpp</code> 和 <code>main.cpp</code> <strong>各自独立</strong>编译成 <code>.o</code>：<code>main.o</code> 里有一个&quot;对 <code>add</code> 的未解析引用&quot;，<code>math.o</code> 里有 <code>add</code> 的定义。链接器把两者一拼，引用就解析上了。这正是命令 <code>g++ main.cpp math.cpp -o app</code> 背后发生的事。</p>
+<div class="warn">
+<strong>ODR：同一个定义，全程序只能有一份</strong>
+C++ 有条铁律叫<strong>单一定义规则（One Definition Rule, ODR）</strong>：一个函数或全局变量，在整个程序里<strong>只能被定义一次</strong>。<br>
+这解释了头文件的黄金准则：<strong>头文件里放声明，不放定义</strong>（<code>inline</code> 函数、模板、类定义除外——它们有特殊豁免）。如果你把一个普通函数的<em>定义</em>写进头文件，然后两个 <code>.cpp</code> 都 <code>#include</code> 它，链接器就会看到<em>两份</em>定义，报 <code>multiple definition</code>。这也是为什么头文件几乎总要配一个 <code>#pragma once</code>（或 include guard）——防止同一个头在一个翻译单元里被展开多次。
+</div><h2>亲手制造、再读懂一个链接错误</h2>
+<p>单文件也能触发链接错误——只声明、不定义即可。下面这段能编译、但<strong>不能链接</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 声明了一个函数，但整个程序里没有它的定义
+int mysteryNumber();
+
+int main() {
+    return mysteryNumber();   // 编译没问题（有声明），链接失败（没定义）
+}</code></pre>
+</div><p>把它放进 Compiler Explorer 并开启执行，你会看到类似这样的链接器报错（不是编译器报错）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">/usr/bin/ld: undefined reference to `mysteryNumber()'
+collect2: error: ld returned 1 exit status</code></pre>
+</div><p>注意报错来自 <code>ld</code>（链接器）而非编译器——因为编译阶段一切合法，只是链接时找不到 <code>mysteryNumber</code> 的实体。补上定义，问题就消失。下面这个完整版就能正常编译、链接、运行：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5pbnQgbXlzdGVyeU51bWJlcigpOyAgICAgICAgICAvLyDlo7DmmI5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjpjb3V0IDw8IG15c3RlcnlOdW1iZXIoKSA8PCAnXFxuJztcbn1cblxuaW50IG15c3RlcnlOdW1iZXIoKSB7ICAgICAgICAgLy8g5a6a5LmJ77yI5pys5L6L5Lit5pS%2B5Zyo5ZCM5LiA5Liq5paH5Lu26YeM77yJXG4gICAgcmV0dXJuIDQyO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+int mysteryNumber();          // 声明
+
+int main() {
+    std::cout &lt;&lt; mysteryNumber() &lt;&lt; '\n';
+}
+
+int mysteryNumber() {         // 定义（本例中放在同一个文件里）
+    return 42;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>编译器很宽容地允许&quot;先用后定义&quot;（只要用之前有声明），因为它知道链接器最后会来收尾。运行输出 <code>42</code>。</p>
+<h2>为什么值得理解这套模型</h2>
+<p>这套&quot;独立编译 + 统一链接&quot;的机制，是 C++ 很多特性的根源：</p>
+<ul>
+<li><strong>编译快、可增量</strong>：改一个 <code>.cpp</code> 只需重编它自己，再重新链接，不必重编整个项目——大型项目靠这个才能维持可接受的构建时间。</li>
+<li><strong>头文件的一切规矩</strong>（放声明、<code>#pragma once</code>、ODR）都是它的直接推论。</li>
+<li><strong>模板为什么通常整个写在头文件里</strong>（第 11 章）——因为编译器必须在使用处看到模板的完整定义才能实例化，这也是这套模型下的必然结果。</li>
+</ul>
+<div class="note">
+<strong>C++20 的模块（modules）</strong>
+头文件这套机制有它的历史包袱：<code>#include</code> 本质是文本粘贴，同一个头被成百上千个翻译单元反复展开、反复编译，既慢又容易出微妙问题。C++20 引入了<strong>模块（modules）</strong>作为现代替代——用 <code>import</code> 取代 <code>#include</code>，语义更接近你熟悉的 Java / Python 模块，编译也更快。但截至目前工具链支持仍在成熟中，头文件在可见的未来仍是主流，所以本书以头文件模型为主来讲解。
+</div><p>理解了&quot;源码如何变成程序&quot;，我们就有了读懂报错的基础。接下来的第二部分（从下一章的值语义开始）会深入 C++ 的核心——对象、内存与生命周期。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 每个 <code>.cpp</code> <strong>独立编译</strong>成目标文件，再由<strong>链接器</strong>拼接、解析符号——编译和链接是两个独立阶段。</li>
+<li>一段旅程分四步：<strong>预处理</strong>（展开 <code>#include</code>）→ <strong>编译</strong>（→汇编）→ <strong>汇编</strong>（→<code>.o</code>）→ <strong>链接</strong>（→可执行）。</li>
+<li>一个 <code>.cpp</code> 加它 include 的全部内容，构成一个<strong>翻译单元</strong>，是编译的基本单位。</li>
+<li><strong>声明</strong>说&quot;有这东西、长这样&quot;（编译器满意即可），<strong>定义</strong>给出实体（链接器负责核对）。</li>
+<li>由此分出两类报错：<strong>编译错误</strong>（单文件内部说不通）和<strong>链接错误</strong>（<code>undefined reference</code> / <code>multiple definition</code>，拼接时才暴露）。</li>
+<li><strong>头文件放声明</strong>供多方 <code>#include</code>；受 <strong>ODR</strong> 约束，普通函数/变量全程序只能定义一次，故头文件配 <code>#pragma once</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch01.html">← 第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a>
+  <a class="nav-next" href="ch03.html">第 3 章 值语义：变量就是对象本身 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
