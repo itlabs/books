@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 D 继续前进：标准、书目与工具链</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li class="active"><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 D 继续前进：标准、书目与工具链</h1>
+<p>读完本书，你已经建立起 C++ 的核心心智模型。但 C++ 是一门庞大的语言，本书是<strong>地基</strong>，不是全部。这份附录给你一张继续前进的地图。</p>
+<h2>本书没深入、但你会遇到的话题</h2>
+<p>按重要性大致排序，这些是自然的下一步：</p>
+<div class="keypoint">
+<strong>值得接着学的主题</strong>
+<ul>
+<li><strong>完美转发与转发引用</strong>（<code>T&amp;&amp;</code> 在模板里的特殊含义、<code>std::forward</code> 的完整故事）——第 11、16 章点到，值得系统学。</li>
+<li><strong>模板元编程与类型特征</strong>（<code>&lt;type_traits&gt;</code>、SFINAE 的历史、变量模板）。</li>
+<li><strong>移动语义的进阶细节</strong>（引用折叠、值类别在泛型中的传播）。</li>
+<li><strong>更多标准库</strong>：<code>std::variant</code> / <code>std::any</code>、<code>std::string_view</code>、<code>std::span</code>、<code>&lt;chrono&gt;</code> 时间库、<code>&lt;filesystem&gt;</code>、格式化 <code>std::format</code>。</li>
+<li><strong>协程</strong>（C++20 <code>co_await</code>/<code>co_yield</code>）——异步与惰性生成的新范式。</li>
+<li><strong>模块</strong>（C++20 <code>import</code>）——第 2 章提过，头文件的现代替代，工具链正在成熟。</li>
+<li><strong>并发进阶</strong>：<code>std::future</code>/<code>std::async</code>、条件变量、无锁数据结构、内存序细节（第 20 章）。</li>
+</ul>
+</div><h2>C++ 标准的演进</h2>
+<p>C++ 每三年出一个新标准，理解版本脉络能帮你读懂各种代码：</p>
+<table>
+<thead>
+<tr>
+<th>标准</th>
+<th>年份</th>
+<th>标志性特性</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>C++11</td>
+<td>2011</td>
+<td>移动语义、<code>auto</code>、lambda、智能指针、<code>nullptr</code>、右值引用——<strong>现代 C++ 的起点</strong></td>
+</tr>
+<tr>
+<td>C++14</td>
+<td>2014</td>
+<td>泛型 lambda、放宽的 <code>constexpr</code></td>
+</tr>
+<tr>
+<td>C++17</td>
+<td>2017</td>
+<td>结构化绑定、<code>std::optional</code>/<code>variant</code>、<code>if</code> 初始化、CTAD、强制拷贝消除</td>
+</tr>
+<tr>
+<td>C++20</td>
+<td>2020</td>
+<td><strong>concepts、ranges、协程、模块</strong>、<code>std::jthread</code>——一次大更新</td>
+</tr>
+<tr>
+<td>C++23</td>
+<td>2023</td>
+<td><code>std::expected</code>、<code>std::print</code>、更强的 ranges 与 <code>constexpr</code></td>
+</tr>
+</tbody></table>
+<div class="note">
+<strong>"现代 C++" 指什么</strong>
+通常指 <strong>C++11 及以后</strong>的风格：值语义 + RAII + 智能指针 + 移动语义为默认，几乎不写裸 <code>new</code>/<code>delete</code>。本书教的就是这套。如果你在网上看到满是裸指针、<code>new</code>/<code>delete</code>、<code>NULL</code> 的代码，那多半是 C++11 之前的老风格——理解它、但别模仿它。
+</div><h2>权威学习资源</h2>
+<div class="keypoint">
+<strong>参考与查阅</strong>
+<ul>
+<li><strong><a href="https://en.cppreference.com">cppreference.com</a></strong>——标准库和语言特性的权威参考，<strong>你会天天用</strong>。每个类型/函数都标注了从哪个标准起可用。</li>
+<li><strong><a href="https://godbolt.org">Compiler Explorer</a></strong>——本书用的在线编译器，看汇编、对比编译器、快速试代码的神器。</li>
+<li><strong><a href="https://isocpp.org/faq">C++ Core Guidelines</a></strong>（Bjarne Stroustrup 与 Herb Sutter 主持）——现代 C++ 的官方最佳实践大全。</li>
+</ul>
+</div><div class="keypoint">
+<strong>值得读的书</strong>
+<ul>
+<li><strong>《Effective Modern C++》</strong>（Scott Meyers）——讲透 C++11/14 的移动语义、智能指针、lambda 等，本书读者的<strong>理想下一本</strong>。</li>
+<li><strong>《A Tour of C++》</strong>（Bjarne Stroustrup，语言之父）——简洁的现代 C++ 全景导览。</li>
+<li><strong>《C++ Concurrency in Action》</strong>（Anthony Williams）——想深入第 20 章的并发，就读它。</li>
+<li><strong>《C++ Templates: The Complete Guide》</strong>——模板的百科全书，进阶时查阅。</li>
+</ul>
+</div><h2>保持工具链的现代化</h2>
+<div class="keypoint">
+<strong>让工具帮你写对代码</strong>
+<ul>
+<li><strong>始终开 <code>-Wall -Wextra</code></strong>，把警告当错误对待（<code>-Werror</code>）。</li>
+<li><strong>日常用 AddressSanitizer / UBSan 跑测试</strong>（附录 A、C）——它抓住的 bug 比你想象的多。</li>
+<li><strong>用 clang-tidy 做静态检查</strong>，用 clang-format 统一风格。</li>
+<li><strong>写单元测试</strong>：GoogleTest、Catch2 是主流框架。</li>
+<li><strong>跟上标准</strong>：编译器默认标准往往偏旧，记得显式 <code>-std=c++23</code>（或你能用的最新版）。</li>
+</ul>
+</div><h2>最后的话</h2>
+<p>你从&quot;变量就是对象本身&quot;这一个观念出发，一路建立起对内存、生命周期、所有权、编译期、以及编译器行为的完整认识。这套心智模型，是很多只会&quot;用&quot; C++ 的人从未真正拥有的。</p>
+<p>C++ 的学习没有终点——语言在演进，你的理解也会随项目加深。但<strong>最难的那道坎——从&quot;托管语言的引用世界&quot;切换到&quot;C++ 的值与生命周期世界&quot;——你已经迈过去了</strong>。剩下的，是在实践中把它变成本能。</p>
+<p>去写代码吧。遇到困惑时，随时回到 Compiler Explorer 点开&quot;看汇编&quot;，问问编译器到底做了什么——那往往是最好的老师。</p>
+<p><strong>祝你在 C++ 的世界里，写得清晰，也跑得飞快。</strong></p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-c.html">← 附录 C 读懂编译器与链接器的报错</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

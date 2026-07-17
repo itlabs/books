@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 A 搭好环境：编译器、构建与在线工具</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li class="active"><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 A 搭好环境：编译器、构建与在线工具</h1>
+<p>本书的代码块都配了 <strong>🔗 在 Compiler Explorer 打开</strong> 按钮，点开即可在线编译运行，不装任何东西也能学完全书。但要认真写 C++，你迟早需要一套本地环境。这份附录帮你快速搭好。</p>
+<h2>最快上手：只用浏览器</h2>
+<p>如果你现在只想跟着书跑代码，<strong>什么都不用装</strong>：</p>
+<ul>
+<li>点每段代码的 <strong>🔗 在 Compiler Explorer 打开</strong>，在 <a href="https://godbolt.org">godbolt.org</a> 里直接编译、运行、改代码重跑。</li>
+<li>想看编译器生成的汇编（&quot;编译器到底做了什么&quot;），点 <strong>🔬 看汇编 / 编译器处理</strong>。</li>
+</ul>
+<p>这足以支撑你读完全书、做完所有练习。下面的本地环境，等你想写自己的项目时再装。</p>
+<h2>本地编译器</h2>
+<p>C++ 有三大主流编译器，任选其一：</p>
+<table>
+<thead>
+<tr>
+<th>编译器</th>
+<th>平台</th>
+<th>安装</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>GCC</strong>（<code>g++</code>）</td>
+<td>Linux / macOS / Windows(MSYS2)</td>
+<td>见下</td>
+</tr>
+<tr>
+<td><strong>Clang</strong>（<code>clang++</code>）</td>
+<td>Linux / macOS / Windows</td>
+<td>见下</td>
+</tr>
+<tr>
+<td><strong>MSVC</strong>（<code>cl</code>）</td>
+<td>Windows</td>
+<td>装 Visual Studio</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>确保编译器够新（支持 C++20/23）</strong>
+本书用到 concepts、ranges、<code>std::expected</code> 等现代特性，需要较新的编译器：<strong>GCC ≥ 13、Clang ≥ 16、MSVC ≥ VS2022</strong>。版本太老会报"不认识的特性"。装完用 <code>g++ --version</code> 确认。
+</div><p><strong>Linux（Ubuntu/Debian）</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">sudo apt update
+sudo apt install g++ cmake
+g++ --version        # 确认版本 &gt;= 13</code></pre>
+</div><p><strong>macOS</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">xcode-select --install    # 装 Apple Clang（够用）
+# 或用 Homebrew 装新版 GCC / LLVM：
+brew install gcc llvm cmake</code></pre>
+</div><p><strong>Windows</strong>：推荐两条路——装 <a href="https://visualstudio.microsoft.com/">Visual Studio</a>（勾选&quot;使用 C++ 的桌面开发&quot;，自带 MSVC + 调试器），或装 <a href="https://www.msys2.org/">MSYS2</a> 用其中的 GCC。若用 WSL，则按上面 Linux 的方式装即可。</p>
+<h2>编译与运行一个程序</h2>
+<p>把代码存成 <code>main.cpp</code>，然后：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">g++ -std=c++23 -O2 -Wall -Wextra main.cpp -o app
+./app                 # Windows 上是 app.exe</code></pre>
+</div><p>各选项的意思（本书所有代码块下方的&quot;本地编译运行&quot;命令就是这套）：</p>
+<div class="keypoint">
+<strong>常用编译选项</strong>
+<ul>
+<li><code>-std=c++23</code>：用 C++23 标准（编译器较老可退到 <code>-std=c++20</code>）。<strong>不加会默认用老标准，现代特性会报错。</strong></li>
+<li><code>-O2</code>：开启优化（第 19 章）。<strong>测性能必须加</strong>；日常调试可用 <code>-O0</code> 或 <code>-Og</code>。</li>
+<li><code>-Wall -Wextra</code>：打开常用警告。<strong>强烈建议一直开着</strong>——它能帮你抓住悬垂引用、未初始化变量等一大类 bug（第 4 章）。</li>
+<li><code>-pthread</code>：用到 <code>&lt;thread&gt;</code>（第 20 章）时加上。</li>
+</ul>
+</div><p>调试相关的两个附加选项，排查内存问题时极有用：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 开调试信息 + 地址消毒器：能在运行时抓出越界、悬垂、泄漏
+g++ -std=c++23 -g -fsanitize=address,undefined main.cpp -o app
+./app</code></pre>
+</div><p><code>-fsanitize=address,undefined</code>（ASan/UBSan）会在程序真正踩到未定义行为（越界访问、使用已释放内存、有符号溢出等）时<strong>立刻报告并指出位置</strong>——这是现代 C++ 最有用的排错工具之一，建议养成用它跑测试的习惯。</p>
+<h2>用 CMake 管理多文件项目</h2>
+<p>单文件用 <code>g++ main.cpp</code> 就够。项目一旦有多个 <code>.cpp</code>（回忆第 2 章的编译/链接模型），就该用构建系统。<strong>CMake</strong> 是事实标准。一个最小的 <code>CMakeLists.txt</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">cmake_minimum_required(VERSION 3.20)
+project(MyApp)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(app main.cpp helper.cpp)   # 列出所有 .cpp</code></pre>
+</div><p>构建它：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cmake -B build              # 在 build/ 目录生成构建文件
+cmake --build build         # 编译
+./build/app                 # 运行</code></pre>
+</div><p>CMake 会自动处理&quot;每个 <code>.cpp</code> 独立编译成 <code>.o</code>、再链接到一起&quot;（第 2 章）的全过程，还能管理依赖库、增量编译。IDE（VS、CLion、VS Code）都原生支持它。</p>
+<h2>编辑器与 IDE</h2>
+<p>任选：</p>
+<ul>
+<li><strong>VS Code</strong> + C/C++ 扩展 + CMake Tools：轻量、跨平台，最流行的免费组合。</li>
+<li><strong>CLion</strong>：JetBrains 出品（用过 IntelliJ / PyCharm 会很熟悉），开箱即用，付费。</li>
+<li><strong>Visual Studio</strong>（Windows）：最强的 C++ 调试体验，社区版免费。</li>
+</ul>
+<div class="note">
+<strong>务必配上 clangd 或 IntelliSense</strong>
+现代 C++ 编辑器的核心是<strong>语言服务器</strong>（clangd，或 VS 的 IntelliSense）——它提供补全、跳转、实时错误提示、以及对模板/concepts 的理解。配好它，写 C++ 的体验会天差地别。VS Code 装 clangd 扩展、或微软的 C/C++ 扩展即可。
+</div><h2>几个值得知道的工具</h2>
+<p>真正做项目时，这些工具会成为你的日常：</p>
+<ul>
+<li><strong>clang-format</strong>：自动格式化代码（团队统一风格）。</li>
+<li><strong>clang-tidy</strong>：静态检查，能揪出很多&quot;能编译但有问题&quot;的写法。</li>
+<li><strong>AddressSanitizer / UBSan</strong>：上面讲过的运行时消毒器，抓内存/未定义行为。</li>
+<li><strong>Valgrind</strong>（Linux）：另一种内存检测工具，较慢但无需重新编译。</li>
+<li><strong>包管理</strong>：<a href="https://vcpkg.io">vcpkg</a> 或 <a href="https://conan.io">Conan</a>，用来引入第三方库（C++ 没有 Maven/pip 那样的官方中央仓库，这两个是社区主流方案）。</li>
+</ul>
+<div class="keypoint">
+<strong>一句话建议</strong>
+入门阶段：<strong>用 Compiler Explorer 学书 → 装 GCC/Clang + VS Code + clangd 写小程序 → 项目变大再上 CMake</strong>。别一开始就被工具链劝退——先把语言学会，工具随需而学。
+</div>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch21.html">← 第 21 章 综合项目：从零实现一个 vector</a>
+  <a class="nav-next" href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 B 从 Java / Python 到 C++ 术语对照表</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li class="active"><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 B 从 Java / Python 到 C++ 术语对照表</h1>
+<p>这份附录是给你查的——遇到陌生的 C++ 概念，先看它对应你熟悉的 Java / Python 里的什么，再看关键差异。<strong>⚠️ 标记的是&quot;看起来像、其实很不同&quot;的陷阱</strong>，这些最容易踩。</p>
+<h2>变量与内存</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java / Python</th>
+<th>C++</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>变量</td>
+<td>对象的引用</td>
+<td>⚠️ 对象本身（值语义）</td>
+<td><code>b = a</code> 在 C++ 是<strong>拷贝</strong>，不是共享（第 3 章）</td>
+</tr>
+<tr>
+<td>对象位置</td>
+<td>几乎全在堆</td>
+<td>⚠️ 默认在栈</td>
+<td>C++ 不写 <code>new</code> 也能建对象（第 4 章）</td>
+</tr>
+<tr>
+<td>内存回收</td>
+<td>GC 自动</td>
+<td>⚠️ RAII（析构自动）</td>
+<td>确定时刻销毁，非&quot;未来某时&quot;（第 5 章）</td>
+</tr>
+<tr>
+<td>空值</td>
+<td><code>null</code> / <code>None</code></td>
+<td><code>nullptr</code>（指针）/ <code>std::optional</code>（值）</td>
+<td>引用不能为空（第 8 章）</td>
+</tr>
+<tr>
+<td>常量</td>
+<td><code>final</code></td>
+<td><code>const</code> / <code>constexpr</code></td>
+<td><code>const</code> 更深、会传染；<code>constexpr</code> 是编译期（第 9、13 章）</td>
+</tr>
+</tbody></table>
+<h2>引用、指针与所有权</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java / Python</th>
+<th>C++</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>传参默认</td>
+<td>传引用（对象）</td>
+<td>⚠️ 传值（拷贝）</td>
+<td>要改外部对象需显式 <code>&amp;</code>（第 3 章）</td>
+</tr>
+<tr>
+<td>&quot;指向&quot;对象</td>
+<td>引用（隐式）</td>
+<td>引用 <code>T&amp;</code> / 指针 <code>T*</code></td>
+<td>引用不可空不可改绑；指针可（第 8 章）</td>
+</tr>
+<tr>
+<td>独占持有堆对象</td>
+<td>—（GC 管）</td>
+<td><code>std::unique_ptr</code></td>
+<td>不可拷贝，只可移动（第 8 章）</td>
+</tr>
+<tr>
+<td>共享持有</td>
+<td>普通引用</td>
+<td><code>std::shared_ptr</code></td>
+<td>引用计数，归零才释放（第 8 章）</td>
+</tr>
+<tr>
+<td>破除循环引用</td>
+<td>—（GC 能处理环）</td>
+<td>⚠️ <code>std::weak_ptr</code></td>
+<td><code>shared_ptr</code> 循环会泄漏（第 8 章）</td>
+</tr>
+<tr>
+<td>移动/转移所有权</td>
+<td>—（无此概念）</td>
+<td>⚠️ <code>std::move</code></td>
+<td>只是类型转换，&quot;贴可移动标签&quot;（第 6 章）</td>
+</tr>
+</tbody></table>
+<h2>类与对象</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java / Python</th>
+<th>C++</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>构造函数</td>
+<td><code>constructor</code> / <code>__init__</code></td>
+<td>构造函数</td>
+<td>用<strong>成员初始化列表</strong>（第 10 章）</td>
+</tr>
+<tr>
+<td>析构/清理</td>
+<td><code>finalize</code> / <code>__del__</code>（不可靠）</td>
+<td>⚠️ 析构函数 <code>~T()</code>（确定）</td>
+<td>离开作用域即调用（第 5 章）</td>
+</tr>
+<tr>
+<td>方法默认虚</td>
+<td>⚠️ 是（Java）</td>
+<td>否，需显式 <code>virtual</code></td>
+<td>C++ 默认非虚更快（第 18 章）</td>
+</tr>
+<tr>
+<td>抽象方法</td>
+<td><code>abstract</code> / <code>ABC</code></td>
+<td>纯虚函数 <code>= 0</code></td>
+<td>（第 18 章）</td>
+</tr>
+<tr>
+<td>重写标注</td>
+<td><code>@Override</code></td>
+<td><code>override</code></td>
+<td>建议每次都写（第 18 章）</td>
+</tr>
+<tr>
+<td>禁止拷贝</td>
+<td>—（自行控制）</td>
+<td><code>= delete</code></td>
+<td>（第 10 章）</td>
+</tr>
+<tr>
+<td>只读方法</td>
+<td>—（约定）</td>
+<td><code>const</code> 成员函数</td>
+<td>const 对象只能调 const 方法（第 9 章）</td>
+</tr>
+</tbody></table>
+<h2>泛型与编译期</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java / Python</th>
+<th>C++</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>泛型</td>
+<td><code>List&lt;T&gt;</code> / 鸭子类型</td>
+<td>模板 <code>template&lt;typename T&gt;</code></td>
+<td>⚠️ 编译期<strong>单态化</strong>，非类型擦除（第 11 章）</td>
+</tr>
+<tr>
+<td>泛型约束</td>
+<td><code>&lt;T extends X&gt;</code></td>
+<td>concepts（<code>requires</code>）</td>
+<td>更灵活的鸭子类型契约（第 12 章）</td>
+</tr>
+<tr>
+<td>编译期常量</td>
+<td>—（很有限）</td>
+<td><code>constexpr</code> / <code>consteval</code></td>
+<td>能编译期跑循环、算表（第 13 章）</td>
+</tr>
+<tr>
+<td>编译期断言</td>
+<td>—（运行时 assert）</td>
+<td><code>static_assert</code></td>
+<td>不满足直接编译失败（第 13 章）</td>
+</tr>
+</tbody></table>
+<h2>标准库</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java</th>
+<th>Python</th>
+<th>C++</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>动态数组</td>
+<td><code>ArrayList</code></td>
+<td><code>list</code></td>
+<td><code>std::vector</code>（第 14 章）</td>
+</tr>
+<tr>
+<td>哈希表</td>
+<td><code>HashMap</code></td>
+<td><code>dict</code></td>
+<td><code>std::unordered_map</code>（第 14 章）</td>
+</tr>
+<tr>
+<td>有序表</td>
+<td><code>TreeMap</code></td>
+<td>—</td>
+<td><code>std::map</code>（第 14 章）</td>
+</tr>
+<tr>
+<td>集合</td>
+<td><code>HashSet</code></td>
+<td><code>set</code></td>
+<td><code>std::unordered_set</code>（第 14 章）</td>
+</tr>
+<tr>
+<td>遍历抽象</td>
+<td><code>Iterator</code></td>
+<td>迭代器协议</td>
+<td>迭代器（<code>begin</code>/<code>end</code>，第 14 章）</td>
+</tr>
+<tr>
+<td>流式处理</td>
+<td>Stream</td>
+<td>推导式/生成器</td>
+<td>ranges + views（第 15 章）</td>
+</tr>
+<tr>
+<td>匿名函数</td>
+<td><code>x -&gt; ...</code></td>
+<td><code>lambda</code></td>
+<td>⚠️ lambda（捕获要显式，第 16 章）</td>
+</tr>
+<tr>
+<td>可能无值</td>
+<td><code>Optional&lt;T&gt;</code></td>
+<td>返回 <code>None</code></td>
+<td><code>std::optional&lt;T&gt;</code>（第 17 章）</td>
+</tr>
+<tr>
+<td>成功或错误</td>
+<td>—（多用异常）</td>
+<td>—</td>
+<td><code>std::expected&lt;T,E&gt;</code>（第 17 章）</td>
+</tr>
+</tbody></table>
+<h2>错误处理与并发</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java / Python</th>
+<th>C++</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>抛/捕获异常</td>
+<td><code>throw</code> / <code>try-catch</code></td>
+<td><code>throw</code> / <code>try-catch</code></td>
+<td>无受检异常；按 <code>const&amp;</code> 捕获（第 17 章）</td>
+</tr>
+<tr>
+<td>资源清理</td>
+<td>try-with-resources / <code>with</code></td>
+<td>⚠️ RAII（自动）</td>
+<td>每个对象默认行为，非专门语法（第 5 章）</td>
+</tr>
+<tr>
+<td>承诺不抛</td>
+<td>—（无）</td>
+<td><code>noexcept</code></td>
+<td>影响移动优化（第 17 章）</td>
+</tr>
+<tr>
+<td>线程</td>
+<td><code>Thread</code></td>
+<td><code>threading.Thread</code></td>
+<td><code>std::thread</code> / <code>std::jthread</code>（第 20 章）</td>
+</tr>
+<tr>
+<td>真并行</td>
+<td>⚠️ 是 / ⚠️ 否(GIL)</td>
+<td>是（无 GIL）</td>
+<td>Python 多线程受 GIL 限制，C++ 不受（第 20 章）</td>
+</tr>
+<tr>
+<td>加锁</td>
+<td><code>synchronized</code> / <code>Lock</code></td>
+<td><code>std::mutex</code> + <code>lock_guard</code></td>
+<td>RAII 自动解锁（第 20 章）</td>
+</tr>
+<tr>
+<td>数据竞争</td>
+<td>有内存模型保护</td>
+<td>⚠️ 未定义行为</td>
+<td>后果更严重（第 20 章）</td>
+</tr>
+</tbody></table>
+<h2>编译模型</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>Java / Python</th>
+<th>C++</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>模块引入</td>
+<td><code>import</code></td>
+<td><code>#include</code>（/ C++20 <code>import</code>）</td>
+<td>⚠️ <code>#include</code> 是文本粘贴（第 2 章）</td>
+</tr>
+<tr>
+<td>编译单位</td>
+<td>类 / 模块</td>
+<td>翻译单元（每个 <code>.cpp</code>）</td>
+<td>独立编译再链接（第 2 章）</td>
+</tr>
+<tr>
+<td>声明与定义</td>
+<td>一体</td>
+<td>⚠️ 分离（头文件/源文件）</td>
+<td>分出编译错误 vs 链接错误（第 2、附录 C 章）</td>
+</tr>
+<tr>
+<td>优化</td>
+<td>运行时 JIT</td>
+<td>编译期（<code>-O2</code>）</td>
+<td>结果可在汇编里直接看（第 19 章）</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>最该记住的五个"看起来像、其实不同"</strong>
+<ol>
+<li><strong>变量是对象本身</strong>，不是引用——赋值是拷贝（第 3 章）。</li>
+<li><strong>对象默认在栈上</strong>、离开作用域确定销毁——RAII 而非 GC（第 4、5 章）。</li>
+<li><strong>传参默认拷贝</strong>，共享要显式 <code>&</code>（第 3 章）。</li>
+<li><strong>方法默认非虚</strong>，多态要显式 <code>virtual</code>（第 18 章）。</li>
+<li><strong>模板是编译期代码生成</strong>，不是运行时泛型（第 11 章）。</li>
+</ol>
+这五点是从托管语言切换到 C++ 时最大的认知落差，也是本书反复强调的主线。
+</div>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-a.html">← 附录 A 搭好环境：编译器、构建与在线工具</a>
+  <a class="nav-next" href="appendix-c.html">附录 C 读懂编译器与链接器的报错 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
