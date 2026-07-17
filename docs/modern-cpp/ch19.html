@@ -51,7 +51,32 @@
 编译器可以对你的代码做<strong>任意变换</strong>，只要变换后程序的<strong>可观察行为</strong>不变（输出、对 <code>volatile</code> 变量的访问、文件/IO 等）。<br>
 换句话说：编译器不保证"按你写的一步步执行"，只保证"最终看到的结果和你写的一样"。它可以删掉、合并、重排任何不影响可观察结果的操作。这就是它敢做激进优化的法律依据。
 </div><p>所以你写的 C++ 是&quot;意图的描述&quot;，不是&quot;执行的脚本&quot;。编译器读懂意图，然后生成达到同样效果的最快代码。下面逐个看它的招式。</p>
-<h2>内联：消除函数调用的开销</h2>
+<div class="concept">
+<svg viewBox="0 0 540 165" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 源码 -->
+  <rect x="15" y="45" width="150" height="70" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="90" y="38" text-anchor="middle" font-size="12" fill="#2b6cb0">你写的源码</text>
+  <text x="25" y="68" font-size="9.5" font-family="monospace">vector, 循环,</text>
+  <text x="25" y="83" font-size="9.5" font-family="monospace">lambda, 函数调用</text>
+  <text x="25" y="98" font-size="9.5" font-family="monospace">…层层抽象</text>
+  <!-- 优化器 -->
+  <rect x="210" y="50" width="120" height="60" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="270" y="42" text-anchor="middle" font-size="12" fill="#e0692f">编译器优化</text>
+  <text x="270" y="72" text-anchor="middle" font-size="9.5" fill="#6b7280">内联·常量折叠</text>
+  <text x="270" y="87" text-anchor="middle" font-size="9.5" fill="#6b7280">RVO·去虚化</text>
+  <text x="270" y="102" text-anchor="middle" font-size="9.5" fill="#6b7280">死代码·循环优化</text>
+  <!-- 汇编 -->
+  <rect x="375" y="45" width="150" height="70" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="450" y="38" text-anchor="middle" font-size="12" fill="#3f9b5c">生成的机器码</text>
+  <text x="450" y="80" text-anchor="middle" font-size="13" font-family="monospace">精简 · 高效</text>
+  <text x="450" y="98" text-anchor="middle" font-size="9.5" fill="#6b7280">有时只剩一个常量</text>
+  <path d="M165 80 L208 80" stroke="#6b7280" stroke-width="1.6" marker-end="url(#o)"/>
+  <path d="M330 80 L373 80" stroke="#6b7280" stroke-width="1.6" marker-end="url(#o)"/>
+  <text x="270" y="140" text-anchor="middle" font-size="11" fill="#6b7280">as-if 规则：只要可观察行为不变，中间怎么改都行 → 抽象被抹平，性能不打折</text>
+  <defs><marker id="o" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker></defs>
+</svg>
+<div class="caption">图 19-1　编译器优化流水线：高层抽象的源码经一系列优化，在 as-if 规则的授权下变成精简高效的机器码——这就是"零成本抽象"</div>
+</div><h2>内联：消除函数调用的开销</h2>
 <p><strong>内联（inlining）</strong> 是最基础也最重要的优化：把一次函数调用<strong>直接替换成函数体</strong>，省掉调用的开销（跳转、传参、栈帧），更重要的是——内联后，函数体和调用点的代码能<strong>一起被进一步优化</strong>。</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">C++</span>
