@@ -17,21 +17,22 @@
 <li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
 <li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
 <li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
-<li><a href="ch06.html">第 6 章 拷贝、移动与所有权</a></li>
-<li><a href="ch07.html">第 7 章 引用、指针与智能指针</a></li>
-<li><a href="ch08.html">第 8 章 const、常量性与不可变</a></li>
-<li><a href="ch09.html">第 9 章 类、构造与特殊成员函数</a></li>
-<li><a href="ch10.html">第 10 章 模板：编译期的泛型</a></li>
-<li><a href="ch11.html">第 11 章 concepts 与约束：模板的类型系统</a></li>
-<li><a href="ch12.html">第 12 章 编译期计算：constexpr 与 consteval</a></li>
-<li><a href="ch13.html">第 13 章 STL 容器与迭代器</a></li>
-<li><a href="ch14.html">第 14 章 算法、range 与视图</a></li>
-<li><a href="ch15.html">第 15 章 lambda、函数对象与可调用体</a></li>
-<li><a href="ch16.html">第 16 章 错误处理：异常、错误码与 expected</a></li>
-<li><a href="ch17.html">第 17 章 多态：虚函数、vtable 与静态多态</a></li>
-<li><a href="ch18.html">第 18 章 编译器如何优化你的代码</a></li>
-<li><a href="ch19.html">第 19 章 并发：线程、原子与内存模型</a></li>
-<li><a href="ch20.html">第 20 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
 <li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
 <li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
 <li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
@@ -124,7 +125,7 @@ int main() {
     return square(9);   // 编译器直接生成 "return 81"
 }</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
-</div><p>点开&quot;看汇编&quot;，你会看到 <code>main</code> 里根本没有乘法指令，只有一个 <code>81</code>。这种&quot;代码在编译期就跑完了&quot;的能力，是 Java / Python 给不了你的。<strong>第 12 章</strong>（编译期计算）和<strong>第 18 章</strong>（编译器优化）会带你深入。</p>
+</div><p>点开&quot;看汇编&quot;，你会看到 <code>main</code> 里根本没有乘法指令，只有一个 <code>81</code>。这种&quot;代码在编译期就跑完了&quot;的能力，是 Java / Python 给不了你的。<strong>第 13 章</strong>（编译期计算）和<strong>第 19 章</strong>（编译器优化）会带你深入。</p>
 <h2>那 C++ 换来了什么？</h2>
 <p>既然要放弃 GC 的省心、接受值语义的&quot;反直觉&quot;，图什么？</p>
 <ul>
@@ -138,10 +139,10 @@ int main() {
 <p>全书的路线：</p>
 <ol>
 <li><strong>换心智模型</strong>（第 1–2 章）：先建立值语义的直觉，再看清&quot;源码怎么变成能跑的程序&quot;。</li>
-<li><strong>对象、内存与生命周期</strong>（第 3–9 章，<strong>核心</strong>）：值语义、栈与堆、RAII、拷贝与移动、指针与所有权、const、类。这一部分立住了，C++ 就不再神秘。</li>
-<li><strong>泛型与编译期</strong>（第 10–12 章）：模板、concepts、constexpr——C++ 泛型和 Java 泛型是两个世界。</li>
-<li><strong>标准库的现代用法</strong>（第 13–16 章）：容器、算法与 range、lambda、错误处理。</li>
-<li><strong>深入运行时与编译器</strong>（第 17–20 章）：多态与 vtable、编译器优化、并发与内存模型，最后从零实现一个 <code>vector</code> 把所有知识串起来。</li>
+<li><strong>对象、内存与生命周期</strong>（第 3–10 章，<strong>核心</strong>）：值语义、栈与堆、RAII、值类别、拷贝与移动、指针与所有权、const、类。这一部分立住了，C++ 就不再神秘。</li>
+<li><strong>泛型与编译期</strong>（第 11–13 章）：模板、concepts、constexpr——C++ 泛型和 Java 泛型是两个世界。</li>
+<li><strong>标准库的现代用法</strong>（第 14–17 章）：容器、算法与 range、lambda、错误处理。</li>
+<li><strong>深入运行时与编译器</strong>（第 18–21 章）：多态与 vtable、编译器优化、并发与内存模型，最后从零实现一个 <code>vector</code> 把所有知识串起来。</li>
 </ol>
 <div class="note">
 <strong>本书默认现代 C++（C++20 / C++23）</strong>

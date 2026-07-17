@@ -17,21 +17,22 @@
 <li class="active"><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
 <li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
 <li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
-<li><a href="ch06.html">第 6 章 拷贝、移动与所有权</a></li>
-<li><a href="ch07.html">第 7 章 引用、指针与智能指针</a></li>
-<li><a href="ch08.html">第 8 章 const、常量性与不可变</a></li>
-<li><a href="ch09.html">第 9 章 类、构造与特殊成员函数</a></li>
-<li><a href="ch10.html">第 10 章 模板：编译期的泛型</a></li>
-<li><a href="ch11.html">第 11 章 concepts 与约束：模板的类型系统</a></li>
-<li><a href="ch12.html">第 12 章 编译期计算：constexpr 与 consteval</a></li>
-<li><a href="ch13.html">第 13 章 STL 容器与迭代器</a></li>
-<li><a href="ch14.html">第 14 章 算法、range 与视图</a></li>
-<li><a href="ch15.html">第 15 章 lambda、函数对象与可调用体</a></li>
-<li><a href="ch16.html">第 16 章 错误处理：异常、错误码与 expected</a></li>
-<li><a href="ch17.html">第 17 章 多态：虚函数、vtable 与静态多态</a></li>
-<li><a href="ch18.html">第 18 章 编译器如何优化你的代码</a></li>
-<li><a href="ch19.html">第 19 章 并发：线程、原子与内存模型</a></li>
-<li><a href="ch20.html">第 20 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
 <li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
 <li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
 <li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
@@ -122,7 +123,7 @@ int main() {
 <li><code>Point b = a;</code>&nbsp; 这是<strong>初始化</strong>：b 刚诞生，用 a 的内容把它建起来（调用<em>拷贝构造函数</em>）。</li>
 <li><code>b = a;</code>&nbsp; （b 已存在）这是<strong>赋值</strong>：把已经存在的 b 的内容替换成 a 的（调用<em>拷贝赋值运算符</em>）。</li>
 </ul>
-第 9 章会讲这两个函数怎么自定义，现在只需记住：<strong>两种情况都在拷贝，都不会让 b 变成 a 的别名。</strong>
+第 10 章会讲这两个函数怎么自定义，现在只需记住：<strong>两种情况都在拷贝，都不会让 b 变成 a 的别名。</strong>
 </div><h2>函数传参：默认也是拷贝</h2>
 <p>值语义最容易&quot;咬&quot;到人的地方，是函数传参。在 Java / Python 里，你把一个对象传进函数，函数内部拿到的是同一个对象的引用，改它会影响外面。在 C++ 里，<strong>默认按值传递——函数拿到的是一份拷贝</strong>。</p>
 <div class="code-block cpp">
@@ -141,7 +142,7 @@ int main() {
     std::cout &lt;&lt; a.x &lt;&lt; '\n';   // 仍是 1
 }</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
-</div><p>想让函数真的改到外面的对象，你得<strong>显式要求</strong>用引用（第 7 章细讲），加一个 <code>&amp;</code>：</p>
+</div><p>想让函数真的改到外面的对象，你得<strong>显式要求</strong>用引用（第 8 章细讲），加一个 <code>&amp;</code>：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">C++</span>
     <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuc3RydWN0IFBvaW50IHsgaW50IHgsIHk7IH07XG5cbnZvaWQgbW92ZVJpZ2h0KFBvaW50JiBwKSB7ICAvLyDmjInlvJXnlKjvvJpwIOWwseaYr%2BWklumdoumCo%2BS4quWvueixoVxuICAgIHAueCArPSAxMDA7XG59XG5cbmludCBtYWluKCkge1xuICAgIFBvaW50IGF7MSwgMn07XG4gICAgbW92ZVJpZ2h0KGEpO1xuICAgIHN0ZDo6Y291dCA8PCBhLnggPDwgJ1xcbic7ICAgLy8g5Y%2BY5oiQIDEwMVxufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
@@ -213,7 +214,7 @@ int main() {
 <li>按值传参：<code>void process(std::vector&lt;int&gt; data)</code> —— 每次调用都拷贝整个 vector。想只读就用 <code>const std::vector&lt;int&gt;&amp;</code>。</li>
 <li>循环里 <code>for (auto x : container)</code> —— 每轮拷贝一个元素。想只读就用 <code>for (const auto&amp; x : container)</code>。</li>
 </ul>
-C++ 后来引入的<strong>移动语义</strong>（第 6 章）正是为了在"该转移而非拷贝"时避免这种开销。
+C++ 后来引入的<strong>移动语义</strong>（第 7 章）正是为了在"该转移而非拷贝"时避免这种开销。
 </div><h2>编译器视角：拷贝真的发生了吗？</h2>
 <p>值语义听起来到处在拷贝，性能岂不很差？这里有个漂亮的地方：<strong>编译器会消除掉没有意义的拷贝</strong>。</p>
 <p>看这个返回一个大对象的函数。按值语义的字面意思，<code>make()</code> 里的 <code>p</code> 要拷贝一份返回，再拷贝一份给 <code>result</code>——两次拷贝。但现代编译器会做<strong>返回值优化（RVO）</strong>，直接在 <code>result</code> 的内存里构造对象，一次拷贝都不发生：</p>
@@ -232,7 +233,7 @@ int main() {
     return result.x + result.y;
 }</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
-</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：你会发现根本没有拷贝的痕迹，编译器直接算出了 <code>3</code>。这就是第 1 章说的&quot;零成本抽象&quot;——<strong>值语义在源码层面给你清晰的语义，编译器在底层把不必要的开销抹掉</strong>。第 6 章和第 18 章会深入这套机制。</p>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：你会发现根本没有拷贝的痕迹，编译器直接算出了 <code>3</code>。这就是第 1 章说的&quot;零成本抽象&quot;——<strong>值语义在源码层面给你清晰的语义，编译器在底层把不必要的开销抹掉</strong>。第 7 章和第 19 章会深入这套机制。</p>
 <div class="note">
 <strong>为什么 C++ 选择值语义作为默认？</strong>
 因为值语义带来<strong>局部推理</strong>的能力：看到一个 <code>Point a</code>，你就知道它是一个独立的对象，不会因为别处某个隐藏的别名而被偷偷改掉。没有别名，就没有一大类并发 bug 和"谁动了我的对象"的调试噩梦。C++ 的立场是：默认给你安全的独立性，需要共享时你再显式地要——而不是反过来。
@@ -276,7 +277,7 @@ b.n = 10</code></pre>
 <li><code>=</code> 是<strong>拷贝</strong>（初始化用拷贝构造，赋值用拷贝赋值运算符），不是让变量互为别名。</li>
 <li>函数传参<strong>默认按值（拷贝）</strong>；要改到外面的对象，需显式用引用 <code>&amp;</code>。方向和 Java / Python 相反：拷贝是默认，共享要特意要求。</li>
 <li>值语义是<strong>深</strong>的：拷贝容器会连元素一起复制，得到完全独立的对象——强大但可能很贵。</li>
-<li>无意的拷贝是常见性能陷阱；<strong>移动语义</strong>（第 6 章）用来避免它。</li>
+<li>无意的拷贝是常见性能陷阱；<strong>移动语义</strong>（第 7 章）用来避免它。</li>
 <li>编译器会用 <strong>RVO</strong> 等手段消除不必要的拷贝，让值语义成为&quot;零成本抽象&quot;。</li>
 </ul>
 

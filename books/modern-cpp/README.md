@@ -34,27 +34,28 @@
 - [第 3 章 值语义：变量就是对象本身](chapters/ch03.md)
 - [第 4 章 栈、堆与对象生命周期](chapters/ch04.md)
 - [第 5 章 RAII：没有 GC，如何自动清理](chapters/ch05.md)
-- [第 6 章 拷贝、移动与所有权](chapters/ch06.md)
-- [第 7 章 引用、指针与智能指针](chapters/ch07.md)
-- [第 8 章 const、常量性与不可变](chapters/ch08.md)
-- [第 9 章 类、构造与特殊成员函数](chapters/ch09.md)
+- [第 6 章 值类别：左值、右值与 std::move](chapters/ch06.md)
+- [第 7 章 拷贝、移动与所有权](chapters/ch07.md)
+- [第 8 章 引用、指针与智能指针](chapters/ch08.md)
+- [第 9 章 const、常量性与不可变](chapters/ch09.md)
+- [第 10 章 类、构造与特殊成员函数](chapters/ch10.md)
 
 ### 第三部分 · 泛型与编译期
-- [第 10 章 模板：编译期的泛型](chapters/ch10.md)
-- [第 11 章 concepts 与约束：模板的类型系统](chapters/ch11.md)
-- [第 12 章 编译期计算：constexpr 与 consteval](chapters/ch12.md)
+- [第 11 章 模板：编译期的泛型](chapters/ch11.md)
+- [第 12 章 concepts 与约束：模板的类型系统](chapters/ch12.md)
+- [第 13 章 编译期计算：constexpr 与 consteval](chapters/ch13.md)
 
 ### 第四部分 · 标准库的现代用法
-- [第 13 章 STL 容器与迭代器](chapters/ch13.md)
-- [第 14 章 算法、range 与视图](chapters/ch14.md)
-- [第 15 章 lambda、函数对象与可调用体](chapters/ch15.md)
-- [第 16 章 错误处理：异常、错误码与 expected](chapters/ch16.md)
+- [第 14 章 STL 容器与迭代器](chapters/ch14.md)
+- [第 15 章 算法、range 与视图](chapters/ch15.md)
+- [第 16 章 lambda、函数对象与可调用体](chapters/ch16.md)
+- [第 17 章 错误处理：异常、错误码与 expected](chapters/ch17.md)
 
 ### 第五部分 · 深入运行时与编译器
-- [第 17 章 多态：虚函数、vtable 与静态多态](chapters/ch17.md)
-- [第 18 章 编译器如何优化你的代码](chapters/ch18.md)
-- [第 19 章 并发：线程、原子与内存模型](chapters/ch19.md)
-- [第 20 章 综合项目：从零实现一个 vector](chapters/ch20.md)
+- [第 18 章 多态：虚函数、vtable 与静态多态](chapters/ch18.md)
+- [第 19 章 编译器如何优化你的代码](chapters/ch19.md)
+- [第 20 章 并发：线程、原子与内存模型](chapters/ch20.md)
+- [第 21 章 综合项目：从零实现一个 vector](chapters/ch21.md)
 
 ### 附录
 - [附录 A 搭好环境：编译器、构建与在线工具](chapters/appendix-a.md)
@@ -64,7 +65,7 @@
 
 ## 怎么用这本书
 
-1. **按顺序读第二部分。** 第 3—7 章是全书地基：值语义、生命周期、RAII、移动、所有权。这套模型立住了，后面都顺。
+1. **按顺序读第二部分。** 第 3—10 章是全书地基：值语义、生命周期、RAII、值类别、移动、所有权。这套模型立住了，后面都顺。
 2. **点开代码块动手改。** 遇到"为什么"，最快的验证方式就是在 Compiler Explorer 里改一行重跑，或点"看汇编"看编译器到底做了什么。
 3. **用附录 B 查术语。** 遇到陌生词，先看它对应你熟悉的 Java / Python 里的什么概念。
 4. **默认现代 C++（C++20 / C++23）。** 本书讲的是今天该怎么写 C++，不是 1998 年的写法。

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 章 值类别：左值、右值与 std::move</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你已经会编程了——那 C++ 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 从源码到可执行：编译、链接与翻译单元</a></li>
+<li><a href="ch03.html">第 3 章 值语义：变量就是对象本身</a></li>
+<li><a href="ch04.html">第 4 章 栈、堆与对象生命周期</a></li>
+<li><a href="ch05.html">第 5 章 RAII：没有 GC，如何自动清理</a></li>
+<li class="active"><a href="ch06.html">第 6 章 值类别：左值、右值与 std::move</a></li>
+<li><a href="ch07.html">第 7 章 拷贝、移动与所有权</a></li>
+<li><a href="ch08.html">第 8 章 引用、指针与智能指针</a></li>
+<li><a href="ch09.html">第 9 章 const、常量性与不可变</a></li>
+<li><a href="ch10.html">第 10 章 类、构造与特殊成员函数</a></li>
+<li><a href="ch11.html">第 11 章 模板：编译期的泛型</a></li>
+<li><a href="ch12.html">第 12 章 concepts 与约束：模板的类型系统</a></li>
+<li><a href="ch13.html">第 13 章 编译期计算：constexpr 与 consteval</a></li>
+<li><a href="ch14.html">第 14 章 STL 容器与迭代器</a></li>
+<li><a href="ch15.html">第 15 章 算法、range 与视图</a></li>
+<li><a href="ch16.html">第 16 章 lambda、函数对象与可调用体</a></li>
+<li><a href="ch17.html">第 17 章 错误处理：异常、错误码与 expected</a></li>
+<li><a href="ch18.html">第 18 章 多态：虚函数、vtable 与静态多态</a></li>
+<li><a href="ch19.html">第 19 章 编译器如何优化你的代码</a></li>
+<li><a href="ch20.html">第 20 章 并发：线程、原子与内存模型</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现一个 vector</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：编译器、构建与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 从 Java / Python 到 C++ 术语对照表</a></li>
+<li><a href="appendix-c.html">附录 C 读懂编译器与链接器的报错</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：标准、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 6 章 值类别：左值、右值与 std::move</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你在 Java / Python 里从没听过"左值""右值"——因为那些语言不需要它。但在 C++ 里，<strong>每一个表达式都有一个"值类别"</strong>，它决定了这个表达式能不能被赋值、能不能取地址、以及——最关键的——它的资源能不能被<strong>偷走</strong>。</p>
+<p>这一章是下一章"移动语义"的地基。读完你会明白：<code>std::move</code> 其实<strong>什么都不搬</strong>，它只是一个类型转换；真正决定"拷贝还是移动"的，是表达式的值类别。</p>
+</div><h2>为什么需要这个概念</h2>
+<p>先看一个你早就会、但从没深究过的现象。这两行赋值，一行合法，一行编译不过：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int x = 10;
+x = 20;      // ✅ 合法：x 可以出现在 = 左边
+10 = 20;     // ❌ 编译错误：10 不能出现在 = 左边</code></pre>
+</div><p>为什么 <code>x</code> 能放在等号左边，<code>10</code> 不能？因为 <code>x</code> 是一个<strong>有身份、有地址的对象</strong>——它在内存里占着一块地方，你可以往里写东西。而 <code>10</code> 只是一个<strong>临时的、马上就消失的值</strong>，它没有稳定的地址，写进去也没意义。</p>
+<p>C++ 给这两类表达式起了名字，这就是&quot;左值&quot;和&quot;右值&quot;的由来：</p>
+<div class="keypoint">
+<strong>最朴素的定义（先建立直觉，后面再精确）</strong>
+<ul>
+<li><strong>左值（lvalue）</strong>：有名字、有稳定地址的表达式。它<em>是</em>一个持久的对象。能放在 <code>=</code> 左边，能对它取地址 <code>&</code>。例：变量 <code>x</code>、<code>arr[0]</code>、<code>*ptr</code>。</li>
+<li><strong>右值（rvalue）</strong>：临时的、即将消失的值，没有稳定地址。例：字面量 <code>10</code>、表达式结果 <code>a + b</code>、函数返回的临时对象。</li>
+</ul>
+名字的来历就是字面意思：<strong>l</strong>eft（能在赋值左边）和 <strong>r</strong>ight（只能在右边）。
+</div><h2>一个判别小技巧：能取地址吗？</h2>
+<p>区分左值和右值，有个立竿见影的办法：<strong>试试能不能对它取地址 <code>&amp;</code></strong>。能取地址的是左值，不能的是右值。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuXG5pbnQgZigpIHsgcmV0dXJuIDQyOyB9XG5cbmludCBtYWluKCkge1xuICAgIGludCB4ID0gMTA7XG5cbiAgICBpbnQqIHAgPSAmeDsgICAgICAgIC8vIOKchSB4IOaYr%2BW3puWAvO%2B8jOiDveWPluWcsOWdgFxuICAgIHN0ZDo6Y291dCA8PCAqcCA8PCAnXFxuJztcblxuICAgIC8vIGludCogcSA9ICYxMDsgICAgLy8g4p2MIDEwIOaYr%2BWPs%2BWAvO%2B8jOS4jeiDveWPluWcsOWdgFxuICAgIC8vIGludCogciA9ICZmKCk7ICAgLy8g4p2MIGYoKSDov5Tlm57nmoTkuLTml7blgLzmmK%2Flj7PlgLzvvIzkuI3og73lj5blnLDlnYBcbiAgICAvLyBpbnQqIHMgPSAmKHgrMSk7IC8vIOKdjCB4KzEg55qE57uT5p6c5piv5Y%2Bz5YC8XG5cbiAgICBzdGQ6OmNvdXQgPDwgXCImeCA9IFwiIDw8IHAgPDwgJ1xcbic7ICAgLy8g5bem5YC85pyJ56iz5a6a5Zyw5Z2AXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+
+int f() { return 42; }
+
+int main() {
+    int x = 10;
+
+    int* p = &amp;x;        // ✅ x 是左值，能取地址
+    std::cout &lt;&lt; *p &lt;&lt; '\n';
+
+    // int* q = &amp;10;    // ❌ 10 是右值，不能取地址
+    // int* r = &amp;f();   // ❌ f() 返回的临时值是右值，不能取地址
+    // int* s = &amp;(x+1); // ❌ x+1 的结果是右值
+
+    std::cout &lt;&lt; "&amp;x = " &lt;&lt; p &lt;&lt; '\n';   // 左值有稳定地址
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>把注释掉的三行任意一行放开，点 <strong>🔗 在 Compiler Explorer 打开</strong> 编译——你会看到编译器明确报错 &quot;lvalue required as unary &#39;&amp;&#39; operand&quot;。编译器用的正是&quot;值类别&quot;这套判断。</p>
+<div class="note">
+<strong>为什么 Java / Python 不需要这个？</strong>
+因为在那些语言里，一切对象都在堆上、由引用访问，你从不直接操心"这个表达式有没有地址、是不是临时的"。而 C++ 有栈上对象、有临时对象、能取地址、能就地构造——它必须在语言层面区分"持久的东西"和"临时的东西"，才能安全地决定资源归属。值类别就是这套区分的规则。
+</div><h2>右值引用：一种&quot;只绑定临时值&quot;的引用</h2>
+<p>到这里都还是铺垫。真正的新东西是 C++11 引入的 <strong>右值引用</strong>，写作 <code>T&amp;&amp;</code>（两个 <code>&amp;</code>）。</p>
+<ul>
+<li>普通引用 <code>T&amp;</code>（一个 <code>&amp;</code>，从第 8 章起细讲）只能绑定到<strong>左值</strong>；</li>
+<li>右值引用 <code>T&amp;&amp;</code> 专门绑定到<strong>右值</strong>——那些临时的、即将消失的值。</li>
+</ul>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cblxuaW50IG1haW4oKSB7XG4gICAgc3RkOjpzdHJpbmcgcyA9IFwiaGVsbG9cIjtcblxuICAgIHN0ZDo6c3RyaW5nJiBscmVmID0gczsgICAgICAgICAgLy8g4pyFIOW3puWAvOW8leeUqOe7keW3puWAvFxuICAgIC8vIHN0ZDo6c3RyaW5nJiBiYWQgPSBcInRlbXBcIjsgICAvLyDinYwg5bem5YC85byV55So5LiN6IO957uR5Li05pe25YC8XG5cbiAgICBzdGQ6OnN0cmluZyYmIHJyZWYgPSBcInRlbXBcIjsgICAgLy8g4pyFIOWPs%2BWAvOW8leeUqOe7keWPs%2BWAvO%2B8iOS4tOaXtiBzdHJpbmfvvIlcbiAgICAvLyBzdGQ6OnN0cmluZyYmIGJhZDIgPSBzOyAgICAgIC8vIOKdjCDlj7PlgLzlvJXnlKjkuI3og73nu5Hlt6blgLwgc1xuXG4gICAgc3RkOjpjb3V0IDw8IGxyZWYgPDwgXCIsIFwiIDw8IHJyZWYgPDwgJ1xcbic7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+int main() {
+    std::string s = "hello";
+
+    std::string&amp; lref = s;          // ✅ 左值引用绑左值
+    // std::string&amp; bad = "temp";   // ❌ 左值引用不能绑临时值
+
+    std::string&amp;&amp; rref = "temp";    // ✅ 右值引用绑右值（临时 string）
+    // std::string&amp;&amp; bad2 = s;      // ❌ 右值引用不能绑左值 s
+
+    std::cout &lt;&lt; lref &lt;&lt; ", " &lt;&lt; rref &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>为什么要专门发明一种&quot;只认临时值&quot;的引用？因为<strong>临时值马上就要销毁了，它的资源没人要了——正好可以放心地偷走</strong>，而不必辛辛苦苦拷贝一份。这就是下一章移动语义的核心思想：<strong>对右值，转移；对左值，拷贝。</strong> 右值引用就是编译器用来识别&quot;这是个可以被掏空的临时值&quot;的抓手。</p>
+<div class="concept">
+<svg viewBox="0 0 540 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 左值 -->
+  <rect x="30" y="40" width="150" height="46" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="105" y="30" text-anchor="middle" font-size="13" fill="#2b6cb0">左值 lvalue</text>
+  <text x="105" y="68" text-anchor="middle" font-size="13" fill="#111" font-family="monospace">变量 s、x、arr[0]</text>
+  <text x="105" y="110" text-anchor="middle" font-size="12" fill="#374151">有名字 / 有地址 / 持久</text>
+  <text x="105" y="128" text-anchor="middle" font-size="12" fill="#3f9b5c">→ 该拷贝（别人还要用）</text>
+  <!-- 右值 -->
+  <rect x="360" y="40" width="150" height="46" rx="8" fill="#fff4ec" stroke="#e0692f" stroke-width="2"/>
+  <text x="435" y="30" text-anchor="middle" font-size="13" fill="#e0692f">右值 rvalue</text>
+  <text x="435" y="68" text-anchor="middle" font-size="13" fill="#111" font-family="monospace">10、a+b、f()</text>
+  <text x="435" y="110" text-anchor="middle" font-size="12" fill="#374151">临时 / 无地址 / 将消失</text>
+  <text x="435" y="128" text-anchor="middle" font-size="12" fill="#e0692f">→ 可移动（掏空也无妨）</text>
+  <!-- 引用绑定 -->
+  <rect x="30" y="165" width="150" height="34" rx="6" fill="#fff" stroke="#6b7280"/>
+  <text x="105" y="187" text-anchor="middle" font-size="13" fill="#374151" font-family="monospace">T&amp;  绑左值</text>
+  <rect x="360" y="165" width="150" height="34" rx="6" fill="#fff" stroke="#6b7280"/>
+  <text x="435" y="187" text-anchor="middle" font-size="13" fill="#374151" font-family="monospace">T&amp;&amp; 绑右值</text>
+  <path d="M105 88 L105 163" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#d1)"/>
+  <path d="M435 88 L435 163" stroke="#e0692f" stroke-width="1.6" marker-end="url(#d2)"/>
+  <defs>
+    <marker id="d1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="d2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0692f"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 6-1　值类别决定资源归属：左值该拷贝，右值可移动。T& 绑左值，T&& 绑右值</div>
+</div><h2>std::move 的真相：它什么都不搬</h2>
+<p>现在来拆穿全 C++ 最容易误解的一个名字。<code>std::move</code> 听起来像&quot;把数据搬走&quot;，但它的实现是这样的（简化版）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// std::move 的本质：一个类型转换，仅此而已
+template &lt;typename T&gt;
+constexpr std::remove_reference_t&lt;T&gt;&amp;&amp; move(T&amp;&amp; x) noexcept {
+    return static_cast&lt;std::remove_reference_t&lt;T&gt;&amp;&amp;&gt;(x);
+}</code></pre>
+</div><div class="keypoint">
+<strong><code>std::move(x)</code> 不移动任何东西</strong>
+它只是把 <code>x</code> <strong>强制转换成右值引用</strong>，相当于对编译器说："我不再需要 x 的当前内容了，你可以把它当临时值对待、可以偷走它的资源。"<br>
+真正的"搬"发生在<strong>之后</strong>——当这个右值被传给移动构造函数或移动赋值时（下一章的主题）。<code>std::move</code> 本身只是<strong>贴了一张"可以掏空我"的标签</strong>。
+</div><p>用汇编印证&quot;它什么都不做&quot;。下面 <code>std::move</code> 作用在一个 <code>int</code> 上（<code>int</code> 没有资源可移动，移动等于拷贝），你会发现它没有产生任何额外指令：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPHV0aWxpdHk%2BXG5cbmludCBjb25zdW1lKGludCYmIHYpIHsgcmV0dXJuIHY7IH1cblxuaW50IHRlc3QoaW50IHgpIHtcbiAgICByZXR1cm4gY29uc3VtZShzdGQ6Om1vdmUoeCkpOyAgIC8vIG1vdmUg5Y%2Bq5piv5oqKIHgg6L2s5oiQ5Y%2Bz5YC877yM5peg6L%2BQ6KGM5pe25byA6ZSAXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔬 看汇编 / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;utility&gt;
+
+int consume(int&amp;&amp; v) { return v; }
+
+int test(int x) {
+    return consume(std::move(x));   // move 只是把 x 转成右值，无运行时开销
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>点开 <strong>🔬 看汇编 / 编译器处理</strong>：<code>std::move</code> 这一层完全消失了，<code>test</code> 直接把 <code>x</code> 交给 <code>consume</code>。这再次印证——<strong>它是一个纯编译期的类型转换，零运行时成本</strong>。</p>
+<h2>危险：move 之后别再用它</h2>
+<p>既然 <code>std::move(x)</code> 是在宣告&quot;x 的内容我不要了，随便掏空&quot;，那么 move 之后 <code>x</code> 处于什么状态？答案是**&quot;有效但未指定&quot;（valid but unspecified）**——对象还活着（析构不会出问题），但里面装什么不保证。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHN0cmluZz5cbiNpbmNsdWRlIDx1dGlsaXR5PlxuXG5pbnQgbWFpbigpIHtcbiAgICBzdGQ6OnN0cmluZyBhID0gXCJoZWxsbyB3b3JsZFwiO1xuICAgIHN0ZDo6c3RyaW5nIGIgPSBzdGQ6Om1vdmUoYSk7ICAgLy8g5oqKIGEg55qE5YaF5a6556e75Yqo57uZIGJcblxuICAgIHN0ZDo6Y291dCA8PCBcImIgPSBcIiA8PCBiIDw8ICdcXG4nOyAgICAgICAgICAgLy8gXCJoZWxsbyB3b3JsZFwiXG4gICAgc3RkOjpjb3V0IDw8IFwiYSA9IFxcXCJcIiA8PCBhIDw8IFwiXFxcIlxcblwiOyAgICAgICAgLy8g6YCa5bi45Li656m677yM5L2G5qCH5YeG5LiN5L%2Bd6K%2BB5YaF5a65XG4gICAgc3RkOjpjb3V0IDw8IFwiYS5zaXplKCkgPSBcIiA8PCBhLnNpemUoKSA8PCAnXFxuJztcblxuICAgIGEgPSBcInJldXNlZFwiOyAgICAgICAgICAgICAgICAgICAgLy8g4pyFIOmHjeaWsOi1i%2BWAvOaAu%2BaYr%2BWuieWFqOeahFxuICAgIHN0ZDo6Y291dCA8PCBcImEgPSBcIiA8PCBhIDw8ICdcXG4nO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;utility&gt;
+
+int main() {
+    std::string a = "hello world";
+    std::string b = std::move(a);   // 把 a 的内容移动给 b
+
+    std::cout &lt;&lt; "b = " &lt;&lt; b &lt;&lt; '\n';           // "hello world"
+    std::cout &lt;&lt; "a = \"" &lt;&lt; a &lt;&lt; "\"\n";        // 通常为空，但标准不保证内容
+    std::cout &lt;&lt; "a.size() = " &lt;&lt; a.size() &lt;&lt; '\n';
+
+    a = "reused";                    // ✅ 重新赋值总是安全的
+    std::cout &lt;&lt; "a = " &lt;&lt; a &lt;&lt; '\n';
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><div class="warn">
+<strong>move 之后的对象，只能做两件事</strong>
+一个被 <code>std::move</code> 掏空的对象，之后<strong>只保证</strong>能安全地：①<strong>销毁</strong>（离开作用域），②<strong>重新赋值</strong>。<br>
+读它的旧内容、或假设它还是原来的值，是 bug 的常见来源。规则很简单：<strong>move 完就当它没了，除非你重新给它赋值。</strong>
+</div><h2>精确一点：五种值类别（了解即可）</h2>
+<p>前面用&quot;左值 / 右值&quot;两分法建立了直觉，够用来理解移动了。但如果你去查标准或看编译器报错，会遇到更细的术语。这里给你一张地图，不必背，遇到了能对上号即可：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">//                    表达式（expression）
+//                    /                \
+//              glvalue              rvalue
+//             /       \            /      \
+//        lvalue      xvalue（消亡值）    prvalue（纯右值）
+//
+//  lvalue  : 有名字的持久对象     —— 变量 x、*p、arr[i]
+//  prvalue : 纯粹的临时值/字面量  —— 10、a+b、make()
+//  xvalue  : "将亡"的对象         —— std::move(x) 的结果、返回 T&amp;&amp; 的调用
+//  glvalue = lvalue + xvalue     —— 有身份（有地址）的表达式
+//  rvalue  = prvalue + xvalue    —— 可被移动的表达式</code></pre>
+</div><p>两条主线索足以应付日常：</p>
+<ul>
+<li><strong>有没有身份（能不能取地址）</strong> → 有则 glvalue（含 lvalue、xvalue），无则 prvalue；</li>
+<li><strong>能不能被移动</strong> → 能则 rvalue（含 prvalue、xvalue），不能则 lvalue。</li>
+</ul>
+<p><code>std::move(x)</code> 的作用，用这张图说就是：把一个 <strong>lvalue</strong>（<code>x</code>）变成一个 <strong>xvalue</strong>（&quot;将亡值&quot;），于是它就落入了 rvalue 阵营，可以匹配 <code>T&amp;&amp;</code>、触发移动。</p>
+<div class="note">
+<strong>不用记这五个词</strong>
+真正要牢记的还是那句话：<strong>左值该拷贝，右值可移动；<code>std::move</code> 只是把左值贴上"可移动"的标签。</strong>五分类是精确化的补充，等你读第 16 章 lambda 捕获、或写完美转发模板（第 11 章）时会再见到 xvalue，到时候回头看这张图即可。
+</div><h2>动手：观察值类别如何选择重载</h2>
+<p>下面这段程序用函数重载&quot;探测&quot;实参的值类别：传左值走一个版本，传右值走另一个。这正是移动语义在底层挑选&quot;拷贝还是移动&quot;的机制。运行前先预测每行走哪个分支：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPGlvc3RyZWFtPlxuI2luY2x1ZGUgPHV0aWxpdHk%2BXG5cbnZvaWQgaW5zcGVjdChjb25zdCBpbnQmIHgpIHsgICAvLyDnu5Hlrprlt6blgLxcbiAgICBzdGQ6OmNvdXQgPDwgXCLlt6blgLzniYjmnKw6IFwiIDw8IHggPDwgJ1xcbic7XG59XG52b2lkIGluc3BlY3QoaW50JiYgeCkgeyAgICAgICAgLy8g57uR5a6a5Y%2Bz5YC8XG4gICAgc3RkOjpjb3V0IDw8IFwi5Y%2Bz5YC854mI5pysOiBcIiA8PCB4IDw8ICdcXG4nO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBpbnQgYSA9IDE7XG5cbiAgICBpbnNwZWN0KGEpOyAgICAgICAgICAgICAgLy8gYSDmmK%2Flt6blgLwg4oaSID9cbiAgICBpbnNwZWN0KDQyKTsgICAgICAgICAgICAgLy8gNDIg5piv5Y%2Bz5YC8IOKGkiA%2FXG4gICAgaW5zcGVjdChhICsgMSk7ICAgICAgICAgIC8vIGErMSDnmoTnu5PmnpzmmK%2Flj7PlgLwg4oaSID9cbiAgICBpbnNwZWN0KHN0ZDo6bW92ZShhKSk7ICAgLy8gbW92ZShhKSDmmK%2Flj7PlgLwoeHZhbHVlKSDihpIgP1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;iostream&gt;
+#include &lt;utility&gt;
+
+void inspect(const int&amp; x) {   // 绑定左值
+    std::cout &lt;&lt; "左值版本: " &lt;&lt; x &lt;&lt; '\n';
+}
+void inspect(int&amp;&amp; x) {        // 绑定右值
+    std::cout &lt;&lt; "右值版本: " &lt;&lt; x &lt;&lt; '\n';
+}
+
+int main() {
+    int a = 1;
+
+    inspect(a);              // a 是左值 → ?
+    inspect(42);             // 42 是右值 → ?
+    inspect(a + 1);          // a+1 的结果是右值 → ?
+    inspect(std::move(a));   // move(a) 是右值(xvalue) → ?
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>预期输出：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">左值版本: 1
+右值版本: 42
+右值版本: 2
+右值版本: 1</code></pre>
+</div><p>看懂这个重载决议，你就掌握了移动语义的钥匙——<code>std::vector</code>、<code>std::string</code> 内部正是用同一套 <code>T&amp;</code> / <code>T&amp;&amp;</code> 重载，来决定&quot;拷贝底层数组&quot;还是&quot;直接接管指针&quot;。下一章，我们就把这套机制变成能省下真实开销的移动构造与移动赋值。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>C++ 中每个表达式都有<strong>值类别</strong>。朴素地分两类：<strong>左值</strong>（有名字、有地址、持久）和<strong>右值</strong>（临时、无地址、将消失）。</li>
+<li>判别技巧：<strong>能取地址 <code>&amp;</code> 的是左值</strong>，不能的是右值。</li>
+<li><strong>右值引用 <code>T&amp;&amp;</code></strong> 专门绑定右值，是编译器识别&quot;可被掏空的临时值&quot;的抓手。</li>
+<li><strong><code>std::move</code> 什么都不搬</strong>：它是一个零成本的类型转换，只是把左值贴上&quot;可移动&quot;标签；真正的移动发生在之后的移动构造/赋值里。</li>
+<li>move 之后的对象处于**&quot;有效但未指定&quot;**状态，只应销毁或重新赋值。</li>
+<li>精确的五分类（lvalue / prvalue / xvalue / glvalue / rvalue）了解即可；核心口诀是<strong>左值该拷贝，右值可移动</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch05.html">← 第 5 章 RAII：没有 GC，如何自动清理</a>
+  <a class="nav-next" href="ch07.html">第 7 章 拷贝、移动与所有权 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
