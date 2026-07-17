@@ -31,12 +31,40 @@ function loadBooks() {
 }
 
 // ---- 自定义 marked 渲染：给代码块加"运行"按钮 ----
-// 约定：
+// 约定（Python 书）：
 //   ```python        -> 可高亮 + 可点击运行（浏览器里跑真 Python）
 //   ```python-norun  -> 只高亮，不给运行按钮（如需网络/密钥的 AI 代码）
+// 约定（C++ 书）：
+//   ```cpp           -> 高亮 + "🔗 在 Compiler Explorer 打开" + 附本地编译命令
+//   ```cpp-asm       -> 同上，但 godbolt 默认 -O2 并展开汇编面板（讲"编译器处理"用）
+//   ```cpp-norun     -> 只高亮（片段、故意报错示范、伪代码）
 //   ```bash / 其它    -> 只高亮
 let blockId = 0;
 const renderer = new marked.Renderer();
+
+// 把整段 C++ 源码打包进一个 Compiler Explorer 分享链接。
+// 用 godbolt 的 clientstate（base64 的 JSON）方案：点开即带上代码、编译器、参数、面板。
+function godboltUrl(code, { asm = false } = {}) {
+  const compiler = "g142"; // x86-64 gcc 14.2
+  const options = "-std=c++23 -O2 -Wall" + (asm ? "" : "");
+  // 汇编视角展开 compiler 面板；普通视角额外展开一个 execution（运行）面板
+  const state = {
+    sessions: [
+      {
+        id: 1,
+        language: "c++",
+        source: code,
+        compilers: [{ id: compiler, options }],
+        executors: asm
+          ? []
+          : [{ compiler: { id: compiler, options }, wrap: true }],
+      },
+    ],
+  };
+  const b64 = Buffer.from(JSON.stringify(state), "utf8").toString("base64");
+  return "https://godbolt.org/clientstate/" + encodeURIComponent(b64);
+}
+
 renderer.code = function (token) {
   // marked v12+ 传入的是 token 对象 {text, lang, escaped}
   const code = typeof token === "string" ? token : token.text;
@@ -56,14 +84,36 @@ renderer.code = function (token) {
 </div>`;
   }
 
+  if (lang === "cpp" || lang === "cpp-asm") {
+    const asm = lang === "cpp-asm";
+    const url = godboltUrl(code, { asm });
+    const label = asm ? "🔬 看汇编 / 编译器处理" : "🔗 在 Compiler Explorer 打开";
+    // 本地编译命令：把源码存成 main.cpp 后编译运行
+    const buildCmd = "g++ -std=c++23 -O2 -Wall main.cpp && ./a.out";
+    return `<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="${url}" target="_blank" rel="noopener">${label}</a></div>
+  <pre class="line-numbers"><code class="language-cpp">${escape(code)}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>${escape(buildCmd)}</code></div>
+</div>`;
+  }
+
   const langClass =
     lang === "python-norun"
       ? "language-python"
-      : lang
-        ? "language-" + lang
-        : "language-none";
+      : lang === "cpp-norun"
+        ? "language-cpp"
+        : lang
+          ? "language-" + lang
+          : "language-none";
   const tag =
-    lang === "python-norun" ? "Python" : lang === "bash" ? "终端" : lang || "";
+    lang === "python-norun"
+      ? "Python"
+      : lang === "cpp-norun"
+        ? "C++"
+        : lang === "bash"
+          ? "终端"
+          : lang || "";
   return `<div class="code-block">
   ${tag ? `<div class="code-head"><span class="lang-tag">${tag}</span></div>` : ""}
   <pre class="line-numbers"><code class="${langClass}">${escape(code)}</code></pre>
@@ -99,6 +149,8 @@ ${bodyHtml}
 <!-- 语法高亮：本地文件，离线可用 -->
 <script src="vendor/prism-core.min.js"></script>
 <script src="vendor/prism-python.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
 <script src="vendor/prism-bash.min.js"></script>
 <script src="vendor/prism-line-numbers.min.js"></script>
 <!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->

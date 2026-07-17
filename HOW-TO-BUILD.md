@@ -67,6 +67,17 @@ node pack.js python-teens    # 生成 python-teens-offline.zip
 3. 重新 `node build.js`（或 `node build.js <书名>`）。
 
 ### 代码块约定（重要）
-- ` ```python ` —— 会带"运行"按钮，能在浏览器里跑。**必须是完整、可独立运行**的代码。
+
+**Python 书（python-teens）：**
+- ` ```python ` —— 会带"运行"按钮，能在浏览器里跑（Pyodide）。**必须是完整、可独立运行**的代码。
 - ` ```python-norun ` —— 只高亮、不给运行按钮。用于：故意报错的示范、需要联网/密钥的 AI 代码、turtle/pygame 代码。
+
+**C++ 书（modern-cpp）：**
+- ` ```cpp ` —— 高亮 + "🔗 在 Compiler Explorer 打开"按钮（点开即在线编译运行、可改代码重跑）+ 附本地编译命令。**应是完整可编译的程序。**
+- ` ```cpp-asm ` —— 同上，但按钮是"🔬 看汇编 / 编译器处理"，godbolt 默认 `-O2` 并展开汇编面板。用于讲优化、内联、模板实例化、RVO 等"编译器处理"的地方。
+- ` ```cpp-norun ` —— 只高亮、不给按钮。用于片段、故意报错示范、伪代码。
+
+> godbolt 链接用 `clientstate`（base64 编码的会话 JSON）生成，携带源码、编译器 `g142`(gcc 14.2)、`-std=c++23 -O2 -Wall` 参数和运行面板。点开即联网编译；离线时代码块与本地编译命令仍完整可读。默认编译器/参数可在 `build.js` 的 `godboltUrl()` 里改。
+
+**通用：**
 - ` ```bash ` —— 终端命令，只高亮。

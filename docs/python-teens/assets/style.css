@@ -148,6 +148,24 @@ pre[class*="language-"] { padding: 16px 14px; font-size: 15px; }
 .output.error { border-top-color: #e05b4b; color: #ffb3aa; }
 .output .prompt-line { color: #7fd6ff; }
 
+/* ===== C++ 代码块：Compiler Explorer 链接 + 本地编译命令 ===== */
+.ce-btn {
+  background: #2b6cb0; color: #fff; text-decoration: none;
+  padding: 5px 14px; border-radius: 6px; font-size: 14px; font-weight: 600;
+  white-space: nowrap;
+}
+.ce-btn:hover { background: #2456a0; }
+.local-cmd {
+  background: #1b1b1b; color: #b9c0c8;
+  padding: 8px 16px; font-size: 13px; border-top: 1px solid #333;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.local-cmd-label { color: #7f8894; }
+.local-cmd code {
+  color: #9fe3b0; font-family: "SF Mono", Consolas, monospace;
+  background: none; padding: 0;
+}
+
 /* ===== 概念图示（作者在 md 里用 <div class="concept"> 包裹 SVG） ===== */
 .concept {
   margin: 26px 0; padding: 22px; background: #f7fbff;
