@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 20 章 同一个 softmax，四种技术怎么写</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li class="active"><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 20 章 同一个 softmax，四种技术怎么写</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面十几章你分别认识了 CUDA（第 10、11 章）、SYCL（第 12 章）、Triton（第 13、14 章）和 CuTe DSL（第 15 章），还学会了归约这个核心并行原语（第 18 章）。这一章把它们摆到<strong>同一张桌子上</strong>：用四种技术实现<strong>同一个算法——按行 softmax</strong>，让你亲眼看到它们不是四门语言，而是<strong>同一个编程模型的四件外衣</strong>。</p>
+<p>读完你会明白 softmax 为什么是"每行两次归约"的问题、数值稳定的减最大值技巧到底在防什么，还会有一份浏览器里能跑的数值稳定 softmax 模拟器——它就是后面四个 GPU 版本共同要对齐的"可执行规范"。</p>
+</div><h2>先说清楚：softmax 是什么，以及它藏着的两次归约</h2>
+<p>softmax 把一行实数变成一个概率分布——每个数变成正数、且整行加起来等于 1。对一行 $x_0, x_1, \dots, x_{n-1}$，第 $i$ 个输出是：</p>
+<p>$$\text{softmax}(x)_i = \frac{e^{x_i}}{\sum_j e^{x_j}}$$</p>
+<p>它在深度学习里无处不在（注意力机制的核心一步就是它，第 21 章会看到）。我们要做的是<strong>按行 softmax</strong>：给一个矩阵，对<strong>每一行</strong>独立做一次 softmax。这正好是第 18 章&quot;归约&quot;的直接应用——只不过每一行需要的不是一次归约，而是<strong>两次</strong>：</p>
+<ol>
+<li>先求这一行的<strong>最大值</strong>（一次 max 归约）；</li>
+<li>再求 $\sum_j e^{x_j - \max}$（一次 sum 归约）。</li>
+</ol>
+<p>为什么需要那个&quot;减最大值&quot;？因为 $e^{x}$ 增长极快：<code>float</code> 到 $x \approx 88$ 就 <code>exp</code> 溢出成 <code>inf</code> 了。而注意力打分动辄上百。技巧是利用一个恒等式——分子分母同乘 $e^{-\max}$ 结果不变：</p>
+<p>$$\frac{e^{x_i}}{\sum_j e^{x_j}} = \frac{e^{x_i - \max}}{\sum_j e^{x_j - \max}}$$</p>
+<p>减掉最大值后，最大的那个指数变成 $e^0 = 1$，其余都 $\le 1$，<strong>永不溢出，结果却分毫不差</strong>。这就是<strong>数值稳定 softmax（numerically-stable softmax）</strong>，是所有正经实现的标配。</p>
+<div class="keypoint">
+<strong>把 softmax 看成一条数据流水线</strong>
+每一行都要走五步：<strong>读入这一行 → 求 max（归约①）→ 减 max 后取 exp → 求 sum（归约②）→ 每个元素除以 sum</strong>。四种 GPU 技术做的是同一条流水线，区别只在于<strong>"谁来做那两次归约"</strong>：CUDA/SYCL 要你亲手用 shared memory 把 block/work-group 里的线程折叠成一个值；Triton 给你一个 <code>tl.max</code>／<code>tl.sum</code> 直接对整块求；CuTe 则让你在更细的 layout 层面掌控数据怎么摆。
+</div><h2>一图看清：同一条流水线，四种技术各自怎么表达</h2>
+<div class="concept">
+<svg viewBox="0 0 620 360" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="310" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">同一条 softmax 流水线，四种技术如何表达每一步</text>
+  <!-- 五步的列头 -->
+  <g font-size="10" fill="#374151" text-anchor="middle">
+    <rect x="120" y="34" width="94" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/><text x="167" y="51">① 读入一行</text>
+    <rect x="216" y="34" width="94" height="26" rx="4" fill="#fbe6dc" stroke="#e06a3b"/><text x="263" y="51">② 求 max</text>
+    <rect x="312" y="34" width="94" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/><text x="359" y="51">③ 减max取exp</text>
+    <rect x="408" y="34" width="94" height="26" rx="4" fill="#fbe6dc" stroke="#e06a3b"/><text x="455" y="51">④ 求 sum</text>
+    <rect x="504" y="34" width="100" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/><text x="554" y="51">⑤ 除以 sum</text>
+  </g>
+  <text x="60" y="51" text-anchor="middle" font-size="10" fill="#6b7280">步骤</text>
+  <!-- 四行技术 -->
+  <g font-family="monospace" font-size="8.5" fill="#1a4a7a" text-anchor="middle">
+    <!-- CUDA -->
+    <rect x="10" y="70" width="100" height="60" rx="4" fill="#f7fbff" stroke="#2b6cb0"/><text x="60" y="104" font-size="11" fill="#2b6cb0" font-family="sans-serif" font-weight="bold">CUDA</text>
+    <text x="167" y="95">x[c]=in[row*W+c]</text><text x="167" y="108" fill="#6b7280">1 block / 行</text>
+    <text x="263" y="95">shared 归约</text><text x="263" y="108" fill="#a53f1c">fmaxf 折叠</text>
+    <text x="359" y="102">expf(x-m)</text>
+    <text x="455" y="95">shared 归约</text><text x="455" y="108" fill="#a53f1c">+= 折叠</text>
+    <text x="554" y="102">y[c]=e*inv</text>
+  </g>
+  <g font-family="monospace" font-size="8.5" fill="#1a4a7a" text-anchor="middle">
+    <!-- SYCL -->
+    <rect x="10" y="140" width="100" height="60" rx="4" fill="#f7fbff" stroke="#2b6cb0"/><text x="60" y="174" font-size="11" fill="#2b6cb0" font-family="sans-serif" font-weight="bold">SYCL</text>
+    <text x="167" y="165">x[c] 同上</text><text x="167" y="178" fill="#6b7280">1 wg / 行</text>
+    <text x="263" y="165">local_accessor</text><text x="263" y="178" fill="#a53f1c">归约</text>
+    <text x="359" y="172">sycl::exp</text>
+    <text x="455" y="165">local_accessor</text><text x="455" y="178" fill="#a53f1c">归约</text>
+    <text x="554" y="172">y[c]=e*inv</text>
+  </g>
+  <g font-family="monospace" font-size="8.5" fill="#1a4a7a" text-anchor="middle">
+    <!-- Triton -->
+    <rect x="10" y="210" width="100" height="60" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="60" y="244" font-size="11" fill="#2f7a45" font-family="sans-serif" font-weight="bold">Triton</text>
+    <text x="167" y="235">tl.load(整行)</text><text x="167" y="248" fill="#6b7280">1 program / 行</text>
+    <text x="263" y="242" fill="#2f7a45">tl.max(x,0)</text>
+    <text x="359" y="242">tl.exp(x-m)</text>
+    <text x="455" y="242" fill="#2f7a45">tl.sum(e,0)</text>
+    <text x="554" y="242">e / s</text>
+  </g>
+  <g font-family="monospace" font-size="8.5" fill="#1a4a7a" text-anchor="middle">
+    <!-- CuTe -->
+    <rect x="10" y="280" width="100" height="60" rx="4" fill="#fdf6ec" stroke="#c98a2b"/><text x="60" y="314" font-size="11" fill="#9a6a17" font-family="sans-serif" font-weight="bold">CuTe</text>
+    <text x="167" y="305">Tensor+Layout</text><text x="167" y="318" fill="#6b7280">tile 映射</text>
+    <text x="263" y="312" fill="#9a6a17">对 tile 归约</text>
+    <text x="359" y="312">逐元素 exp</text>
+    <text x="455" y="312" fill="#9a6a17">对 tile 归约</text>
+    <text x="554" y="312">融进后续算子</text>
+  </g>
+  <text x="310" y="352" text-anchor="middle" font-size="10" fill="#6b7280">五步流水线完全相同；橙色的两步（②④归约）是四种技术差异最大、最见功力的地方</text>
+</svg>
+<div class="caption">图 20-1　同一条 softmax 数据流（读入→max→exp→sum→归一化），四种技术逐步对照。算法一模一样，变的只是"怎么把一行折叠成一个数"这两次归约的写法</div>
+</div><p>真正拉开四者写法差距的，是那两次归约。CUDA/SYCL 是<strong>线程级</strong>思维：你要亲手指挥一群线程，先各扫一段、写进 shared memory，再用一棵折叠树把它们收成一个值。Triton 是<strong>块级</strong>思维：你把一整行当成一个&quot;块&quot;，<code>tl.max(x, axis=0)</code> 一句话就把归约交给编译器，它自己去决定用什么 warp/shared 策略。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA / SYCL：线程级归约（你亲手折叠）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 每个线程先扫自己负责的列，得到局部值
+float local = -INFINITY;
+for (int c = tid; c &lt; cols; c += blockDim.x)
+    local = fmaxf(local, x[c]);
+buf[tid] = local;                 // 写进 shared memory
+__syncthreads();
+// 折叠树：blockDim → ... → 2 → 1
+for (int s = blockDim.x/2; s &gt; 0; s &gt;&gt;= 1) {
+    if (tid &lt; s) buf[tid] = fmaxf(buf[tid], buf[tid+s]);
+    __syncthreads();
+}
+float row_max = buf[0];           // 归约结果</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">Triton：块级归约（编译器替你折叠）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python"># 一整行就是一个块，归约是一句话
+x = tl.load(in_ptrs, mask=mask, other=-float('inf'))
+row_max = tl.max(x, axis=0)     # 这一句 = 左边整段
+z = x - row_max
+num = tl.exp(z)
+denom = tl.sum(num, axis=0)     # 第二次归约，同样一句话
+y = num / denom
+# 折叠树、shared、warp shuffle 全由 Triton 自动生成</code></pre>
+</div></div>
+</div><p>这就是第 13 章反复强调的：Triton 把你从&quot;线程&quot;的粒度<strong>抬高到&quot;块&quot;的粒度</strong>。同一次归约，CUDA 让你看见每一步折叠，Triton 让你只说&quot;对这个块求 max&quot;。抽象层次不同，跑出来的却是同一件事——下面的模拟器先把这件事本身钉死。</p>
+<h2>动手：数值稳定 softmax 的可执行规范</h2>
+<p>下面这段程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它只用标准库，逐行做数值稳定 softmax，把每一行的中间量（max、sum）打印出来，并断言每一行加起来等于 1。<strong>四个 GPU 版本，跑出来都必须和它一致</strong>——它就是本章的&quot;黄金参考&quot;。特别注意第 2 行那个数字上百的例子：它演示了不减最大值就会溢出的真实风险。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%95%B0%E5%80%BC%E7%A8%B3%E5%AE%9A%E7%9A%84%20row-wise%20softmax%EF%BC%9A%E8%BF%99%E6%98%AF%E5%9B%9B%E7%A7%8D%20GPU%20%E5%AE%9E%E7%8E%B0%E5%85%B1%E5%90%8C%E7%9A%84%E2%80%9C%E5%8F%AF%E6%89%A7%E8%A1%8C%E8%A7%84%E8%8C%83%E2%80%9D%0Aimport%20math%0A%0Adef%20softmax_row(row)%3A%0A%20%20%20%20%23%20%E7%AC%AC%E4%B8%80%E9%81%8D%E5%BD%92%E7%BA%A6%EF%BC%9A%E6%B1%82%E8%BF%99%E4%B8%80%E8%A1%8C%E7%9A%84%E6%9C%80%E5%A4%A7%E5%80%BC%EF%BC%88%E6%95%B0%E5%80%BC%E7%A8%B3%E5%AE%9A%E7%9A%84%E5%85%B3%E9%94%AE%EF%BC%89%0A%20%20%20%20m%20%3D%20row%5B0%5D%0A%20%20%20%20for%20x%20in%20row%5B1%3A%5D%3A%0A%20%20%20%20%20%20%20%20if%20x%20%3E%20m%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20m%20%3D%20x%0A%20%20%20%20%23%20%E5%87%8F%E6%9C%80%E5%A4%A7%E5%80%BC%E5%86%8D%E5%8F%96%20exp%EF%BC%8C%E9%81%BF%E5%85%8D%20exp%20%E6%BA%A2%E5%87%BA%0A%20%20%20%20exps%20%3D%20%5Bmath.exp(x%20-%20m)%20for%20x%20in%20row%5D%0A%20%20%20%20%23%20%E7%AC%AC%E4%BA%8C%E9%81%8D%E5%BD%92%E7%BA%A6%EF%BC%9A%E6%B1%82%20exp%20%E4%B9%8B%E5%92%8C%0A%20%20%20%20s%20%3D%200.0%0A%20%20%20%20for%20e%20in%20exps%3A%0A%20%20%20%20%20%20%20%20s%20%2B%3D%20e%0A%20%20%20%20%23%20%E5%BD%92%E4%B8%80%E5%8C%96%0A%20%20%20%20out%20%3D%20%5Be%20%2F%20s%20for%20e%20in%20exps%5D%0A%20%20%20%20return%20out%2C%20m%2C%20s%0A%0Amatrix%20%3D%20%5B%0A%20%20%20%20%5B1.0%2C%202.0%2C%203.0%2C%204.0%5D%2C%0A%20%20%20%20%5B0.0%2C%200.0%2C%200.0%2C%200.0%5D%2C%0A%20%20%20%20%5B100.0%2C%20101.0%2C%20102.0%2C%20103.0%5D%2C%20%20%20%23%20%E5%A4%A7%E6%95%B0%EF%BC%9A%E4%B8%8D%E5%87%8F%E6%9C%80%E5%A4%A7%E5%80%BC%E5%B0%B1%E4%BC%9A%20exp%20%E6%BA%A2%E5%87%BA%0A%5D%0A%0Aprint(%22%E9%80%90%E8%A1%8C%E5%81%9A%E6%95%B0%E5%80%BC%E7%A8%B3%E5%AE%9A%20softmax%EF%BC%88%E5%85%88%E6%B1%82%20max%EF%BC%8C%E5%86%8D%E6%B1%82%20sum%EF%BC%8C%E4%B8%A4%E6%AC%A1%E5%BD%92%E7%BA%A6%EF%BC%89%EF%BC%9A%22)%0Afor%20r%2C%20row%20in%20enumerate(matrix)%3A%0A%20%20%20%20out%2C%20m%2C%20s%20%3D%20softmax_row(row)%0A%20%20%20%20pretty%20%3D%20%22%5B%22%20%2B%20%22%2C%20%22.join(f%22%7Bv%3A.4f%7D%22%20for%20v%20in%20out)%20%2B%20%22%5D%22%0A%20%20%20%20print(f%22%20%20%E8%A1%8C%20%7Br%7D%3A%20max%3D%7Bm%3A.1f%7D%20%20sum(exp)%3D%7Bs%3A.4f%7D%20%20softmax%3D%7Bpretty%7D%22)%0A%20%20%20%20%23%20%E9%AA%8C%E8%AF%81%EF%BC%9A%E6%AF%8F%E8%A1%8C%E5%BF%85%E9%A1%BB%E5%92%8C%E4%B8%BA%201%0A%20%20%20%20total%20%3D%200.0%0A%20%20%20%20for%20v%20in%20out%3A%0A%20%20%20%20%20%20%20%20total%20%2B%3D%20v%0A%20%20%20%20assert%20abs(total%20-%201.0)%20%3C%201e-9%2C%20total%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%E6%A0%A1%E9%AA%8C%EF%BC%9A%E8%BF%99%E4%B8%80%E8%A1%8C%E5%8A%A0%E8%B5%B7%E6%9D%A5%20%3D%20%7Btotal%3A.6f%7D%20%20%E2%86%92%20%E7%BA%A6%E7%AD%89%E4%BA%8E%201.0%20%E2%9C%93%22)%0A%0Aprint(%22%5Cn%E5%85%B3%E9%94%AE%E8%A7%82%E5%AF%9F%EF%BC%9A%E8%A1%8C%202%20%E7%9A%84%E6%95%B0%E5%AD%97%E9%AB%98%E8%BE%BE%20100%2B%EF%BC%8C%E8%8B%A5%E4%B8%8D%E5%85%88%E5%87%8F%E5%8E%BB%20max%EF%BC%8Cexp(103)%20%E4%BC%9A%E6%BA%A2%E5%87%BA%E6%88%90%20inf%EF%BC%9B%22)%0Aprint(%22%E5%87%8F%E5%8E%BB%E6%AF%8F%E8%A1%8C%E7%9A%84%20max%20%E5%90%8E%EF%BC%8C%E6%9C%80%E5%A4%A7%E7%9A%84%E6%8C%87%E6%95%B0%E5%8F%98%E6%88%90%20exp(0)%3D1%EF%BC%8C%E7%BB%93%E6%9E%9C%E5%AE%8C%E5%85%A8%E4%B8%8D%E5%8F%98%EF%BC%8C%E5%8D%B4%E6%B0%B8%E4%B8%8D%E6%BA%A2%E5%87%BA%E3%80%82%22)"># 数值稳定的 row-wise softmax：这是四种 GPU 实现共同的“可执行规范”
+import math
+
+def softmax_row(row):
+    # 第一遍归约：求这一行的最大值（数值稳定的关键）
+    m = row[0]
+    for x in row[1:]:
+        if x &gt; m:
+            m = x
+    # 减最大值再取 exp，避免 exp 溢出
+    exps = [math.exp(x - m) for x in row]
+    # 第二遍归约：求 exp 之和
+    s = 0.0
+    for e in exps:
+        s += e
+    # 归一化
+    out = [e / s for e in exps]
+    return out, m, s
+
+matrix = [
+    [1.0, 2.0, 3.0, 4.0],
+    [0.0, 0.0, 0.0, 0.0],
+    [100.0, 101.0, 102.0, 103.0],   # 大数：不减最大值就会 exp 溢出
+]
+
+print("逐行做数值稳定 softmax（先求 max，再求 sum，两次归约）：")
+for r, row in enumerate(matrix):
+    out, m, s = softmax_row(row)
+    pretty = "[" + ", ".join(f"{v:.4f}" for v in out) + "]"
+    print(f"  行 {r}: max={m:.1f}  sum(exp)={s:.4f}  softmax={pretty}")
+    # 验证：每行必须和为 1
+    total = 0.0
+    for v in out:
+        total += v
+    assert abs(total - 1.0) &lt; 1e-9, total
+    print(f"       校验：这一行加起来 = {total:.6f}  → 约等于 1.0 ✓")
+
+print("\n关键观察：行 2 的数字高达 100+，若不先减去 max，exp(103) 会溢出成 inf；")
+print("减去每行的 max 后，最大的指数变成 exp(0)=1，结果完全不变，却永不溢出。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">逐行做数值稳定 softmax（先求 max，再求 sum，两次归约）：
+  行 0: max=4.0  sum(exp)=1.5530  softmax=[0.0321, 0.0871, 0.2369, 0.6439]
+       校验：这一行加起来 = 1.000000  → 约等于 1.0 ✓
+  行 1: max=0.0  sum(exp)=4.0000  softmax=[0.2500, 0.2500, 0.2500, 0.2500]
+       校验：这一行加起来 = 1.000000  → 约等于 1.0 ✓
+  行 2: max=103.0  sum(exp)=1.5530  softmax=[0.0321, 0.0871, 0.2369, 0.6439]
+       校验：这一行加起来 = 1.000000  → 约等于 1.0 ✓
+
+关键观察：行 2 的数字高达 100+，若不先减去 max，exp(103) 会溢出成 inf；
+减去每行的 max 后，最大的指数变成 exp(0)=1，结果完全不变，却永不溢出。</code></pre>
+</div><p>看行 0 和行 2：数字整体抬高了 99，softmax 结果<strong>逐位相同</strong>——这就是减最大值不改变结果的证明。请动手改：把行 2 的 <code>max</code> 减法去掉（在 <code>exps</code> 里直接写 <code>math.exp(x)</code>），你会看到 <code>math.exp(103)</code> 直接抛 <code>OverflowError</code>。这也是为什么下面每个 GPU kernel 的第一次归约都是求 max。</p>
+<h2>CUDA：一个 block 负责一行，shared memory 做两次归约</h2>
+<p>最贴近硬件的写法（第 10、11 章）。分工策略是 GPU 上做按行归约的经典套路：<strong>一个 block 负责一整行</strong>，block 里的线程先各自扫过这一行的若干列，再用第 18 章那棵折叠树在 shared memory 里归约成一个值。max 和 sum 是同一套归约代码，只是折叠时一个用 <code>fmaxf</code>、一个用 <code>+</code>。下面是<strong>完整可编译</strong>的 <code>.cu</code>，跑完对着 CPU 参考逐行校验。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y21hdGg%2BXG4jaW5jbHVkZSA8Y3VkYV9ydW50aW1lLmg%2BXG5cbiNkZWZpbmUgVEhSRUFEUyAyNTYgICAvLyDmr4%2FkuKogYmxvY2sg55qE57q%2F56iL5pWw77yM5Y%2BWIDIg55qE5bmC5L6%2F5LqO5oqY5Y%2Bg5b2S57qmXG5cbi8vIOS4gOS4qiBibG9jayDotJ%2FotKPkuIDooYzvvJtibG9jayDlhoXnur%2FnqIvljY%2FkvZzlgZrkuKTmrKHlvZLnuqbvvIjlhYggbWF477yM5YaNIHN1be%2B8iVxuX19nbG9iYWxfXyB2b2lkIHNvZnRtYXhfcm93cyhjb25zdCBmbG9hdCogaW4sIGZsb2F0KiBvdXQsIGludCByb3dzLCBpbnQgY29scykge1xuICAgIGludCByb3cgPSBibG9ja0lkeC54OyAgICAgICAgICAgICAgICAgLy8g5oiR6L%2BZ5LiqIGJsb2NrIOi0n%2Bi0o%2BesrOWHoOihjFxuICAgIGlmIChyb3cgPj0gcm93cykgcmV0dXJuO1xuICAgIGludCB0aWQgPSB0aHJlYWRJZHgueDtcbiAgICBjb25zdCBmbG9hdCogeCA9IGluICArIHJvdyAqIGNvbHM7XG4gICAgZmxvYXQqICAgICAgIHkgPSBvdXQgKyByb3cgKiBjb2xzO1xuXG4gICAgX19zaGFyZWRfXyBmbG9hdCBidWZbVEhSRUFEU107XG5cbiAgICAvLyAtLS0tIOesrOS4gOasoeW9kue6pu%2B8muaxguacrOihjOacgOWkp%2BWAvCAtLS0tXG4gICAgZmxvYXQgbG9jYWxfbWF4ID0gLUlORklOSVRZO1xuICAgIGZvciAoaW50IGMgPSB0aWQ7IGMgPCBjb2xzOyBjICs9IGJsb2NrRGltLngpICAgLy8g5q%2BP5Liq57q%2F56iL6Leo5q2l5omr6Ieq5bex6YKj5Yeg5YiXXG4gICAgICAgIGxvY2FsX21heCA9IGZtYXhmKGxvY2FsX21heCwgeFtjXSk7XG4gICAgYnVmW3RpZF0gPSBsb2NhbF9tYXg7XG4gICAgX19zeW5jdGhyZWFkcygpO1xuICAgIGZvciAoaW50IHMgPSBibG9ja0RpbS54IC8gMjsgcyA%2BIDA7IHMgPj49IDEpIHsgLy8g5oqY5Y%2Bg5qCR77yaMjU24oaSMTI44oaS4oCm4oaSMVxuICAgICAgICBpZiAodGlkIDwgcykgYnVmW3RpZF0gPSBmbWF4ZihidWZbdGlkXSwgYnVmW3RpZCArIHNdKTtcbiAgICAgICAgX19zeW5jdGhyZWFkcygpO1xuICAgIH1cbiAgICBmbG9hdCByb3dfbWF4ID0gYnVmWzBdO1xuICAgIF9fc3luY3RocmVhZHMoKTtcblxuICAgIC8vIC0tLS0g56ys5LqM5qyh5b2S57qm77ya5rGCIHN1bShleHAoeCAtIG1heCkpIC0tLS1cbiAgICBmbG9hdCBsb2NhbF9zdW0gPSAwLjBmO1xuICAgIGZvciAoaW50IGMgPSB0aWQ7IGMgPCBjb2xzOyBjICs9IGJsb2NrRGltLngpXG4gICAgICAgIGxvY2FsX3N1bSArPSBleHBmKHhbY10gLSByb3dfbWF4KTtcbiAgICBidWZbdGlkXSA9IGxvY2FsX3N1bTtcbiAgICBfX3N5bmN0aHJlYWRzKCk7XG4gICAgZm9yIChpbnQgcyA9IGJsb2NrRGltLnggLyAyOyBzID4gMDsgcyA%2BPj0gMSkge1xuICAgICAgICBpZiAodGlkIDwgcykgYnVmW3RpZF0gKz0gYnVmW3RpZCArIHNdO1xuICAgICAgICBfX3N5bmN0aHJlYWRzKCk7XG4gICAgfVxuICAgIGZsb2F0IHJvd19zdW0gPSBidWZbMF07XG4gICAgX19zeW5jdGhyZWFkcygpO1xuXG4gICAgLy8gLS0tLSDlvZLkuIDljJblhpnlm54gLS0tLVxuICAgIGZsb2F0IGludiA9IDEuMGYgLyByb3dfc3VtO1xuICAgIGZvciAoaW50IGMgPSB0aWQ7IGMgPCBjb2xzOyBjICs9IGJsb2NrRGltLngpXG4gICAgICAgIHlbY10gPSBleHBmKHhbY10gLSByb3dfbWF4KSAqIGludjtcbn1cblxuaW50IG1haW4oKSB7XG4gICAgY29uc3QgaW50IHJvd3MgPSA0LCBjb2xzID0gMjAwMDsgICAgICAgICAgICAgICAgLy8gY29scyDmlYXmhI%2FkuI3mmK%2Fnur%2FnqIvmlbDnmoTmlbTmlbDlgI1cbiAgICBjb25zdCBpbnQgTiA9IHJvd3MgKiBjb2xzLCBieXRlcyA9IE4gKiBzaXplb2YoZmxvYXQpO1xuXG4gICAgZmxvYXQqIGhfaW4gID0gKGZsb2F0KiltYWxsb2MoYnl0ZXMpO1xuICAgIGZsb2F0KiBoX291dCA9IChmbG9hdCopbWFsbG9jKGJ5dGVzKTtcbiAgICBmb3IgKGludCByID0gMDsgciA8IHJvd3M7ICsrcilcbiAgICAgICAgZm9yIChpbnQgYyA9IDA7IGMgPCBjb2xzOyArK2MpXG4gICAgICAgICAgICBoX2luW3IgKiBjb2xzICsgY10gPSAwLjAwMWYgKiBjICsgcjsgICAgLy8g6YCg54K55pyJ5Yy65YiG5bqm55qE5pWw5o2uXG5cbiAgICBmbG9hdCAqZF9pbiwgKmRfb3V0O1xuICAgIGN1ZGFNYWxsb2MoJmRfaW4sICBieXRlcyk7XG4gICAgY3VkYU1hbGxvYygmZF9vdXQsIGJ5dGVzKTtcbiAgICBjdWRhTWVtY3B5KGRfaW4sIGhfaW4sIGJ5dGVzLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcblxuICAgIHNvZnRtYXhfcm93czw8PHJvd3MsIFRIUkVBRFM%2BPj4oZF9pbiwgZF9vdXQsIHJvd3MsIGNvbHMpOyAgLy8g5LiA6KGM5LiA5LiqIGJsb2NrXG4gICAgY3VkYU1lbWNweShoX291dCwgZF9vdXQsIGJ5dGVzLCBjdWRhTWVtY3B5RGV2aWNlVG9Ib3N0KTtcblxuICAgIC8vIC0tLS0gQ1BVIOWPguiAg%2B%2B8mumAkOihjOaVsOWAvOeos%2BWumiBzb2Z0bWF477yM5q%2BU5a%2B55pyA5aSn6K%2Bv5beuIC0tLS1cbiAgICBkb3VibGUgbWF4X2VyciA9IDAuMDtcbiAgICBmb3IgKGludCByID0gMDsgciA8IHJvd3M7ICsrcikge1xuICAgICAgICBjb25zdCBmbG9hdCogeCA9IGhfaW4gKyByICogY29scztcbiAgICAgICAgZmxvYXQgbSA9IC1JTkZJTklUWTtcbiAgICAgICAgZm9yIChpbnQgYyA9IDA7IGMgPCBjb2xzOyArK2MpIG0gPSBmbWF4ZihtLCB4W2NdKTtcbiAgICAgICAgZG91YmxlIHMgPSAwLjA7XG4gICAgICAgIGZvciAoaW50IGMgPSAwOyBjIDwgY29sczsgKytjKSBzICs9IGV4cCgoZG91YmxlKXhbY10gLSBtKTtcbiAgICAgICAgZm9yIChpbnQgYyA9IDA7IGMgPCBjb2xzOyArK2MpIHtcbiAgICAgICAgICAgIGRvdWJsZSByZWYgPSBleHAoKGRvdWJsZSl4W2NdIC0gbSkgLyBzO1xuICAgICAgICAgICAgZG91YmxlIGVyciA9IGZhYnMocmVmIC0gaF9vdXRbciAqIGNvbHMgKyBjXSk7XG4gICAgICAgICAgICBpZiAoZXJyID4gbWF4X2VycikgbWF4X2VyciA9IGVycjtcbiAgICAgICAgfVxuICAgIH1cbiAgICBwcmludGYoXCLooYzmlbA9JWQg5YiX5pWwPSVk77yM5LiOIENQVSDlj4LogIPnmoTmnIDlpKfor6%2Flt64gPSAlLjJlXFxuXCIsIHJvd3MsIGNvbHMsIG1heF9lcnIpO1xuICAgIHByaW50ZihcIuihjCAwIOWJjSAzIOS4qu%2B8miUuNmYgJS42ZiAlLjZmXFxuXCIsIGhfb3V0WzBdLCBoX291dFsxXSwgaF9vdXRbMl0pO1xuICAgIHByaW50ZihtYXhfZXJyIDwgMWUtNSA%2FIFwi57uT5p6c5q2j56Gu77yaT0tcXG5cIiA6IFwi57uT5p6c5LiN5a%2B577yBXFxuXCIpO1xuXG4gICAgY3VkYUZyZWUoZF9pbik7IGN1ZGFGcmVlKGRfb3V0KTtcbiAgICBmcmVlKGhfaW4pOyBmcmVlKGhfb3V0KTtcbiAgICByZXR1cm4gMDtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibnZjYzEyOSIsIm9wdGlvbnMiOiItc3RkPWMrKzIwIC1PMyAtLWdwdS1hcmNoaXRlY3R1cmU9c21fOTAgLXB0eCJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cmath&gt;
+#include &lt;cuda_runtime.h&gt;
+
+#define THREADS 256   // 每个 block 的线程数，取 2 的幂便于折叠归约
+
+// 一个 block 负责一行；block 内线程协作做两次归约（先 max，再 sum）
+__global__ void softmax_rows(const float* in, float* out, int rows, int cols) {
+    int row = blockIdx.x;                 // 我这个 block 负责第几行
+    if (row &gt;= rows) return;
+    int tid = threadIdx.x;
+    const float* x = in  + row * cols;
+    float*       y = out + row * cols;
+
+    __shared__ float buf[THREADS];
+
+    // ---- 第一次归约：求本行最大值 ----
+    float local_max = -INFINITY;
+    for (int c = tid; c &lt; cols; c += blockDim.x)   // 每个线程跨步扫自己那几列
+        local_max = fmaxf(local_max, x[c]);
+    buf[tid] = local_max;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s &gt; 0; s &gt;&gt;= 1) { // 折叠树：256→128→…→1
+        if (tid &lt; s) buf[tid] = fmaxf(buf[tid], buf[tid + s]);
+        __syncthreads();
+    }
+    float row_max = buf[0];
+    __syncthreads();
+
+    // ---- 第二次归约：求 sum(exp(x - max)) ----
+    float local_sum = 0.0f;
+    for (int c = tid; c &lt; cols; c += blockDim.x)
+        local_sum += expf(x[c] - row_max);
+    buf[tid] = local_sum;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s &gt; 0; s &gt;&gt;= 1) {
+        if (tid &lt; s) buf[tid] += buf[tid + s];
+        __syncthreads();
+    }
+    float row_sum = buf[0];
+    __syncthreads();
+
+    // ---- 归一化写回 ----
+    float inv = 1.0f / row_sum;
+    for (int c = tid; c &lt; cols; c += blockDim.x)
+        y[c] = expf(x[c] - row_max) * inv;
+}
+
+int main() {
+    const int rows = 4, cols = 2000;                // cols 故意不是线程数的整数倍
+    const int N = rows * cols, bytes = N * sizeof(float);
+
+    float* h_in  = (float*)malloc(bytes);
+    float* h_out = (float*)malloc(bytes);
+    for (int r = 0; r &lt; rows; ++r)
+        for (int c = 0; c &lt; cols; ++c)
+            h_in[r * cols + c] = 0.001f * c + r;    // 造点有区分度的数据
+
+    float *d_in, *d_out;
+    cudaMalloc(&amp;d_in,  bytes);
+    cudaMalloc(&amp;d_out, bytes);
+    cudaMemcpy(d_in, h_in, bytes, cudaMemcpyHostToDevice);
+
+    softmax_rows&lt;&lt;&lt;rows, THREADS&gt;&gt;&gt;(d_in, d_out, rows, cols);  // 一行一个 block
+    cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost);
+
+    // ---- CPU 参考：逐行数值稳定 softmax，比对最大误差 ----
+    double max_err = 0.0;
+    for (int r = 0; r &lt; rows; ++r) {
+        const float* x = h_in + r * cols;
+        float m = -INFINITY;
+        for (int c = 0; c &lt; cols; ++c) m = fmaxf(m, x[c]);
+        double s = 0.0;
+        for (int c = 0; c &lt; cols; ++c) s += exp((double)x[c] - m);
+        for (int c = 0; c &lt; cols; ++c) {
+            double ref = exp((double)x[c] - m) / s;
+            double err = fabs(ref - h_out[r * cols + c]);
+            if (err &gt; max_err) max_err = err;
+        }
+    }
+    printf("行数=%d 列数=%d，与 CPU 参考的最大误差 = %.2e\n", rows, cols, max_err);
+    printf("行 0 前 3 个：%.6f %.6f %.6f\n", h_out[0], h_out[1], h_out[2]);
+    printf(max_err &lt; 1e-5 ? "结果正确：OK\n" : "结果不对！\n");
+
+    cudaFree(d_in); cudaFree(d_out);
+    free(h_in); free(h_out);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc ch20_softmax.cu -o ch20_softmax &amp;&amp; ./ch20_softmax</code></pre>
+</div><p>注意 <code>cols = 2000</code> 故意不是 256 的整数倍——<code>for (int c = tid; c &lt; cols; c += blockDim.x)</code> 这个**跨步循环（grid-stride 式）**让每个线程处理多列，把任意宽度的行摊到固定 256 个线程上。这是第 18 章&quot;数据比线程多时怎么归约&quot;的标准手法。改一行试试：把 <code>THREADS</code> 从 256 改成 128，结果和误差都不会变——<strong>归约的线程数与算法正确性无关</strong>，只影响速度。</p>
+<h2>SYCL：一个 work-group 负责一行，local_accessor 做归约</h2>
+<p>同一套分工，换成第 12 章的可移植写法。CUDA 的 <code>blockIdx.x</code> → SYCL 的 <code>it.get_group(0)</code>，<code>threadIdx.x</code> → <code>it.get_local_id(0)</code>，<code>__shared__</code> → <code>local_accessor</code>，<code>__syncthreads()</code> → <code>it.barrier()</code>（对照表见附录 B）。逻辑与 CUDA 版<strong>逐行对应</strong>，这正是本章要你看到的——换外衣，不换算法。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPHN5Y2wvc3ljbC5ocHA%2BXG4jaW5jbHVkZSA8Y21hdGg%2BXG4jaW5jbHVkZSA8Y3N0ZGlvPlxuXG5jb25zdGV4cHIgaW50IFdHID0gMTI4OyAgIC8vIOavj%2BS4qiB3b3JrLWdyb3VwIOeahCB3b3JrLWl0ZW0g5pWw77yM5Y%2BWIDIg55qE5bmCXG5cbmludCBtYWluKCkge1xuICAgIGNvbnN0IGludCByb3dzID0gNCwgY29scyA9IDIwMDA7XG4gICAgY29uc3QgaW50IE4gPSByb3dzICogY29scztcbiAgICBzeWNsOjpxdWV1ZSBxO1xuXG4gICAgLy8g55SoIFVTTSBzaGFyZWQgbWVtb3J577yMaG9zdC9kZXZpY2Ug6YO96IO955u05o6l6K6%2F6ZeuXG4gICAgZmxvYXQqIGluICA9IHN5Y2w6Om1hbGxvY19zaGFyZWQ8ZmxvYXQ%2BKE4sIHEpO1xuICAgIGZsb2F0KiBvdXQgPSBzeWNsOjptYWxsb2Nfc2hhcmVkPGZsb2F0PihOLCBxKTtcbiAgICBmb3IgKGludCByID0gMDsgciA8IHJvd3M7ICsrcilcbiAgICAgICAgZm9yIChpbnQgYyA9IDA7IGMgPCBjb2xzOyArK2MpXG4gICAgICAgICAgICBpbltyICogY29scyArIGNdID0gMC4wMDFmICogYyArIHI7XG5cbiAgICBxLnN1Ym1pdChbJl0oc3ljbDo6aGFuZGxlciYgaCkge1xuICAgICAgICAvLyDmr4%2FkuKogd29yay1ncm91cCDkuIDlnZflsYDpg6jlhoXlrZjvvIznrYnku7fkuo4gQ1VEQSDnmoQgX19zaGFyZWRfX1xuICAgICAgICBzeWNsOjpsb2NhbF9hY2Nlc3NvcjxmbG9hdCwgMT4gYnVmKHN5Y2w6OnJhbmdlPDE%2BKFdHKSwgaCk7XG4gICAgICAgIC8vIOaAuyB3b3JrLWl0ZW0gPSByb3dzIOS4qiB3b3JrLWdyb3VwIMOXIOavj%2Be7hCBXRyDkuKpcbiAgICAgICAgc3ljbDo6bmRfcmFuZ2U8MT4gbmRyKHN5Y2w6OnJhbmdlPDE%2BKHJvd3MgKiBXRyksIHN5Y2w6OnJhbmdlPDE%2BKFdHKSk7XG4gICAgICAgIGgucGFyYWxsZWxfZm9yKG5kciwgWz1dKHN5Y2w6Om5kX2l0ZW08MT4gaXQpIHtcbiAgICAgICAgICAgIGludCByb3cgPSBpdC5nZXRfZ3JvdXAoMCk7ICAgICAgICAgICAgLy8g5oiR6L%2BZ5LiqIHdvcmstZ3JvdXAg6LSf6LSj56ys5Yeg6KGMXG4gICAgICAgICAgICBpbnQgdGlkID0gaXQuZ2V0X2xvY2FsX2lkKDApO1xuICAgICAgICAgICAgY29uc3QgZmxvYXQqIHggPSBpbiAgKyByb3cgKiBjb2xzO1xuICAgICAgICAgICAgZmxvYXQqICAgICAgIHkgPSBvdXQgKyByb3cgKiBjb2xzO1xuICAgICAgICAgICAgYXV0byBmZW5jZSA9IHN5Y2w6OmFjY2Vzczo6ZmVuY2Vfc3BhY2U6OmxvY2FsX3NwYWNlO1xuXG4gICAgICAgICAgICAvLyAtLS0tIOesrOS4gOasoeW9kue6pu%2B8mm1heCAtLS0tXG4gICAgICAgICAgICBmbG9hdCBsb2NhbF9tYXggPSAtSU5GSU5JVFk7XG4gICAgICAgICAgICBmb3IgKGludCBjID0gdGlkOyBjIDwgY29sczsgYyArPSBXRylcbiAgICAgICAgICAgICAgICBsb2NhbF9tYXggPSBzeWNsOjpmbWF4KGxvY2FsX21heCwgeFtjXSk7XG4gICAgICAgICAgICBidWZbdGlkXSA9IGxvY2FsX21heDtcbiAgICAgICAgICAgIGl0LmJhcnJpZXIoZmVuY2UpO1xuICAgICAgICAgICAgZm9yIChpbnQgcyA9IFdHIC8gMjsgcyA%2BIDA7IHMgPj49IDEpIHtcbiAgICAgICAgICAgICAgICBpZiAodGlkIDwgcykgYnVmW3RpZF0gPSBzeWNsOjpmbWF4KGJ1Zlt0aWRdLCBidWZbdGlkICsgc10pO1xuICAgICAgICAgICAgICAgIGl0LmJhcnJpZXIoZmVuY2UpO1xuICAgICAgICAgICAgfVxuICAgICAgICAgICAgZmxvYXQgcm93X21heCA9IGJ1ZlswXTtcbiAgICAgICAgICAgIGl0LmJhcnJpZXIoZmVuY2UpO1xuXG4gICAgICAgICAgICAvLyAtLS0tIOesrOS6jOasoeW9kue6pu%2B8mnN1bShleHAoeCAtIG1heCkpIC0tLS1cbiAgICAgICAgICAgIGZsb2F0IGxvY2FsX3N1bSA9IDAuMGY7XG4gICAgICAgICAgICBmb3IgKGludCBjID0gdGlkOyBjIDwgY29sczsgYyArPSBXRylcbiAgICAgICAgICAgICAgICBsb2NhbF9zdW0gKz0gc3ljbDo6ZXhwKHhbY10gLSByb3dfbWF4KTtcbiAgICAgICAgICAgIGJ1Zlt0aWRdID0gbG9jYWxfc3VtO1xuICAgICAgICAgICAgaXQuYmFycmllcihmZW5jZSk7XG4gICAgICAgICAgICBmb3IgKGludCBzID0gV0cgLyAyOyBzID4gMDsgcyA%2BPj0gMSkge1xuICAgICAgICAgICAgICAgIGlmICh0aWQgPCBzKSBidWZbdGlkXSArPSBidWZbdGlkICsgc107XG4gICAgICAgICAgICAgICAgaXQuYmFycmllcihmZW5jZSk7XG4gICAgICAgICAgICB9XG4gICAgICAgICAgICBmbG9hdCByb3dfc3VtID0gYnVmWzBdO1xuICAgICAgICAgICAgaXQuYmFycmllcihmZW5jZSk7XG5cbiAgICAgICAgICAgIC8vIC0tLS0g5b2S5LiA5YyW5YaZ5ZueIC0tLS1cbiAgICAgICAgICAgIGZsb2F0IGludiA9IDEuMGYgLyByb3dfc3VtO1xuICAgICAgICAgICAgZm9yIChpbnQgYyA9IHRpZDsgYyA8IGNvbHM7IGMgKz0gV0cpXG4gICAgICAgICAgICAgICAgeVtjXSA9IHN5Y2w6OmV4cCh4W2NdIC0gcm93X21heCkgKiBpbnY7XG4gICAgICAgIH0pO1xuICAgIH0pLndhaXQoKTtcblxuICAgIC8vIC0tLS0gQ1BVIOWPguiAg%2BagoemqjCAtLS0tXG4gICAgZG91YmxlIG1heF9lcnIgPSAwLjA7XG4gICAgZm9yIChpbnQgciA9IDA7IHIgPCByb3dzOyArK3IpIHtcbiAgICAgICAgY29uc3QgZmxvYXQqIHggPSBpbiArIHIgKiBjb2xzO1xuICAgICAgICBmbG9hdCBtID0gLUlORklOSVRZO1xuICAgICAgICBmb3IgKGludCBjID0gMDsgYyA8IGNvbHM7ICsrYykgbSA9IHN0ZDo6Zm1heChtLCB4W2NdKTtcbiAgICAgICAgZG91YmxlIHMgPSAwLjA7XG4gICAgICAgIGZvciAoaW50IGMgPSAwOyBjIDwgY29sczsgKytjKSBzICs9IHN0ZDo6ZXhwKChkb3VibGUpeFtjXSAtIG0pO1xuICAgICAgICBmb3IgKGludCBjID0gMDsgYyA8IGNvbHM7ICsrYykge1xuICAgICAgICAgICAgZG91YmxlIHJlZiA9IHN0ZDo6ZXhwKChkb3VibGUpeFtjXSAtIG0pIC8gcztcbiAgICAgICAgICAgIG1heF9lcnIgPSBzdGQ6OmZtYXgobWF4X2Vyciwgc3RkOjpmYWJzKHJlZiAtIG91dFtyICogY29scyArIGNdKSk7XG4gICAgICAgIH1cbiAgICB9XG4gICAgcHJpbnRmKFwi6KGM5pWwPSVkIOWIl%2BaVsD0lZO%2B8jOS4jiBDUFUg5Y%2BC6ICD55qE5pyA5aSn6K%2Bv5beuID0gJS4yZVxcblwiLCByb3dzLCBjb2xzLCBtYXhfZXJyKTtcbiAgICBwcmludGYobWF4X2VyciA8IDFlLTUgPyBcIue7k%2BaenOato%2Behru%2B8mk9LXFxuXCIgOiBcIue7k%2BaenOS4jeWvue%2B8gVxcblwiKTtcblxuICAgIHN5Y2w6OmZyZWUoaW4sIHEpO1xuICAgIHN5Y2w6OmZyZWUob3V0LCBxKTtcbiAgICByZXR1cm4gMDtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiaWN4MjAyNjAwIiwib3B0aW9ucyI6Ii1mc3ljbCAtTzIgLXN0ZD1jKysyMCJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;sycl/sycl.hpp&gt;
+#include &lt;cmath&gt;
+#include &lt;cstdio&gt;
+
+constexpr int WG = 128;   // 每个 work-group 的 work-item 数，取 2 的幂
+
+int main() {
+    const int rows = 4, cols = 2000;
+    const int N = rows * cols;
+    sycl::queue q;
+
+    // 用 USM shared memory，host/device 都能直接访问
+    float* in  = sycl::malloc_shared&lt;float&gt;(N, q);
+    float* out = sycl::malloc_shared&lt;float&gt;(N, q);
+    for (int r = 0; r &lt; rows; ++r)
+        for (int c = 0; c &lt; cols; ++c)
+            in[r * cols + c] = 0.001f * c + r;
+
+    q.submit([&amp;](sycl::handler&amp; h) {
+        // 每个 work-group 一块局部内存，等价于 CUDA 的 __shared__
+        sycl::local_accessor&lt;float, 1&gt; buf(sycl::range&lt;1&gt;(WG), h);
+        // 总 work-item = rows 个 work-group × 每组 WG 个
+        sycl::nd_range&lt;1&gt; ndr(sycl::range&lt;1&gt;(rows * WG), sycl::range&lt;1&gt;(WG));
+        h.parallel_for(ndr, [=](sycl::nd_item&lt;1&gt; it) {
+            int row = it.get_group(0);            // 我这个 work-group 负责第几行
+            int tid = it.get_local_id(0);
+            const float* x = in  + row * cols;
+            float*       y = out + row * cols;
+            auto fence = sycl::access::fence_space::local_space;
+
+            // ---- 第一次归约：max ----
+            float local_max = -INFINITY;
+            for (int c = tid; c &lt; cols; c += WG)
+                local_max = sycl::fmax(local_max, x[c]);
+            buf[tid] = local_max;
+            it.barrier(fence);
+            for (int s = WG / 2; s &gt; 0; s &gt;&gt;= 1) {
+                if (tid &lt; s) buf[tid] = sycl::fmax(buf[tid], buf[tid + s]);
+                it.barrier(fence);
+            }
+            float row_max = buf[0];
+            it.barrier(fence);
+
+            // ---- 第二次归约：sum(exp(x - max)) ----
+            float local_sum = 0.0f;
+            for (int c = tid; c &lt; cols; c += WG)
+                local_sum += sycl::exp(x[c] - row_max);
+            buf[tid] = local_sum;
+            it.barrier(fence);
+            for (int s = WG / 2; s &gt; 0; s &gt;&gt;= 1) {
+                if (tid &lt; s) buf[tid] += buf[tid + s];
+                it.barrier(fence);
+            }
+            float row_sum = buf[0];
+            it.barrier(fence);
+
+            // ---- 归一化写回 ----
+            float inv = 1.0f / row_sum;
+            for (int c = tid; c &lt; cols; c += WG)
+                y[c] = sycl::exp(x[c] - row_max) * inv;
+        });
+    }).wait();
+
+    // ---- CPU 参考校验 ----
+    double max_err = 0.0;
+    for (int r = 0; r &lt; rows; ++r) {
+        const float* x = in + r * cols;
+        float m = -INFINITY;
+        for (int c = 0; c &lt; cols; ++c) m = std::fmax(m, x[c]);
+        double s = 0.0;
+        for (int c = 0; c &lt; cols; ++c) s += std::exp((double)x[c] - m);
+        for (int c = 0; c &lt; cols; ++c) {
+            double ref = std::exp((double)x[c] - m) / s;
+            max_err = std::fmax(max_err, std::fabs(ref - out[r * cols + c]));
+        }
+    }
+    printf("行数=%d 列数=%d，与 CPU 参考的最大误差 = %.2e\n", rows, cols, max_err);
+    printf(max_err &lt; 1e-5 ? "结果正确：OK\n" : "结果不对！\n");
+
+    sycl::free(in, q);
+    sycl::free(out, q);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>icpx -fsycl -O2 -std=c++20 main.cpp -o app &amp;&amp; ./app   # 需要 Intel oneAPI</code></div>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">icpx -fsycl ch20_softmax.cpp -o ch20_softmax_sycl &amp;&amp; ./ch20_softmax_sycl</code></pre>
+</div><div class="note">
+<strong>为什么两份代码长得几乎一样</strong>
+把 CUDA 版和 SYCL 版并排看，你会发现它们的<strong>骨架完全重合</strong>：同样"一行一个组"、同样两趟折叠归约、同样的跨步循环。差别全在词汇——这正是第 12 章的主旨：SYCL 用标准 C++ 表达和 CUDA 一样的执行模型，换来跨厂商可移植。真正的算法（两次归约 + 减最大值）一个字节都没变。
+</div><h2>Triton：一个 program 负责一行，归约是一句话</h2>
+<p>到了 Triton（第 13、14 章），抽象层次陡然抬高。你不再管&quot;线程&quot;，而是让<strong>一个 program 处理一整行</strong>——把整行 <code>tl.load</code> 成一个块，然后 <code>tl.max</code>、<code>tl.sum</code> 直接对块归约，折叠树、shared memory、warp shuffle 全由编译器生成。上面 CUDA 里那二十行归约，这里各缩成一句话。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python">import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def softmax_kernel(in_ptr, out_ptr, in_row_stride, out_row_stride,
+                   n_cols, BLOCK_SIZE: tl.constexpr):
+    # 一个 program 处理一行——program_id 就是行号
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK_SIZE)              # 0,1,...,BLOCK_SIZE-1
+    mask = cols &lt; n_cols                         # 尾部超出真实列数的要屏蔽
+    in_ptrs = in_ptr + row * in_row_stride + cols
+
+    # 越界位置填 -inf：它们既不会赢得 max，exp 后也是 0，不影响 sum
+    x = tl.load(in_ptrs, mask=mask, other=-float('inf'))
+
+    row_max = tl.max(x, axis=0)                  # 第一次归约：一句话
+    z = x - row_max
+    num = tl.exp(z)                              # exp(-inf)=0，尾部自动清零
+    denom = tl.sum(num, axis=0)                  # 第二次归约：一句话
+    y = num / denom
+
+    out_ptrs = out_ptr + row * out_row_stride + cols
+    tl.store(out_ptrs, y, mask=mask)             # 只写回真实的列
+
+
+def softmax(x: torch.Tensor) -&gt; torch.Tensor:
+    rows, cols = x.shape
+    # 块必须能装下一整行；取不小于 cols 的 2 的幂
+    BLOCK_SIZE = triton.next_power_of_2(cols)
+    out = torch.empty_like(x)
+    # 启动网格：一维，rows 个 program，每个处理一行
+    softmax_kernel[(rows,)](
+        x, out,
+        x.stride(0), out.stride(0),
+        cols, BLOCK_SIZE=BLOCK_SIZE,
+    )
+    return out
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+    x = torch.randn(4, 2000, device="cuda")
+    y = softmax(x)
+    ref = torch.softmax(x, dim=1)           # PyTorch 参考实现
+    print("最大误差：", (y - ref).abs().max().item())
+    print("每行和：", y.sum(dim=1))          # 应当全是 1.0</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pip install triton torch   # 需要 NVIDIA GPU；然后：python main.py</code></div>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pip install triton torch   # 需要一块 NVIDIA GPU</code></pre>
+</div><div class="warn">
+<strong>尾部（tail）不能不管</strong>
+真实列数 <code>n_cols</code> 很少正好是 2 的幂，所以块里总有一截"多出来的通道"。<code>mask = cols &lt; n_cols</code> 就是第 13 章讲的尾部掩码。诀窍在 <code>other=-float('inf')</code>：把越界位置读成 -∞，它既当不上 max，<code>exp(-inf)=0</code> 又不给 sum 添分，于是尾部对结果<strong>零污染</strong>。这和 CUDA 版里 <code>if (i &lt; n)</code>、SYCL 版里 <code>c &lt; cols</code> 是同一件事的不同表达——处理"数据不是线程整数倍"的那个永恒问题。
+</div><h2>CuTe / CUTLASS：什么时候你会需要它</h2>
+<p>前三种技术已经能把 softmax 写得又对又快，为什么还有第四件外衣？答案不在 softmax 本身，而在<strong>它之后</strong>。看第 15 章的 CuTe DSL 和 CUTLASS，你不会为了单跑一个 softmax 去动用它们——那是杀鸡用牛刀。你会在下面这些时候伸手去够它：</p>
+<ul>
+<li><strong>要把 softmax 融进一个更大的算子</strong>。第 21 章的注意力就是 <code>softmax(Q·Kᵀ)·V</code>——softmax 夹在两个矩阵乘之间。用 CuTe，你能让 softmax 的结果<strong>直接留在寄存器/shared memory 里</strong>喂给下一个矩阵乘，而不是写回全局内存再读一遍（第 14 章讲的算子融合的极致形态）。</li>
+<li><strong>要精确掌控数据的摆放（layout）</strong>。CuTe 的核心是 <code>Layout</code> 代数——用一套形状与步长的表达式，精确描述数据在内存里怎么排、怎么切给 Tensor Core（第 19 章）。当归约要沿着一个奇怪的维度、或要和矩阵乘的 tile 边界对齐时，这种掌控力是 Triton 的 <code>tl.sum(axis=...)</code> 给不了的。</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CuTe DSL (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python"># CuTe 的思维：先用 Layout 描述“数据怎么摆”，再在其上做 tile 化的归约
+# （示意，非完整程序；完整用法见第 15 章）
+# 一行的 score 被切成若干 tile，每个 tile 是寄存器里的一小片 Tensor
+tile = make_tensor(smem_ptr, make_layout(shape, stride))
+row_max = reduce(tile, op=cute.max, axis=...)   # 沿指定维度归约
+# 关键价值：这个 tile 可以“原地”流向下一个 gemm，无需回全局内存</code></pre>
+</div><div class="keypoint">
+<strong>四种技术，一条选择轴</strong>
+从 Triton 到 CUDA 再到 CuTe，是一条<strong>"抽象 ↔ 掌控"</strong>的轴：Triton 用一句 <code>tl.sum</code> 换来开发飞快，适合快速写出正确高效的单算子；CUDA/SYCL 让你手握每一次折叠和每一块 shared memory，适合榨干性能或做 Triton 表达不了的调度；CuTe/CUTLASS 把掌控力推到 layout 层面，适合把 softmax 这样的算子<strong>无缝焊进</strong>矩阵乘的流水线——这正是下一章 fused attention 的做法。选哪件外衣，取决于你要的是"快点写完"还是"抠到极致"。
+</div><h2>小结与下一步</h2>
+<p>你用四种技术写了同一个 softmax，应该已经内化了本书反复敲打的那句话：<strong>它们是同一个编程模型的不同外衣</strong>。算法自始至终是那条五步流水线——读入、求 max、减 max 取 exp、求 sum、归一化，核心是<strong>每行两次归约 + 减最大值防溢出</strong>。变的只是那两次归约谁来写：CUDA/SYCL 让你亲手用 shared memory 折叠（线程级），Triton 一句 <code>tl.max</code>/<code>tl.sum</code> 交给编译器（块级），CuTe 则让你连数据的 layout 都拿捏在手。</p>
+<p>但 softmax 从来不是终点。它最重要的舞台，是<strong>注意力机制</strong>：<code>softmax(Q·Kᵀ / √d)·V</code>。下一章是全书的收官之作——从零实现一个 <strong>fused attention 前向</strong>。你会看到 softmax 这道&quot;两次归约&quot;的题，如何和 tiling（第 11 章）、归约（第 18 章）、shared memory（第 7 章）、流水线（第 19 章）全部拧到一起，逼出那个让整个领域为之一振的技巧：<strong>online softmax（在线 softmax）</strong>——不物化整个打分矩阵，边流式扫描边更新 running max 和 running sum。这是 softmax 的&quot;boss 关&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>按行 softmax = 每行两次归约</strong>：先 max（归约①），再 sum(exp)（归约②），最后每个元素除以 sum——是第 18 章归约原语的直接应用。</li>
+<li><strong>数值稳定技巧</strong>：先减去每行最大值再取 exp，利用分子分母同乘 $e^{-\max}$ 结果不变的恒等式，<strong>防止 exp 溢出</strong>，结果分毫不差。</li>
+<li><strong>CUDA/SYCL 是线程级归约</strong>：一个 block / work-group 负责一行，线程各扫一段写进 shared memory / local_accessor，再用折叠树收成一个值；两份代码骨架完全重合，只是词汇不同。</li>
+<li><strong>Triton 是块级归约</strong>：一个 program 处理一整行，<code>tl.max</code> / <code>tl.sum</code> 一句话完成归约，折叠细节交给编译器；尾部靠 <code>mask</code> + <code>other=-inf</code> 零污染处理。</li>
+<li><strong>CuTe/CUTLASS</strong> 面向的是 layout 掌控与算子融合——单跑 softmax 用不上它，但要把 softmax 焊进注意力这样的大算子时，它无可替代。</li>
+<li>四种技术构成一条 <strong>&quot;抽象 ↔ 掌控&quot;</strong> 的选择轴，跑出来的是同一个算法。下一章用它们的组合拳实现 <strong>fused attention</strong>，主角是 <strong>online softmax</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch19.html">← 第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a>
+  <a class="nav-next" href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

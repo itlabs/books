@@ -1,0 +1,227 @@
+/* ===== 全局 ===== */
+:root {
+  --bg: #fbf9f4;
+  --paper: #ffffff;
+  --ink: #2d2a26;
+  --muted: #6b6459;
+  --accent: #e06a3b;
+  --accent-soft: #fbe6dc;
+  --blue: #2f6db3;
+  --green: #3f9b5c;
+  --line: #e7e0d4;
+  --code-bg: #2d2d2d;
+  --sidebar-w: 280px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  font-size: 18px;
+  line-height: 1.85;
+}
+
+/* ===== 侧边栏目录 ===== */
+#sidebar {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: var(--sidebar-w);
+  background: #33302b;
+  color: #d9d2c5;
+  overflow-y: auto;
+  padding: 20px 0;
+  z-index: 100;
+}
+.toc-title { font-size: 20px; font-weight: 700; padding: 8px 22px 14px; }
+.toc-title a { color: #fff; text-decoration: none; }
+.toc-home { padding: 0 22px 12px; }
+.toc-home a { color: #b8b3aa; text-decoration: none; font-size: 13px; }
+.toc-home a:hover { color: #fff; }
+.toc-list { list-style: none; margin: 0; padding: 0; }
+.toc-list li a {
+  display: block;
+  padding: 9px 22px;
+  color: #c9c2b5;
+  text-decoration: none;
+  font-size: 15px;
+  border-left: 3px solid transparent;
+}
+.toc-list li a:hover { background: #413d37; color: #fff; }
+.toc-list li.active a {
+  background: #413d37;
+  color: #fff;
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+#menu-toggle {
+  display: none;
+  position: fixed; top: 12px; left: 12px; z-index: 200;
+  background: var(--accent); color: #fff; border: none;
+  padding: 10px 16px; border-radius: 8px; font-size: 16px; cursor: pointer;
+}
+
+/* ===== 主体 ===== */
+main {
+  margin-left: var(--sidebar-w);
+  display: flex;
+  justify-content: center;
+  padding: 40px 24px 80px;
+}
+article {
+  background: var(--paper);
+  max-width: 820px;
+  width: 100%;
+  padding: 48px 56px 64px;
+  border-radius: 14px;
+  box-shadow: 0 2px 24px rgba(60, 50, 30, 0.06);
+}
+
+/* ===== 文字排版 ===== */
+h1 {
+  font-size: 32px; line-height: 1.35; margin: 0 0 28px;
+  padding-bottom: 16px; border-bottom: 3px solid var(--accent-soft);
+}
+h2 { font-size: 25px; margin: 42px 0 14px; color: #1f1c18; }
+h3 { font-size: 20px; margin: 30px 0 10px; color: #3a352f; }
+p { margin: 14px 0; }
+a { color: var(--blue); }
+strong { color: #b3441f; }
+ul, ol { padding-left: 26px; }
+li { margin: 6px 0; }
+hr { border: none; border-top: 1px solid var(--line); margin: 36px 0; }
+
+/* 行内代码 */
+code:not([class*="language-"]) {
+  background: #f0ece3;
+  color: #b3441f;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 0.9em;
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+/* 引用块（小贴士 / 安全提醒） */
+blockquote {
+  margin: 18px 0;
+  padding: 14px 20px;
+  background: #fff7ec;
+  border-left: 5px solid #f0a94b;
+  border-radius: 0 8px 8px 0;
+  color: #6b5638;
+}
+blockquote p { margin: 6px 0; }
+
+/* 表格 */
+table { border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 16px; }
+th, td { border: 1px solid var(--line); padding: 9px 13px; text-align: left; }
+th { background: var(--accent-soft); }
+
+/* ===== 代码块 ===== */
+.code-block { margin: 20px 0; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.12); }
+.code-head {
+  display: flex; align-items: center; gap: 10px;
+  background: #3c3c3c; padding: 8px 14px;
+}
+.lang-tag { color: #9fe3b0; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; margin-right: auto; }
+.run-btn, .reset-btn {
+  background: var(--green); color: #fff; border: none;
+  padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;
+}
+.reset-btn { background: #6b6459; }
+.run-btn:hover { background: #34844d; }
+.reset-btn:hover { background: #565049; }
+.run-btn:disabled { background: #888; cursor: wait; }
+.code-block pre { margin: 0; border-radius: 0; }
+pre[class*="language-"] { padding: 16px 14px; font-size: 15px; }
+.code-block code[contenteditable="true"] { outline: none; }
+.code-block code[contenteditable="true"]:focus { background: #363636; }
+
+/* 运行输出 */
+.output {
+  background: #1b1b1b; color: #e4e4e4;
+  padding: 14px 16px; font-family: "SF Mono", Consolas, monospace;
+  font-size: 14px; white-space: pre-wrap; border-top: 2px solid var(--green);
+  max-height: 340px; overflow: auto;
+}
+.output.error { border-top-color: #e05b4b; color: #ffb3aa; }
+.output .prompt-line { color: #7fd6ff; }
+
+/* ===== C++ 代码块：Compiler Explorer 链接 + 本地编译命令 ===== */
+.ce-btn {
+  background: #2b6cb0; color: #fff; text-decoration: none;
+  padding: 5px 14px; border-radius: 6px; font-size: 14px; font-weight: 600;
+  white-space: nowrap;
+}
+.ce-btn:hover { background: #2456a0; }
+.local-cmd {
+  background: #1b1b1b; color: #b9c0c8;
+  padding: 8px 16px; font-size: 13px; border-top: 1px solid #333;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.local-cmd-label { color: #7f8894; }
+.local-cmd code {
+  color: #9fe3b0; font-family: "SF Mono", Consolas, monospace;
+  background: none; padding: 0;
+}
+
+/* ===== 概念图示（作者在 md 里用 <div class="concept"> 包裹 SVG） ===== */
+.concept {
+  margin: 26px 0; padding: 22px; background: #f7fbff;
+  border: 1px solid #d5e6f5; border-radius: 12px; text-align: center;
+}
+.concept svg { max-width: 100%; height: auto; }
+.concept .caption { margin-top: 10px; color: var(--muted); font-size: 15px; }
+
+/* "本章你会做出什么" 高亮盒 */
+.goal-box {
+  background: linear-gradient(135deg, #fff4ec, #ffeee0);
+  border: 2px dashed var(--accent);
+  border-radius: 12px; padding: 20px 24px; margin: 20px 0;
+}
+
+/* ===== 双栏对照（左：你熟悉的 Java/Python；右：C++） ===== */
+.compare {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0;
+}
+.compare > div { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.compare .compare-head {
+  padding: 7px 14px; font-size: 13px; font-weight: 700; letter-spacing: .3px; color: #fff;
+}
+.compare .known .compare-head { background: #6b7280; }   /* 你已知的语言 */
+.compare .cpp-side .compare-head { background: #2b6cb0; } /* C++ */
+.compare .code-block { margin: 0; border-radius: 0; box-shadow: none; }
+@media (max-width: 720px) { .compare { grid-template-columns: 1fr; } }
+
+/* ===== 提示 / 注意 / 陷阱 框 ===== */
+.note, .warn, .keypoint {
+  margin: 20px 0; padding: 14px 18px; border-radius: 8px;
+  border-left: 4px solid; font-size: 15px;
+}
+.note { background: #eff6ff; border-color: #3b82f6; }
+.warn { background: #fff7ed; border-color: #f97316; }
+.keypoint { background: #f0fdf4; border-color: #22c55e; }
+.note strong, .warn strong, .keypoint strong { display: block; margin-bottom: 4px; }
+
+/* 章节间导航 */
+.chapter-nav {
+  display: flex; justify-content: space-between; gap: 16px;
+  margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line);
+}
+.chapter-nav a {
+  text-decoration: none; padding: 12px 18px; background: var(--accent-soft);
+  border-radius: 10px; color: #a53f1c; font-weight: 600; font-size: 15px;
+}
+.chapter-nav a:hover { background: var(--accent); color: #fff; }
+
+/* ===== 响应式 ===== */
+@media (max-width: 900px) {
+  #menu-toggle { display: block; }
+  #sidebar { transform: translateX(-100%); transition: transform 0.25s; }
+  #sidebar.open { transform: translateX(0); }
+  main { margin-left: 0; padding: 64px 12px 60px; }
+  article { padding: 28px 20px 40px; }
+  body { font-size: 17px; }
+  h1 { font-size: 27px; }
+}

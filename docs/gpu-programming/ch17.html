@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 章 访存优化：合并、bank conflict 与向量化</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li class="active"><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 17 章 访存优化：合并、bank conflict 与向量化</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章的 Roofline 反复告诉你一件事：绝大多数 kernel 卡在带宽上。这一章就是把"优化访存"这把最值钱的杠杆彻底讲透——三个层面：<strong>全局内存的合并访问（memory coalescing）</strong>决定一个 warp 的 32 次读能不能压成一两次大传输；<strong>shared memory 的 bank conflict</strong>决定片上访存是 1 个周期还是被串行化 32 倍；<strong>向量化加载（float4）</strong>决定每条访存指令搬 4 字节还是 16 字节。</p>
+<p>读完你能用一个浏览器里能跑的 bank 模拟器亲手数出冲突、并看到 padding 怎么把它清零，还能读懂一份完整可编译的矩阵转置代码——从"访存全乱"的朴素版，到"合并 + 无冲突"的 tiling 版。这是把带宽受限 kernel 提速的核心手艺。</p>
+</div><h2>第一层：全局内存的合并访问</h2>
+<p>第 7 章简单说过合并访问，这一章我们把机制讲到底。关键事实是：<strong>GPU 从全局内存（显存）取数据，不是一个字节一个字节取，而是一次搬一整段对齐的内存块</strong>——通常是 32、64 或 128 字节的<strong>事务（transaction）</strong>。这就像你从仓库取货，叉车一次搬一整个托盘，你要一颗螺丝它也搬一托盘回来。</p>
+<p>一个 warp 有 32 个线程，它们的 32 次访存会被硬件<strong>尽量合并</strong>成尽可能少的事务。理想情况：32 个线程访问<strong>连续的 32 个 float</strong>（128 字节），刚好落在一个对齐的 128 字节块里——<strong>一次事务全部搞定</strong>，带宽利用率 100%。这就是<strong>合并访问（memory coalescing）</strong>。</p>
+<p>反过来，如果 32 个线程访问的地址<strong>东一个西一个</strong>（跨度很大），每个线程都可能触发一次独立的事务——32 个线程要 32 次事务，每次还只用了搬回来那一整块里的一小格，带宽被浪费到 1/32。<strong>访问的字节数一样多，但因为不连续，实际打到显存上的流量翻了几十倍。</strong> 这就是第 1 章说的&quot;访问顺序比访问次数还重要&quot;的确切含义。</p>
+<h3>AoS vs SoA：一个数据布局的经典抉择</h3>
+<p>这个原理直接决定了你该怎么摆数据。假设每个粒子有 x、y、z 三个坐标，两种存法：</p>
+<ul>
+<li><strong>AoS（Array of Structs，结构体数组）</strong>：<code>struct Particle{float x,y,z;}; Particle p[N];</code> —— 内存里是 <code>x0 y0 z0 x1 y1 z1 ...</code>，一个粒子的三个分量挨在一起。</li>
+<li><strong>SoA（Struct of Arrays，数组的结构体）</strong>：<code>float x[N], y[N], z[N];</code> —— 内存里是 <code>x0 x1 x2 ... y0 y1 y2 ...</code>，同一分量的所有值挨在一起。</li>
+</ul>
+<p>现在一个 warp 的 32 个线程各处理一个粒子、都要读它的 <code>x</code>。AoS 里，线程 0 读地址 0、线程 1 读地址 12（跳过 y0 z0）、线程 2 读地址 24……<strong>跨度 12 字节、完全不连续</strong>，合并失败。SoA 里，32 个线程读的是 <code>x[0..31]</code>——<strong>紧挨着的 128 字节，一次事务搞定</strong>。</p>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">同一个 warp 读所有粒子的 x：AoS 散开 vs SoA 连续</text>
+  <!-- AoS -->
+  <text x="30" y="52" font-size="12" fill="#e06a3b" font-weight="bold">AoS: x0 y0 z0 x1 y1 z1 ...</text>
+  <g font-family="monospace" font-size="9">
+    <!-- 内存格子 -->
+    <rect x="30" y="60" width="30" height="24" fill="#fbe6dc" stroke="#e06a3b"/><text x="45" y="76" text-anchor="middle" fill="#a53f1c">x0</text>
+    <rect x="60" y="60" width="30" height="24" fill="#eee" stroke="#9ca3af"/><text x="75" y="76" text-anchor="middle" fill="#6b7280">y0</text>
+    <rect x="90" y="60" width="30" height="24" fill="#eee" stroke="#9ca3af"/><text x="105" y="76" text-anchor="middle" fill="#6b7280">z0</text>
+    <rect x="120" y="60" width="30" height="24" fill="#fbe6dc" stroke="#e06a3b"/><text x="135" y="76" text-anchor="middle" fill="#a53f1c">x1</text>
+    <rect x="150" y="60" width="30" height="24" fill="#eee" stroke="#9ca3af"/><text x="165" y="76" text-anchor="middle" fill="#6b7280">y1</text>
+    <rect x="180" y="60" width="30" height="24" fill="#eee" stroke="#9ca3af"/><text x="195" y="76" text-anchor="middle" fill="#6b7280">z1</text>
+    <rect x="210" y="60" width="30" height="24" fill="#fbe6dc" stroke="#e06a3b"/><text x="225" y="76" text-anchor="middle" fill="#a53f1c">x2</text>
+    <rect x="240" y="60" width="30" height="24" fill="#eee" stroke="#9ca3af"/><text x="255" y="76" text-anchor="middle" fill="#6b7280">y2</text>
+    <rect x="270" y="60" width="30" height="24" fill="#eee" stroke="#9ca3af"/><text x="285" y="76" text-anchor="middle" fill="#6b7280">z2</text>
+    <rect x="300" y="60" width="30" height="24" fill="#fbe6dc" stroke="#e06a3b"/><text x="315" y="76" text-anchor="middle" fill="#a53f1c">x3</text>
+    <rect x="330" y="60" width="60" height="24" fill="#fff" stroke="#9ca3af"/><text x="360" y="76" text-anchor="middle" fill="#6b7280">...</text>
+  </g>
+  <!-- 线程箭头，跳着指 -->
+  <g stroke="#e06a3b" stroke-width="1.2" fill="none">
+    <path d="M45 108 L45 86" marker-end="url(#a3)"/>
+    <path d="M100 108 L131 86" marker-end="url(#a3)"/>
+    <path d="M155 108 L221 86" marker-end="url(#a3)"/>
+    <path d="M210 108 L311 86" marker-end="url(#a3)"/>
+  </g>
+  <text x="30" y="124" font-size="10" fill="#e06a3b">线程 0,1,2,3 读 x：跨度 12 字节，散开 → 合并失败，多次事务</text>
+  <!-- SoA -->
+  <text x="30" y="180" font-size="12" fill="#3f9b5c" font-weight="bold">SoA: x0 x1 x2 x3 ... （y、z 各自另存）</text>
+  <g font-family="monospace" font-size="9">
+    <rect x="30" y="188" width="30" height="24" fill="#e5f5ea" stroke="#3f9b5c"/><text x="45" y="204" text-anchor="middle" fill="#2f7a45">x0</text>
+    <rect x="60" y="188" width="30" height="24" fill="#e5f5ea" stroke="#3f9b5c"/><text x="75" y="204" text-anchor="middle" fill="#2f7a45">x1</text>
+    <rect x="90" y="188" width="30" height="24" fill="#e5f5ea" stroke="#3f9b5c"/><text x="105" y="204" text-anchor="middle" fill="#2f7a45">x2</text>
+    <rect x="120" y="188" width="30" height="24" fill="#e5f5ea" stroke="#3f9b5c"/><text x="135" y="204" text-anchor="middle" fill="#2f7a45">x3</text>
+    <rect x="150" y="188" width="30" height="24" fill="#e5f5ea" stroke="#3f9b5c"/><text x="165" y="204" text-anchor="middle" fill="#2f7a45">x4</text>
+    <rect x="180" y="188" width="30" height="24" fill="#e5f5ea" stroke="#3f9b5c"/><text x="195" y="204" text-anchor="middle" fill="#2f7a45">x5</text>
+    <rect x="210" y="188" width="90" height="24" fill="#fff" stroke="#9ca3af"/><text x="255" y="204" text-anchor="middle" fill="#6b7280">...</text>
+  </g>
+  <g stroke="#3f9b5c" stroke-width="1.2" fill="none">
+    <path d="M45 236 L45 214" marker-end="url(#a3g)"/>
+    <path d="M75 236 L75 214" marker-end="url(#a3g)"/>
+    <path d="M105 236 L105 214" marker-end="url(#a3g)"/>
+    <path d="M135 236 L135 214" marker-end="url(#a3g)"/>
+  </g>
+  <text x="30" y="252" font-size="10" fill="#3f9b5c">线程 0,1,2,3 读 x：紧挨着 → 一次事务合并，带宽跑满</text>
+  <defs>
+    <marker id="a3" markerWidth="9" markerHeight="9" refX="4" refY="7" orient="auto"><path d="M0,0 L8,0 L4,8 Z" fill="#e06a3b"/></marker>
+    <marker id="a3g" markerWidth="9" markerHeight="9" refX="4" refY="7" orient="auto"><path d="M0,0 L8,0 L4,8 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 17-1　一个 warp 都读 x 分量：AoS 里 x 被 y、z 隔开，访问散成多次事务；SoA 把所有 x 排在一起，一次事务合并搞定</div>
+</div><div class="compare">
+<div class="known">
+<div class="compare-head">AoS：直觉自然，但访存散</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct Particle { float x, y, z; };
+Particle* p;              // x0 y0 z0 x1 y1 z1 ...
+int i = blockIdx.x*blockDim.x
+      + threadIdx.x;
+float xi = p[i].x;        // 跨度 12 字节
+// warp 内 32 次读散开 → 合并失败</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SoA：对 GPU 友好，合并</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">float *x, *y, *z;         // x0 x1 x2 ... 各自连续
+int i = blockIdx.x*blockDim.x
+      + threadIdx.x;
+float xi = x[i];          // 跨度 4 字节
+// warp 内读 x[0..31] 连续 → 一次事务</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>GPU 上的黄金布局规则</strong>
+让<strong>相邻的线程访问相邻的内存</strong>（<code>data[threadIdx.x]</code> 而不是 <code>data[threadIdx.x * stride]</code>）。这条规则把 CPU 时代"结构体挨在一起对缓存友好"的直觉<strong>反转</strong>了：CPU 上一个线程顺序扫一个结构体，AoS 更好；GPU 上一个 warp 的 32 个线程同时各取一个结构体的同一个字段，SoA 才能合并。数据布局往往比 kernel 里的算法更影响速度。
+</div><p>最经典的&quot;访存不连续&quot;陷阱是<strong>矩阵转置</strong>：<code>out[x][y] = in[y][x]</code>。读 <code>in</code> 时相邻线程读相邻列（连续，合并好），写 <code>out</code> 时相邻线程却要写相邻行（跨度是整行的宽度，完全不连续）——<strong>读合并了，写却散了</strong>。这个问题我们放到本章动手部分用完整代码解决。</p>
+<h2>第二层：shared memory 的 bank conflict</h2>
+<p>数据一旦搬进 shared memory（第 7 章那块片上高速内存），就没有&quot;合并&quot;问题了——但有它自己的坑：<strong>bank conflict（bank 冲突）</strong>。第 7 章提过一句，这里讲透。</p>
+<p>shared memory 在硬件上被切成 <strong>32 个 bank</strong>（存储体），像 32 条并排的收银台。连续的 4 字节字轮流分到这 32 个 bank 上：字 0 在 bank 0、字 1 在 bank 1、……字 31 在 bank 31、字 32 又回到 bank 0。规则就一条：</p>
+<blockquote>
+<p><strong>bank 编号 = 字地址 % 32</strong></p>
+</blockquote>
+<p>一个 warp 的 32 个线程同时访问 shared memory 时：</p>
+<ul>
+<li>如果它们落在<strong>32 个不同的 bank</strong>（每个 bank 最多一个线程）——<strong>全部并行，1 个周期</strong>搞定。这是理想情况。</li>
+<li>如果有 <strong>k 个线程挤到同一个 bank</strong>（且不是读同一个地址的广播），这个 bank 只能一个一个服务——<strong>k-way 冲突，串行 k 轮</strong>。最坏情况 32 个线程全挤到一个 bank，慢 32 倍。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">32 线程 → 32 个 bank：无冲突 vs 2-way 冲突</text>
+  <!-- 无冲突 -->
+  <text x="140" y="46" text-anchor="middle" font-size="12" fill="#3f9b5c" font-weight="bold">stride-1：addr = t</text>
+  <g font-family="monospace" font-size="8">
+    <!-- 线程行 -->
+    <text x="20" y="72" fill="#6b7280">线程</text>
+    <text x="20" y="150" fill="#6b7280">bank</text>
+    <!-- 8 个示意（真实 32） -->
+    <!-- thread boxes -->
+    <g fill="#e5f5ea" stroke="#3f9b5c">
+      <rect x="60" y="60" width="26" height="18"/><rect x="90" y="60" width="26" height="18"/><rect x="120" y="60" width="26" height="18"/><rect x="150" y="60" width="26" height="18"/><rect x="180" y="60" width="26" height="18"/><rect x="210" y="60" width="26" height="18"/>
+    </g>
+    <text x="73" y="73" text-anchor="middle" fill="#2f7a45">t0</text><text x="103" y="73" text-anchor="middle" fill="#2f7a45">t1</text><text x="133" y="73" text-anchor="middle" fill="#2f7a45">t2</text><text x="163" y="73" text-anchor="middle" fill="#2f7a45">t3</text><text x="193" y="73" text-anchor="middle" fill="#2f7a45">t4</text><text x="223" y="73" text-anchor="middle" fill="#2f7a45">t5</text>
+    <!-- bank boxes -->
+    <g fill="#fff" stroke="#3f9b5c">
+      <rect x="60" y="138" width="26" height="18"/><rect x="90" y="138" width="26" height="18"/><rect x="120" y="138" width="26" height="18"/><rect x="150" y="138" width="26" height="18"/><rect x="180" y="138" width="26" height="18"/><rect x="210" y="138" width="26" height="18"/>
+    </g>
+    <text x="73" y="151" text-anchor="middle" fill="#2f7a45">b0</text><text x="103" y="151" text-anchor="middle" fill="#2f7a45">b1</text><text x="133" y="151" text-anchor="middle" fill="#2f7a45">b2</text><text x="163" y="151" text-anchor="middle" fill="#2f7a45">b3</text><text x="193" y="151" text-anchor="middle" fill="#2f7a45">b4</text><text x="223" y="151" text-anchor="middle" fill="#2f7a45">b5</text>
+  </g>
+  <g stroke="#3f9b5c" stroke-width="1.2">
+    <line x1="73" y1="78" x2="73" y2="138"/><line x1="103" y1="78" x2="103" y2="138"/><line x1="133" y1="78" x2="133" y2="138"/><line x1="163" y1="78" x2="163" y2="138"/><line x1="193" y1="78" x2="193" y2="138"/><line x1="223" y1="78" x2="223" y2="138"/>
+  </g>
+  <text x="140" y="180" text-anchor="middle" font-size="10" fill="#3f9b5c">一一对应 → 1 个周期</text>
+  <!-- 2-way 冲突 -->
+  <text x="420" y="46" text-anchor="middle" font-size="12" fill="#e06a3b" font-weight="bold">stride-2：addr = 2t</text>
+  <g font-family="monospace" font-size="8">
+    <g fill="#fbe6dc" stroke="#e06a3b">
+      <rect x="330" y="60" width="26" height="18"/><rect x="360" y="60" width="26" height="18"/><rect x="390" y="60" width="26" height="18"/><rect x="420" y="60" width="26" height="18"/><rect x="450" y="60" width="26" height="18"/><rect x="480" y="60" width="26" height="18"/>
+    </g>
+    <text x="343" y="73" text-anchor="middle" fill="#a53f1c">t0</text><text x="373" y="73" text-anchor="middle" fill="#a53f1c">t1</text><text x="403" y="73" text-anchor="middle" fill="#a53f1c">t2</text><text x="433" y="73" text-anchor="middle" fill="#a53f1c">t3</text><text x="463" y="73" text-anchor="middle" fill="#a53f1c">t4</text><text x="493" y="73" text-anchor="middle" fill="#a53f1c">t5</text>
+    <g fill="#fff" stroke="#e06a3b">
+      <rect x="330" y="138" width="26" height="18"/><rect x="360" y="138" width="26" height="18"/><rect x="390" y="138" width="26" height="18"/><rect x="420" y="138" width="26" height="18"/><rect x="450" y="138" width="26" height="18"/><rect x="480" y="138" width="26" height="18"/>
+    </g>
+    <text x="343" y="151" text-anchor="middle" fill="#a53f1c">b0</text><text x="373" y="151" text-anchor="middle" fill="#a53f1c">b2</text><text x="403" y="151" text-anchor="middle" fill="#a53f1c">b4</text><text x="433" y="151" text-anchor="middle" fill="#a53f1c">b0</text><text x="463" y="151" text-anchor="middle" fill="#a53f1c">b2</text><text x="493" y="151" text-anchor="middle" fill="#a53f1c">b4</text>
+  </g>
+  <g stroke="#e06a3b" stroke-width="1.2">
+    <line x1="343" y1="78" x2="343" y2="138"/><line x1="373" y1="78" x2="373" y2="138"/><line x1="403" y1="78" x2="403" y2="138"/>
+    <!-- t3 撞回 b0, t4 撞 b2, t5 撞 b4 -->
+    <line x1="433" y1="78" x2="345" y2="138"/><line x1="463" y1="78" x2="375" y2="138"/><line x1="493" y1="78" x2="405" y2="138"/>
+  </g>
+  <text x="420" y="180" text-anchor="middle" font-size="10" fill="#e06a3b">t0/t3 撞 b0，t1/t4 撞 b2… → 2-way 冲突</text>
+  <text x="420" y="194" text-anchor="middle" font-size="10" fill="#e06a3b">串行 2 轮，慢一倍</text>
+</svg>
+<div class="caption">图 17-2　shared memory 有 32 个 bank，bank = 地址 % 32。stride-1 时 32 线程铺满 32 bank（1 周期）；stride-2 时只用一半 bank，每个被 2 个线程命中（2-way 冲突，串行 2 轮）</div>
+</div><h3>padding：一个字宽度就化解转置的冲突</h3>
+<p>bank conflict 最出名的现身场景，还是转置。在 shared memory 里开一块 <code>tile[32][32]</code>，写进去时按行、读出来时按列（转置就是行列互换）。问题来了：<code>tile[ty][tx]</code> 的地址是 <code>ty*32 + tx</code>，同一列 <code>tile[0][k], tile[1][k], ..., tile[31][k]</code> 的地址是 <code>k, 32+k, 64+k, ...</code>——它们 <strong>% 32 全等于 k，全挤在同一个 bank</strong>！一个 warp 读一整列 = 32-way 冲突，慢 32 倍。</p>
+<p>修复手法优雅到近乎魔法：把列宽从 32 改成 <strong>33</strong>，声明成 <code>tile[32][32+1]</code>。多出来的这一列从不使用，纯粹是&quot;占位符&quot;，但它让 <code>tile[ty][k]</code> 的地址变成 <code>ty*33 + k</code>。现在同一列的地址是 <code>k, 33+k, 66+k, ...</code>，因为 33 与 32 互质，它们 % 32 的结果<strong>各不相同</strong>——32 个线程刚好又铺满 32 个 bank，冲突归零。<strong>多花 32 个 float 的 shared memory，换来 32 倍的访存吞吐。</strong> 这就是你在无数 GPU 代码里见到的 <code>[TILE][TILE+1]</code> 的来历。</p>
+<h2>动手（一）：数出 bank 冲突，看 padding 清零它</h2>
+<p>下面这个程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它对一个 warp（32 线程）的访问模式，逐个算 <code>bank = 地址 % 32</code>，统计最忙的 bank 被几个线程命中（就是几路冲突）。四种模式：连续（无冲突）、跨 2（2-way）、按列取（32-way 最坏）、以及 +1 padding 后（冲突消失）。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20bank%20conflict%20%E6%A8%A1%E6%8B%9F%E5%99%A8%EF%BC%9Ashared%20memory%20%E6%9C%89%2032%20%E4%B8%AA%20bank%EF%BC%8Cbank%20%3D%20%E5%9C%B0%E5%9D%80%20%25%2032%0ANUM_BANKS%20%3D%2032%0A%0Adef%20analyze(name%2C%20addresses)%3A%0A%20%20%20%20%22%22%22%E7%BB%99%E4%B8%80%E4%B8%AA%20warp%EF%BC%8832%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%EF%BC%89%E5%90%84%E8%87%AA%E8%AE%BF%E9%97%AE%E7%9A%84%20shared%20memory%20%E5%9C%B0%E5%9D%80%EF%BC%88%E4%BB%A5%204%20%E5%AD%97%E8%8A%82%E5%AD%97%E4%B8%BA%E5%8D%95%E4%BD%8D%EF%BC%89%EF%BC%8C%0A%20%20%20%20%E7%BB%9F%E8%AE%A1%E6%AF%8F%E4%B8%AA%20bank%20%E8%A2%AB%E5%87%A0%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%91%BD%E4%B8%AD%EF%BC%8C%E6%9C%80%E5%A4%A7%E5%86%B2%E7%AA%81%E6%95%B0%20%3D%20%E8%BF%99%E6%AC%A1%E8%AE%BF%E9%97%AE%E8%A6%81%E4%B8%B2%E8%A1%8C%E5%87%A0%E8%BD%AE%E3%80%82%22%22%22%0A%20%20%20%20hits%20%3D%20%5B0%5D%20*%20NUM_BANKS%0A%20%20%20%20for%20addr%20in%20addresses%3A%0A%20%20%20%20%20%20%20%20hits%5Baddr%20%25%20NUM_BANKS%5D%20%2B%3D%201%0A%20%20%20%20max_conf%20%3D%20max(hits)%20%20%20%20%20%20%20%20%20%20%23%20%E5%91%BD%E4%B8%AD%E5%90%8C%E4%B8%80%20bank%20%E7%9A%84%E6%9C%80%E5%A4%9A%E7%BA%BF%E7%A8%8B%E6%95%B0%20%3D%20k-way%20%E5%86%B2%E7%AA%81%0A%20%20%20%20way%20%3D%20%22%E6%97%A0%E5%86%B2%E7%AA%81%EF%BC%881%20%E5%91%A8%E6%9C%9F%EF%BC%89%22%20if%20max_conf%20%3D%3D%201%20else%20f%22%7Bmax_conf%7D-way%20%E5%86%B2%E7%AA%81%EF%BC%88%E4%B8%B2%E8%A1%8C%20%7Bmax_conf%7D%20%E8%BD%AE%EF%BC%89%22%0A%20%20%20%20print(f%22%7Bname%7D%EF%BC%9A%E6%9C%80%E5%BF%99%E7%9A%84%20bank%20%E8%A2%AB%20%7Bmax_conf%7D%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%91%BD%E4%B8%AD%20%E2%86%92%20%7Bway%7D%22)%0A%20%20%20%20return%20max_conf%0A%0A%23%2032%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%EF%BC%8C%E7%BA%BF%E7%A8%8B%20t%20%E8%AE%BF%E9%97%AE%E7%9A%84%E5%AD%97%E5%9C%B0%E5%9D%80%0Atids%20%3D%20list(range(32))%0A%0A%23%20%E6%A8%A1%E5%BC%8F%201%EF%BC%9Astride-1%EF%BC%8Caddr%20%3D%20t%20%E2%80%94%E2%80%94%2032%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%88%9A%E5%A5%BD%E9%93%BA%E6%BB%A1%2032%20%E4%B8%AA%20bank%0Aanalyze(%22stride-1%20%20addr%3Dt%22%2C%20%20%20%20%20%20%20%20%5Bt%20for%20t%20in%20tids%5D)%0A%0A%23%20%E6%A8%A1%E5%BC%8F%202%EF%BC%9Astride-2%EF%BC%8Caddr%20%3D%202t%20%E2%80%94%E2%80%94%20%E5%8F%AA%E8%90%BD%E5%9C%A8%E5%81%B6%E6%95%B0%20bank%EF%BC%8C%E6%AF%8F%E4%B8%AA%E8%A2%AB%202%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%91%BD%E4%B8%AD%0Aanalyze(%22stride-2%20%20addr%3D2t%22%2C%20%20%20%20%20%20%20%5B2*t%20for%20t%20in%20tids%5D)%0A%0A%23%20%E6%A8%A1%E5%BC%8F%203%EF%BC%9A%E5%88%97%E8%AE%BF%E9%97%AE%20addr%20%3D%20t*32%20%E2%80%94%E2%80%94%20%E5%85%A8%E9%83%A8%E8%90%BD%E5%88%B0%20bank%200%EF%BC%8C32-way%20%E5%86%B2%E7%AA%81%EF%BC%88%E6%9C%80%E5%9D%8F%EF%BC%89%0Aanalyze(%22%E5%88%97%E8%AE%BF%E9%97%AE%20%20%20addr%3Dt*32%22%2C%20%20%20%20%20%20%5Bt*32%20for%20t%20in%20tids%5D)%0A%0A%23%20%E6%A8%A1%E5%BC%8F%204%EF%BC%9A%E5%8A%A0%20padding%EF%BC%8C%E5%88%97%E5%AE%BD%E4%BB%8E%2032%20%E6%94%B9%E6%88%90%2033%EF%BC%8Caddr%20%3D%20t*33%20%E2%80%94%E2%80%94%20%E5%86%B2%E7%AA%81%E6%B6%88%E5%A4%B1%0Aanalyze(%22padding%20%20addr%3Dt*33%22%2C%20%20%20%20%20%20%5Bt*33%20for%20t%20in%20tids%5D)"># bank conflict 模拟器：shared memory 有 32 个 bank，bank = 地址 % 32
+NUM_BANKS = 32
+
+def analyze(name, addresses):
+    """给一个 warp（32 个线程）各自访问的 shared memory 地址（以 4 字节字为单位），
+    统计每个 bank 被几个线程命中，最大冲突数 = 这次访问要串行几轮。"""
+    hits = [0] * NUM_BANKS
+    for addr in addresses:
+        hits[addr % NUM_BANKS] += 1
+    max_conf = max(hits)          # 命中同一 bank 的最多线程数 = k-way 冲突
+    way = "无冲突（1 周期）" if max_conf == 1 else f"{max_conf}-way 冲突（串行 {max_conf} 轮）"
+    print(f"{name}：最忙的 bank 被 {max_conf} 个线程命中 → {way}")
+    return max_conf
+
+# 32 个线程，线程 t 访问的字地址
+tids = list(range(32))
+
+# 模式 1：stride-1，addr = t —— 32 个线程刚好铺满 32 个 bank
+analyze("stride-1  addr=t",        [t for t in tids])
+
+# 模式 2：stride-2，addr = 2t —— 只落在偶数 bank，每个被 2 个线程命中
+analyze("stride-2  addr=2t",       [2*t for t in tids])
+
+# 模式 3：列访问 addr = t*32 —— 全部落到 bank 0，32-way 冲突（最坏）
+analyze("列访问   addr=t*32",      [t*32 for t in tids])
+
+# 模式 4：加 padding，列宽从 32 改成 33，addr = t*33 —— 冲突消失
+analyze("padding  addr=t*33",      [t*33 for t in tids])</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">stride-1  addr=t：最忙的 bank 被 1 个线程命中 → 无冲突（1 周期）
+stride-2  addr=2t：最忙的 bank 被 2 个线程命中 → 2-way 冲突（串行 2 轮）
+列访问   addr=t*32：最忙的 bank 被 32 个线程命中 → 32-way 冲突（串行 32 轮）
+padding  addr=t*33：最忙的 bank 被 1 个线程命中 → 无冲突（1 周期）</code></pre>
+</div><p>看模式 3 和模式 4：仅仅把跨度从 32 改成 33，最坏的 32-way 冲突就变回了无冲突。请动手改：把模式 2 的 <code>2*t</code> 改成 <code>3*t</code>（stride-3）再运行——你会发现它居然<strong>无冲突</strong>！因为 3 和 32 互质，<code>3t % 32</code> 遍历所有 bank。再试 <code>4*t</code>（stride-4，4 与 32 不互质）——4-way 冲突。<strong>规律：跨度与 32 的最大公约数就是冲突路数。</strong> 这正是 padding 用&quot;互质&quot;消冲突的数学原理。</p>
+<h2>第三层：向量化加载</h2>
+<p>还有一招提高带宽利用率的手法：<strong>向量化加载（vectorized load）</strong>。GPU 支持一条指令读取 128 位（16 字节）的 <code>float4</code>、<code>int4</code> 等类型。用它，一个线程一次就能搬 4 个 float，好处有两个：<strong>每条访存指令搬的字节数翻 4 倍</strong>（更容易打满事务带宽），并且<strong>访存指令数量减到 1/4</strong>（减轻指令发射压力，对访存密集 kernel 尤其有效）。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 标量版：一个线程搬 1 个 float，要发 4 条 load
+float a0 = in[i], a1 = in[i+1], a2 = in[i+2], a3 = in[i+3];
+
+// 向量化版：一条指令搬 16 字节（4 个 float）
+// 把指针 reinterpret 成 float4*，注意要求 16 字节对齐
+float4 v = reinterpret_cast&lt;const float4*&gt;(in)[i];  // v.x v.y v.z v.w
+out4[i] = make_float4(v.x*2, v.y*2, v.z*2, v.w*2);</code></pre>
+</div><div class="warn">
+<strong>向量化的前提：对齐与整除</strong>
+<code>float4</code> 要求首地址按 <strong>16 字节对齐</strong>，且元素个数能被 4 整除，否则会读越界或触发未对齐访问。<code>cudaMalloc</code> 返回的指针天然满足 256 字节对齐，所以从头读一般安全；但如果你从数组中间某个奇数下标开始 reinterpret，对齐就破了。数据量不是 4 的倍数时，要单独处理尾巴。向量化是锦上添花，别在没测出访存指令是瓶颈前就上——先保证合并、再考虑向量化。
+</div><h2>动手（二）：矩阵转置，从&quot;访存全乱&quot;到&quot;合并 + 无冲突&quot;</h2>
+<p>把三个层面串起来的最佳实战就是矩阵转置。下面是一个<strong>完整可编译</strong>的程序，包含两个 kernel：朴素版（读合并、写不合并），和 shared memory tiling 版（读写都合并，且用 <code>+1</code> padding 消除 bank 冲突）。host 端做了完整的分配、拷贝、正确性校验，两个版本都会验证并打印 <code>OK</code>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6Ii8vIHRyYW5zcG9zZS5jdSDigJTigJQg55%2Bp6Zi16L2s572u77ya5py057Sg54mIIHZzIHNoYXJlZCBtZW1vcnkgdGlsaW5nIOeJiO%2B8iCsxIHBhZGRpbmfvvIlcbi8vIOe8luivke%2B8mm52Y2MgLU8yIC1vIHRyYW5zcG9zZSB0cmFuc3Bvc2UuY3VcbiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3N0ZGxpYj5cbiNpbmNsdWRlIDxjdWRhX3J1bnRpbWUuaD5cblxuI2RlZmluZSBUSUxFIDMyXG5cbi8vIC0tLS0tLS0tLS0g54mI5pysIDHvvJrmnLTntKDovaznva4gLS0tLS0tLS0tLVxuLy8gb3V0IOaYryBXIOihjCBIIOWIl%2B%2B8iGluIOaYryBIIOihjCBXIOWIl%2B%2B8ieOAguivuyBpbiDml7bnm7jpgrvnur%2FnqIvor7vnm7jpgrvliJfvvIjlkIjlubblpb3vvInvvIxcbi8vIOWGmSBvdXQg5pe255u46YK757q%2F56iL5YaZ55u46YK76KGM77yI6Leo5bqmID0gSO%2B8jOS4jeWQiOW5tu%2B8ieKAlOKAlOWGmeiuv%2BWtmOiiq%2Ba1qui0ueOAglxuX19nbG9iYWxfXyB2b2lkIHRyYW5zcG9zZU5haXZlKGNvbnN0IGZsb2F0KiBpbiwgZmxvYXQqIG91dCwgaW50IFcsIGludCBIKSB7XG4gICAgaW50IHggPSBibG9ja0lkeC54ICogVElMRSArIHRocmVhZElkeC54OyAgIC8vIGluIOeahOWIl1xuICAgIGludCB5ID0gYmxvY2tJZHgueSAqIFRJTEUgKyB0aHJlYWRJZHgueTsgICAvLyBpbiDnmoTooYxcbiAgICBpZiAoeCA8IFcgJiYgeSA8IEgpIHtcbiAgICAgICAgLy8gb3V0W3hdW3ldID0gaW5beV1beF3vvJtvdXQg55qE6KGM5a695pivIEhcbiAgICAgICAgb3V0W3ggKiBIICsgeV0gPSBpblt5ICogVyArIHhdO1xuICAgIH1cbn1cblxuLy8gLS0tLS0tLS0tLSDniYjmnKwgMu%2B8mnNoYXJlZCBtZW1vcnkgdGlsaW5nICsgcGFkZGluZyAtLS0tLS0tLS0tXG4vLyDlhYjmiorkuIDlnZcgdGlsZSDlkIjlubblnLDor7vov5sgc2hhcmVkIG1lbW9yee%2B8jOWGjeWQiOW5tuWcsOWGmeWbniBvdXTjgIJcbi8vIHRpbGUg5YiX5a6955SoIFRJTEUrMe%2B8jOmBv%2BWFjeaMieWIl%2Bivu%2BWGmeaXtueahCAzMi13YXkgYmFuayBjb25mbGljdOOAglxuX19nbG9iYWxfXyB2b2lkIHRyYW5zcG9zZVRpbGVkKGNvbnN0IGZsb2F0KiBpbiwgZmxvYXQqIG91dCwgaW50IFcsIGludCBIKSB7XG4gICAgX19zaGFyZWRfXyBmbG9hdCB0aWxlW1RJTEVdW1RJTEUgKyAxXTsgICAgIC8vICsxIOa2iOmZpCBiYW5rIGNvbmZsaWN0XG5cbiAgICAvLyDor7vpmLbmrrXvvJrnm7jpgrvnur%2FnqIvor7sgaW4g55qE55u46YK75YiXIOKGkiDlkIjlubZcbiAgICBpbnQgeCA9IGJsb2NrSWR4LnggKiBUSUxFICsgdGhyZWFkSWR4Lng7XG4gICAgaW50IHkgPSBibG9ja0lkeC55ICogVElMRSArIHRocmVhZElkeC55O1xuICAgIGlmICh4IDwgVyAmJiB5IDwgSClcbiAgICAgICAgdGlsZVt0aHJlYWRJZHgueV1bdGhyZWFkSWR4LnhdID0gaW5beSAqIFcgKyB4XTtcblxuICAgIF9fc3luY3RocmVhZHMoKTtcblxuICAgIC8vIOWGmemYtuaute%2B8muaKiuacrCBibG9jayDnmoTlnZDmoIfovaznva7lkI7vvIznm7jpgrvnur%2FnqIvlhpkgb3V0IOeahOebuOmCu%2BWIlyDihpIg5LuN5ZCI5bm2XG4gICAgaW50IHh0ID0gYmxvY2tJZHgueSAqIFRJTEUgKyB0aHJlYWRJZHgueDsgIC8vIG91dCDnmoTliJfvvIjlr7nlupQgaW4g55qE6KGM5pa55ZCR77yJXG4gICAgaW50IHl0ID0gYmxvY2tJZHgueCAqIFRJTEUgKyB0aHJlYWRJZHgueTsgIC8vIG91dCDnmoTooYzvvIjlr7nlupQgaW4g55qE5YiX5pa55ZCR77yJXG4gICAgaWYgKHh0IDwgSCAmJiB5dCA8IFcpXG4gICAgICAgIG91dFt5dCAqIEggKyB4dF0gPSB0aWxlW3RocmVhZElkeC54XVt0aHJlYWRJZHgueV07ICAvLyDku44gc2hhcmVkIOmHjOaMieWIl%2BWPllxufVxuXG5pbnQgY2hlY2tSZXN1bHQoY29uc3QgZmxvYXQqIG91dCwgY29uc3QgZmxvYXQqIGluLCBpbnQgVywgaW50IEgpIHtcbiAgICBmb3IgKGludCByID0gMDsgciA8IFc7ICsrcikgICAgICAgICAgLy8gb3V0IOaciSBXIOihjOOAgUgg5YiXXG4gICAgICAgIGZvciAoaW50IGMgPSAwOyBjIDwgSDsgKytjKVxuICAgICAgICAgICAgaWYgKG91dFtyICogSCArIGNdICE9IGluW2MgKiBXICsgcl0pIHJldHVybiAwO1xuICAgIHJldHVybiAxO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgVyA9IDEwMjQsIEggPSA3Njg7ICAgICAgICAgLy8gaW46IEgg6KGMIFcg5YiXXG4gICAgY29uc3Qgc2l6ZV90IGJ5dGVzID0gKHNpemVfdClXICogSCAqIHNpemVvZihmbG9hdCk7XG5cbiAgICBmbG9hdCogaF9pbiAgPSAoZmxvYXQqKW1hbGxvYyhieXRlcyk7XG4gICAgZmxvYXQqIGhfb3V0ID0gKGZsb2F0KiltYWxsb2MoYnl0ZXMpO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgVyAqIEg7ICsraSkgaF9pbltpXSA9IChmbG9hdClpO1xuXG4gICAgZmxvYXQgKmRfaW4sICpkX291dDtcbiAgICBjdWRhTWFsbG9jKCZkX2luLCBieXRlcyk7XG4gICAgY3VkYU1hbGxvYygmZF9vdXQsIGJ5dGVzKTtcbiAgICBjdWRhTWVtY3B5KGRfaW4sIGhfaW4sIGJ5dGVzLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcblxuICAgIGRpbTMgYmxvY2soVElMRSwgVElMRSk7XG4gICAgZGltMyBncmlkKChXICsgVElMRSAtIDEpIC8gVElMRSwgKEggKyBUSUxFIC0gMSkgLyBUSUxFKTtcblxuICAgIC8vIC0tLSDmnLTntKDniYggLS0tXG4gICAgY3VkYU1lbXNldChkX291dCwgMCwgYnl0ZXMpO1xuICAgIHRyYW5zcG9zZU5haXZlPDw8Z3JpZCwgYmxvY2s%2BPj4oZF9pbiwgZF9vdXQsIFcsIEgpO1xuICAgIGN1ZGFNZW1jcHkoaF9vdXQsIGRfb3V0LCBieXRlcywgY3VkYU1lbWNweURldmljZVRvSG9zdCk7XG4gICAgcHJpbnRmKFwibmFpdmUgOiAlc1xcblwiLCBjaGVja1Jlc3VsdChoX291dCwgaF9pbiwgVywgSCkgPyBcIk9LXCIgOiBcIkZBSUxcIik7XG5cbiAgICAvLyAtLS0gdGlsaW5nICsgcGFkZGluZyDniYggLS0tXG4gICAgY3VkYU1lbXNldChkX291dCwgMCwgYnl0ZXMpO1xuICAgIHRyYW5zcG9zZVRpbGVkPDw8Z3JpZCwgYmxvY2s%2BPj4oZF9pbiwgZF9vdXQsIFcsIEgpO1xuICAgIGN1ZGFNZW1jcHkoaF9vdXQsIGRfb3V0LCBieXRlcywgY3VkYU1lbWNweURldmljZVRvSG9zdCk7XG4gICAgcHJpbnRmKFwidGlsZWQgOiAlc1xcblwiLCBjaGVja1Jlc3VsdChoX291dCwgaF9pbiwgVywgSCkgPyBcIk9LXCIgOiBcIkZBSUxcIik7XG5cbiAgICAvLyDor7TmmI7vvJrkuKTkuKrniYjmnKznu5Pmnpzpg73mraPnoa7vvIzkvYblrp7mtYvpgJ%2Fluqblt67lvILpnIDopoHlnKjnnJ%2Flrp4gR1BVIOS4iueUqFxuICAgIC8vIHByb2ZpbGVy77yI5aaCIE5zaWdodCBDb21wdXRl77yJ5rWL6YeP4oCU4oCUdGlsZWQg54mI5YaZ6K6%2F5a2Y5ZCI5bm244CB5pegIGJhbmtcbiAgICAvLyDlhrLnqoHvvIzpgJrluLjmmI7mmL7mm7Tlv6vjgILmnKzmnLrmsqHmnIkgR1BVIOaXtuWPr%2BWPqumqjOivgeato%2BehruaAp%2BOAglxuICAgIHByaW50ZihcIu%2B8iOiuoeaXtumcgOWcqOecn%2BWuniBHUFUg5LiK55SoIHByb2ZpbGVyIOa1i%2BmHj%2B%2B8iVxcblwiKTtcblxuICAgIGN1ZGFGcmVlKGRfaW4pOyBjdWRhRnJlZShkX291dCk7XG4gICAgZnJlZShoX2luKTsgZnJlZShoX291dCk7XG4gICAgcmV0dXJuIDA7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im52Y2MxMjkiLCJvcHRpb25zIjoiLXN0ZD1jKysyMCAtTzMgLS1ncHUtYXJjaGl0ZWN0dXJlPXNtXzkwIC1wdHgifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// transpose.cu —— 矩阵转置：朴素版 vs shared memory tiling 版（+1 padding）
+// 编译：nvcc -O2 -o transpose transpose.cu
+#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+#include &lt;cuda_runtime.h&gt;
+
+#define TILE 32
+
+// ---------- 版本 1：朴素转置 ----------
+// out 是 W 行 H 列（in 是 H 行 W 列）。读 in 时相邻线程读相邻列（合并好），
+// 写 out 时相邻线程写相邻行（跨度 = H，不合并）——写访存被浪费。
+__global__ void transposeNaive(const float* in, float* out, int W, int H) {
+    int x = blockIdx.x * TILE + threadIdx.x;   // in 的列
+    int y = blockIdx.y * TILE + threadIdx.y;   // in 的行
+    if (x &lt; W &amp;&amp; y &lt; H) {
+        // out[x][y] = in[y][x]；out 的行宽是 H
+        out[x * H + y] = in[y * W + x];
+    }
+}
+
+// ---------- 版本 2：shared memory tiling + padding ----------
+// 先把一块 tile 合并地读进 shared memory，再合并地写回 out。
+// tile 列宽用 TILE+1，避免按列读写时的 32-way bank conflict。
+__global__ void transposeTiled(const float* in, float* out, int W, int H) {
+    __shared__ float tile[TILE][TILE + 1];     // +1 消除 bank conflict
+
+    // 读阶段：相邻线程读 in 的相邻列 → 合并
+    int x = blockIdx.x * TILE + threadIdx.x;
+    int y = blockIdx.y * TILE + threadIdx.y;
+    if (x &lt; W &amp;&amp; y &lt; H)
+        tile[threadIdx.y][threadIdx.x] = in[y * W + x];
+
+    __syncthreads();
+
+    // 写阶段：把本 block 的坐标转置后，相邻线程写 out 的相邻列 → 仍合并
+    int xt = blockIdx.y * TILE + threadIdx.x;  // out 的列（对应 in 的行方向）
+    int yt = blockIdx.x * TILE + threadIdx.y;  // out 的行（对应 in 的列方向）
+    if (xt &lt; H &amp;&amp; yt &lt; W)
+        out[yt * H + xt] = tile[threadIdx.x][threadIdx.y];  // 从 shared 里按列取
+}
+
+int checkResult(const float* out, const float* in, int W, int H) {
+    for (int r = 0; r &lt; W; ++r)          // out 有 W 行、H 列
+        for (int c = 0; c &lt; H; ++c)
+            if (out[r * H + c] != in[c * W + r]) return 0;
+    return 1;
+}
+
+int main() {
+    const int W = 1024, H = 768;         // in: H 行 W 列
+    const size_t bytes = (size_t)W * H * sizeof(float);
+
+    float* h_in  = (float*)malloc(bytes);
+    float* h_out = (float*)malloc(bytes);
+    for (int i = 0; i &lt; W * H; ++i) h_in[i] = (float)i;
+
+    float *d_in, *d_out;
+    cudaMalloc(&amp;d_in, bytes);
+    cudaMalloc(&amp;d_out, bytes);
+    cudaMemcpy(d_in, h_in, bytes, cudaMemcpyHostToDevice);
+
+    dim3 block(TILE, TILE);
+    dim3 grid((W + TILE - 1) / TILE, (H + TILE - 1) / TILE);
+
+    // --- 朴素版 ---
+    cudaMemset(d_out, 0, bytes);
+    transposeNaive&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d_in, d_out, W, H);
+    cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost);
+    printf("naive : %s\n", checkResult(h_out, h_in, W, H) ? "OK" : "FAIL");
+
+    // --- tiling + padding 版 ---
+    cudaMemset(d_out, 0, bytes);
+    transposeTiled&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d_in, d_out, W, H);
+    cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost);
+    printf("tiled : %s\n", checkResult(h_out, h_in, W, H) ? "OK" : "FAIL");
+
+    // 说明：两个版本结果都正确，但实测速度差异需要在真实 GPU 上用
+    // profiler（如 Nsight Compute）测量——tiled 版写访存合并、无 bank
+    // 冲突，通常明显更快。本机没有 GPU 时可只验证正确性。
+    printf("（计时需在真实 GPU 上用 profiler 测量）\n");
+
+    cudaFree(d_in); cudaFree(d_out);
+    free(h_in); free(h_out);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><p>两个 kernel 算出的结果完全一样（都打印 <code>OK</code>），区别只在<strong>访存效率</strong>：朴素版写 <code>out</code> 时跨度是 <code>H</code>，一个 warp 的 32 次写散落在显存各处，合并失败；tiling 版先把数据合并地读进 shared memory，转置发生在片上（靠 <code>+1</code> padding 避开 bank 冲突），再合并地写回 <code>out</code>——读、写两头都合并。在真实 GPU 上，tiling 版通常有数倍的带宽优势。你可以点代码块的 <strong>🔗 在 Compiler Explorer 打开</strong> 看两个 kernel 编译出的 PTX，对比它们的 load/store 指令。</p>
+<div class="note">
+<strong>为什么转置值得这么大费周章</strong>
+转置本身一次计算都不做——它的算术强度几乎是 0，是<strong>纯带宽受限</strong>的极端例子（回到第 16 章的 Roofline，它贴在斜屋顶最左端）。正因为它"只搬不算"，它的全部性能就等于访存效率，成了检验合并/bank conflict 手艺的最佳练习。真实项目里，转置常常和别的计算<strong>融合</strong>在一个 kernel 里（第 14 章的算子融合），避免为了转置单独读写一趟显存。
+</div><h2>小结与下一步</h2>
+<p>访存优化是把带宽受限 kernel 提速的头号杠杆，这一章给了你三层工具：全局内存要<strong>合并</strong>（相邻线程访问相邻地址，SoA 优于 AoS），shared memory 要<strong>避开 bank conflict</strong>（<code>[TILE][TILE+1]</code> 的 padding），还可以用<strong>向量化加载</strong>（float4）一次多搬几倍字节。转置这个例子把三者串在了一起。</p>
+<p>有了合并访问和 shared memory 的手艺，你已经能写出高效的<strong>逐元素</strong>和<strong>局部</strong>访存了。但还有一类模式访存和计算深度交织、需要线程间协作——<strong>归约（reduction）<strong>和</strong>扫描（scan）</strong>：把一整个数组加成一个数、或算前缀和。它们看似简单，却把 warp 分歧、bank conflict、shuffle、原子操作全都用上了，是检验你到此为止所有知识的试金石。下一章我们就来把这两个并行原语写到极致。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>全局内存按 <strong>32/64/128 字节事务</strong>成块传输。一个 warp 的 32 次访问若落在连续对齐块里 → <strong>合并</strong>成一次事务；若散开 → 事务数暴增，带宽浪费到几十分之一。</li>
+<li>布局规则：<strong>相邻线程访问相邻地址</strong>。因此 GPU 上 <strong>SoA（<code>float x[],y[],z[]</code>）优于 AoS（<code>struct{float x,y,z}</code>）</strong>——与 CPU 缓存直觉相反。</li>
+<li>shared memory 有 <strong>32 个 bank，bank = 地址 % 32</strong>。一个 warp 若 k 个线程挤同一 bank → <strong>k-way 冲突，串行 k 轮</strong>；跨度与 32 的最大公约数就是冲突路数。</li>
+<li>用 <strong><code>[TILE][TILE+1]</code> padding</strong>（33 与 32 互质）把转置里的 32-way 列冲突清零，代价只是极少的 shared memory。</li>
+<li><strong>向量化加载（float4/int4）</strong> 每条指令搬 16 字节、把访存指令数减到 1/4——但要求 16 字节对齐、元素数整除，是合并之后的锦上添花。</li>
+<li><strong>矩阵转置</strong>是纯带宽受限的经典练习：朴素版写不合并，tiling+padding 版读写都合并且无 bank 冲突，结果相同而带宽差数倍。</content>
+</invoke></li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch16.html">← 第 16 章 性能模型：occupancy、带宽与 Roofline</a>
+  <a class="nav-next" href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

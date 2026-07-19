@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 章 真正的调度单位：Warp 与 Sub-group</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li class="active"><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 6 章 真正的调度单位：Warp 与 Sub-group</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 4、5 章讲了你在代码里写的执行层级——block / work-group。但硬件从来不会把一个 block 当成一个整体去调度。它会把 block 悄悄<strong>切成一片片 32 个线程的小队</strong>，NVIDIA 叫它 <strong>warp（线程束）</strong>，这才是 GPU 真正的调度单位。SYCL/OpenCL 里的对应物叫 <strong>sub-group（子组）</strong>。</p>
+<p>读完你会明白：为什么 block 大小几乎总该是 32 的倍数、"lane（通道）"是什么、第 2 章的 warp 分歧放到"一个 block 有好几个 warp"的尺度上是什么样，以及为什么一个 SM 上挂着越多 warp、GPU 反而越快。你还会跑一个模拟器，亲眼看到线程怎么打包进 warp、非 32 倍数的 block 浪费了多少条 lane，以及"对齐到 warp 边界的分歧其实不要钱"。</p>
+</div><h2>block 不是一整块：硬件把它切成 warp</h2>
+<p>回忆第 3 章那张硬件图：你启动的一个 <strong>block</strong> 会被整个分配到<strong>一个 SM</strong> 上。但 SM 内部并不是拿一个 block 当一个整体来跑的——它的调度器一次只认 32 个线程一组的小队。于是 SM 一拿到 block，做的第一件事就是把 block 里的线程<strong>按 threadIdx 顺序、每 32 个切成一个 warp</strong>。</p>
+<p>一个 128 线程的 block，会被切成 <strong>4 个 warp</strong>：</p>
+<ul>
+<li>warp 0：threadIdx.x = 0…31</li>
+<li>warp 1：threadIdx.x = 32…63</li>
+<li>warp 2：threadIdx.x = 64…95</li>
+<li>warp 3：threadIdx.x = 96…127</li>
+</ul>
+<p>这 32 个线程从此<strong>绑定在一起</strong>：它们同一时刻执行同一条指令（这正是第 2 章的 SIMT），一起被调度上算术单元，一起等内存。warp 才是 GPU 调度、执行、访存的<strong>原子单位</strong>——block 只是你写代码时的组织单位，warp 是硬件真正认的东西。</p>
+<div class="keypoint">
+<strong>三层里多出来的一层</strong>
+你写代码看到的是 grid → block → thread 三层（第 4 章）。但硬件在 block 和 thread 之间<strong>硬塞了一层 warp</strong>：grid → block →（硬件切分）warp → thread。这一层你在源码里几乎看不见，却决定了分歧、访存、占用率这三件最影响性能的事。理解 warp，是从"能写出正确的 kernel"迈向"能写出<strong>快</strong>的 kernel"的分水岭。
+</div><h2>Lane：warp 内的门牌号</h2>
+<p>warp 里的 32 个线程，每个占一条 <strong>lane（通道）</strong>，编号 0…31。一个线程的 lane 编号就是它在 warp 内部的位置：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int lane   = threadIdx.x % 32;   // 我在自己 warp 里排第几（0..31）
+int warpId = threadIdx.x / 32;   // 我属于 block 里的第几个 warp</code></pre>
+</div><p>lane 这个概念现在看着没用，但它是第 8 章 <strong>warp 级原语</strong>的基础：像&quot;把 lane 3 的值直接递给 lane 0&quot;这种线程间通信，靠的就是 lane 编号来点名。先记住这个门牌号。</p>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一个 128 线程的 block 被切成 4 个 warp</text>
+  <rect x="20" y="32" width="520" height="220" rx="8" fill="#f7fbff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="30" y="50" font-size="12" fill="#2b6cb0" font-weight="bold">block（128 线程）</text>
+  <!-- warp 0 -->
+  <rect x="40" y="60" width="480" height="30" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="35" y="80" font-size="10" fill="#2b6cb0" text-anchor="end" transform="translate(0,0)"></text>
+  <text x="52" y="79" font-size="11" fill="#2b6cb0">warp 0</text>
+  <text x="510" y="79" font-size="10" fill="#6b7280" text-anchor="end">lane 0 … 31 → threadIdx 0…31</text>
+  <!-- warp 1 -->
+  <rect x="40" y="96" width="480" height="30" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="52" y="115" font-size="11" fill="#2b6cb0">warp 1</text>
+  <text x="510" y="115" font-size="10" fill="#6b7280" text-anchor="end">lane 0 … 31 → threadIdx 32…63</text>
+  <!-- warp 2 : diverging -->
+  <rect x="40" y="132" width="240" height="30" rx="4" fill="#fbe6dc" stroke="#e06a3b"/>
+  <rect x="280" y="132" width="240" height="30" rx="4" fill="#e5e7eb" stroke="#6b7280"/>
+  <text x="52" y="151" font-size="11" fill="#a53f1c">warp 2</text>
+  <text x="170" y="151" font-size="10" fill="#a53f1c" text-anchor="middle">走 if：16 条 lane 干活</text>
+  <text x="400" y="151" font-size="10" fill="#6b7280" text-anchor="middle">走 else：另 16 条"关灯"干等</text>
+  <!-- warp 3 -->
+  <rect x="40" y="168" width="480" height="30" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="52" y="187" font-size="11" fill="#2b6cb0">warp 3</text>
+  <text x="510" y="187" font-size="10" fill="#6b7280" text-anchor="end">lane 0 … 31 → threadIdx 96…127</text>
+  <text x="280" y="222" text-anchor="middle" font-size="11" fill="#6b7280">warp 0/1/3 内部齐步走，无分歧；warp 2 内部走向不同 → 分歧，if 和 else 串行执行</text>
+  <text x="280" y="242" text-anchor="middle" font-size="10" fill="#e06a3b">分歧被<tspan font-weight="bold">关在单个 warp 内部</tspan>：它拖慢的只有 warp 2，不影响另外三个 warp</text>
+</svg>
+<div class="caption">图 6-1　硬件把 128 线程的 block 切成 4 个 warp。每个 warp 是 32 条 lane 的小队；分歧发生时，代价被局限在出现分歧的那个 warp 里</div>
+</div><h2>为什么 block 大小几乎总该是 32 的倍数</h2>
+<p>既然 SM 每 32 个线程切一个 warp，那当 block 大小<strong>不是</strong> 32 的倍数时会怎样？答案很直接：<strong>硬件会补齐到 32 的整数倍，多出来的 lane 全程空转、却照样占资源。</strong></p>
+<p>举个扎心的例子：一个 <strong>33 线程</strong>的 block。硬件切出来是 <strong>2 个 warp</strong>——第一个 warp 装满 32 个线程，第二个 warp 只装了 1 个线程，<strong>剩下 31 条 lane 全程&quot;关灯&quot;</strong>。你花了两个 warp 的调度和寄存器成本，却只干了 33 个线程的活，第二个 warp 有 97% 的算力在空转。</p>
+<div class="warn">
+<strong>选 block 大小的第一条规矩</strong>
+把 block 大小选成 <strong>32 的倍数</strong>（常见的是 128、256、512）。选 33、100、200 这种数，尾部一定有 lane 被浪费；更糟的是，warp 是资源分配的单位，那个"只装了 1 个线程的 warp"照样占满一个 warp 份额的寄存器和调度槽。这不是玄学，是硬件切分规则的直接后果——下面的模拟器会把浪费的 lane 精确数给你看。
+</div><h2>Active mask：谁开着灯</h2>
+<p>第 2 章讲分歧时说&quot;该走的干活、其余关灯&quot;。硬件用什么记录&quot;此刻这个 warp 里哪些 lane 开着灯&quot;？——一个 32 位的整数，叫 <strong>active mask（活跃掩码）</strong>：第 <em>i</em> 位为 1 表示 lane <em>i</em> 此刻活跃（要执行当前指令），为 0 表示被屏蔽。</p>
+<p>warp 遇到 <code>if</code> 分歧时，硬件先用&quot;满足条件的 lane&quot;这套掩码跑 if 分支，再用&quot;取反的掩码&quot;跑 else 分支——两趟，串行。掩码就是&quot;关灯/开灯&quot;的物理实现。第 8 章你会看到，很多 warp 级原语（如 <code>__ballot_sync</code> 返回的正是一个投票掩码）直接把这个 mask 交到你手里用。</p>
+<h2>换到 SYCL：sub-group</h2>
+<p>warp 是 NVIDIA 的叫法，也写死了 32 这个数。可移植的 <strong>SYCL/OpenCL</strong> 里，同一个概念叫 <strong>sub-group（子组）</strong>，而且<strong>它的大小不保证是 32</strong>：在 NVIDIA 卡上通常是 32，在某些 AMD 卡上是 64，在 Intel GPU 上可能是 8/16/32。所以在 SYCL 里，你<strong>不能把 32 写死</strong>，必须在运行时查询。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：warp 与 lane（32 写死）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// warp 大小是常量 32
+int lane   = threadIdx.x % warpSize;  // warpSize==32
+int warpId = threadIdx.x / warpSize;
+
+// warp 级原语，隐含 32 条 lane
+unsigned m = __activemask();
+float v = __shfl_down_sync(m, x, 1);</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SYCL：sub-group（大小要查询）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 大小随硬件变，必须在运行时问
+auto sg = it.get_sub_group();
+uint32_t sz  = sg.get_local_range()[0]; // 8/16/32/64
+uint32_t lid = sg.get_local_id()[0];    // 我在 sub-group 里排第几
+
+// 对应的 shuffle：sycl::shift_group_left(sg, x, 1)</code></pre>
+</div></div>
+</div><div class="note">
+<strong>写可移植代码的纪律</strong>
+CUDA 里 <code>warpSize</code> 恒为 32，你可以（虽然不推荐）当常量用；但一旦转到 SYCL，<code>32</code> 就成了 bug 的温床。规矩很简单：<strong>凡是和"一个调度小队里有几个线程"有关的逻辑，都去查询 <code>sub_group_size</code>，绝不硬编码</strong>。附录 B 有 CUDA ↔ SYCL 的完整术语对照表。
+</div><h2>占用率预告：为什么&quot;warp 越多越好&quot;</h2>
+<p>第 3 章说 GPU 靠&quot;用并行掩盖延迟&quot;——某个 warp 卡在等显存（几百个周期）时，调度器立刻切到另一个<strong>就绪</strong>的 warp 接着算，等待就被填满了。这里的关键词是&quot;另一个就绪的 warp&quot;：<strong>只有当一个 SM 上同时驻留足够多的 warp，调度器才有牌可打。</strong></p>
+<p>一个 SM 能同时驻留的 warp 数是有上限的（由寄存器、shared memory 等资源决定）。&quot;实际驻留的 warp 数 ÷ 硬件上限&quot;就是 <strong>占用率（occupancy）</strong>。占用率低，意味着一旦手头的 warp 都在等内存，调度器无 warp 可切，算术单元就空转——延迟藏不住了。</p>
+<div class="keypoint">
+<strong>把三章串起来</strong>
+第 1 章："GPU 用海量并行掩盖延迟"；第 3 章："warp 调度器负责切换"；这一章补上最后一环：<strong>调度器能切换的前提，是 SM 上驻留着很多 warp</strong>。这就是为什么 GPU 要你开成千上万个线程——不是为了"同时算完"，而是为了给调度器足够多的 warp 来掩盖访存延迟。占用率怎么定量计算、多高才够，是第 16 章的主题。
+</div><h2>warp 级原语：一瞥（细节在第 8 章）</h2>
+<p>既然一个 warp 的 32 个线程本就绑在一起、齐步执行，硬件干脆提供了让它们<strong>直接交换寄存器值、绕过内存</strong>的指令，叫 <strong>warp 级原语（warp-level primitives）</strong>。两个最常用的：</p>
+<ul>
+<li><code>__shfl_sync</code> / <code>__shfl_down_sync</code>：让一条 lane 直接读另一条 lane 的寄存器值（shuffle，洗牌）。</li>
+<li><code>__ballot_sync</code>：让 warp 里每条 lane 投一票（真/假），返回一个 32 位掩码。</li>
+</ul>
+<p>它们的威力在于<strong>不碰 shared memory、不碰全局内存</strong>，纯寄存器间通信，极快。经典用法是&quot;warp 内求和&quot;——用 shuffle 做一棵折叠的归约树，5 步（log₂32）就把 32 个值加成 1 个：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// warp 内 32 个 lane 的值求和，全程不碰内存（预告第 8、18 章）
+__inline__ __device__ float warpReduceSum(float val) {
+    // 每一步把"距离减半"的 lane 的值加过来：16→8→4→2→1
+    for (int offset = 16; offset &gt; 0; offset &gt;&gt;= 1)
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    return val;   // lane 0 拿到的就是整个 warp 的总和
+}</code></pre>
+</div><p><code>0xffffffff</code> 是那个 32 位掩码，表示&quot;32 条 lane 全部参与&quot;。现在不用抠语义，只需记住：<strong>warp 不只是调度单位，还是一个能高速内部协作的小团队</strong>。归约、扫描这些经典并行模式（第 18 章）都建立在它之上。</p>
+<h2>动手：线程如何打包进 warp，分歧到底贵在哪</h2>
+<p>下面这个模拟器<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它做三件事：把一个 block 按 32 切成 warp、数出非 32 倍数时浪费了多少条 lane，然后把第 2 章的分歧模型<strong>升级到整个 block（好几个 warp）的尺度</strong>，对比两种分工：一种让分歧发生在 warp <em>内部</em>，一种让分歧<em>对齐到 warp 边界</em>。你会看到后者几乎不花钱。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%EF%BC%9A%E7%BA%BF%E7%A8%8B%E6%80%8E%E4%B9%88%E6%89%93%E5%8C%85%E8%BF%9B%20warp%20%2B%20%E5%88%86%E6%AD%A7%E5%9C%A8%20warp%20%E5%B0%BA%E5%BA%A6%E4%B8%8A%E7%9A%84%E4%BB%A3%E4%BB%B7%0AWARP%20%3D%2032%0A%0Adef%20pack_into_warps(block_size)%3A%0A%20%20%20%20num_warps%20%3D%20(block_size%20%2B%20WARP%20-%201)%20%2F%2F%20WARP%20%20%20%20%20%23%20%E4%B8%8D%E5%A4%9F%2032%20%E7%9A%84%E5%90%91%E4%B8%8A%E8%A1%A5%E9%BD%90%0A%20%20%20%20total_lanes%20%3D%20num_warps%20*%20WARP%0A%20%20%20%20wasted%20%3D%20total_lanes%20-%20block_size%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%A9%BA%E8%BD%AC%E7%9A%84%20lane%0A%20%20%20%20print(f%22%20%20block%3D%7Bblock_size%3A%3E4%7D%20%E2%86%92%20%7Bnum_warps%7D%20%E4%B8%AA%20warp%EF%BC%88%7Btotal_lanes%7D%20%E6%9D%A1%20lane%EF%BC%89%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20f%22%E5%B9%B2%E6%B4%BB%20%7Bblock_size%7D%EF%BC%8C%E7%A9%BA%E8%BD%AC%20%7Bwasted%7D%22)%0A%20%20%20%20return%20num_warps%2C%20wasted%0A%0Aprint(%22%E4%B8%80%E3%80%81%E7%BA%BF%E7%A8%8B%E5%A6%82%E4%BD%95%E6%89%93%E5%8C%85%E8%BF%9B%20warp%EF%BC%88%E6%B3%A8%E6%84%8F%E9%9D%9E%2032%20%E5%80%8D%E6%95%B0%E7%9A%84%E6%B5%AA%E8%B4%B9%EF%BC%89%22)%0Afor%20bs%20in%20%5B32%2C%20128%2C%20256%2C%2033%2C%20100%5D%3A%0A%20%20%20%20pack_into_warps(bs)%0A%0Adef%20branch_cost(block_size%2C%20predicate%2C%20if_cost%3D3%2C%20else_cost%3D3)%3A%0A%20%20%20%20%22%22%22%E6%8A%8A%20block%20%E5%88%87%E6%88%90%20warp%EF%BC%8C%E9%80%90%20warp%20%E8%AE%A1%E5%88%86%EF%BC%9A%0A%20%20%20%20warp%20%E5%86%85%E5%85%A8%E8%B5%B0%E5%90%8C%E4%B8%80%E5%88%86%E6%94%AF%20%E2%86%92%20%E5%8F%AA%E4%BB%98%E9%82%A3%E4%B8%80%E6%9D%A1%E5%88%86%E6%94%AF%E7%9A%84%E9%92%B1%EF%BC%9B%0A%20%20%20%20warp%20%E5%86%85%E8%B5%B0%E5%90%91%E4%B8%8D%E5%90%8C%EF%BC%88%E5%88%86%E6%AD%A7%EF%BC%89%E2%86%92%20if%20%E5%92%8C%20else%20%E9%83%BD%E8%A6%81%E4%BB%98%EF%BC%8C%E4%B8%B2%E8%A1%8C%E3%80%82%22%22%22%0A%20%20%20%20num_warps%20%3D%20(block_size%20%2B%20WARP%20-%201)%20%2F%2F%20WARP%0A%20%20%20%20total%20%3D%200%0A%20%20%20%20diverged_warps%20%3D%200%0A%20%20%20%20for%20w%20in%20range(num_warps)%3A%0A%20%20%20%20%20%20%20%20preds%20%3D%20%5Bpredicate(w%20*%20WARP%20%2B%20lane)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20for%20lane%20in%20range(WARP)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20w%20*%20WARP%20%2B%20lane%20%3C%20block_size%5D%0A%20%20%20%20%20%20%20%20any_if%20%20%20%3D%20any(preds)%0A%20%20%20%20%20%20%20%20any_else%20%3D%20any(not%20p%20for%20p%20in%20preds)%0A%20%20%20%20%20%20%20%20cost%20%3D%20(if_cost%20if%20any_if%20else%200)%20%2B%20(else_cost%20if%20any_else%20else%200)%0A%20%20%20%20%20%20%20%20if%20any_if%20and%20any_else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20diverged_warps%20%2B%3D%201%0A%20%20%20%20%20%20%20%20total%20%2B%3D%20cost%0A%20%20%20%20return%20total%2C%20diverged_warps%2C%20num_warps%0A%0ABS%20%3D%20128%20%20%23%204%20%E4%B8%AA%20warp%0A%23%20%E6%96%B9%E6%A1%88%20A%EF%BC%9A%E6%8C%89%E5%A5%87%E5%81%B6%E5%88%86%E5%B7%A5%20%E2%86%92%20%E6%AF%8F%E4%B8%AA%20warp%20%E9%83%BD%E6%98%AF%E4%B8%80%E5%8D%8A%E4%B8%80%E5%8D%8A%20%E2%86%92%20%E6%AF%8F%E4%B8%AA%20warp%20%E9%83%BD%E5%88%86%E6%AD%A7%0Aa_total%2C%20a_div%2C%20nw%20%3D%20branch_cost(BS%2C%20lambda%20tid%3A%20tid%20%25%202%20%3D%3D%200)%0A%23%20%E6%96%B9%E6%A1%88%20B%EF%BC%9A%E6%8C%89%20warp%20%E8%BE%B9%E7%95%8C%E5%88%86%E5%B7%A5%EF%BC%88warpId%20%E7%9A%84%E5%A5%87%E5%81%B6%EF%BC%89%E2%86%92%20%E6%AF%8F%E4%B8%AA%20warp%20%E5%86%85%E9%83%A8%E4%B8%80%E8%87%B4%20%E2%86%92%20%E6%97%A0%E5%88%86%E6%AD%A7%0Ab_total%2C%20b_div%2C%20_%20%20%3D%20branch_cost(BS%2C%20lambda%20tid%3A%20(tid%20%2F%2F%20WARP)%20%25%202%20%3D%3D%200)%0A%0Aprint(f%22%5Cn%E4%BA%8C%E3%80%81%E5%90%8C%E4%B8%80%E4%B8%AA%20128%20%E7%BA%BF%E7%A8%8B%20block%EF%BC%88%7Bnw%7D%20%E4%B8%AA%20warp%EF%BC%89%EF%BC%8C%E4%B8%A4%E7%A7%8D%E5%88%86%E5%B7%A5%E7%9A%84%E4%BB%A3%E4%BB%B7%22)%0Aprint(f%22%20%20%E6%96%B9%E6%A1%88%20A%20%E6%8C%89%E5%A5%87%E5%81%B6%EF%BC%88tid%252%EF%BC%89%EF%BC%9A%7Ba_div%7D%2F%7Bnw%7D%20%E4%B8%AA%20warp%20%E5%88%86%E6%AD%A7%EF%BC%8C%E5%85%B1%E8%8A%B1%20%7Ba_total%7D%20%E6%AD%A5%22)%0Aprint(f%22%20%20%E6%96%B9%E6%A1%88%20B%20%E6%8C%89%20warp%20%E8%BE%B9%E7%95%8C%20%20%20%EF%BC%9A%7Bb_div%7D%2F%7Bnw%7D%20%E4%B8%AA%20warp%20%E5%88%86%E6%AD%A7%EF%BC%8C%E5%85%B1%E8%8A%B1%20%7Bb_total%7D%20%E6%AD%A5%22)%0Aprint(f%22%20%20%E2%86%92%20%E7%BB%93%E6%9E%9C%E5%AE%8C%E5%85%A8%E4%B8%80%E6%A0%B7%EF%BC%8C%E4%BD%86%20A%20%E6%AF%94%20B%20%E6%85%A2%E4%BA%86%20%7Ba_total%20%2F%20b_total%3A.0f%7D%20%E5%80%8D%22)%0Aprint(%22%20%20%E5%8E%9F%E5%9B%A0%EF%BC%9AA%20%E7%9A%84%E5%88%86%E6%AD%A7%E8%90%BD%E5%9C%A8%E6%AF%8F%E4%B8%AA%20warp%20%E5%86%85%E9%83%A8%EF%BC%88%E4%B8%B2%E8%A1%8C%E4%B8%A4%E6%9D%A1%E5%88%86%E6%94%AF%EF%BC%89%EF%BC%9B%22)%0Aprint(%22%20%20%20%20%20%20%20%20B%20%E7%9A%84%E5%88%86%E6%AD%A7%E5%AF%B9%E9%BD%90%E5%88%B0%20warp%20%E8%BE%B9%E7%95%8C%EF%BC%8C%E6%AF%8F%E4%B8%AA%20warp%20%E5%8F%AA%E8%B5%B0%E4%B8%80%E6%9D%A1%E8%B7%AF%20%E2%86%92%20%E4%B8%8D%E8%8A%B1%E9%92%B1%E3%80%82%22)"># 模拟：线程怎么打包进 warp + 分歧在 warp 尺度上的代价
+WARP = 32
+
+def pack_into_warps(block_size):
+    num_warps = (block_size + WARP - 1) // WARP     # 不够 32 的向上补齐
+    total_lanes = num_warps * WARP
+    wasted = total_lanes - block_size                # 空转的 lane
+    print(f"  block={block_size:&gt;4} → {num_warps} 个 warp（{total_lanes} 条 lane），"
+          f"干活 {block_size}，空转 {wasted}")
+    return num_warps, wasted
+
+print("一、线程如何打包进 warp（注意非 32 倍数的浪费）")
+for bs in [32, 128, 256, 33, 100]:
+    pack_into_warps(bs)
+
+def branch_cost(block_size, predicate, if_cost=3, else_cost=3):
+    """把 block 切成 warp，逐 warp 计分：
+    warp 内全走同一分支 → 只付那一条分支的钱；
+    warp 内走向不同（分歧）→ if 和 else 都要付，串行。"""
+    num_warps = (block_size + WARP - 1) // WARP
+    total = 0
+    diverged_warps = 0
+    for w in range(num_warps):
+        preds = [predicate(w * WARP + lane)
+                 for lane in range(WARP)
+                 if w * WARP + lane &lt; block_size]
+        any_if   = any(preds)
+        any_else = any(not p for p in preds)
+        cost = (if_cost if any_if else 0) + (else_cost if any_else else 0)
+        if any_if and any_else:
+            diverged_warps += 1
+        total += cost
+    return total, diverged_warps, num_warps
+
+BS = 128  # 4 个 warp
+# 方案 A：按奇偶分工 → 每个 warp 都是一半一半 → 每个 warp 都分歧
+a_total, a_div, nw = branch_cost(BS, lambda tid: tid % 2 == 0)
+# 方案 B：按 warp 边界分工（warpId 的奇偶）→ 每个 warp 内部一致 → 无分歧
+b_total, b_div, _  = branch_cost(BS, lambda tid: (tid // WARP) % 2 == 0)
+
+print(f"\n二、同一个 128 线程 block（{nw} 个 warp），两种分工的代价")
+print(f"  方案 A 按奇偶（tid%2）：{a_div}/{nw} 个 warp 分歧，共花 {a_total} 步")
+print(f"  方案 B 按 warp 边界   ：{b_div}/{nw} 个 warp 分歧，共花 {b_total} 步")
+print(f"  → 结果完全一样，但 A 比 B 慢了 {a_total / b_total:.0f} 倍")
+print("  原因：A 的分歧落在每个 warp 内部（串行两条分支）；")
+print("        B 的分歧对齐到 warp 边界，每个 warp 只走一条路 → 不花钱。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">一、线程如何打包进 warp（注意非 32 倍数的浪费）
+  block=  32 → 1 个 warp（32 条 lane），干活 32，空转 0
+  block= 128 → 4 个 warp（128 条 lane），干活 128，空转 0
+  block= 256 → 8 个 warp（256 条 lane），干活 256，空转 0
+  block=  33 → 2 个 warp（64 条 lane），干活 33，空转 31
+  block= 100 → 4 个 warp（128 条 lane），干活 100，空转 28
+
+二、同一个 128 线程 block（4 个 warp），两种分工的代价
+  方案 A 按奇偶（tid%2）：4/4 个 warp 分歧，共花 24 步
+  方案 B 按 warp 边界   ：0/4 个 warp 分歧，共花 12 步
+  → 结果完全一样，但 A 比 B 慢了 2 倍
+  原因：A 的分歧落在每个 warp 内部（串行两条分支）；
+        B 的分歧对齐到 warp 边界，每个 warp 只走一条路 → 不花钱。</code></pre>
+</div><p>两个结论一次看清。第一段：<code>block=33</code> 白白空转 31 条 lane——这就是&quot;block 大小要取 32 的倍数&quot;的量化证据。第二段：同样是&quot;一半线程走 if、一半走 else&quot;，<strong>按奇偶分</strong>让每个 warp 都撕成两半、串行跑两条分支；<strong>按 warp 边界分</strong>让每个 warp 内部意见一致，各走各的路，总代价直接减半。请动手改：把方案 B 的判据从 <code>(tid // WARP) % 2 == 0</code> 改成 <code>tid &lt; 64</code>（前 64 个线程走 if）——因为 64 正好是 2 个 warp 的边界，你会发现它<strong>依然 0 分歧</strong>。这就是第 2 章那句话的精确版：<strong>分歧的代价按 warp 结算，让走向不同的线程落到不同的 warp 里，分歧就是免费的。</strong></p>
+<h2>小结与下一步</h2>
+<p>你现在知道了 GPU 真正的调度单位不是 block，而是 block 被切出来的一个个 32 线程的 warp（SYCL 里叫 sub-group，大小要查询）。这把第 2 章的分歧、第 3 章的延迟掩盖，都落到了&quot;warp&quot;这个具体的硬件粒度上。</p>
+<p>warp 内部能高速协作，靠的是它们共享一个东西——但 warp <em>之间</em>、block 里<em>不同 warp</em> 之间要交换数据，就得靠内存。而内存，正是决定 GPU 性能的另一半答案。下一章我们拆开 GPU 的<strong>内存层级</strong>：寄存器、shared memory、全局内存三级差着数量级的速度，以及那个能让性能差出几十倍的核心概念——<strong>合并访问（memory coalescing）</strong>：当一个 warp 的 32 条 lane 访问连续地址时，会发生什么好事。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>硬件从不把 block 当整体调度，而是按 threadIdx 顺序<strong>每 32 个线程切一个 warp</strong>（NVIDIA）。warp 才是 GPU 真正的调度、执行、访存单位。</li>
+<li>warp 内每个线程占一条 <strong>lane</strong>（0…31），<code>lane = threadIdx.x % 32</code>；lane 编号是 warp 级原语点名通信的基础。</li>
+<li><strong>block 大小几乎总该取 32 的倍数</strong>：33 线程会切成 2 个 warp、白白空转 31 条 lane，还照样占资源。</li>
+<li><strong>active mask</strong> 是 warp 里&quot;哪些 lane 开着灯&quot;的 32 位记录；分歧就是用两套互补的掩码把 if/else 串行跑两趟。</li>
+<li>SYCL/OpenCL 的对应物是 <strong>sub-group</strong>，大小不保证是 32（可能 8/16/32/64），<strong>必须运行时查询，不能硬编码</strong>。</li>
+<li>SM 上驻留越多 warp，调度器越有牌可切来掩盖延迟——这就是<strong>占用率（occupancy）</strong>，第 16 章定量展开。</li>
+<li>warp 级原语（<code>__shfl_down_sync</code>、<code>__ballot_sync</code>）让 32 条 lane 绕过内存直接协作，是归约/扫描的基础（第 8、18 章）。</li>
+<li>分歧的代价<strong>按 warp 结算</strong>：warp 内分歧才串行付费；把分歧对齐到 warp 边界，它就是免费的。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch05.html">← 第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a>
+  <a class="nav-next" href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

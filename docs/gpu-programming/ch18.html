@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 18 章 并行原语：归约与扫描的经典模式</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li class="active"><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 18 章 并行原语：归约与扫描的经典模式</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面你学会了把"每个元素一个线程"的活儿映射到 GPU，那都是<strong>各干各的、互不来往</strong>的计算。这一章处理一类新问题：<strong>结果依赖于所有元素</strong>——求一个数组的和、最大值，或每个位置的前缀和。这类问题在 CPU 上一个 <code>for</code> 循环就搞定，可它天生带着"上一步喂给下一步"的串行依赖，怎么让几万个线程一起做？</p>
+<p>答案是两个被反复使用的<strong>并行原语（parallel primitive）</strong>：<strong>归约（reduction）</strong>和<strong>扫描（scan / 前缀和）</strong>。读完你会明白它们怎么把看似串行的问题拆成 <code>log N</code> 步的并行，并亲手跑两个浏览器里的模拟器，看着数组在每一步塌缩或铺开；最后写出一个完整的、用 shared memory + 树形归约 + warp shuffle + atomicAdd 求和的 CUDA 程序。</p>
+</div><h2>问题：这次每个线程不能只顾自己</h2>
+<p>回忆你在 CPU 上求一个数组的和，代码简单到不用想：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// CPU：一个累加器，从头扫到尾
+float sum = 0.0f;
+for (int i = 0; i &lt; n; ++i)
+    sum += a[i];        // 每一步都依赖上一步的 sum</code></pre>
+</div><p>这段代码有一个你平时不会注意、但对 GPU 是致命的性质：<strong>每一次 <code>sum += a[i]</code> 都要读上一次的 <code>sum</code></strong>。第 5 次加法必须等第 4 次算完，第 4 次又要等第 3 次……<code>n</code> 个元素排成一条<strong>长度为 n 的依赖链</strong>，只能一个接一个走。CPU 上无所谓，反正就几个线程，单核跑得飞快。可 GPU 有几万个线程，你让它们排成一条链依次加，等于让一支千人军队走独木桥——绝大多数线程在干等。</p>
+<div class="keypoint">
+<strong>并行原语要解决的核心矛盾</strong>
+归约和扫描的输出<strong>依赖全部输入</strong>，朴素写法是一条长度 <code>n</code> 的串行依赖链。并行化的关键洞察是：加法（以及 max、min、乘法……）满足<strong>结合律</strong>，<code>((a+b)+c)+d</code> 可以重排成 <code>(a+b)+(c+d)</code>。一旦允许重新结合，那条长链就能折叠成一棵<strong>深度只有 log₂n 的树</strong>——这就是把串行变并行的全部秘密。
+</div><h2>归约：把一条链折成一棵树</h2>
+<p>先看最简单的归约——数组求和。串行是 <code>n-1</code> 次加法排成一条链；树形归约则让<strong>相邻的元素两两相加</strong>，一轮下来元素个数减半，<code>log₂n</code> 轮后只剩一个。</p>
+<p>拿 8 个数举例。第 1 轮：让 4 个线程各做一次加法，8 个数变 4 个；第 2 轮：2 个线程，变 2 个；第 3 轮：1 个线程，变 1 个。<code>log₂8 = 3</code> 轮就出结果，而串行要 7 步。数据一大，差距是指数级的：一百万个元素，串行一百万步，树形归约只要 20 步。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CPU：一条 n 步的依赖链</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">float sum = 0;
+for (int i = 0; i &lt; n; ++i)
+    sum += a[i];
+// 第 i 步依赖第 i-1 步
+// 深度 = n，无法并行
+// n=1e6 → 一百万步</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">GPU：一棵 log₂n 层的树</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 每一步：活跃线程数减半
+for (int s = n/2; s &gt;= 1; s &gt;&gt;= 1) {
+    if (tid &lt; s)
+        a[tid] += a[tid + s];
+    __syncthreads();   // 等这一层都算完
+}
+// 深度 = log₂n
+// n=1e6 → 约 20 步</code></pre>
+</div></div>
+</div><p>具体怎么两两相加，有讲究。一种自然的想法是&quot;隔一个加一个&quot;（stride 从 1 开始翻倍），但那会让活跃线程分散、还容易在 shared memory 上撞 <strong>bank conflict</strong>（第 17 章）。更好的写法叫<strong>顺序寻址（sequential addressing）</strong>：让 stride 从 <code>n/2</code> 开始<strong>减半</strong>，每一步都是<strong>前半段加后半段</strong>——活跃的永远是编号最小的一批线程 <code>tid &lt; stride</code>，它们连续排布，既避免了 warp 内的分支分歧（第 2 章），访问 shared memory 也是连续的、不撞 bank。下面这张图就是顺序寻址的样子：</p>
+<div class="concept">
+<svg viewBox="0 0 560 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">树形归约：每一步活跃线程减半，log₂8 = 3 步求出总和</text>
+  <defs>
+    <marker id="ar18" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2b6cb0"/></marker>
+  </defs>
+  <!-- Row0: 初始 8 个值 -->
+  <g font-family="monospace" font-size="9" fill="#6b7280">
+    <text x="53"  y="40" text-anchor="middle">tid0</text><text x="111" y="40" text-anchor="middle">tid1</text>
+    <text x="169" y="40" text-anchor="middle">tid2</text><text x="227" y="40" text-anchor="middle">tid3</text>
+    <text x="285" y="40" text-anchor="middle">tid4</text><text x="343" y="40" text-anchor="middle">tid5</text>
+    <text x="401" y="40" text-anchor="middle">tid6</text><text x="459" y="40" text-anchor="middle">tid7</text>
+  </g>
+  <g fill="#eef6ff" stroke="#2b6cb0" font-family="monospace" font-size="13">
+    <rect x="30"  y="45" width="46" height="30"/><text x="53"  y="65" text-anchor="middle" fill="#1a4a7a">3</text>
+    <rect x="88"  y="45" width="46" height="30"/><text x="111" y="65" text-anchor="middle" fill="#1a4a7a">1</text>
+    <rect x="146" y="45" width="46" height="30"/><text x="169" y="65" text-anchor="middle" fill="#1a4a7a">7</text>
+    <rect x="204" y="45" width="46" height="30"/><text x="227" y="65" text-anchor="middle" fill="#1a4a7a">0</text>
+    <rect x="262" y="45" width="46" height="30"/><text x="285" y="65" text-anchor="middle" fill="#1a4a7a">4</text>
+    <rect x="320" y="45" width="46" height="30"/><text x="343" y="65" text-anchor="middle" fill="#1a4a7a">1</text>
+    <rect x="378" y="45" width="46" height="30"/><text x="401" y="65" text-anchor="middle" fill="#1a4a7a">6</text>
+    <rect x="436" y="45" width="46" height="30"/><text x="459" y="65" text-anchor="middle" fill="#1a4a7a">3</text>
+  </g>
+  <!-- Step1 arrows: col4..7 -> col0..3 -->
+  <g stroke="#2b6cb0" stroke-width="1.3" fill="none">
+    <path d="M285 76 L58 122"  marker-end="url(#ar18)"/>
+    <path d="M343 76 L116 122" marker-end="url(#ar18)"/>
+    <path d="M401 76 L174 122" marker-end="url(#ar18)"/>
+    <path d="M459 76 L232 122" marker-end="url(#ar18)"/>
+  </g>
+  <text x="470" y="100" font-size="11" fill="#e06a3b">第 1 步 stride=4：前半段 += 后半段</text>
+  <!-- Row1: 4 boxes -->
+  <g fill="#eef6ff" stroke="#2b6cb0" font-family="monospace" font-size="13">
+    <rect x="30"  y="125" width="46" height="30"/><text x="53"  y="145" text-anchor="middle" fill="#1a4a7a">7</text>
+    <rect x="88"  y="125" width="46" height="30"/><text x="111" y="145" text-anchor="middle" fill="#1a4a7a">2</text>
+    <rect x="146" y="125" width="46" height="30"/><text x="169" y="145" text-anchor="middle" fill="#1a4a7a">13</text>
+    <rect x="204" y="125" width="46" height="30"/><text x="227" y="145" text-anchor="middle" fill="#1a4a7a">3</text>
+  </g>
+  <text x="280" y="145" font-size="11" fill="#6b7280">← 4 个线程活跃</text>
+  <!-- Step2 arrows: col2,3 -> col0,1 -->
+  <g stroke="#2b6cb0" stroke-width="1.3" fill="none">
+    <path d="M169 156 L58 202"  marker-end="url(#ar18)"/>
+    <path d="M227 156 L116 202" marker-end="url(#ar18)"/>
+  </g>
+  <!-- Row2: 2 boxes -->
+  <g fill="#eef6ff" stroke="#2b6cb0" font-family="monospace" font-size="13">
+    <rect x="30" y="205" width="46" height="30"/><text x="53"  y="225" text-anchor="middle" fill="#1a4a7a">20</text>
+    <rect x="88" y="205" width="46" height="30"/><text x="111" y="225" text-anchor="middle" fill="#1a4a7a">5</text>
+  </g>
+  <text x="170" y="225" font-size="11" fill="#6b7280">← 第 2 步 stride=2：2 个线程</text>
+  <!-- Step3 arrow -->
+  <g stroke="#2b6cb0" stroke-width="1.3" fill="none">
+    <path d="M111 236 L58 282" marker-end="url(#ar18)"/>
+  </g>
+  <!-- Row3: 1 box -->
+  <g fill="#dcedff" stroke="#2b6cb0" stroke-width="2" font-family="monospace" font-size="14">
+    <rect x="30" y="285" width="46" height="30"/><text x="53" y="306" text-anchor="middle" fill="#1a4a7a" font-weight="bold">25</text>
+  </g>
+  <text x="100" y="305" font-size="11" fill="#6b7280">← 第 3 步 stride=1：1 个线程 → 总和 = 25</text>
+</svg>
+<div class="caption">图 18-1　顺序寻址的树形归约：stride 从 4 减半到 1，每一步"前半段 += 后半段"，活跃线程数 4→2→1；log₂8=3 步就把 8 个数求成一个和</div>
+</div><h3>在一个 block 里做归约</h3>
+<p>一个 block 里的线程能共享 shared memory、能用 <code>__syncthreads()</code> 互相等待（第 8 章）——这正好是树形归约需要的两样东西。标准套路分三步：</p>
+<ol>
+<li><strong>搬进 shared memory</strong>：每个线程从全局内存读一个元素，放进 block 的 shared memory 数组，<code>__syncthreads()</code> 确保全搬完。</li>
+<li><strong>树形折叠</strong>：按上面的顺序寻址循环，每一层折叠后 <code>__syncthreads()</code>，等这一层所有线程都写完，下一层才能读。</li>
+<li><strong>收尾</strong>：折到只剩一个 warp（32 个线程）时，warp 内的线程本就锁步执行，不再需要 <code>__syncthreads()</code>——改用更快的 <strong>warp shuffle</strong>（第 8 章的 <code>__shfl_down_sync</code>）在寄存器里直接交换、相加，省掉最后几轮的 shared memory 往返和同步。</li>
+</ol>
+<div class="warn">
+<strong>为什么最后一个 warp 要特殊处理</strong>
+<code>__syncthreads()</code> 是整个 block 的 barrier，不便宜。当活跃线程降到 32 个以内时，它们全在同一个 warp 里、天然锁步，继续调用 <code>__syncthreads()</code> 纯属浪费。warp shuffle 让线程直接读另一个线程寄存器里的值，无需经过 shared memory，也无需同步——这是归约 kernel 里最经典的一处优化。但要记住：shuffle 只在<strong>同一个 warp 内</strong>有效，跨 warp 仍得靠 shared memory + <code>__syncthreads()</code>。
+</div><h3>合并 block 之间的结果</h3>
+<p>一个 block 只能归约它自己那部分数据，得到一个<strong>部分和（partial sum）</strong>。一百万个元素、每 block 处理 256 个，就有约 4096 个部分和要再合成一个总和。跨 block 无法用 <code>__syncthreads()</code>（第 4 章讲过，block 之间不能安全互等），有两条常见路子：</p>
+<ul>
+<li><strong>第二个 kernel</strong>：第一个 kernel 把每个 block 的部分和写进一个长度为 <code>blocks</code> 的数组，再启动第二个 kernel 归约这个短数组。两次启动之间是天然的全局同步点。</li>
+<li><strong>atomicAdd 汇总</strong>：每个 block 算完后，用一次原子加（第 8 章）把自己的部分和累加到一个全局累加器上。省了第二个 kernel，代价是几千次原子加的争用——但每个 block 只加一次（不是每个线程都加），争用可以接受。本章的完整程序用的就是这条路。</li>
+</ul>
+<h2>扫描：比它看起来难得多的原语</h2>
+<p>第二个原语是<strong>扫描（scan）</strong>，也叫<strong>前缀和（prefix sum）</strong>。给定数组 <code>[a0, a1, a2, ...]</code>，扫描输出<strong>每个位置之前所有元素的累积</strong>。它分两种：</p>
+<ul>
+<li><strong>包含式（inclusive）</strong>：<code>out[i] = a0 + a1 + ... + ai</code>（含自己）。</li>
+<li><strong>排他式（exclusive）</strong>：<code>out[i] = a0 + ... + a(i-1)</code>（不含自己，第 0 位是单位元 0）。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">包含式扫描：每个输出 = 到它为止所有输入之和</text>
+  <defs>
+    <marker id="ar18b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+  <text x="20" y="62" font-size="11" fill="#6b7280">输入</text>
+  <g fill="#eef6ff" stroke="#2b6cb0" font-family="monospace" font-size="13">
+    <rect x="30"  y="45" width="46" height="30"/><text x="53"  y="65" text-anchor="middle" fill="#1a4a7a">3</text>
+    <rect x="88"  y="45" width="46" height="30"/><text x="111" y="65" text-anchor="middle" fill="#1a4a7a">1</text>
+    <rect x="146" y="45" width="46" height="30"/><text x="169" y="65" text-anchor="middle" fill="#1a4a7a">7</text>
+    <rect x="204" y="45" width="46" height="30"/><text x="227" y="65" text-anchor="middle" fill="#1a4a7a">0</text>
+    <rect x="262" y="45" width="46" height="30"/><text x="285" y="65" text-anchor="middle" fill="#1a4a7a">4</text>
+    <rect x="320" y="45" width="46" height="30"/><text x="343" y="65" text-anchor="middle" fill="#1a4a7a">1</text>
+    <rect x="378" y="45" width="46" height="30"/><text x="401" y="65" text-anchor="middle" fill="#1a4a7a">6</text>
+    <rect x="436" y="45" width="46" height="30"/><text x="459" y="65" text-anchor="middle" fill="#1a4a7a">3</text>
+  </g>
+  <!-- 大括号覆盖输入 0..4 -->
+  <path d="M30 82 L30 92 L285 92 L285 82" stroke="#e06a3b" fill="none" stroke-width="1.3"/>
+  <path d="M157 92 L157 100" stroke="#e06a3b" stroke-width="1.3"/>
+  <text x="157" y="114" text-anchor="middle" font-size="11" fill="#e06a3b">前 5 个相加 3+1+7+0+4 = 15</text>
+  <path d="M157 118 L283 168" stroke="#e06a3b" stroke-width="1.3" fill="none" marker-end="url(#ar18b)"/>
+  <text x="20" y="187" font-size="11" fill="#6b7280">输出</text>
+  <g fill="#f0fdf4" stroke="#3f9b5c" font-family="monospace" font-size="13">
+    <rect x="30"  y="170" width="46" height="30"/><text x="53"  y="190" text-anchor="middle" fill="#2f7a45">3</text>
+    <rect x="88"  y="170" width="46" height="30"/><text x="111" y="190" text-anchor="middle" fill="#2f7a45">4</text>
+    <rect x="146" y="170" width="46" height="30"/><text x="169" y="190" text-anchor="middle" fill="#2f7a45">11</text>
+    <rect x="204" y="170" width="46" height="30"/><text x="227" y="190" text-anchor="middle" fill="#2f7a45">11</text>
+    <rect x="262" y="170" width="46" height="30" fill="#dff5e6" stroke-width="2"/><text x="285" y="190" text-anchor="middle" fill="#2f7a45" font-weight="bold">15</text>
+    <rect x="320" y="170" width="46" height="30"/><text x="343" y="190" text-anchor="middle" fill="#2f7a45">16</text>
+    <rect x="378" y="170" width="46" height="30"/><text x="401" y="190" text-anchor="middle" fill="#2f7a45">22</text>
+    <rect x="436" y="170" width="46" height="30"/><text x="459" y="190" text-anchor="middle" fill="#2f7a45">25</text>
+  </g>
+  <text x="280" y="232" text-anchor="middle" font-size="11" fill="#6b7280">最后一个输出（25）正好是全部元素之和——扫描"顺手"就把归约也算了</text>
+</svg>
+<div class="caption">图 18-2　包含式扫描：out[i] 是输入前 i+1 项之和。图中 out[4]=15=3+1+7+0+4；最右端 25 就是整个数组的总和</div>
+</div><p>扫描比归约棘手，因为它的<strong>每个输出都不同</strong>——归约只要一个总和，扫描要 <code>n</code> 个各不相同的累积值。朴素串行版还是一个循环：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">out[0] = a[0];
+for (int i = 1; i &lt; n; ++i)
+    out[i] = out[i-1] + a[i];   // 又是一条 n 步的依赖链</code></pre>
+</div><p>看起来彻头彻尾是串行的——<code>out[i]</code> 明明白白依赖 <code>out[i-1]</code>。但和归约一样，靠结合律，它照样能拆成 <code>log N</code> 步的并行。</p>
+<h3>两种并行扫描</h3>
+<p><strong>Hillis-Steele 扫描（step-efficient）<strong>最直观：第 <code>d</code> 步（<code>d = 1, 2, 4, ...</code>）让每个位置加上距它 <code>d</code> 格的左邻 <code>x[i] += x[i-d]</code>。<code>log₂n</code> 步后每个位置就累积了它左边所有元素。本章的模拟器演示的就是它。它步数少（<code>log n</code> 步），但每步几乎所有线程都在加，总加法次数是 <code>O(n log n)</code>——比串行的 <code>O(n)</code> 还多，属于</strong>不做无用功但做了重复功</strong>。</p>
+<p>**Blelloch 扫描（work-efficient）**更省，总加法次数降到 <code>O(n)</code>，代价是两趟遍历树：</p>
+<ul>
+<li><strong>上扫（up-sweep / reduce）</strong>：自底向上做一次树形归约，顺便在树的内部节点上留下部分和。走完根节点拿到总和。</li>
+<li><strong>下扫（down-sweep）</strong>：把根置为单位元（0），自顶向下走，每个节点把自己的值传给右孩子、把&quot;左孩子旧值 + 自己&quot;传给……最终每个叶子恰好得到它左边所有元素之和（排他式扫描）。</li>
+</ul>
+<p>上扫下扫各 <code>log n</code> 步、总功 <code>O(n)</code>，是 GPU 库（如 CUB、Thrust）里大规模扫描的底子。概念上你只需记住一句：<strong>扫描 = 一趟自底向上的归约 + 一趟自顶向下的分发</strong>。</p>
+<div class="note">
+<strong>为什么值得为扫描费这么大劲</strong>
+扫描是一大堆算法的地基原语。<strong>直方图</strong>用它把各桶计数变成桶的起始偏移；<strong>基数排序</strong>用它算出每个元素该落到的位置；<strong>流压缩（stream compaction）</strong>——"把数组里满足条件的元素紧凑地挑出来"——本质就是对一个 0/1 标记数组做排他式扫描，扫描结果直接告诉每个被保留元素该写到输出的第几格。你会发现，很多"看起来必须串行"的数据整理，底层都是一次扫描。归约和扫描就是并行算法的加减法，值得吃透。
+</div><h2>动手：树形归约模拟器</h2>
+<p>下面这段程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它用纯 Python 忠实复刻图 18-1 的顺序寻址归约：每一步把前半段加上后半段，打印数组状态，并报告本步有几个线程在干活。你会看到活跃线程数 <code>4 → 2 → 1</code> 一路减半，<code>log₂8 = 3</code> 步得到总和。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A0%91%E5%BD%A2%E5%BD%92%E7%BA%A6%E6%A8%A1%E6%8B%9F%E5%99%A8%EF%BC%9A%E6%8A%8A%208%20%E4%B8%AA%E6%95%B0%E6%B1%82%E5%92%8C%EF%BC%8C%E7%9C%8B%E6%AF%8F%E4%B8%80%E6%AD%A5%E6%B4%BB%E8%B7%83%E7%BA%BF%E7%A8%8B%E6%95%B0%E5%A6%82%E4%BD%95%E5%87%8F%E5%8D%8A%0Adata%20%3D%20%5B3%2C%201%2C%207%2C%200%2C%204%2C%201%2C%206%2C%203%5D%0An%20%3D%20len(data)%0Aa%20%3D%20data%5B%3A%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%A4%8D%E5%88%B6%E4%B8%80%E4%BB%BD%EF%BC%8C%E5%B0%B1%E5%9C%B0%E5%BD%92%E7%BA%A6%0Aprint(f%22%E5%88%9D%E5%A7%8B%E6%95%B0%E7%BB%84%EF%BC%88%7Bn%7D%20%E4%B8%AA%EF%BC%89%EF%BC%9A%7Ba%7D%20%20%20%EF%BC%88CPU%20%E4%B8%B2%E8%A1%8C%E6%B1%82%E5%92%8C%20%3D%20%7Bsum(data)%7D%EF%BC%89%22)%0A%0Astep%20%3D%200%0Astride%20%3D%20n%20%2F%2F%202%0Awhile%20stride%20%3E%3D%201%3A%0A%20%20%20%20step%20%2B%3D%201%0A%20%20%20%20active%20%3D%20stride%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%AC%E6%AD%A5%E6%B4%BB%E8%B7%83%E7%BA%BF%E7%A8%8B%E6%95%B0%20%3D%20stride%0A%20%20%20%20for%20tid%20in%20range(stride)%3A%20%20%20%20%20%20%23%20%E5%8F%AA%E6%9C%89%20tid%20%3C%20stride%20%E7%9A%84%E7%BA%BF%E7%A8%8B%E6%B4%BB%E8%B7%83%0A%20%20%20%20%20%20%20%20a%5Btid%5D%20%2B%3D%20a%5Btid%20%2B%20stride%5D%20%20%23%20%E5%89%8D%E5%8D%8A%E6%AE%B5%20%2B%3D%20%E5%90%8E%E5%8D%8A%E6%AE%B5%0A%20%20%20%20print(f%22%E7%AC%AC%20%7Bstep%7D%20%E6%AD%A5%EF%BC%9Astride%3D%7Bstride%7D%EF%BC%8C%7Bactive%7D%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E6%B4%BB%E8%B7%83%20-%3E%20%7Ba%7D%22)%0A%20%20%20%20stride%20%2F%2F%3D%202%0A%0Aprint(f%22%5Cn%E5%BD%92%E7%BA%A6%E5%AE%8C%E6%88%90%EF%BC%8Ca%5B0%5D%20%3D%20%7Ba%5B0%5D%7D%20%20%EF%BC%88%E4%B8%8E%20CPU%20%E6%B1%82%E5%92%8C%E4%B8%80%E8%87%B4%EF%BC%9F%7Ba%5B0%5D%20%3D%3D%20sum(data)%7D%EF%BC%89%22)%0Aprint(f%22%7Bn%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%E5%8F%AA%E7%94%A8%E4%BA%86%20%7Bstep%7D%20%E6%AD%A5%20%3D%20log2(%7Bn%7D)%EF%BC%8C%E8%80%8C%E4%B8%B2%E8%A1%8C%E9%9C%80%E8%A6%81%20%7Bn-1%7D%20%E6%AC%A1%E5%8A%A0%E6%B3%95%22)"># 树形归约模拟器：把 8 个数求和，看每一步活跃线程数如何减半
+data = [3, 1, 7, 0, 4, 1, 6, 3]
+n = len(data)
+a = data[:]                        # 复制一份，就地归约
+print(f"初始数组（{n} 个）：{a}   （CPU 串行求和 = {sum(data)}）")
+
+step = 0
+stride = n // 2
+while stride &gt;= 1:
+    step += 1
+    active = stride                # 本步活跃线程数 = stride
+    for tid in range(stride):      # 只有 tid &lt; stride 的线程活跃
+        a[tid] += a[tid + stride]  # 前半段 += 后半段
+    print(f"第 {step} 步：stride={stride}，{active} 个线程活跃 -&gt; {a}")
+    stride //= 2
+
+print(f"\n归约完成，a[0] = {a[0]}  （与 CPU 求和一致？{a[0] == sum(data)}）")
+print(f"{n} 个元素只用了 {step} 步 = log2({n})，而串行需要 {n-1} 次加法")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">初始数组（8 个）：[3, 1, 7, 0, 4, 1, 6, 3]   （CPU 串行求和 = 25）
+第 1 步：stride=4，4 个线程活跃 -&gt; [7, 2, 13, 3, 4, 1, 6, 3]
+第 2 步：stride=2，2 个线程活跃 -&gt; [20, 5, 13, 3, 4, 1, 6, 3]
+第 3 步：stride=1，1 个线程活跃 -&gt; [25, 5, 13, 3, 4, 1, 6, 3]
+
+归约完成，a[0] = 25  （与 CPU 求和一致？True）
+8 个元素只用了 3 步 = log2(8)，而串行需要 7 次加法</code></pre>
+</div><p>注意归约后<strong>数组尾部是&quot;垃圾&quot;</strong>——只有 <code>a[0]</code> 是有效结果，<code>a[1..]</code> 留着中间值没人再管。这在 GPU 上完全 OK：block 只关心最后写出 <code>sdata[0]</code>。请动手改：把 <code>data</code> 换成 16 个数（比如 <code>list(range(16))</code>），再运行——你会看到步数变成 <code>log₂16 = 4</code>，而串行要 15 步。数据翻倍，串行步数翻倍，树形归约只多一步，这就是对数的威力。</p>
+<h2>动手：Hillis-Steele 扫描模拟器</h2>
+<p>再看扫描。下面这段程序<strong>同样能在浏览器里跑</strong>，实现图 18-2 的包含式扫描。它每一步让每个位置加上距它 <code>d</code> 格的左邻（<code>d = 1, 2, 4</code>），打印每步后的数组，最后和 CPU 串行前缀和核对。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20Hillis-Steele%20%E5%8C%85%E5%90%AB%E5%BC%8F%E6%89%AB%E6%8F%8F%EF%BC%9A%E6%AF%8F%E4%B8%AA%E8%BE%93%E5%87%BA%20%3D%20%E5%88%B0%E5%AE%83%E4%B8%BA%E6%AD%A2%E6%89%80%E6%9C%89%E8%BE%93%E5%85%A5%E4%B9%8B%E5%92%8C%0Adata%20%3D%20%5B3%2C%201%2C%207%2C%200%2C%204%2C%201%2C%206%2C%203%5D%0An%20%3D%20len(data)%0Ax%20%3D%20data%5B%3A%5D%0Aprint(f%22%E8%BE%93%E5%85%A5%EF%BC%9A%20%20%20%20%20%20%20%20%20%20%7Bx%7D%22)%0A%0Astep%20%3D%200%0Ad%20%3D%201%0Awhile%20d%20%3C%20n%3A%0A%20%20%20%20step%20%2B%3D%201%0A%20%20%20%20old%20%3D%20x%5B%3A%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%88%E8%AF%BB%E6%97%A7%E5%80%BC%EF%BC%88%E6%A8%A1%E6%8B%9F%20double%20buffering%EF%BC%8C%E9%81%BF%E5%85%8D%E8%AF%BB%E5%88%B0%E6%9C%AC%E6%AD%A5%E5%88%9A%E5%86%99%E7%9A%84%E5%80%BC%EF%BC%89%0A%20%20%20%20for%20i%20in%20range(n)%3A%0A%20%20%20%20%20%20%20%20if%20i%20%3E%3D%20d%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20x%5Bi%5D%20%3D%20old%5Bi%5D%20%2B%20old%5Bi%20-%20d%5D%20%20%23%20%E5%8A%A0%E4%B8%8A%E8%B7%9D%E7%A6%BB%20d%20%E7%9A%84%E5%B7%A6%E9%82%BB%0A%20%20%20%20print(f%22%E7%AC%AC%20%7Bstep%7D%20%E6%AD%A5%20d%3D%7Bd%7D%EF%BC%9A%20%20%20%20%20%20%7Bx%7D%22)%0A%20%20%20%20d%20*%3D%202%0A%0A%23%20%E7%94%A8%20CPU%20%E4%B8%B2%E8%A1%8C%E5%89%8D%E7%BC%80%E5%92%8C%E6%A0%B8%E5%AF%B9%0Aref%2C%20acc%20%3D%20%5B%5D%2C%200%0Afor%20v%20in%20data%3A%0A%20%20%20%20acc%20%2B%3D%20v%0A%20%20%20%20ref.append(acc)%0Aprint(f%22%5Cn%E6%9C%80%E7%BB%88%EF%BC%88%E5%8C%85%E5%90%AB%E5%BC%8F%E6%89%AB%E6%8F%8F%EF%BC%89%EF%BC%9A%7Bx%7D%22)%0Aprint(f%22CPU%20%E4%B8%B2%E8%A1%8C%E5%89%8D%E7%BC%80%E5%92%8C%EF%BC%9A%20%20%20%20%7Bref%7D%22)%0Aprint(f%22%E4%B8%80%E8%87%B4%EF%BC%9F%7Bx%20%3D%3D%20ref%7D%EF%BC%8C%E5%85%B1%20%7Bstep%7D%20%E6%AD%A5%20%3D%20log2(%7Bn%7D)%22)"># Hillis-Steele 包含式扫描：每个输出 = 到它为止所有输入之和
+data = [3, 1, 7, 0, 4, 1, 6, 3]
+n = len(data)
+x = data[:]
+print(f"输入：          {x}")
+
+step = 0
+d = 1
+while d &lt; n:
+    step += 1
+    old = x[:]                          # 先读旧值（模拟 double buffering，避免读到本步刚写的值）
+    for i in range(n):
+        if i &gt;= d:
+            x[i] = old[i] + old[i - d]  # 加上距离 d 的左邻
+    print(f"第 {step} 步 d={d}：      {x}")
+    d *= 2
+
+# 用 CPU 串行前缀和核对
+ref, acc = [], 0
+for v in data:
+    acc += v
+    ref.append(acc)
+print(f"\n最终（包含式扫描）：{x}")
+print(f"CPU 串行前缀和：    {ref}")
+print(f"一致？{x == ref}，共 {step} 步 = log2({n})")</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">输入：          [3, 1, 7, 0, 4, 1, 6, 3]
+第 1 步 d=1：      [3, 4, 8, 7, 4, 5, 7, 9]
+第 2 步 d=2：      [3, 4, 11, 11, 12, 12, 11, 14]
+第 3 步 d=4：      [3, 4, 11, 11, 15, 16, 22, 25]
+
+最终（包含式扫描）：[3, 4, 11, 11, 15, 16, 22, 25]
+CPU 串行前缀和：    [3, 4, 11, 11, 15, 16, 22, 25]
+一致？True，共 3 步 = log2(8)</code></pre>
+</div><p>注意那个 <code>old = x[:]</code>：扫描里每个位置要读的是<strong>上一步的值</strong>，如果就地边读边写，会读到本步刚被别的位置改过的数——GPU 上这对应&quot;双缓冲（double buffering）&quot;，用两块 shared memory 轮流当读/写缓冲，或在读写之间插 <code>__syncthreads()</code>。请动手改：把 <code>old = x[:]</code> 删掉、循环里直接用 <code>x</code> 代替 <code>old</code>，再运行——你会看到结果<strong>错了</strong>，因为破坏了&quot;读旧值&quot;的约束。这正是并行扫描最容易踩的坑。</p>
+<h2>动手：一个完整的 CUDA 求和归约程序</h2>
+<p>把上面的思路落地成一个<strong>完整、可编译</strong>的 <code>.cu</code> 程序：每个 block 用 shared memory + 树形归约把自己那段求成部分和，最后一个 warp 用 shuffle 收尾，再用 <code>atomicAdd</code> 把各 block 的部分和汇总到全局累加器。程序对全 1 数组求和（理论和 = <code>n</code>），与 CPU 结果核对后打印 <code>OK</code> 和总和。点代码块的 <strong>🔗 在 Compiler Explorer 打开</strong> 可看 PTX；本地有 GPU 就用下面的命令编译运行。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y21hdGg%2BXG4jaW5jbHVkZSA8Y3VkYV9ydW50aW1lLmg%2BXG5cbi8vIOWdl%2Be6p%2BaxguWSjOW9kue6pu%2B8mnNoYXJlZCBtZW1vcnkgKyDmoJHlvaLmipjlj6AgKyDmnIDlkI7kuIDkuKogd2FycCDnlKggc2h1ZmZsZSDmlLblsL5cbl9fZ2xvYmFsX18gdm9pZCByZWR1Y2Vfc3VtKGNvbnN0IGZsb2F0KiBpbiwgZmxvYXQqIG91dCwgaW50IG4pIHtcbiAgICBleHRlcm4gX19zaGFyZWRfXyBmbG9hdCBzZGF0YVtdO1xuICAgIGludCB0aWQgPSB0aHJlYWRJZHgueDtcbiAgICBpbnQgaSAgID0gYmxvY2tJZHgueCAqIGJsb2NrRGltLnggKyB0aHJlYWRJZHgueDtcblxuICAgIC8vIDEpIOavj%2BS4que6v%2Beoi%2BaQrOS4gOS4quWFg%2Be0oOi%2FmyBzaGFyZWQgbWVtb3J577yM6LaK55WM55qE5aGr5Yqg5rOV5Y2V5L2N5YWDIDBcbiAgICBzZGF0YVt0aWRdID0gKGkgPCBuKSA%2FIGluW2ldIDogMC4wZjtcbiAgICBfX3N5bmN0aHJlYWRzKCk7XG5cbiAgICAvLyAyKSDpobrluo%2Flr7vlnYDmoJHlvaLlvZLnuqbvvJrmtLvot4Pnur%2FnqIsgdGlkPHN0cmlkZe%2B8jOWJjeWNiuautSArPSDlkI7ljYrmrrXvvIznm7TliLDliankuIDkuKogd2FycFxuICAgIGZvciAoaW50IHN0cmlkZSA9IGJsb2NrRGltLnggLyAyOyBzdHJpZGUgPiAzMjsgc3RyaWRlID4%2BPSAxKSB7XG4gICAgICAgIGlmICh0aWQgPCBzdHJpZGUpIHNkYXRhW3RpZF0gKz0gc2RhdGFbdGlkICsgc3RyaWRlXTtcbiAgICAgICAgX19zeW5jdGhyZWFkcygpOyAgICAgICAgICAvLyDnrYnov5nkuIDlsYLlhpnlrozvvIzkuIvkuIDlsYLmiY3og73or7tcbiAgICB9XG5cbiAgICAvLyAzKSDmnIDlkI7kuIDkuKogd2FycO%2B8iDMyIOe6v%2Beoi%2B%2B8ieWkqeeEtumUgeatpe%2B8mueUqCBzaHVmZmxlIOaUtuWwvu%2B8jOaXoOmcgCBfX3N5bmN0aHJlYWRzXG4gICAgaWYgKHRpZCA8IDMyKSB7XG4gICAgICAgIGZsb2F0IHYgPSBzZGF0YVt0aWRdICsgc2RhdGFbdGlkICsgMzJdOyAgICAgICAgLy8g5YWI5oqKIDY0IOS4quW5tuaIkCAzMiDkuKpcbiAgICAgICAgZm9yIChpbnQgb2Zmc2V0ID0gMTY7IG9mZnNldCA%2BIDA7IG9mZnNldCA%2BPj0gMSkgLy8gMzLihpIxNuKGkjjihpI04oaSMuKGkjFcbiAgICAgICAgICAgIHYgKz0gX19zaGZsX2Rvd25fc3luYygweGZmZmZmZmZmLCB2LCBvZmZzZXQpO1xuICAgICAgICAvLyA0KSDmr4%2FkuKogYmxvY2sg5Y%2Bq55SxIDAg5Y%2B357q%2F56iL5YGa5LiA5qyhIGF0b21pY0FkZO%2B8jOaKiumDqOWIhuWSjOaxh%2BaAu%2BWIsOWFqOWxgFxuICAgICAgICBpZiAodGlkID09IDApIGF0b21pY0FkZChvdXQsIHYpO1xuICAgIH1cbn1cblxuaW50IG1haW4oKSB7XG4gICAgY29uc3QgaW50IG4gPSAxIDw8IDIwOyAgICAgICAgICAgICAgICAgLy8gMSwwNDgsNTc2IOS4quWFg%2Be0oFxuICAgIGNvbnN0IGludCBieXRlcyA9IG4gKiBzaXplb2YoZmxvYXQpO1xuXG4gICAgZmxvYXQqIGhfaW4gPSAoZmxvYXQqKW1hbGxvYyhieXRlcyk7XG4gICAgZG91YmxlIGNwdV9zdW0gPSAwLjA7XG4gICAgZm9yIChpbnQgaSA9IDA7IGkgPCBuOyArK2kpIHtcbiAgICAgICAgaF9pbltpXSA9IDEuMGY7ICAgICAgICAgICAgICAgICAgICAvLyDlhaggMe%2B8jOeQhuiuuuaAu%2BWSjCA9IG5cbiAgICAgICAgY3B1X3N1bSArPSBoX2luW2ldO1xuICAgIH1cblxuICAgIGZsb2F0ICpkX2luLCAqZF9vdXQ7XG4gICAgY3VkYU1hbGxvYygmZF9pbiwgYnl0ZXMpO1xuICAgIGN1ZGFNYWxsb2MoJmRfb3V0LCBzaXplb2YoZmxvYXQpKTtcbiAgICBjdWRhTWVtY3B5KGRfaW4sIGhfaW4sIGJ5dGVzLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcbiAgICBjdWRhTWVtc2V0KGRfb3V0LCAwLCBzaXplb2YoZmxvYXQpKTsgICAvLyDlhajlsYDntK%2FliqDlmajmuIXpm7ZcblxuICAgIGludCB0aHJlYWRzID0gMjU2OyAgICAgICAgICAgICAgICAgICAgIC8vIDMyIOeahOWAjeaVsOOAgeS4lCA%2BPSA2NO%2B8iOaUtuWwvuimgeeUqCB0aWQrMzLvvIlcbiAgICBpbnQgYmxvY2tzICA9IChuICsgdGhyZWFkcyAtIDEpIC8gdGhyZWFkcztcbiAgICBzaXplX3Qgc2htZW0gPSB0aHJlYWRzICogc2l6ZW9mKGZsb2F0KTtcbiAgICByZWR1Y2Vfc3VtPDw8YmxvY2tzLCB0aHJlYWRzLCBzaG1lbT4%2BPihkX2luLCBkX291dCwgbik7XG5cbiAgICBmbG9hdCBncHVfc3VtID0gMC4wZjtcbiAgICBjdWRhTWVtY3B5KCZncHVfc3VtLCBkX291dCwgc2l6ZW9mKGZsb2F0KSwgY3VkYU1lbWNweURldmljZVRvSG9zdCk7XG5cbiAgICBwcmludGYoXCJDUFUg5rGC5ZKMID0gJS4wZlxcblwiLCBjcHVfc3VtKTtcbiAgICBwcmludGYoXCJHUFUg5rGC5ZKMID0gJS4wZlxcblwiLCBncHVfc3VtKTtcbiAgICBwcmludGYoXCIlc1xcblwiLCAoZmFicyhncHVfc3VtIC0gKGZsb2F0KWNwdV9zdW0pIDwgMWUtMykgPyBcIk9LXCIgOiBcIkZBSUxFRFwiKTtcblxuICAgIGN1ZGFGcmVlKGRfaW4pOyBjdWRhRnJlZShkX291dCk7IGZyZWUoaF9pbik7XG4gICAgcmV0dXJuIDA7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im52Y2MxMjkiLCJvcHRpb25zIjoiLXN0ZD1jKysyMCAtTzMgLS1ncHUtYXJjaGl0ZWN0dXJlPXNtXzkwIC1wdHgifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cmath&gt;
+#include &lt;cuda_runtime.h&gt;
+
+// 块级求和归约：shared memory + 树形折叠 + 最后一个 warp 用 shuffle 收尾
+__global__ void reduce_sum(const float* in, float* out, int n) {
+    extern __shared__ float sdata[];
+    int tid = threadIdx.x;
+    int i   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // 1) 每个线程搬一个元素进 shared memory，越界的填加法单位元 0
+    sdata[tid] = (i &lt; n) ? in[i] : 0.0f;
+    __syncthreads();
+
+    // 2) 顺序寻址树形归约：活跃线程 tid&lt;stride，前半段 += 后半段，直到剩一个 warp
+    for (int stride = blockDim.x / 2; stride &gt; 32; stride &gt;&gt;= 1) {
+        if (tid &lt; stride) sdata[tid] += sdata[tid + stride];
+        __syncthreads();          // 等这一层写完，下一层才能读
+    }
+
+    // 3) 最后一个 warp（32 线程）天然锁步：用 shuffle 收尾，无需 __syncthreads
+    if (tid &lt; 32) {
+        float v = sdata[tid] + sdata[tid + 32];        // 先把 64 个并成 32 个
+        for (int offset = 16; offset &gt; 0; offset &gt;&gt;= 1) // 32→16→8→4→2→1
+            v += __shfl_down_sync(0xffffffff, v, offset);
+        // 4) 每个 block 只由 0 号线程做一次 atomicAdd，把部分和汇总到全局
+        if (tid == 0) atomicAdd(out, v);
+    }
+}
+
+int main() {
+    const int n = 1 &lt;&lt; 20;                 // 1,048,576 个元素
+    const int bytes = n * sizeof(float);
+
+    float* h_in = (float*)malloc(bytes);
+    double cpu_sum = 0.0;
+    for (int i = 0; i &lt; n; ++i) {
+        h_in[i] = 1.0f;                    // 全 1，理论总和 = n
+        cpu_sum += h_in[i];
+    }
+
+    float *d_in, *d_out;
+    cudaMalloc(&amp;d_in, bytes);
+    cudaMalloc(&amp;d_out, sizeof(float));
+    cudaMemcpy(d_in, h_in, bytes, cudaMemcpyHostToDevice);
+    cudaMemset(d_out, 0, sizeof(float));   // 全局累加器清零
+
+    int threads = 256;                     // 32 的倍数、且 &gt;= 64（收尾要用 tid+32）
+    int blocks  = (n + threads - 1) / threads;
+    size_t shmem = threads * sizeof(float);
+    reduce_sum&lt;&lt;&lt;blocks, threads, shmem&gt;&gt;&gt;(d_in, d_out, n);
+
+    float gpu_sum = 0.0f;
+    cudaMemcpy(&amp;gpu_sum, d_out, sizeof(float), cudaMemcpyDeviceToHost);
+
+    printf("CPU 求和 = %.0f\n", cpu_sum);
+    printf("GPU 求和 = %.0f\n", gpu_sum);
+    printf("%s\n", (fabs(gpu_sum - (float)cpu_sum) &lt; 1e-3) ? "OK" : "FAILED");
+
+    cudaFree(d_in); cudaFree(d_out); free(h_in);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc ch18_reduce.cu -o ch18_reduce &amp;&amp; ./ch18_reduce</code></pre>
+</div><p>跑起来会打印：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">CPU 求和 = 1048576
+GPU 求和 = 1048576
+OK</code></pre>
+</div><p>这个 kernel 浓缩了本章和第 8 章的全部要点：shared memory 承载 block 内的树、<code>__syncthreads()</code> 保证每层写完再读、warp shuffle 免掉最后几轮的同步、atomicAdd 把跨 block 的部分和汇合。请动手改：把 <code>reduce_sum</code> 里第 1 步改成 <code>sdata[tid] = (i &lt; n) ? in[i] * in[i] : 0.0f;</code>——你就把&quot;求和&quot;变成了&quot;平方和&quot;，一个字都不用动树形结构。这说明归约的骨架是通用的，换个&quot;每个线程往里放什么&quot;就能算出不同的东西（这也是求 L2 范数、方差的做法）。再试着把 <code>+=</code> 换成 <code>fmaxf(...)</code>、单位元从 0 换成 <code>-INFINITY</code>，你就得到了一个求最大值的归约——第 20 章的 softmax 正需要它。</p>
+<h2>小结与下一步</h2>
+<p>归约和扫描是本书从&quot;每个线程各干各的&quot;迈向&quot;线程协作解决全局问题&quot;的分水岭。它们的共同灵魂是同一句话：<strong>利用结合律，把一条长度 n 的串行依赖链，折叠成一棵深度 log n 的并行树</strong>。</p>
+<p>你现在能用 shared memory + <code>__syncthreads()</code> + warp shuffle 写出一个高效的块级归约，也理解了扫描为什么&quot;看着串行、实则可并行&quot;，以及它是直方图、排序、流压缩这些算法的地基。</p>
+<p>到这里，本书的性能与算法主线（occupancy、Roofline、访存优化、并行原语）就铺完了。下一章我们抬头看看<strong>现代 GPU 硬件</strong>为 AI 时代加了什么新武器：<strong>Tensor Core</strong>（一条指令做一整块矩阵乘）、<strong>异步拷贝与 TMA</strong>（搬数据不挡住计算）、以及<strong>软件流水线</strong>（一边算一边预取下一块）。它们是 FlashAttention、CUTLASS 这些&quot;快得离谱&quot;的库背后的真正引擎——而这也解释了 Triton、CuTe DSL 这些高级 DSL 为何存在：把这些硬件能力用起来，而不必手写 PTX。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>归约（求和/max）和扫描（前缀和）的输出<strong>依赖全部输入</strong>，朴素写法是一条长度 <code>n</code> 的串行依赖链；靠<strong>结合律</strong>能折成深度 <code>log n</code> 的并行树。</li>
+<li><strong>树形归约</strong>每一步活跃线程减半，<code>log₂n</code> 步出结果；<strong>顺序寻址</strong>（stride 从 n/2 减半、前半段+=后半段）能避免 warp 分歧和 bank conflict（第 2、17 章）。</li>
+<li>块级归约三步走：搬进 <strong>shared memory</strong> → 树形折叠（每层 <code>__syncthreads()</code>）→ 最后一个 warp 用 <strong>shuffle</strong> 收尾（第 8 章）；跨 block 用<strong>第二个 kernel</strong> 或 <strong>atomicAdd</strong> 汇总。</li>
+<li><strong>扫描</strong>分包含式/排他式，看着串行实则可并行：<strong>Hillis-Steele</strong>（<code>log n</code> 步、<code>O(n log n)</code> 功）直观；<strong>Blelloch</strong>（上扫+下扫、<code>O(n)</code> 功）更省——记住&quot;扫描 = 自底向上归约 + 自顶向下分发&quot;。</li>
+<li>扫描是直方图、基数排序、流压缩等一大类算法的地基原语；归约换个单位元和运算就能算平方和、最大值（第 20 章 softmax 会用到）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch17.html">← 第 17 章 访存优化：合并、bank conflict 与向量化</a>
+  <a class="nav-next" href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

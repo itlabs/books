@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 章 协作与同步：barrier、shuffle 与原子操作</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li class="active"><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 8 章 协作与同步：barrier、shuffle 与原子操作</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面几章里，线程都在各干各的：一个线程算一个元素，互不打扰。但真实 kernel 里线程常常需要<strong>协作</strong>——一起算一个和、共享一块数据、往同一个地方累加。这一章讲清 GPU 上的三种协作机制，以及一个反直觉的事实：<strong>GPU 上几乎不用锁。</strong></p>
+<p>你会看到 <strong>block 级 barrier</strong>（<code>__syncthreads()</code>）、<strong>warp 级 shuffle</strong>（寄存器直接交换）、以及 <strong>原子操作</strong>（<code>atomicAdd</code>）各自解决什么问题、代价在哪，还会亲手跑两个模拟器：一个让你看到"一个慢线程拖垮整个 block"，一个用 5 步把 32 个数归约成 1 个。</p>
+</div><h2>为什么 GPU 几乎不用锁</h2>
+<p>在 CPU 上，多个线程要更新同一个共享变量时，你的第一反应是加锁：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">std::mutex m;
+long total = 0;
+// 每个线程：
+{
+    std::lock_guard&lt;std::mutex&gt; lk(m);  // 抢锁
+    total += local_sum;                 // 临界区
+}                                       // 出作用域自动解锁</code></pre>
+</div><p>在 8 个线程上，这没问题：抢锁的冲突不多，偶尔等一下。但把这套原封不动搬上 GPU，会立刻崩溃——不是语法错，是<strong>性能灾难</strong>。想想第 1 章的世界观：GPU 上是<strong>成千上万个线程</strong>同时冲向同一把锁。锁的本质是&quot;让临界区串行执行&quot;，于是你几万个线程排成一队，一个接一个进临界区——你精心堆起来的并行度瞬间归零，还不如单核 CPU。</p>
+<p>所以 GPU 的协作哲学是<strong>尽量不串行化</strong>。它给你三件工具，每一件都是为&quot;让尽可能多的线程仍然并行&quot;而设计的：</p>
+<ol>
+<li><strong>block 级 barrier</strong>：不锁数据，而是设一个&quot;集合点&quot;，让一个 block 内的所有线程<strong>等齐</strong>再一起往下走。</li>
+<li><strong>warp 级 shuffle</strong>：让一个 warp 内的 32 个线程<strong>直接交换寄存器</strong>，连内存都不碰，用来做超快的 warp 内归约。</li>
+<li><strong>原子操作</strong>：当实在躲不开&quot;多个线程更新同一个地址&quot;时，用硬件原语一步完成&quot;读-改-写&quot;，不必加锁。</li>
+</ol>
+<p>一句话锚定：<strong>CPU 靠锁保护数据，GPU 靠 barrier 协调节奏、靠 shuffle 交换数据、靠原子操作压缩冲突。</strong> 下面逐一看。</p>
+<h2>机制一：block 级 barrier —— 全体到齐再走</h2>
+<p>barrier（屏障）是一句集合命令：<strong>&quot;这个 block 里的所有线程，都到这一行为止，谁先到谁等着，等全员到齐，再一起继续。&quot;</strong> CUDA 里它叫 <code>__syncthreads()</code>，SYCL 里叫 <code>item.barrier(...)</code>：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：__syncthreads()</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">__shared__ float tile[256];
+tile[threadIdx.x] = in[i];   // 各自往 shared 写
+__syncthreads();             // 等全 block 写完
+float left = tile[threadIdx.x - 1];  // 现在读邻居才安全</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SYCL：item.barrier()</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">auto tile = /* local_accessor */;
+tile[it.get_local_id(0)] = in[i];
+it.barrier(sycl::access::fence_space::local_space);
+float left = tile[it.get_local_id(0) - 1];</code></pre>
+</div></div>
+</div><p>barrier 最典型的用途，正是配合上一章讲的 <strong>shared memory</strong>：一批线程先各自把数据搬进 shared memory，然后必须<strong>等所有线程都搬完</strong>，才能安全地去读别的线程搬来的数据。没有这道 barrier，你就会读到别人还没写入的垃圾值——这是一种数据竞争。barrier 不保护某个变量，它保护的是<strong>时序</strong>：把&quot;写阶段&quot;和&quot;读阶段&quot;隔开。</p>
+<div class="concept">
+<svg viewBox="0 0 560 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">barrier：先到的线程等齐，全员一起放行</text>
+  <!-- barrier 墙 -->
+  <rect x="300" y="40" width="6" height="170" fill="#e06a3b"/>
+  <text x="303" y="228" text-anchor="middle" font-size="11" fill="#e06a3b">barrier（集合点）</text>
+  <!-- 4 个线程，进度不同，虚线表示干等 -->
+  <g font-family="monospace" font-size="11" fill="#2b6cb0">
+    <!-- T0 快 -->
+    <rect x="40" y="50" width="120" height="16" rx="3" fill="#cfe4fb" stroke="#2b6cb0"/>
+    <line x1="160" y1="58" x2="300" y2="58" stroke="#9ca3af" stroke-dasharray="4 3"/>
+    <text x="20" y="62">T0</text>
+    <!-- T1 中 -->
+    <rect x="40" y="88" width="200" height="16" rx="3" fill="#cfe4fb" stroke="#2b6cb0"/>
+    <line x1="240" y1="96" x2="300" y2="96" stroke="#9ca3af" stroke-dasharray="4 3"/>
+    <text x="20" y="100">T1</text>
+    <!-- T2 最慢，决定放行时刻 -->
+    <rect x="40" y="126" width="260" height="16" rx="3" fill="#f6c6b3" stroke="#e06a3b"/>
+    <text x="20" y="138">T2</text>
+    <text x="170" y="138" font-size="10" fill="#a53f1c">最慢的线程</text>
+    <!-- T3 中快 -->
+    <rect x="40" y="164" width="160" height="16" rx="3" fill="#cfe4fb" stroke="#2b6cb0"/>
+    <line x1="200" y1="172" x2="300" y2="172" stroke="#9ca3af" stroke-dasharray="4 3"/>
+    <text x="20" y="176">T3</text>
+  </g>
+  <!-- 放行后一起走 -->
+  <g stroke="#3f9b5c" stroke-width="1.5" fill="none">
+    <path d="M306 58 L360 58" marker-end="url(#a8)"/>
+    <path d="M306 96 L360 96" marker-end="url(#a8)"/>
+    <path d="M306 134 L360 134" marker-end="url(#a8)"/>
+    <path d="M306 172 L360 172" marker-end="url(#a8)"/>
+  </g>
+  <text x="440" y="118" text-anchor="middle" font-size="11" fill="#3f9b5c">全员到齐后</text>
+  <text x="440" y="134" text-anchor="middle" font-size="11" fill="#3f9b5c">同时继续往下</text>
+  <defs>
+    <marker id="a8" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 8-1　barrier 不保护数据，它对齐时序：先到的线程（虚线段）干等，直到最慢的那个也到达，全 block 才一起放行——所以一个慢线程会拖住整块</div>
+</div><p>barrier 有一个必须刻进肌肉记忆的陷阱：<strong><code>__syncthreads()</code> 要求 block 里每一个线程都能执行到它。</strong> 如果你把它写进了一段只有部分线程会进入的分支里，那些没进分支的线程永远到不了这个集合点，而进了分支的线程会永远等它们——整个 block <strong>死锁</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// ❌ 致命错误：把 __syncthreads() 放进了分歧的分支里
+__global__ void deadlock(float* x, int n) {
+    int i = threadIdx.x;
+    if (i &lt; n) {              // 当 n &lt; blockDim.x 时，只有部分线程进来
+        x[i] *= 2.0f;
+        __syncthreads();      // 进来的线程在此等待——但没进来的永远不会到达
+    }                         // → 整个 block 永久卡死
+}
+
+// ✅ 正确：barrier 放在所有线程都会执行到的位置，用别的方式处理边界
+__global__ void ok(float* x, int n) {
+    int i = threadIdx.x;
+    if (i &lt; n) x[i] *= 2.0f;  // 边界检查只包住工作，不包住 barrier
+    __syncthreads();          // 全 block 都会到达
+}</code></pre>
+</div><div class="warn">
+<strong>barrier 的黄金法则：要么全体执行，要么全体不执行</strong>
+<code>__syncthreads()</code> 必须在 block 内所有线程都会到达的控制流里。放进依赖 <code>threadIdx</code> 的 <code>if</code>、放进可能被部分线程提前 <code>return</code> 跳过的位置，都会导致<strong>死锁</strong>——而且它不报错，就是永远挂住。这是新手最常踩的 GPU 坑之一，回顾第 2 章的 warp 分歧：分歧本身只是变慢，但<strong>分歧 + barrier = 死锁</strong>。
+</div><p>图 8-1 还揭示了 barrier 的性能含义：整个 block 的进度由<strong>最慢的那个线程</strong>决定。这正是第 2 章讲 warp 分歧要紧的另一个原因——如果 block 里有个 warp 因为分歧跑得慢，barrier 会让其余所有 warp 陪它一起等。我们用一个能在浏览器里跑的模拟器把这件事量化出来。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20block%20%E7%BA%A7%20barrier%EF%BC%9A%E5%85%88%E5%88%B0%E7%9A%84%E7%BA%BF%E7%A8%8B%E5%B9%B2%E7%AD%89%EF%BC%8C%E5%85%A8%E5%91%98%E5%88%B0%E9%BD%90%E6%89%8D%E4%B8%80%E8%B5%B7%E6%94%BE%E8%A1%8C%0A%23%20arrivals%5Bt%5D%20%3D%20%E7%AC%AC%20t%20%E5%8F%B7%E7%BA%BF%E7%A8%8B%22%E5%88%B0%E8%BE%BE%20barrier%22%E6%89%80%E9%9C%80%E7%9A%84%E6%AD%A5%E6%95%B0%EF%BC%88%E6%A8%A1%E6%8B%9F%E5%90%84%E7%BA%BF%E7%A8%8B%E8%BF%9B%E5%BA%A6%E4%B8%8D%E5%90%8C%EF%BC%89%0Aarrivals%20%3D%20%5B2%2C%205%2C%201%2C%208%2C%203%2C%202%2C%204%2C%201%5D%0A%0Abarrier_time%20%3D%20max(arrivals)%20%20%20%20%20%20%20%20%20%20%23%20barrier%20%E6%94%BE%E8%A1%8C%E6%97%B6%E5%88%BB%20%3D%20%E6%9C%80%E6%85%A2%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%88%B0%E8%BE%BE%E6%97%B6%E5%88%BB%0Aslowest%20%3D%20arrivals.index(barrier_time)%0A%0Aprint(%22%E5%90%84%E7%BA%BF%E7%A8%8B%E5%88%B0%E8%BE%BE%20barrier%20%E7%9A%84%E6%83%85%E5%86%B5%EF%BC%9A%22)%0Afor%20tid%2C%20t%20in%20enumerate(arrivals)%3A%0A%20%20%20%20wait%20%3D%20barrier_time%20-%20t%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%88%B0%E5%BE%97%E6%97%A9%E7%9A%84%EF%BC%8C%E5%B0%B1%E5%BE%97%E5%B9%B2%E7%AD%89%E8%BF%99%E4%B9%88%E5%A4%9A%E6%AD%A5%0A%20%20%20%20bar%20%3D%20%22%E5%B7%B2%E5%88%B0%E8%BE%BE%22%20if%20wait%20%3D%3D%200%20else%20f%22%E5%88%B0%E8%BE%BE%E5%90%8E%E5%B9%B2%E7%AD%89%20%7Bwait%7D%20%E6%AD%A5%22%0A%20%20%20%20print(f%22%20%20%E7%BA%BF%E7%A8%8B%20%7Btid%7D%EF%BC%9A%E7%AC%AC%20%7Bt%7D%20%E6%AD%A5%E5%88%B0%E8%BE%BE%EF%BC%8C%7Bbar%7D%22)%0A%0Atotal_wait%20%3D%20sum(barrier_time%20-%20t%20for%20t%20in%20arrivals)%0Aprint(f%22%5Cnbarrier%20%E6%94%BE%E8%A1%8C%E6%97%B6%E5%88%BB%20%3D%20max(%E5%88%B0%E8%BE%BE%E6%97%B6%E5%88%BB)%20%3D%20%E7%AC%AC%20%7Bbarrier_time%7D%20%E6%AD%A5%22)%0Aprint(f%22%E6%95%B4%E4%B8%AA%20block%20%E7%9A%84%E8%BF%9B%E5%BA%A6%E7%94%B1%E6%9C%80%E6%85%A2%E7%9A%84%E7%BA%BF%E7%A8%8B%20%7Bslowest%7D%20%E5%8F%B7%EF%BC%88%E7%AC%AC%20%7Bbarrier_time%7D%20%E6%AD%A5%EF%BC%89%E5%86%B3%E5%AE%9A%22)%0Aprint(f%22%E5%85%B6%E4%BD%99%E7%BA%BF%E7%A8%8B%E4%B8%80%E5%85%B1%E7%99%BD%E7%AD%89%E4%BA%86%20%7Btotal_wait%7D%20%E6%AD%A5%E2%80%94%E2%80%94%E8%BF%99%E4%BA%9B%E5%B0%B1%E6%98%AF%E8%A2%AB%20barrier%20%E6%B5%AA%E8%B4%B9%E6%8E%89%E7%9A%84%E7%AE%97%E5%8A%9B%22)"># 模拟 block 级 barrier：先到的线程干等，全员到齐才一起放行
+# arrivals[t] = 第 t 号线程"到达 barrier"所需的步数（模拟各线程进度不同）
+arrivals = [2, 5, 1, 8, 3, 2, 4, 1]
+
+barrier_time = max(arrivals)          # barrier 放行时刻 = 最慢线程的到达时刻
+slowest = arrivals.index(barrier_time)
+
+print("各线程到达 barrier 的情况：")
+for tid, t in enumerate(arrivals):
+    wait = barrier_time - t           # 到得早的，就得干等这么多步
+    bar = "已到达" if wait == 0 else f"到达后干等 {wait} 步"
+    print(f"  线程 {tid}：第 {t} 步到达，{bar}")
+
+total_wait = sum(barrier_time - t for t in arrivals)
+print(f"\nbarrier 放行时刻 = max(到达时刻) = 第 {barrier_time} 步")
+print(f"整个 block 的进度由最慢的线程 {slowest} 号（第 {barrier_time} 步）决定")
+print(f"其余线程一共白等了 {total_wait} 步——这些就是被 barrier 浪费掉的算力")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">各线程到达 barrier 的情况：
+  线程 0：第 2 步到达，到达后干等 6 步
+  线程 1：第 5 步到达，到达后干等 3 步
+  线程 2：第 1 步到达，到达后干等 7 步
+  线程 3：第 8 步到达，已到达
+  线程 4：第 3 步到达，到达后干等 5 步
+  线程 5：第 2 步到达，到达后干等 6 步
+  线程 6：第 4 步到达，到达后干等 4 步
+  线程 7：第 1 步到达，到达后干等 7 步
+
+barrier 放行时刻 = max(到达时刻) = 第 8 步
+整个 block 的进度由最慢的线程 3 号（第 8 步）决定
+其余线程一共白等了 38 步——这些就是被 barrier 浪费掉的算力</code></pre>
+</div><p>改一行看看：把 <code>arrivals</code> 里那个 <code>8</code> 改成 <code>2</code>，让所有线程的到达时刻都接近——你会发现放行时刻骤降、白等的步数也大幅减少。这就是 GPU 优化里一条朴素但重要的原则：<strong>让一个 block 里的线程负载尽量均衡</strong>，别让个别线程拖后腿，否则大家都得在 barrier 前陪等。</p>
+<h2>机制二：warp 级 shuffle —— 连内存都不碰的交换</h2>
+<p>barrier 协调的是整个 block，但它有成本：要访问 shared memory、要全员等齐。如果需要协作的线程<strong>恰好在同一个 warp 里</strong>（第 6 章：32 个线程齐步走），有一条更快的路——<strong>shuffle（洗牌）</strong>。</p>
+<p>回忆第 6 章：一个 warp 的 32 个线程本就在同一时刻齐步执行，硬件让它们<strong>天然同步</strong>。shuffle 指令利用这一点，让一个线程<strong>直接读另一个线程寄存器里的值</strong>——不经过 shared memory，不需要 <code>__syncthreads()</code>，一条指令完成。最常用的是 <code>__shfl_down_sync</code>（从&quot;编号更大&quot;的 lane 取值）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// warp 内归约：把一个 warp 的 32 个 val 求和，结果落在 lane 0
+// mask 指定参与的线程，0xffffffff 表示全 32 个都参与
+float val = /* 本线程的值 */;
+for (int offset = 16; offset &gt; 0; offset &gt;&gt;= 1)
+    val += __shfl_down_sync(0xffffffff, val, offset);
+// 现在 lane 0 的 val 就是整个 warp 的和；其余 lane 的 val 是中间结果</code></pre>
+</div><p>这段循环只有 5 次迭代（<code>offset</code> 取 16、8、4、2、1），就能把 32 个值加成 1 个。它是一棵<strong>归约树</strong>：每一步，活跃的 lane 数减半，<code>lane[i]</code> 把 <code>lane[i+offset]</code> 的值加过来。<code>__shfl_xor_sync</code>（按 lane 编号异或取值）则能做&quot;蝶形&quot;交换，让<strong>每个</strong> lane 最后都拿到总和（广播式归约），常用于 warp 内的 all-reduce。</p>
+<div class="concept">
+<svg viewBox="0 0 560 280" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">warp shuffle 归约树：32 个值 → 1 个，只需 5 步</text>
+  <!-- 每一层是一个居中、宽度减半的条，右侧标 offset -->
+  <g stroke="#2b6cb0">
+    <rect x="40"  y="42"  width="480" height="24" rx="3" fill="#eef6ff"/>
+    <rect x="160" y="82"  width="240" height="24" rx="3" fill="#cfe4fb"/>
+    <rect x="220" y="122" width="120" height="24" rx="3" fill="#a8cef0"/>
+    <rect x="250" y="162" width="60"  height="24" rx="3" fill="#7fb2e8"/>
+    <rect x="265" y="202" width="30"  height="24" rx="3" fill="#4f92da"/>
+    <rect x="272" y="242" width="16"  height="24" rx="3" fill="#2b6cb0"/>
+  </g>
+  <g font-size="11" fill="#1e3a5f" text-anchor="middle">
+    <text x="280" y="59">32 个 lane，各持 1 个值</text>
+    <text x="280" y="99" fill="#1e3a5f">16 个 lane 活跃</text>
+    <text x="280" y="139" fill="#1e3a5f">8 个</text>
+    <text x="280" y="179" fill="#fff">4</text>
+    <text x="280" y="219" fill="#fff">2</text>
+  </g>
+  <text x="292" y="259" font-size="10" fill="#fff" text-anchor="middle">1</text>
+  <text x="330" y="259" font-size="11" fill="#3f9b5c">lane 0 = 总和</text>
+  <!-- 右侧 offset 标注 -->
+  <g font-family="monospace" font-size="11" fill="#e06a3b" text-anchor="start">
+    <text x="470" y="79">offset=16</text>
+    <text x="410" y="119">offset=8</text>
+    <text x="350" y="159">offset=4</text>
+    <text x="320" y="199">offset=2</text>
+    <text x="305" y="239">offset=1</text>
+  </g>
+  <!-- 向下的箭头 -->
+  <g stroke="#e06a3b" stroke-width="1.2" fill="none">
+    <path d="M280 66 L280 80" marker-end="url(#a8b)"/>
+    <path d="M280 106 L280 120" marker-end="url(#a8b)"/>
+    <path d="M280 146 L280 160" marker-end="url(#a8b)"/>
+    <path d="M280 186 L280 200" marker-end="url(#a8b)"/>
+    <path d="M280 226 L280 240" marker-end="url(#a8b)"/>
+  </g>
+  <defs>
+    <marker id="a8b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 8-2　shuffle 归约树：每一步 offset 减半，活跃 lane 数从 32→16→8→4→2→1，log₂(32)=5 步归约完成，全程只在寄存器间交换，不碰 shared memory</div>
+</div><div class="keypoint">
+<strong>三种协作，选谁？看协作的范围</strong>
+需要协作的线程在<strong>同一个 warp（32 线程）</strong>内 → 用 <strong>shuffle</strong>，最快，无需 barrier、不碰内存。跨 warp、但在<strong>同一个 block</strong> 内 → 用 <strong>shared memory + barrier</strong>。跨 block（整个 grid 层面）→ 只能用<strong>全局内存 + 原子操作</strong>，因为不同 block 可能在不同 SM 上、彼此无法 barrier。范围越大，协作越贵——这也是高性能归约的通用套路：先 warp 内 shuffle、再 block 内 shared memory、最后 block 间 atomic，一层比一层用得少。
+</div><h2>机制三：原子操作 —— 躲不开的冲突，用硬件压缩</h2>
+<p>有时候多个线程就是得更新<strong>同一个地址</strong>：统计直方图（很多线程往同一个 bin 加一）、求全局的和、往一个共享计数器申请下标。这时既不能各写各的（会互相覆盖），又不该加锁（会串行化)。GPU 的答案是<strong>原子操作（atomic operation）</strong>：硬件保证&quot;读-改-写&quot;三步不被打断，一条指令原子地完成。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">atomicAdd(&amp;counter, 1);        // 原子地 counter += 1，多线程并发也不丢更新
+atomicMax(&amp;hi, val);           // 原子取最大
+int slot = atomicAdd(&amp;next, 1);// 常见技巧：原子地"领一个号"，返回旧值做下标</code></pre>
+</div><p>原子操作不加锁，但<strong>不是免费的</strong>。当很多线程同时对<strong>同一个地址</strong>做原子加，硬件必须把这些更新排队一个个应用——这叫<strong>争用（contention）</strong>。争用的线程越多，越接近串行。所以用原子操作的正确姿势不是&quot;让每个线程都去 atomic 一下全局变量&quot;，而是<strong>先在便宜的层级把冲突压小</strong>：让每个 block 用 shared memory 算出自己的局部和，最后<strong>每个 block 只做一次</strong> <code>atomicAdd</code> 到全局——把几十万次原子操作压缩成几百次。这正是本章动手环节要写的 kernel。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CPU：几个线程，靠锁 / std::atomic</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">std::mutex m;
+long total = 0;
+// 每个线程抢锁进临界区（线程少，冲突可控）
+{ std::lock_guard&lt;std::mutex&gt; lk(m);
+  total += local_sum; }
+
+// 或用 std::atomic 省掉锁
+std::atomic&lt;long&gt; a{0};
+a.fetch_add(local_sum);   // 少数线程偶尔冲突</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">GPU：上万线程，靠 barrier + atomic</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 绝不给几万个线程加锁——会彻底串行化
+__shared__ float partial[256];
+partial[tid] = val;
+__syncthreads();          // 先 block 内归约（不锁）
+// ... 树形归约到 partial[0] ...
+if (tid == 0)
+    atomicAdd(total, partial[0]);  // 每 block 只冲突一次</code></pre>
+</div></div>
+</div><p>区别的根源还是第 1 章那句话：CPU 上线程少，锁的冲突可控；GPU 上线程数以万计，任何&quot;让线程排队&quot;的机制都是性能毒药。所以 GPU 把协作拆成<strong>层级</strong>——warp 内用 shuffle，block 内用 barrier + shared，实在要跨 block 才用原子，且尽量让原子操作的次数降到最低。</p>
+<h2>动手：用 5 步把 32 个数归约成 1 个</h2>
+<p>下面这个模拟器<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它忠实地模拟图 8-2 的 warp shuffle 归约：每一步用 <code>offset</code> 让 <code>lane[i]</code> 加上 <code>lane[i+offset]</code> 的值，<code>offset</code> 从 16 一路减半到 1，打印每一步之后 lane 0 累加了多少。5 步之后，lane 0 就持有全部 32 个值的和。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20%E6%A8%A1%E6%8B%9F%20warp%20shuffle%20%E5%BD%92%E7%BA%A6%EF%BC%9A32%20%E4%B8%AA%E5%80%BC%E5%9C%A8%20log2(32)%3D5%20%E6%AD%A5%E5%86%85%E6%B1%82%E5%92%8C%EF%BC%8C%E7%BB%93%E6%9E%9C%E8%90%BD%E5%9C%A8%20lane%200%0AWARP%20%3D%2032%0Avals%20%3D%20list(range(1%2C%20WARP%20%2B%201))%20%20%20%20%20%23%20%5B1%2C%202%2C%203%2C%20...%2C%2032%5D%0Aexpected%20%3D%20sum(vals)%0Aprint(f%22%E5%88%9D%E5%A7%8B%EF%BC%9A%7BWARP%7D%20%E4%B8%AA%E5%80%BC%20%5B1%2C%202%2C%20...%2C%2032%5D%EF%BC%8C%E7%9B%B4%E6%8E%A5%E6%B1%82%E5%92%8C%E5%BA%94%E4%B8%BA%20%7Bexpected%7D%5Cn%22)%0A%0Alane%20%3D%20vals%5B%3A%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20lane%20%E5%BD%93%E5%89%8D%E6%8C%81%E6%9C%89%E7%9A%84%E5%80%BC%0Aoffset%20%3D%20WARP%20%2F%2F%202%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%AC%AC%E4%B8%80%E6%AD%A5%20offset%20%3D%2016%0Astep%20%3D%201%0Awhile%20offset%20%3E%3D%201%3A%0A%20%20%20%20%23%20__shfl_down_sync%EF%BC%9Alane%5Bi%5D%20%E6%8A%8A%20lane%5Bi%2Boffset%5D%20%E7%9A%84%E5%80%BC%E5%8A%A0%E8%BF%87%E6%9D%A5%EF%BC%88%E5%90%8C%E4%B8%80%E6%97%B6%E5%88%BB%E5%B9%B6%E8%A1%8C%E5%AE%8C%E6%88%90%EF%BC%89%0A%20%20%20%20new%20%3D%20lane%5B%3A%5D%0A%20%20%20%20for%20i%20in%20range(WARP)%3A%0A%20%20%20%20%20%20%20%20if%20i%20%2B%20offset%20%3C%20WARP%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20new%5Bi%5D%20%3D%20lane%5Bi%5D%20%2B%20lane%5Bi%20%2B%20offset%5D%0A%20%20%20%20lane%20%3D%20new%0A%20%20%20%20active%20%3D%20WARP%20%2F%2F%20(2%20**%20step)%20%20%20%20%20%23%20%E6%9C%AC%E6%AD%A5%E8%BF%87%E5%90%8E%E4%BB%8D%22%E6%9C%89%E6%84%8F%E4%B9%89%22%E7%9A%84%E6%B4%BB%E8%B7%83%20lane%20%E6%95%B0%0A%20%20%20%20merged%20%3D%202%20**%20step%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20lane%200%20%E6%AD%A4%E5%88%BB%E5%B7%B2%E7%B4%AF%E5%8A%A0%E4%BA%86%E5%A4%9A%E5%B0%91%E4%B8%AA%E5%8E%9F%E5%A7%8B%E5%80%BC%0A%20%20%20%20print(f%22%E7%AC%AC%20%7Bstep%7D%20%E6%AD%A5%20offset%3D%7Boffset%3A2d%7D%EF%BC%9A%7Bactive%3A2d%7D%20%E4%B8%AA%20lane%20%E6%B4%BB%E8%B7%83%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20f%22lane%200%20%E5%B7%B2%E7%B4%AF%E5%8A%A0%20%7Bmerged%3A2d%7D%20%E4%B8%AA%E5%8E%9F%E5%A7%8B%E5%80%BC%EF%BC%8Clane%5B0%5D%20%3D%20%7Blane%5B0%5D%7D%22)%0A%20%20%20%20offset%20%2F%2F%3D%202%0A%20%20%20%20step%20%2B%3D%201%0A%0Aprint(f%22%5Cn%E5%BD%92%E7%BA%A6%E5%AE%8C%E6%88%90%EF%BC%9Alane%5B0%5D%20%3D%20%7Blane%5B0%5D%7D%EF%BC%8C%E4%B8%8E%E7%9B%B4%E6%8E%A5%E6%B1%82%E5%92%8C%20%7Bexpected%7D%20%E4%B8%80%E8%87%B4%EF%BC%9A%7Blane%5B0%5D%20%3D%3D%20expected%7D%22)"># 模拟 warp shuffle 归约：32 个值在 log2(32)=5 步内求和，结果落在 lane 0
+WARP = 32
+vals = list(range(1, WARP + 1))     # [1, 2, 3, ..., 32]
+expected = sum(vals)
+print(f"初始：{WARP} 个值 [1, 2, ..., 32]，直接求和应为 {expected}\n")
+
+lane = vals[:]                      # 每个 lane 当前持有的值
+offset = WARP // 2                  # 第一步 offset = 16
+step = 1
+while offset &gt;= 1:
+    # __shfl_down_sync：lane[i] 把 lane[i+offset] 的值加过来（同一时刻并行完成）
+    new = lane[:]
+    for i in range(WARP):
+        if i + offset &lt; WARP:
+            new[i] = lane[i] + lane[i + offset]
+    lane = new
+    active = WARP // (2 ** step)     # 本步过后仍"有意义"的活跃 lane 数
+    merged = 2 ** step               # lane 0 此刻已累加了多少个原始值
+    print(f"第 {step} 步 offset={offset:2d}：{active:2d} 个 lane 活跃，"
+          f"lane 0 已累加 {merged:2d} 个原始值，lane[0] = {lane[0]}")
+    offset //= 2
+    step += 1
+
+print(f"\n归约完成：lane[0] = {lane[0]}，与直接求和 {expected} 一致：{lane[0] == expected}")</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">初始：32 个值 [1, 2, ..., 32]，直接求和应为 528
+
+第 1 步 offset=16：16 个 lane 活跃，lane 0 已累加  2 个原始值，lane[0] = 18
+第 2 步 offset= 8： 8 个 lane 活跃，lane 0 已累加  4 个原始值，lane[0] = 52
+第 3 步 offset= 4： 4 个 lane 活跃，lane 0 已累加  8 个原始值，lane[0] = 120
+第 4 步 offset= 2： 2 个 lane 活跃，lane 0 已累加 16 个原始值，lane[0] = 256
+第 5 步 offset= 1： 1 个 lane 活跃，lane 0 已累加 32 个原始值，lane[0] = 528
+
+归约完成：lane[0] = 528，与直接求和 528 一致：True</code></pre>
+</div><p>看那一列 lane 数：32 个值只用 <strong>5 步</strong>（而不是 31 次逐个相加）就归约完了——这就是&quot;树形归约&quot;的威力，也是为什么 GPU 求和、求最大值这类操作都写成这个形状。改一行试试：把 <code>WARP = 32</code> 改成 <code>WARP = 8</code>，你会看到只需 <code>log₂(8)=3</code> 步；这也解释了为什么 warp 大小取 2 的幂——归约树才能干净地对折。</p>
+<h2>把它们组合起来：一个真的求和 kernel</h2>
+<p>现在把三种机制拼成一个完整、可编译的程序：对一个大数组求和。策略正是上面反复强调的<strong>分层压缩冲突</strong>——每个 block 先用 shared memory + <code>__syncthreads()</code> 做树形归约算出自己的局部和，然后<strong>每个 block 只做一次</strong> <code>atomicAdd</code> 累加到全局计数器。几十万个线程，最后只产生几百次原子操作。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3N0ZGxpYj5cbiNpbmNsdWRlIDxjdWRhX3J1bnRpbWUuaD5cblxuLy8g5a%2B55pWw57uE5rGC5ZKM77yaYmxvY2sg5YaFIHNoYXJlZCBtZW1vcnkg5qCR5b2i5b2S57qmICsg5q%2BPIGJsb2NrIOS4gOasoSBhdG9taWNBZGRcbl9fZ2xvYmFsX18gdm9pZCBzdW1fa2VybmVsKGNvbnN0IGZsb2F0KiBpbiwgZmxvYXQqIG91dCwgaW50IG4pIHtcbiAgICBleHRlcm4gX19zaGFyZWRfXyBmbG9hdCBzZGF0YVtdOyAgICAgICAgICAgICAgLy8g5Yqo5oCBIHNoYXJlZCBtZW1vcnnvvIzlpKflsI%2FlnKjlkK%2Fliqjml7bnu5lcbiAgICBpbnQgdGlkID0gdGhyZWFkSWR4Lng7XG4gICAgaW50IGkgICA9IGJsb2NrSWR4LnggKiBibG9ja0RpbS54ICsgdGhyZWFkSWR4Lng7XG5cbiAgICBzZGF0YVt0aWRdID0gKGkgPCBuKSA%2FIGluW2ldIDogMC4wZjsgICAgICAgICAgLy8g5ZCE57q%2F56iL6K%2B75LiA5Liq5YWD57Sg77yM6LaK55WM6KGlIDBcbiAgICBfX3N5bmN0aHJlYWRzKCk7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8g562J5YWoIGJsb2NrIOmDveWGmei%2FmyBzaGFyZWQgbWVtb3J5XG5cbiAgICAvLyBibG9jayDlhoXmoJHlvaLlvZLnuqbvvJrmraXplb%2Fmr4%2Fova7lh4%2FljYrvvIjlr7nmipjvvInvvIzlkowgd2FycCBzaHVmZmxlIOaYr%2BWQjOS4gOS4quW9oueKtlxuICAgIGZvciAoaW50IHN0cmlkZSA9IGJsb2NrRGltLnggLyAyOyBzdHJpZGUgPiAwOyBzdHJpZGUgPj49IDEpIHtcbiAgICAgICAgaWYgKHRpZCA8IHN0cmlkZSkgc2RhdGFbdGlkXSArPSBzZGF0YVt0aWQgKyBzdHJpZGVdO1xuICAgICAgICBfX3N5bmN0aHJlYWRzKCk7ICAgICAgICAgICAgICAgICAgICAgICAgICAvLyDmr4%2FkuIDova7kuYvlkI7pg73opoHlho3lkIzmraVcbiAgICB9XG5cbiAgICAvLyDmr4%2FkuKogYmxvY2sg5Y%2Bq55SxIDAg5Y%2B357q%2F56iL5YGa5LiA5qyh5Y6f5a2Q5Yqg4oCU4oCU5oqK5Yay56qB5Y6L5Yiw5pyA5bCPXG4gICAgaWYgKHRpZCA9PSAwKSBhdG9taWNBZGQob3V0LCBzZGF0YVswXSk7XG59XG5cbmludCBtYWluKCkge1xuICAgIGNvbnN0IGludCBOICAgICAgID0gMSA8PCAyMDsgICAgICAgICAgICAgICAgICAvLyAxLDA0OCw1NzYg5Liq5YWD57SgXG4gICAgY29uc3QgaW50IHRocmVhZHMgPSAyNTY7ICAgICAgICAgICAgICAgICAgICAgIC8vIGJsb2NrIOWkp%2BWwj%2B%2B8jOWPliAzMiDnmoTlgI3mlbDjgIEyIOeahOW5glxuICAgIGNvbnN0IGludCBibG9ja3MgID0gKE4gKyB0aHJlYWRzIC0gMSkgLyB0aHJlYWRzOyAgLy8g5ZCR5LiK5Y%2BW5pW05YeR5aSf57q%2F56iLXG5cbiAgICBmbG9hdCogaF9pbiA9IChmbG9hdCopbWFsbG9jKE4gKiBzaXplb2YoZmxvYXQpKTtcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IE47ICsraSkgaF9pbltpXSA9IDEuMGY7ICAgLy8g5YWo5aGrIDHvvIzmgLvlkozlupTnrYnkuo4gTlxuXG4gICAgZmxvYXQgKmRfaW4sICpkX291dDtcbiAgICBjdWRhTWFsbG9jKCZkX2luLCAgTiAqIHNpemVvZihmbG9hdCkpO1xuICAgIGN1ZGFNYWxsb2MoJmRfb3V0LCBzaXplb2YoZmxvYXQpKTtcbiAgICBjdWRhTWVtY3B5KGRfaW4sIGhfaW4sIE4gKiBzaXplb2YoZmxvYXQpLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcbiAgICBjdWRhTWVtc2V0KGRfb3V0LCAwLCBzaXplb2YoZmxvYXQpKTsgICAgICAgICAgLy8g5YWo5bGA6K6h5pWw5Zmo5riF6Zu2XG5cbiAgICAvLyDnrKzkuInkuKogPDw8Pj4%2BIOWPguaVsO%2B8muavj%2BS4qiBibG9jayDnmoTliqjmgIEgc2hhcmVkIG1lbW9yeSDlrZfoioLmlbBcbiAgICBzdW1fa2VybmVsPDw8YmxvY2tzLCB0aHJlYWRzLCB0aHJlYWRzICogc2l6ZW9mKGZsb2F0KT4%2BPihkX2luLCBkX291dCwgTik7XG5cbiAgICBmbG9hdCBoX291dCA9IDAuMGY7XG4gICAgY3VkYU1lbWNweSgmaF9vdXQsIGRfb3V0LCBzaXplb2YoZmxvYXQpLCBjdWRhTWVtY3B5RGV2aWNlVG9Ib3N0KTtcbiAgICBwcmludGYoXCLlhYPntKDkuKrmlbAgTiA9ICVkXFxuXCIsIE4pO1xuICAgIHByaW50ZihcIkdQVSDmsYLlkoznu5PmnpwgPSAlLjFm77yI5pyf5pybICVk77yJXFxuXCIsIGhfb3V0LCBOKTtcblxuICAgIGN1ZGFGcmVlKGRfaW4pO1xuICAgIGN1ZGFGcmVlKGRfb3V0KTtcbiAgICBmcmVlKGhfaW4pO1xuICAgIHJldHVybiAwO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJudmNjMTI5Iiwib3B0aW9ucyI6Ii1zdGQ9YysrMjAgLU8zIC0tZ3B1LWFyY2hpdGVjdHVyZT1zbV85MCAtcHR4In1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+#include &lt;cuda_runtime.h&gt;
+
+// 对数组求和：block 内 shared memory 树形归约 + 每 block 一次 atomicAdd
+__global__ void sum_kernel(const float* in, float* out, int n) {
+    extern __shared__ float sdata[];              // 动态 shared memory，大小在启动时给
+    int tid = threadIdx.x;
+    int i   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    sdata[tid] = (i &lt; n) ? in[i] : 0.0f;          // 各线程读一个元素，越界补 0
+    __syncthreads();                              // 等全 block 都写进 shared memory
+
+    // block 内树形归约：步长每轮减半（对折），和 warp shuffle 是同一个形状
+    for (int stride = blockDim.x / 2; stride &gt; 0; stride &gt;&gt;= 1) {
+        if (tid &lt; stride) sdata[tid] += sdata[tid + stride];
+        __syncthreads();                          // 每一轮之后都要再同步
+    }
+
+    // 每个 block 只由 0 号线程做一次原子加——把冲突压到最小
+    if (tid == 0) atomicAdd(out, sdata[0]);
+}
+
+int main() {
+    const int N       = 1 &lt;&lt; 20;                  // 1,048,576 个元素
+    const int threads = 256;                      // block 大小，取 32 的倍数、2 的幂
+    const int blocks  = (N + threads - 1) / threads;  // 向上取整凑够线程
+
+    float* h_in = (float*)malloc(N * sizeof(float));
+    for (int i = 0; i &lt; N; ++i) h_in[i] = 1.0f;   // 全填 1，总和应等于 N
+
+    float *d_in, *d_out;
+    cudaMalloc(&amp;d_in,  N * sizeof(float));
+    cudaMalloc(&amp;d_out, sizeof(float));
+    cudaMemcpy(d_in, h_in, N * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemset(d_out, 0, sizeof(float));          // 全局计数器清零
+
+    // 第三个 &lt;&lt;&lt;&gt;&gt;&gt; 参数：每个 block 的动态 shared memory 字节数
+    sum_kernel&lt;&lt;&lt;blocks, threads, threads * sizeof(float)&gt;&gt;&gt;(d_in, d_out, N);
+
+    float h_out = 0.0f;
+    cudaMemcpy(&amp;h_out, d_out, sizeof(float), cudaMemcpyDeviceToHost);
+    printf("元素个数 N = %d\n", N);
+    printf("GPU 求和结果 = %.1f（期望 %d）\n", h_out, N);
+
+    cudaFree(d_in);
+    cudaFree(d_out);
+    free(h_in);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><p>点开代码块的 <strong>🔗 在 Compiler Explorer 打开</strong>，可以看到 <code>nvcc</code> 把这个 kernel 编成的 PTX——留意 <code>atomicAdd</code> 对应的原子指令，以及 <code>__syncthreads()</code> 编成的 <code>bar.sync</code>。本地有 NVIDIA 卡的话，<code>nvcc sum.cu -o sum &amp;&amp; ./sum</code> 会打印总和 <code>1048576.0</code>。这个 kernel 已经用上了本章全部三种机制里的两种（barrier + atomic），还留了一个练习：把 block 内归约的最后 6 步（<code>stride</code> 从 32 到 1）换成 warp shuffle，就能少掉几次 <code>__syncthreads()</code>——那是第 18 章优化归约时要做的事。</p>
+<div class="note">
+<strong>浮点求和的顺序问题</strong>
+上面全填 <code>1.0f</code>，结果精确。但如果数组是任意浮点数，<strong>归约的相加顺序会影响结果的最后几位</strong>——浮点加法不满足结合律。GPU 上线程调度不定，同一份数据两次运行甚至可能得到略微不同的和。这不是 bug，是浮点的固有性质；需要可复现结果时要用确定性归约或更高精度累加器。CPU 多线程归约其实有同样的问题，只是你可能没注意过。
+</div><h2>小结与下一步</h2>
+<p>你现在集齐了 GPU 协作的三件工具，也理解了它们背后统一的设计哲学：<strong>别让线程排队</strong>。至此，本书&quot;地基&quot;部分（第 4–8 章）的零件已经全部就位——执行层级、warp、内存层级、协作与同步。下一章我们把它们<strong>全部串起来</strong>：完整地走一遍一个真 kernel 的生命周期，从 host 分配数据、拷贝上显卡、选 grid/block、启动、同步与错误检查、拷回结果，到验证与释放——那个前几章一直&quot;放到第 9 章讲&quot;的完整流程，终于要补齐了。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>GPU 上<strong>几乎不用锁</strong>：锁让上万线程排队，等于放弃并行。GPU 靠 barrier 协调节奏、靠 shuffle 交换数据、靠原子操作压缩冲突。</li>
+<li><strong>block 级 barrier</strong>（<code>__syncthreads()</code> / <code>item.barrier()</code>）让一个 block 的线程<strong>等齐再走</strong>，常用来隔开 shared memory 的&quot;写阶段&quot;和&quot;读阶段&quot;。它由<strong>最慢的线程</strong>决定放行时刻。</li>
+<li>barrier 的黄金法则：<strong>要么全体执行，要么全体不执行</strong>。放进依赖 <code>threadIdx</code> 的分支会让 block <strong>死锁</strong>——分歧 + barrier = 死锁。</li>
+<li><strong>warp 级 shuffle</strong>（<code>__shfl_down_sync</code> / <code>__shfl_xor_sync</code>）让一个 warp 的 32 个线程<strong>直接交换寄存器</strong>，不碰内存、无需 barrier，<code>log₂(32)=5</code> 步完成 warp 内归约。</li>
+<li><strong>原子操作</strong>（<code>atomicAdd</code> 等）解决&quot;多线程更新同一地址&quot;，不加锁但有<strong>争用</strong>成本。正确姿势是<strong>分层压缩冲突</strong>：warp 内 shuffle → block 内 shared+barrier → block 间才用 atomic，且次数降到最低。</content>
+</invoke></li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch07.html">← 第 7 章 内存层级：global、shared、register 与合并访问</a>
+  <a class="nav-next" href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+{
+  "slug": "gpu-programming",
+  "title": "看得见的 GPU 编程",
+  "subtitle": "写给资深程序员的并行心智模型：CUDA、SYCL、Triton 与 CuTe DSL",
+  "description": "从你已经会的 CPU 多线程与 SIMD 出发，用可视化和可运行示例讲清 GPU 的核心编程模型——SIMT/SIMD、Grid/Block/Warp/Thread 与 NDRange/Work-group/Sub-group/Work-item，再横向打通 CUDA、SYCL、Triton、CuTe DSL 四大技术。示例可编译可执行。",
+  "chapters": [
+    ["ch01", "第 1 章 你会并行编程了——那 GPU 到底不一样在哪"],
+    ["ch02", "第 2 章 SIMT 与 SIMD：一条指令，一大群线程"],
+    ["ch03", "第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽"],
+    ["ch04", "第 4 章 执行层级（一）：Grid、Block、Thread"],
+    ["ch05", "第 5 章 执行层级（二）：NDRange、Work-group、Work-item"],
+    ["ch06", "第 6 章 真正的调度单位：Warp 与 Sub-group"],
+    ["ch07", "第 7 章 内存层级：global、shared、register 与合并访问"],
+    ["ch08", "第 8 章 协作与同步：barrier、shuffle 与原子操作"],
+    ["ch09", "第 9 章 你的第一个真 kernel：向量加法的完整生命周期"],
+    ["ch10", "第 10 章 CUDA：最贴近硬件的编程模型"],
+    ["ch11", "第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘"],
+    ["ch12", "第 12 章 SYCL：单一源码的跨厂商 C++"],
+    ["ch13", "第 13 章 Triton：用 Python 写块级 kernel"],
+    ["ch14", "第 14 章 Triton 进阶：算子融合与自动调优"],
+    ["ch15", "第 15 章 CuTe DSL：Layout 与 Tensor 的代数"],
+    ["ch16", "第 16 章 性能模型：occupancy、带宽与 Roofline"],
+    ["ch17", "第 17 章 访存优化：合并、bank conflict 与向量化"],
+    ["ch18", "第 18 章 并行原语：归约与扫描的经典模式"],
+    ["ch19", "第 19 章 现代硬件：Tensor Core、异步拷贝与流水线"],
+    ["ch20", "第 20 章 同一个 softmax，四种技术怎么写"],
+    ["ch21", "第 21 章 综合项目：从零实现 fused attention 前向"],
+    ["appendix-a", "附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具"],
+    ["appendix-b", "附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton"],
+    ["appendix-c", "附录 C 读懂 GPU 报错与用好 profiler"],
+    ["appendix-d", "附录 D 继续前进：文档、书目与工具链"]
+  ]
+}

@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 你的第一个真 kernel：向量加法的完整生命周期</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li class="active"><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 9 章 你的第一个真 kernel：向量加法的完整生命周期</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章给你看过 GPU 版向量加法的 kernel，但把"分配显存、拷贝数据"那部分<strong>推给了第 9 章</strong>。第 3 章讲硬件时又说"一次 kernel 启动，host 先拷数据、再启动、再拷回"，同样<strong>留到第 9 章</strong>。现在，欠下的债一次还清。</p>
+<p>这一章把一个真 CUDA 程序<strong>从头到尾</strong>走一遍：host 分配、<code>cudaMalloc</code>、拷贝上卡、选 grid/block、启动、同步与错误检查、拷回、验证、释放——八个步骤，一个不落。你会拿到一份<strong>正确、带错误检查</strong>的向量加法参考实现（本书后面都以它为基准），再看同一件事用 SYCL 的 USM 怎么写得更省事，最后用一个模拟器算清"这趟到底值不值得跑一趟 GPU"。</p>
+</div><h2>一次 kernel 的完整生命周期：八个步骤</h2>
+<p>CPU 上算 <code>c = a + b</code>，你 <code>malloc</code> 三个数组、写个循环、完事。GPU 上多了一层：数据住在 host 内存，计算发生在 device 显存，中间隔着一条 PCIe 总线。所以一个真 kernel 的生命周期是这样八步：</p>
+<ol>
+<li><strong>host 端分配并初始化数据</strong>（<code>malloc</code> / <code>std::vector</code>），这是你要计算的输入。</li>
+<li><strong>device 端分配显存</strong>（<code>cudaMalloc</code>），给输入输出各开一块。</li>
+<li><strong>H2D 拷贝</strong>（<code>cudaMemcpy ... HostToDevice</code>）：把输入从 host 内存搬进显存。</li>
+<li><strong>选 grid / block 维度</strong>：block 取 32 的倍数，grid 用向上取整凑够线程。</li>
+<li><strong>启动 kernel</strong>（<code>&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;</code>）：注意这是<strong>异步</strong>的，CPU 发完命令立刻返回。</li>
+<li><strong>同步 + 错误检查</strong>（<code>cudaDeviceSynchronize</code> + <code>cudaGetLastError</code>）：等 GPU 真的算完，并检查有没有出错。</li>
+<li><strong>D2H 拷贝</strong>（<code>cudaMemcpy ... DeviceToHost</code>）：把结果从显存搬回 host。</li>
+<li><strong>验证 + 释放</strong>（<code>cudaFree</code> / <code>free</code>）：核对结果，归还所有内存。</li>
+</ol>
+<div class="concept">
+<svg viewBox="0 0 560 290" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一次 kernel 的生命周期：host 与 device 的时间线</text>
+  <!-- 两条泳道 -->
+  <text x="60" y="52" font-size="12" font-weight="bold" fill="#6b7280">Host (CPU)</text>
+  <text x="60" y="122" font-size="12" font-weight="bold" fill="#2b6cb0">Device (GPU)</text>
+  <line x1="30" y1="60" x2="540" y2="60" stroke="#d1d5db"/>
+  <line x1="30" y1="130" x2="540" y2="130" stroke="#d1d5db"/>
+  <!-- host 阶段块 -->
+  <rect x="40" y="66" width="70" height="24" rx="3" fill="#e5e7eb" stroke="#6b7280"/>
+  <text x="75" y="82" text-anchor="middle" font-size="9" fill="#374151">1 分配</text>
+  <rect x="112" y="66" width="70" height="24" rx="3" fill="#e5e7eb" stroke="#6b7280"/>
+  <text x="147" y="82" text-anchor="middle" font-size="9" fill="#374151">2 cudaMalloc</text>
+  <!-- H2D 传输：斜跨到 device -->
+  <rect x="184" y="66" width="80" height="24" rx="3" fill="#fbe6dc" stroke="#e06a3b"/>
+  <text x="224" y="82" text-anchor="middle" font-size="9" fill="#a53f1c">3 H2D 拷贝</text>
+  <g stroke="#e06a3b" stroke-width="1.2" fill="none"><path d="M224 90 L224 128" marker-end="url(#a9)"/></g>
+  <!-- 启动 -->
+  <rect x="266" y="66" width="60" height="24" rx="3" fill="#e5e7eb" stroke="#6b7280"/>
+  <text x="296" y="82" text-anchor="middle" font-size="9" fill="#374151">5 启动</text>
+  <g stroke="#6b7280" stroke-width="1" fill="none" stroke-dasharray="3 2"><path d="M296 90 L330 128" marker-end="url(#a9b)"/></g>
+  <!-- host 等待（同步） -->
+  <rect x="328" y="66" width="90" height="24" rx="3" fill="#f3f4f6" stroke="#9ca3af" stroke-dasharray="4 3"/>
+  <text x="373" y="82" text-anchor="middle" font-size="9" fill="#6b7280">6 等待(同步)</text>
+  <!-- D2H -->
+  <rect x="420" y="66" width="70" height="24" rx="3" fill="#fbe6dc" stroke="#e06a3b"/>
+  <text x="455" y="82" text-anchor="middle" font-size="9" fill="#a53f1c">7 D2H</text>
+  <rect x="492" y="66" width="48" height="24" rx="3" fill="#e5e7eb" stroke="#6b7280"/>
+  <text x="516" y="82" text-anchor="middle" font-size="9" fill="#374151">8 验证</text>
+  <!-- device：compute 块 -->
+  <rect x="330" y="136" width="80" height="24" rx="3" fill="#cfe4fb" stroke="#2b6cb0"/>
+  <text x="370" y="152" text-anchor="middle" font-size="9" fill="#1e3a5f">kernel 计算</text>
+  <!-- D2H back arrow -->
+  <g stroke="#e06a3b" stroke-width="1.2" fill="none"><path d="M410 148 L455 90" marker-end="url(#a9)"/></g>
+  <!-- 三阶段标注 -->
+  <text x="224" y="200" text-anchor="middle" font-size="11" fill="#e06a3b">① H2D 传输</text>
+  <text x="370" y="200" text-anchor="middle" font-size="11" fill="#2b6cb0">② compute 计算</text>
+  <text x="455" y="200" text-anchor="middle" font-size="11" fill="#e06a3b">③ D2H 传输</text>
+  <text x="280" y="230" text-anchor="middle" font-size="11" fill="#6b7280">kernel 启动是异步的：CPU 发完命令(步骤5)立刻返回，</text>
+  <text x="280" y="248" text-anchor="middle" font-size="11" fill="#6b7280">必须靠步骤6的同步，才能确保 GPU 真的算完、结果可拷回</text>
+  <text x="280" y="270" text-anchor="middle" font-size="10" fill="#9ca3af">总时间 ≈ H2D + compute + D2H，对访存受限的 kernel，两头的传输常常是大头</text>
+  <defs>
+    <marker id="a9" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+    <marker id="a9b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9ca3af"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 9-1　八步生命周期的时间线：数据先 H2D 上卡、GPU 算、再 D2H 回来。启动异步、同步是必需的一步；总时间由三段拼成，传输两头往往比中间的计算还贵</div>
+</div><p>第 4、5 步值得单独说。<strong>block 维度取 32 的倍数</strong>，是因为第 6 章讲过的：硬件按 warp（32 线程）调度，block 不是 32 的倍数会浪费最后一个 warp 的部分 lane。256 是常用的稳妥值。<strong>grid 用向上取整</strong>——因为 N 通常不能被 block 大小整除，你得多开一点线程盖住余数，再靠 kernel 里的 <code>if (i &lt; n)</code> 边界检查让多出来的线程什么都不做：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int threads = 256;
+int blocks  = (N + threads - 1) / threads;   // 向上取整：ceil(N / threads)
+// 例：N=1000, threads=256 → blocks=4 → 共启动 1024 个线程
+// 多出的 24 个线程会被 kernel 里的 if (i &lt; n) 挡在门外</code></pre>
+</div><h2>错误检查：GPU 编程里最容易被省掉、也最坑人的一步</h2>
+<p>CPU 上函数出错通常立刻抛异常或返回错误码，你很难忽略。GPU 不一样，有两个陷阱：</p>
+<ul>
+<li><strong>kernel 启动是异步的</strong>：<code>add&lt;&lt;&lt;...&gt;&gt;&gt;()</code> 这行只是把任务丢进队列就返回了，此刻 kernel 可能还没开始跑。所以 kernel <strong>内部</strong>的运行时错误（比如越界访问）不会在这一行报出来。</li>
+<li><strong>错误是&quot;粘&quot;在后面的</strong>：CUDA 的 runtime API 返回错误码（<code>cudaError_t</code>），但很多人从不检查。一个错误可能要等到下一个 CUDA 调用才浮现，报错位置和真正的出错点对不上，极难排查。</li>
+</ul>
+<p>所以专业的 CUDA 代码都会包一个 <strong>CHECK 宏</strong>，对每个 CUDA 调用检查返回值；kernel 启动后则用 <code>cudaGetLastError()</code>（抓启动配置错误，如 block 过大）加 <code>cudaDeviceSynchronize()</code>（等 kernel 跑完并抓运行期错误）。这不是洁癖，是<strong>能不能调试</strong>的分水岭。</p>
+<div class="warn">
+<strong>不查错的 GPU 程序，出了问题几乎无法定位</strong>
+最典型的翻车：kernel 里数组越界，程序不崩、也不报错，只是结果错得莫名其妙；或者 <code>cudaMalloc</code> 因显存不足失败返回了错误码，你没查，后面拿着无效指针继续跑，直到某个不相干的地方段错误。养成习惯：<strong>每个 CUDA 调用都用 CHECK 宏包起来，kernel 启动后紧跟一次 <code>cudaGetLastError()</code> + 同步</strong>。这一步在本书所有 CUDA 示例里都会出现。
+</div><h2>动手：完整、带错误检查的向量加法（本书的基准实现）</h2>
+<p>下面是那份<strong>完整、正确、带错误检查</strong>的参考实现——本书后面每次说&quot;回到第 9 章那个向量加法&quot;，指的就是它。八个步骤在注释里一一标出。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3N0ZGxpYj5cbiNpbmNsdWRlIDxjbWF0aD5cbiNpbmNsdWRlIDxjdWRhX3J1bnRpbWUuaD5cblxuLy8gQ0hFQ0sg5a6P77ya5YyF5L2P5q%2BP5LiqIENVREEgcnVudGltZSDosIPnlKjvvIzlh7rplJnlsLHmiZPljbDkvY3nva7lubbpgIDlh7pcbiNkZWZpbmUgQ0hFQ0soY2FsbCkgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFxcXG4gICAgZG8geyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBcXFxuICAgICAgICBjdWRhRXJyb3JfdCBlcnIgPSAoY2FsbCk7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXFxcbiAgICAgICAgaWYgKGVyciAhPSBjdWRhU3VjY2VzcykgeyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFxcXG4gICAgICAgICAgICBmcHJpbnRmKHN0ZGVyciwgXCJDVURBIOmUmeivryAlczolZDogJXNcXG5cIiwgX19GSUxFX18sIF9fTElORV9fLCAgIFxcXG4gICAgICAgICAgICAgICAgICAgIGN1ZGFHZXRFcnJvclN0cmluZyhlcnIpKTsgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBcXFxuICAgICAgICAgICAgZXhpdChFWElUX0ZBSUxVUkUpOyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXFxcbiAgICAgICAgfSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFxcXG4gICAgfSB3aGlsZSAoMClcblxuX19nbG9iYWxfXyB2b2lkIHZlY19hZGQoY29uc3QgZmxvYXQqIGEsIGNvbnN0IGZsb2F0KiBiLCBmbG9hdCogYywgaW50IG4pIHtcbiAgICBpbnQgaSA9IGJsb2NrSWR4LnggKiBibG9ja0RpbS54ICsgdGhyZWFkSWR4Lng7ICAgLy8g5YWo5bGA57q%2F56iL5LiL5qCHXG4gICAgaWYgKGkgPCBuKSBjW2ldID0gYVtpXSArIGJbaV07ICAgICAgICAgICAgICAgICAgIC8vIOi%2BueeVjOajgOafpe%2B8muWkmuWHuueahOe6v%2Beoi%2BS4jei2iueVjFxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgTiAgICAgPSAxIDw8IDIwOyAgICAgICAgICAgICAgICAgICAgICAgLy8gMSwwNDgsNTc2IOS4quWFg%2Be0oFxuICAgIGNvbnN0IHNpemVfdCBzeiA9IE4gKiBzaXplb2YoZmxvYXQpO1xuXG4gICAgLy8g5q2l6aqkIDHvvJpob3N0IOerr%2BWIhumFjeW5tuWIneWni%2BWMllxuICAgIGZsb2F0KiBoX2EgPSAoZmxvYXQqKW1hbGxvYyhzeik7XG4gICAgZmxvYXQqIGhfYiA9IChmbG9hdCopbWFsbG9jKHN6KTtcbiAgICBmbG9hdCogaF9jID0gKGZsb2F0KiltYWxsb2Moc3opO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTjsgKytpKSB7IGhfYVtpXSA9IDEuMGY7IGhfYltpXSA9IDIuMGY7IH1cblxuICAgIC8vIOatpemqpCAy77yaZGV2aWNlIOerr%2BWIhumFjeaYvuWtmFxuICAgIGZsb2F0ICpkX2EsICpkX2IsICpkX2M7XG4gICAgQ0hFQ0soY3VkYU1hbGxvYygmZF9hLCBzeikpO1xuICAgIENIRUNLKGN1ZGFNYWxsb2MoJmRfYiwgc3opKTtcbiAgICBDSEVDSyhjdWRhTWFsbG9jKCZkX2MsIHN6KSk7XG5cbiAgICAvLyDmraXpqqQgM%2B%2B8mkgyRCDmi7fotJ3vvIzmiorovpPlhaXmkKzkuIrmmL7ljaFcbiAgICBDSEVDSyhjdWRhTWVtY3B5KGRfYSwgaF9hLCBzeiwgY3VkYU1lbWNweUhvc3RUb0RldmljZSkpO1xuICAgIENIRUNLKGN1ZGFNZW1jcHkoZF9iLCBoX2IsIHN6LCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKSk7XG5cbiAgICAvLyDmraXpqqQgNO%2B8mumAiSBncmlkIC8gYmxvY2sg57u05bqm77yIYmxvY2sg5Y%2BWIDMyIOeahOWAjeaVsO%2B8jGdyaWQg5ZCR5LiK5Y%2BW5pW077yJXG4gICAgaW50IHRocmVhZHMgPSAyNTY7XG4gICAgaW50IGJsb2NrcyAgPSAoTiArIHRocmVhZHMgLSAxKSAvIHRocmVhZHM7XG5cbiAgICAvLyDmraXpqqQgNe%2B8muWQr%2BWKqCBrZXJuZWzvvIjlvILmraXvvIHov5nooYzlj5Hlrozlkb3ku6TlsLHov5Tlm57vvIlcbiAgICB2ZWNfYWRkPDw8YmxvY2tzLCB0aHJlYWRzPj4%2BKGRfYSwgZF9iLCBkX2MsIE4pO1xuXG4gICAgLy8g5q2l6aqkIDbvvJrplJnor6%2Fmo4Dmn6UgKyDlkIzmraVcbiAgICBDSEVDSyhjdWRhR2V0TGFzdEVycm9yKCkpOyAgICAgICAgLy8g5oqT5ZCv5Yqo6YWN572u6ZSZ6K%2Bv77yI5aaCIGJsb2NrIOi%2Fh%2BWkp%2B%2B8iVxuICAgIENIRUNLKGN1ZGFEZXZpY2VTeW5jaHJvbml6ZSgpKTsgICAvLyDnrYkga2VybmVsIOecn%2BeahOi3keWujO%2B8jOW5tuaKk%2Bi%2FkOihjOacn%2BmUmeivr1xuXG4gICAgLy8g5q2l6aqkIDfvvJpEMkgg5ou36LSd77yM5oqK57uT5p6c5pCs5ZueIGhvc3RcbiAgICBDSEVDSyhjdWRhTWVtY3B5KGhfYywgZF9jLCBzeiwgY3VkYU1lbWNweURldmljZVRvSG9zdCkpO1xuXG4gICAgLy8g5q2l6aqkIDjvvJrpqozor4EgKyDph4rmlL5cbiAgICBpbnQgZXJyb3JzID0gMDtcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IE47ICsraSlcbiAgICAgICAgaWYgKGZhYnNmKGhfY1tpXSAtIDMuMGYpID4gMWUtNWYpICsrZXJyb3JzO1xuICAgIHByaW50ZihcIk4gPSAlZO%2B8jOe7k%2BaenCAlc%2B%2B8iGhfY1swXSA9ICUuMWbvvIzmnJ%2FmnJsgMy4w77yJXFxuXCIsXG4gICAgICAgICAgIE4sIGVycm9ycyA9PSAwID8gXCLlhajpg6jmraPnoa5cIiA6IFwi5pyJ6ZSZ6K%2BvXCIsIGhfY1swXSk7XG5cbiAgICBDSEVDSyhjdWRhRnJlZShkX2EpKTsgQ0hFQ0soY3VkYUZyZWUoZF9iKSk7IENIRUNLKGN1ZGFGcmVlKGRfYykpO1xuICAgIGZyZWUoaF9hKTsgZnJlZShoX2IpOyBmcmVlKGhfYyk7XG4gICAgcmV0dXJuIDA7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im52Y2MxMjkiLCJvcHRpb25zIjoiLXN0ZD1jKysyMCAtTzMgLS1ncHUtYXJjaGl0ZWN0dXJlPXNtXzkwIC1wdHgifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+#include &lt;cmath&gt;
+#include &lt;cuda_runtime.h&gt;
+
+// CHECK 宏：包住每个 CUDA runtime 调用，出错就打印位置并退出
+#define CHECK(call)                                                        \
+    do {                                                                   \
+        cudaError_t err = (call);                                          \
+        if (err != cudaSuccess) {                                          \
+            fprintf(stderr, "CUDA 错误 %s:%d: %s\n", __FILE__, __LINE__,   \
+                    cudaGetErrorString(err));                              \
+            exit(EXIT_FAILURE);                                            \
+        }                                                                  \
+    } while (0)
+
+__global__ void vec_add(const float* a, const float* b, float* c, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;   // 全局线程下标
+    if (i &lt; n) c[i] = a[i] + b[i];                   // 边界检查：多出的线程不越界
+}
+
+int main() {
+    const int N     = 1 &lt;&lt; 20;                       // 1,048,576 个元素
+    const size_t sz = N * sizeof(float);
+
+    // 步骤 1：host 端分配并初始化
+    float* h_a = (float*)malloc(sz);
+    float* h_b = (float*)malloc(sz);
+    float* h_c = (float*)malloc(sz);
+    for (int i = 0; i &lt; N; ++i) { h_a[i] = 1.0f; h_b[i] = 2.0f; }
+
+    // 步骤 2：device 端分配显存
+    float *d_a, *d_b, *d_c;
+    CHECK(cudaMalloc(&amp;d_a, sz));
+    CHECK(cudaMalloc(&amp;d_b, sz));
+    CHECK(cudaMalloc(&amp;d_c, sz));
+
+    // 步骤 3：H2D 拷贝，把输入搬上显卡
+    CHECK(cudaMemcpy(d_a, h_a, sz, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(d_b, h_b, sz, cudaMemcpyHostToDevice));
+
+    // 步骤 4：选 grid / block 维度（block 取 32 的倍数，grid 向上取整）
+    int threads = 256;
+    int blocks  = (N + threads - 1) / threads;
+
+    // 步骤 5：启动 kernel（异步！这行发完命令就返回）
+    vec_add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(d_a, d_b, d_c, N);
+
+    // 步骤 6：错误检查 + 同步
+    CHECK(cudaGetLastError());        // 抓启动配置错误（如 block 过大）
+    CHECK(cudaDeviceSynchronize());   // 等 kernel 真的跑完，并抓运行期错误
+
+    // 步骤 7：D2H 拷贝，把结果搬回 host
+    CHECK(cudaMemcpy(h_c, d_c, sz, cudaMemcpyDeviceToHost));
+
+    // 步骤 8：验证 + 释放
+    int errors = 0;
+    for (int i = 0; i &lt; N; ++i)
+        if (fabsf(h_c[i] - 3.0f) &gt; 1e-5f) ++errors;
+    printf("N = %d，结果 %s（h_c[0] = %.1f，期望 3.0）\n",
+           N, errors == 0 ? "全部正确" : "有错误", h_c[0]);
+
+    CHECK(cudaFree(d_a)); CHECK(cudaFree(d_b)); CHECK(cudaFree(d_c));
+    free(h_a); free(h_b); free(h_c);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><p>点开代码块的 <strong>🔗 在 Compiler Explorer 打开</strong>，你能看到 <code>vec_add</code> 编成的 PTX；本地有 NVIDIA 卡时，<code>nvcc vecadd.cu -o vecadd &amp;&amp; ./vecadd</code> 会打印&quot;全部正确&quot;。你现在拥有了写任何简单 kernel 的完整骨架——把 <code>vec_add</code> 换成别的逐元素运算（<code>c[i] = a[i]*b[i] + 1.0f</code>），八步流程原封不动。</p>
+<div class="keypoint">
+<strong>这份骨架就是 GPU 编程的"Hello World"</strong>
+八个步骤 + CHECK 宏 + 边界检查 + 异步启动后的同步，构成了几乎所有 CUDA 程序的外壳。真实的复杂 kernel（矩阵乘、attention）在<strong>计算部分</strong>千变万化，但外面这层 host 端的"分配—拷贝—启动—同步—拷回—释放"骨架基本不变。把它记熟，你就再也不会对着一个新 kernel 不知从何写起。
+</div><h2>同一件事，SYCL 用 USM 怎么写</h2>
+<p>CUDA 的显式 <code>cudaMemcpy</code> 很清晰，但也啰嗦：每块数据都要手动分配 device 版、手动拷来拷去。SYCL（第 5、12 章的主角）提供了一种更省事的选择——<strong>USM（统一共享内存，Unified Shared Memory）</strong>：用 <code>malloc_shared</code> 分配的指针，host 和 device <strong>都能直接访问</strong>，数据的搬运交给运行时按需自动完成，你的代码里<strong>没有一句显式拷贝</strong>。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：显式 cudaMemcpy</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">cudaMalloc(&amp;d_a, sz);          // device 专用内存
+cudaMalloc(&amp;d_c, sz);
+cudaMemcpy(d_a, h_a, sz,       // 手动 H2D
+           cudaMemcpyHostToDevice);
+vec_add&lt;&lt;&lt;blocks,threads&gt;&gt;&gt;(d_a,d_b,d_c,N);
+cudaDeviceSynchronize();
+cudaMemcpy(h_c, d_c, sz,       // 手动 D2H
+           cudaMemcpyDeviceToHost);</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SYCL：USM 隐式搬运</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">float* a = malloc_shared&lt;float&gt;(N, q);  // host/device 都能访问
+float* c = malloc_shared&lt;float&gt;(N, q);
+// 直接在 host 上写 a[i]，直接读 c[i]
+q.parallel_for(N, [=](id&lt;1&gt; i){
+    c[i] = a[i] + b[i];
+}).wait();                     // 没有一句显式 memcpy</code></pre>
+</div></div>
+</div><p>下面是完整、可编译的 SYCL 版本。注意它有多干净：一个 <code>queue</code>、<code>malloc_shared</code> 分配、一个 <code>parallel_for</code>、<code>wait()</code> 同步，就完事了。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPHN5Y2wvc3ljbC5ocHA%2BXG4jaW5jbHVkZSA8Y3N0ZGlvPlxuI2luY2x1ZGUgPGNtYXRoPlxuXG5pbnQgbWFpbigpIHtcbiAgICBuYW1lc3BhY2Ugc3kgPSBzeWNsO1xuICAgIGNvbnN0IGludCBOID0gMSA8PCAyMDsgICAgICAgICAgICAgICAgICAgICAgIC8vIDEsMDQ4LDU3NiDkuKrlhYPntKBcblxuICAgIHN5OjpxdWV1ZSBxOyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIOm7mOiupOmAieS4gOS4quiuvuWkh%2B%2B8iEdQVSDkvJjlhYjvvIlcbiAgICBwcmludGYoXCLov5DooYzorr7lpIfvvJolc1xcblwiLFxuICAgICAgICAgICBxLmdldF9kZXZpY2UoKS5nZXRfaW5mbzxzeTo6aW5mbzo6ZGV2aWNlOjpuYW1lPigpLmNfc3RyKCkpO1xuXG4gICAgLy8gVVNN77yaaG9zdCDlkowgZGV2aWNlIOmDveiDveebtOaOpeiuv%2BmXrueahOWFseS6q%2BWGheWtmFxuICAgIGZsb2F0KiBhID0gc3k6Om1hbGxvY19zaGFyZWQ8ZmxvYXQ%2BKE4sIHEpO1xuICAgIGZsb2F0KiBiID0gc3k6Om1hbGxvY19zaGFyZWQ8ZmxvYXQ%2BKE4sIHEpO1xuICAgIGZsb2F0KiBjID0gc3k6Om1hbGxvY19zaGFyZWQ8ZmxvYXQ%2BKE4sIHEpO1xuXG4gICAgZm9yIChpbnQgaSA9IDA7IGkgPCBOOyArK2kpIHsgYVtpXSA9IDEuMGY7IGJbaV0gPSAyLjBmOyB9ICAvLyDnm7TmjqXlnKggaG9zdCDlhplcblxuICAgIC8vIOWQr%2BWKqOW5tuihjOiuoeeul%2B%2B8m%2BaVsOaNruaQrOi%2FkOeUsei%2FkOihjOaXtuaMiemcgOWujOaIkO%2B8jOaXoOmcgOaYvuW8jyBtZW1jcHlcbiAgICBxLnBhcmFsbGVsX2ZvcihzeTo6cmFuZ2U8MT4oTiksIFs9XShzeTo6aWQ8MT4gaWR4KSB7XG4gICAgICAgIGludCBpID0gaWR4WzBdO1xuICAgICAgICBjW2ldID0gYVtpXSArIGJbaV07XG4gICAgfSkud2FpdCgpOyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8g562JIGtlcm5lbCDot5HlroxcblxuICAgIGludCBlcnJvcnMgPSAwO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTjsgKytpKVxuICAgICAgICBpZiAoc3RkOjpmYWJzKGNbaV0gLSAzLjBmKSA%2BIDFlLTVmKSArK2Vycm9ycztcbiAgICBwcmludGYoXCJOID0gJWTvvIznu5PmnpwgJXPvvIhjWzBdID0gJS4xZu%2B8jOacn%2BacmyAzLjDvvIlcXG5cIixcbiAgICAgICAgICAgTiwgZXJyb3JzID09IDAgPyBcIuWFqOmDqOato%2BehrlwiIDogXCLmnInplJnor69cIiwgY1swXSk7XG5cbiAgICBzeTo6ZnJlZShhLCBxKTsgc3k6OmZyZWUoYiwgcSk7IHN5OjpmcmVlKGMsIHEpO1xuICAgIHJldHVybiAwO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJpY3gyMDI2MDAiLCJvcHRpb25zIjoiLWZzeWNsIC1PMiAtc3RkPWMrKzIwIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;sycl/sycl.hpp&gt;
+#include &lt;cstdio&gt;
+#include &lt;cmath&gt;
+
+int main() {
+    namespace sy = sycl;
+    const int N = 1 &lt;&lt; 20;                       // 1,048,576 个元素
+
+    sy::queue q;                                 // 默认选一个设备（GPU 优先）
+    printf("运行设备：%s\n",
+           q.get_device().get_info&lt;sy::info::device::name&gt;().c_str());
+
+    // USM：host 和 device 都能直接访问的共享内存
+    float* a = sy::malloc_shared&lt;float&gt;(N, q);
+    float* b = sy::malloc_shared&lt;float&gt;(N, q);
+    float* c = sy::malloc_shared&lt;float&gt;(N, q);
+
+    for (int i = 0; i &lt; N; ++i) { a[i] = 1.0f; b[i] = 2.0f; }  // 直接在 host 写
+
+    // 启动并行计算；数据搬运由运行时按需完成，无需显式 memcpy
+    q.parallel_for(sy::range&lt;1&gt;(N), [=](sy::id&lt;1&gt; idx) {
+        int i = idx[0];
+        c[i] = a[i] + b[i];
+    }).wait();                                   // 等 kernel 跑完
+
+    int errors = 0;
+    for (int i = 0; i &lt; N; ++i)
+        if (std::fabs(c[i] - 3.0f) &gt; 1e-5f) ++errors;
+    printf("N = %d，结果 %s（c[0] = %.1f，期望 3.0）\n",
+           N, errors == 0 ? "全部正确" : "有错误", c[0]);
+
+    sy::free(a, q); sy::free(b, q); sy::free(c, q);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>icpx -fsycl -O2 -std=c++20 main.cpp -o app &amp;&amp; ./app   # 需要 Intel oneAPI</code></div>
+</div><p>用 <code>icpx -fsycl vecadd.cpp -o vecadd</code> 编译（oneAPI 环境，见附录 A）。USM 让代码短了一半，但<strong>别被迷惑</strong>：数据该搬还得搬，只是搬运的时机和方式交给了运行时。省的是代码量和出错机会，省不掉的是 PCIe 上真实的传输时间——而那，正是决定&quot;值不值得上 GPU&quot;的关键。</p>
+<div class="note">
+<strong>USM 不是魔法，它只是把拷贝藏了起来</strong>
+<code>malloc_shared</code> 的数据在 host 访问时可能在 host 侧，device 访问时被迁移到显存——迁移仍然走 PCIe，仍然要花时间。USM 有几种类型（<code>malloc_device</code> 只在显存、<code>malloc_host</code> 只在 host、<code>malloc_shared</code> 可迁移），第 12 章会细讲。这里的要点是：显式（CUDA）和隐式（USM）只是<strong>谁来写拷贝代码</strong>的区别，物理上的数据搬运和它的成本，两边完全一样。
+</div><h2>动手：这一趟到底值不值得跑 GPU</h2>
+<p>第 3 章说过：只为做一次向量加法就把数据搬上 GPU 再搬回，&quot;光搬运的时间可能就远超省下的计算&quot;。现在你会写完整流程了，我们用一个模拟器把这句话<strong>算成数字</strong>。它用第 3 章的显存带宽（3 TB/s）、一条真实量级的 PCIe 带宽（16 GB/s），把总时间拆成 H2D + compute + D2H 三段，看看谁是大头。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E5%BB%BA%E6%A8%A1%E5%90%91%E9%87%8F%E5%8A%A0%E6%B3%95%20c%3Da%2Bb%20%E7%9A%84%E7%AB%AF%E5%88%B0%E7%AB%AF%E6%97%B6%E9%97%B4%EF%BC%9AH2D%20%2B%20compute%20%2B%20D2H%0Apcie_bw%20%20%20%3D%2016e9%20%20%20%20%20%20%23%20PCIe%20Gen4%20x16%20%E7%BA%A6%2016%20GB%2Fs%EF%BC%88CPU%20%E5%86%85%E5%AD%98%20%E2%86%94%20%E6%98%BE%E5%AD%98%EF%BC%89%0Adevice_bw%20%3D%203.0e12%20%20%20%20%23%20%E6%98%BE%E5%AD%98%E5%B8%A6%E5%AE%BD%203%20TB%2Fs%EF%BC%88%E6%B2%BF%E7%94%A8%E7%AC%AC%203%20%E7%AB%A0%E7%9A%84%E9%87%8F%E7%BA%A7%EF%BC%89%0Acopy_latency%20%3D%205e-6%20%20%20%23%20%E6%AF%8F%E6%AC%A1%20cudaMemcpy%20%E7%9A%84%E5%9B%BA%E5%AE%9A%E5%90%AF%E5%8A%A8%E5%BC%80%E9%94%80%EF%BC%8C%E7%BA%A6%205%20%E5%BE%AE%E7%A7%92%0A%0Adef%20model(N)%3A%0A%20%20%20%20%23%20H2D%20%E6%90%AC%20a%E3%80%81b%20%E4%B8%A4%E4%B8%AA%E6%95%B0%E7%BB%84%EF%BC%9BD2H%20%E6%90%AC%E5%9B%9E%20c%20%E4%B8%80%E4%B8%AA%E6%95%B0%E7%BB%84%EF%BC%9B%E6%AF%8F%E4%B8%AA%20float%204%20%E5%AD%97%E8%8A%82%0A%20%20%20%20h2d%20%3D%20copy_latency%20%2B%20(2%20*%20N%20*%204)%20%2F%20pcie_bw%0A%20%20%20%20d2h%20%3D%20copy_latency%20%2B%20(1%20*%20N%20*%204)%20%2F%20pcie_bw%0A%20%20%20%20%23%20%E8%AE%BE%E5%A4%87%E4%B8%8A%E8%AE%BF%E5%AD%98%E5%8F%97%E9%99%90%EF%BC%9A%E8%AF%BB%20a%E3%80%81%E8%AF%BB%20b%E3%80%81%E5%86%99%20c%20%E5%85%B1%203*N*4%20%E5%AD%97%E8%8A%82%EF%BC%8C%E6%8C%89%E6%98%BE%E5%AD%98%E5%B8%A6%E5%AE%BD%E7%AE%97%0A%20%20%20%20compute%20%3D%20(3%20*%20N%20*%204)%20%2F%20device_bw%0A%20%20%20%20total%20%3D%20h2d%20%2B%20compute%20%2B%20d2h%0A%20%20%20%20return%20h2d%2C%20compute%2C%20d2h%2C%20total%0A%0Afor%20N%20in%20%5B1_000%2C%201_000_000%2C%20100_000_000%5D%3A%0A%20%20%20%20h2d%2C%20compute%2C%20d2h%2C%20total%20%3D%20model(N)%0A%20%20%20%20transfer%20%3D%20h2d%20%2B%20d2h%0A%20%20%20%20print(f%22N%20%3D%20%7BN%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%9A%22)%0A%20%20%20%20print(f%22%20%20H2D%20%E6%8B%B7%E8%B4%9D%20a%2Cb%EF%BC%9A%7Bh2d*1e6%3A8.3f%7D%20us%22)%0A%20%20%20%20print(f%22%20%20%E8%AE%BE%E5%A4%87%E4%B8%8A%E8%AE%A1%E7%AE%97%20%20%EF%BC%9A%7Bcompute*1e6%3A8.3f%7D%20us%22)%0A%20%20%20%20print(f%22%20%20D2H%20%E6%8B%B7%E5%9B%9E%20c%20%20%EF%BC%9A%7Bd2h*1e6%3A8.3f%7D%20us%22)%0A%20%20%20%20print(f%22%20%20%E5%90%88%E8%AE%A1%20%20%20%20%20%20%20%20%EF%BC%9A%7Btotal*1e6%3A8.3f%7D%20us%EF%BC%8C%E5%85%B6%E4%B8%AD%E4%BC%A0%E8%BE%93%E5%8D%A0%20%7Btransfer%2Ftotal*100%3A.2f%7D%25%22)%0A%20%20%20%20print()%0A%0Aprint(%22%E7%BB%93%E8%AE%BA%EF%BC%9A%E4%B8%8D%E7%AE%A1%20N%20%E5%A4%A7%E5%B0%8F%EF%BC%8CH2D%2BD2H%20%E9%83%BD%E5%8D%A0%E4%BA%86%E7%BA%A6%2099.5%25%20%E7%9A%84%E6%97%B6%E9%97%B4%E2%80%94%E2%80%94%22)%0Aprint(%22%E5%9B%A0%E4%B8%BA%20PCIe(16%20GB%2Fs)%20%E6%AF%94%E6%98%BE%E5%AD%98(3%20TB%2Fs)%20%E6%85%A2%E8%BF%91%20200%20%E5%80%8D%EF%BC%8C%E8%80%8C%E5%90%91%E9%87%8F%E5%8A%A0%E6%B3%95%E6%90%AC%E7%9A%84%E5%AD%97%E8%8A%82%E5%92%8C%E7%AE%97%E7%9A%84%E6%AC%A1%E6%95%B0%E4%B8%80%E6%A0%B7%E5%A4%9A%E3%80%82%22)%0Aprint(%22%E6%89%80%E4%BB%A5%E5%8F%AA%E4%B8%BA%E5%81%9A%E4%B8%80%E6%AC%A1%E5%90%91%E9%87%8F%E5%8A%A0%E6%B3%95%E5%B0%B1%E6%8A%8A%E6%95%B0%E6%8D%AE%E6%90%AC%E4%B8%8A%20GPU%20%E5%86%8D%E6%90%AC%E5%9B%9E%EF%BC%8C%E5%87%A0%E4%B9%8E%E6%B0%B8%E8%BF%9C%E4%B8%8D%E5%88%92%E7%AE%97%EF%BC%88%E5%91%BC%E5%BA%94%E7%AC%AC%203%20%E7%AB%A0%EF%BC%89%E3%80%82%22)%0Aprint(%22GPU%20%E5%88%92%E7%AE%97%E7%9A%84%E5%89%8D%E6%8F%90%EF%BC%9A%E6%95%B0%E6%8D%AE%E6%90%AC%E4%B8%8A%E5%8E%BB%E5%90%8E%E8%A2%AB%E5%BE%88%E5%A4%9A%E4%B8%AA%20kernel%20%E5%8F%8D%E5%A4%8D%E4%BD%BF%E7%94%A8%EF%BC%8C%E6%8A%8A%E4%BC%A0%E8%BE%93%E6%88%90%E6%9C%AC%E6%91%8A%E8%96%84%E3%80%82%22)"># 建模向量加法 c=a+b 的端到端时间：H2D + compute + D2H
+pcie_bw   = 16e9      # PCIe Gen4 x16 约 16 GB/s（CPU 内存 ↔ 显存）
+device_bw = 3.0e12    # 显存带宽 3 TB/s（沿用第 3 章的量级）
+copy_latency = 5e-6   # 每次 cudaMemcpy 的固定启动开销，约 5 微秒
+
+def model(N):
+    # H2D 搬 a、b 两个数组；D2H 搬回 c 一个数组；每个 float 4 字节
+    h2d = copy_latency + (2 * N * 4) / pcie_bw
+    d2h = copy_latency + (1 * N * 4) / pcie_bw
+    # 设备上访存受限：读 a、读 b、写 c 共 3*N*4 字节，按显存带宽算
+    compute = (3 * N * 4) / device_bw
+    total = h2d + compute + d2h
+    return h2d, compute, d2h, total
+
+for N in [1_000, 1_000_000, 100_000_000]:
+    h2d, compute, d2h, total = model(N)
+    transfer = h2d + d2h
+    print(f"N = {N} 个元素：")
+    print(f"  H2D 拷贝 a,b：{h2d*1e6:8.3f} us")
+    print(f"  设备上计算  ：{compute*1e6:8.3f} us")
+    print(f"  D2H 拷回 c  ：{d2h*1e6:8.3f} us")
+    print(f"  合计        ：{total*1e6:8.3f} us，其中传输占 {transfer/total*100:.2f}%")
+    print()
+
+print("结论：不管 N 大小，H2D+D2H 都占了约 99.5% 的时间——")
+print("因为 PCIe(16 GB/s) 比显存(3 TB/s) 慢近 200 倍，而向量加法搬的字节和算的次数一样多。")
+print("所以只为做一次向量加法就把数据搬上 GPU 再搬回，几乎永远不划算（呼应第 3 章）。")
+print("GPU 划算的前提：数据搬上去后被很多个 kernel 反复使用，把传输成本摊薄。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">N = 1000 个元素：
+  H2D 拷贝 a,b：   5.500 us
+  设备上计算  ：   0.004 us
+  D2H 拷回 c  ：   5.250 us
+  合计        ：  10.754 us，其中传输占 99.96%
+
+N = 1000000 个元素：
+  H2D 拷贝 a,b： 505.000 us
+  设备上计算  ：   4.000 us
+  D2H 拷回 c  ： 255.000 us
+  合计        ： 764.000 us，其中传输占 99.48%
+
+N = 100000000 个元素：
+  H2D 拷贝 a,b：50005.000 us
+  设备上计算  ： 400.000 us
+  D2H 拷回 c  ：25005.000 us
+  合计        ：75410.000 us，其中传输占 99.47%
+
+结论：不管 N 大小，H2D+D2H 都占了约 99.5% 的时间——
+因为 PCIe(16 GB/s) 比显存(3 TB/s) 慢近 200 倍，而向量加法搬的字节和算的次数一样多。
+所以只为做一次向量加法就把数据搬上 GPU 再搬回，几乎永远不划算（呼应第 3 章）。
+GPU 划算的前提：数据搬上去后被很多个 kernel 反复使用，把传输成本摊薄。</code></pre>
+</div><p>这个结果很扎心，也很重要：向量加法这种<strong>算术强度极低</strong>的 kernel（第 3 章算过它是 0.083 次/字节），几乎 100% 的时间花在 PCIe 传输上，GPU 强大的算力完全用不上。改一行看看：把 <code>compute</code> 那行的 <code>device_bw</code> 换成 <code>peak_flops = 60e12</code> 并用 <code>(1 * N) / peak_flops</code>（按一次加法一个 FLOP 算），你会发现计算时间更小——因为向量加法连显存带宽都喂不饱，更别说算力了。<strong>这就是&quot;是否值得上 GPU&quot;的定量答案</strong>：只有当数据搬上去后被反复计算（把 H2D/D2H 成本摊到很多个 kernel 上），或者本身就是算力密集的任务，GPU 才划算。第 14 章的<strong>算子融合</strong>、第 16 章的 <strong>Roofline 模型</strong>，本质上都在对抗这个&quot;传输/带宽成本&quot;。</p>
+<h2>小结与下一步</h2>
+<p>到这里，本书的&quot;地基&quot;部分（第 4–9 章）完整落成。你从软件的执行层级出发，认识了真正的调度单位 warp、显式的内存层级、三种协作机制，现在把它们全部串成了一个<strong>能编译、能跑、带错误检查的真程序</strong>。你已经会写 GPU kernel 了——这不是夸张，逐元素类的 kernel 你现在完全能独立完成。</p>
+<p>从下一章起进入<strong>第三部分</strong>：把这个模型用四种主流技术分别深入。第 10 章先啃最贴近硬件的 <strong>CUDA</strong>——同样的向量加法你已经写过，我们会在它之上展开 CUDA 的 stream、事件、更细的内存 API 和多 kernel 协作，看清这层&quot;最原始的外衣&quot;到底给了你多少控制力。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>一个真 kernel 的生命周期是<strong>八步</strong>：host 分配 → <code>cudaMalloc</code> → H2D 拷贝 → 选 grid/block → 启动 → 同步+错误检查 → D2H 拷贝 → 验证+释放。</li>
+<li><strong>block 取 32 的倍数</strong>（对齐 warp），<strong>grid 用向上取整</strong> <code>(N+threads-1)/threads</code> 凑够线程，再靠 kernel 里的 <code>if (i &lt; n)</code> 挡住多出的线程。</li>
+<li>kernel 启动是<strong>异步</strong>的，错误可能&quot;粘&quot;在后面的调用上——必须用 <strong>CHECK 宏</strong>包住每个 CUDA 调用，启动后紧跟 <code>cudaGetLastError()</code> + <code>cudaDeviceSynchronize()</code>，否则几乎无法调试。</li>
+<li><strong>SYCL 的 USM</strong>（<code>malloc_shared</code>）让 host/device 共享指针、免写显式拷贝，代码更短；但物理上的 PCIe 传输和成本一分不少，只是被运行时藏了起来。</li>
+<li>用时间模型算清&quot;值不值得上 GPU&quot;：向量加法约 <strong>99.5% 的时间耗在 PCIe 传输</strong>上，算力用不上。GPU 只有在&quot;数据反复使用摊薄传输&quot;或&quot;算力密集&quot;时才划算——这正是后续融合与 Roofline 章节的出发点。</content>
+</invoke></li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch08.html">← 第 8 章 协作与同步：barrier、shuffle 与原子操作</a>
+  <a class="nav-next" href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li class="active"><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>到目前为止你理解的 GPU，是"海量 CUDA 核心 + 内存层级 + warp 调度"。但从 Volta 到 Hopper、Blackwell 这一代把 GPU 变成 AI 引擎的东西，是几样你还没见过的新武器：<strong>Tensor Core</strong>（一条指令做一整块矩阵乘）、<strong>异步拷贝（cp.async / TMA）</strong>（搬数据时不挡住计算）、以及把二者拧在一起的<strong>软件流水线（software pipelining）</strong>。</p>
+<p>你不会手写这些的每一个细节——它们藏在 cuBLAS、CUTLASS、Triton 背后。但你必须<strong>理解它们在干什么、为什么快</strong>，否则你无法读懂为什么 FlashAttention 能把注意力算得那么省，也无法理解 Triton 的 <code>num_stages</code> 到底调的是什么。读完你会跑一个模拟器，亲眼看到"流水线"如何把访存时间藏进计算时间里，并看懂一段 Tensor Core 的 WMMA 代码在做什么。</p>
+</div><h2>回顾：CUDA 核心是&quot;标量的乘加机器&quot;</h2>
+<p>第 3 章说过，一个 SM 里塞满了 <strong>CUDA 核心</strong>，每个核心一拍做一次标量运算。矩阵乘法的内层就是无数次<strong>乘加（FMA，fused multiply-add）</strong>：<code>c += a * b</code>。一个 warp 的 32 个 CUDA 核心，一拍能做 32 个这样的标量 FMA。</p>
+<p>问题在于，AI 的核心计算是<strong>矩阵乘</strong>，而且是巨大的矩阵乘。一个 <code>M×K</code> 乘 <code>K×N</code> 的矩阵乘要做 <code>M×N×K</code> 次乘加。用标量 FMA 一次做一个，哪怕几千个核心一起上，面对动辄上亿次乘加的深度学习层，也显得力不从心。于是硬件工程师做了一件事：<strong>造一个专门做小矩阵乘的电路，一条指令吞下一整块乘加。</strong></p>
+<h2>Tensor Core：一条指令，一整块矩阵乘加</h2>
+<p><strong>Tensor Core（张量核心）<strong>是 Volta（2017）起每个 SM 里新增的专用单元。它不做标量 FMA，而是一条指令完成一次小规模的</strong>矩阵乘累加（MMA，matrix multiply-accumulate）</strong>：</p>
+<p>$$D = A \times B + C$$</p>
+<p>其中 <code>A</code>、<code>B</code>、<code>C</code>、<code>D</code> 都是小方块（例如 16×16）。一次 <code>16×16×16</code> 的 MMA 相当于 <code>16×16×16 = 4096</code> 次标量乘加——<strong>一条指令干掉了几千次 FMA</strong>。这就是 Tensor Core 相比 CUDA 核心在矩阵乘上能快一个数量级甚至更多的原因：它把&quot;取指、译码、调度&quot;的开销摊到了几千次运算上，而不是每次乘加都摊一遍。</p>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一次 Tensor Core MMA ＝ 一大片标量 FMA</text>
+  <!-- 左：CUDA 核心，很多标量 FMA -->
+  <text x="140" y="46" text-anchor="middle" font-size="12" fill="#6b7280" font-weight="bold">CUDA 核心：逐个标量 FMA</text>
+  <g font-family="monospace" font-size="9" fill="#6b7280">
+    <rect x="40" y="58" width="200" height="150" rx="4" fill="#f3f4f6" stroke="#6b7280"/>
+    <text x="140" y="76" text-anchor="middle" fill="#374151">for k: c += a[k]*b[k]</text>
+  </g>
+  <!-- 密密麻麻的小乘加符号 -->
+  <g fill="#9ca3af" font-size="8" font-family="monospace">
+    <text x="55"  y="96">×+</text><text x="80" y="96">×+</text><text x="105" y="96">×+</text><text x="130" y="96">×+</text><text x="155" y="96">×+</text><text x="180" y="96">×+</text><text x="205" y="96">×+</text>
+    <text x="55"  y="114">×+</text><text x="80" y="114">×+</text><text x="105" y="114">×+</text><text x="130" y="114">×+</text><text x="155" y="114">×+</text><text x="180" y="114">×+</text><text x="205" y="114">×+</text>
+    <text x="55"  y="132">×+</text><text x="80" y="132">×+</text><text x="105" y="132">×+</text><text x="130" y="132">×+</text><text x="155" y="132">×+</text><text x="180" y="132">×+</text><text x="205" y="132">×+</text>
+    <text x="55"  y="150">×+</text><text x="80" y="150">×+</text><text x="105" y="150">×+</text><text x="130" y="150">×+</text><text x="155" y="150">×+</text><text x="180" y="150">×+</text><text x="205" y="150">×+</text>
+    <text x="55"  y="168">×+</text><text x="80" y="168">×+</text><text x="105" y="168">×+</text><text x="130" y="168">×+</text><text x="155" y="168">×+</text><text x="180" y="168">×+</text><text x="205" y="168">×+</text>
+  </g>
+  <text x="140" y="196" text-anchor="middle" font-size="9" fill="#6b7280">几千条指令，一次一个乘加</text>
+  <!-- 中间大箭头 -->
+  <text x="275" y="135" text-anchor="middle" font-size="24" fill="#e06a3b">⇒</text>
+  <text x="275" y="155" text-anchor="middle" font-size="9" fill="#e06a3b">一条指令</text>
+  <!-- 右：Tensor Core MMA -->
+  <text x="415" y="46" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">Tensor Core：一次 MMA</text>
+  <g font-family="monospace" font-size="11">
+    <rect x="310" y="70" width="46" height="46" fill="#eef6ff" stroke="#2b6cb0"/><text x="333" y="98" text-anchor="middle" fill="#1a4a7a">A</text>
+    <text x="366" y="98" text-anchor="middle" font-size="14" fill="#2b6cb0">×</text>
+    <rect x="378" y="70" width="46" height="46" fill="#eef6ff" stroke="#2b6cb0"/><text x="401" y="98" text-anchor="middle" fill="#1a4a7a">B</text>
+    <text x="434" y="98" text-anchor="middle" font-size="14" fill="#2b6cb0">+</text>
+    <rect x="446" y="70" width="46" height="46" fill="#f0fdf4" stroke="#3f9b5c"/><text x="469" y="98" text-anchor="middle" fill="#2f7a45">C</text>
+  </g>
+  <text x="401" y="140" text-anchor="middle" font-size="14" fill="#2b6cb0">=</text>
+  <rect x="378" y="150" width="46" height="46" fill="#dcedff" stroke="#2b6cb0" stroke-width="2"/><text x="401" y="178" text-anchor="middle" font-family="monospace" fill="#1a4a7a" font-weight="bold">D</text>
+  <text x="415" y="212" text-anchor="middle" font-size="9" fill="#2b6cb0">16×16×16 = 4096 次乘加，一条指令完成</text>
+  <text x="280" y="245" text-anchor="middle" font-size="11" fill="#6b7280">同样的乘加总量，Tensor Core 把取指/译码开销摊到几千次运算上</text>
+  <text x="280" y="266" text-anchor="middle" font-size="11" fill="#e06a3b">矩阵乘吞吐可达 CUDA 核心的十几到几十倍</text>
+</svg>
+<div class="caption">图 19-1　CUDA 核心逐个做标量 FMA，一拍一个乘加；Tensor Core 一条 MMA 指令吞下一整块 A×B+C（如 16×16×16 = 4096 次乘加），这就是它在矩阵乘上快一个数量级的来源</div>
+</div><h3>混合精度：为什么输入用 FP16、累加用 FP32</h3>
+<p>Tensor Core 还有一个关键设计：<strong>混合精度（mixed precision）</strong>。它接受<strong>低精度</strong>的输入——FP16、BF16，新一代还有 FP8——但在内部<strong>用 FP32 累加</strong>，最后输出 FP32（或转回低精度）。</p>
+<p>为什么这么设计？矩阵乘要把 <code>K</code> 个乘积加起来，<code>K</code> 一大，如果全程用 FP16 累加，小数值会被大数值&quot;吃掉&quot;（浮点吸收误差），精度崩坏。而输入用低精度有两个实打实的好处：<strong>每个数占的比特少一半（或更少），同样带宽能喂进更多数据</strong>（回忆第 3 章：大多数 kernel 卡在带宽）；<strong>低精度乘法器电路更小更快，同样芯片面积能塞更多</strong>。用低精度喂、用高精度攒——这是现代 AI 硬件的通用哲学，也是为什么训练里到处是 FP16/BF16。</p>
+<div class="warn">
+<strong>你几乎从不直接写 Tensor Core 指令</strong>
+Tensor Core 对数据在寄存器和 shared memory 里的<strong>排布（layout）</strong>有苛刻要求——哪个线程持有矩阵的哪几个元素，都有固定规矩。手写极易错且不可移植。所以现实中你通过<strong>层层封装</strong>去用它：最省心的是 <strong>cuBLAS</strong>（调一个 <code>gemm</code>）；要融合就用 <strong>CUTLASS</strong>（第 15 章 CuTe 就是它的底座）或 <strong>Triton 的 <code>tl.dot</code></strong>（第 13、14 章，一行就吃上 Tensor Core）；只有写库的人才碰底层的 <strong>WMMA API</strong> 或 PTX 的 <code>mma</code> 指令。本章末尾给你看一眼 WMMA，是为了让你<strong>认得它</strong>，不是让你天天写它。
+</div><div class="compare">
+<div class="known">
+<div class="compare-head">CUDA 核心：标量 FMA 循环</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 每个线程一个输出元素，循环累加
+float acc = 0.0f;
+for (int k = 0; k &lt; K; ++k)
+    acc += A[row*K + k] * B[k*N + col];
+// K 次标量乘加，全 FP32
+// 取指/调度开销摊在每一次上</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">Tensor Core：一条 MMA 吃一整块</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 一个 warp 协作算一整块 16x16
+wmma::mma_sync(acc, a_frag, b_frag, acc);
+// FP16 输入、FP32 累加
+// 一条指令 = 16*16*16 次乘加
+// 开销摊在几千次运算上</code></pre>
+</div></div>
+</div><h2>异步拷贝：搬数据时别让计算干等</h2>
+<p>Tensor Core 把&quot;算&quot;加速了几十倍，瓶颈立刻回到&quot;喂&quot;——第 3 章那句老话又灵验了：<strong>算得再快，数据搬不上来也白搭</strong>。</p>
+<p>回忆第 11 章的 tiling 矩阵乘：每个 block 反复地&quot;从全局内存搬一小块（tile）到 shared memory → 算这一块 → 搬下一块&quot;。传统写法里，&quot;搬&quot;和&quot;算&quot;是<strong>串行</strong>的：线程发起一次全局内存读，然后<strong>卡住等它到货</strong>，货到了才开始算。等的这几百个周期里，昂贵的 Tensor Core 在闲着。</p>
+<p>现代硬件给了两件工具打破这个串行：</p>
+<ul>
+<li><strong><code>cp.async</code>（异步拷贝，Ampere 起）</strong>：发起一次&quot;全局 → shared&quot;的拷贝后<strong>立即返回</strong>，不等它完成。线程可以接着干别的（比如算上一块），等真要用数据时再用一条指令等它到齐。搬运和计算就能<strong>重叠</strong>。</li>
+<li><strong>TMA（Tensor Memory Accelerator，Hopper 起）</strong>：更进一步，一条指令就能让专门的硬件单元把一整块多维 tile 从全局内存搬进 shared memory，连地址计算都交给硬件，线程完全不用逐元素操心。这大大简化了代码，也释放了寄存器和指令槽。</li>
+</ul>
+<p>这和第 10 章的 <strong>CUDA 流（stream）</strong> 是同一种思想——用重叠掩盖延迟——只是尺度不同：流是在<strong>整个 kernel / 拷贝</strong>的粗粒度上重叠，而 <code>cp.async</code> / TMA 是在<strong>一个 block 内、一块 tile</strong> 的细粒度上重叠。</p>
+<h2>软件流水线：一边算这块，一边预取下一块</h2>
+<p>有了异步拷贝，就能搭出现代高性能 kernel 的核心套路——<strong>软件流水线（software pipelining）</strong>，也叫<strong>多级缓冲（multi-stage buffering）</strong>。</p>
+<p>思想和 CPU 的指令流水线、或工厂流水线一模一样：<strong>在计算当前 tile 的同时，异步预取（prefetch）下一个 tile</strong>。这样当前 tile 算完，下一块数据已经躺在 shared memory 里了，Tensor Core 无缝接着算，几乎不用等内存。你在 shared memory 里开<strong>两块（double buffering）或多块</strong>缓冲轮流用：一块正在被计算，另一块正在被异步填充。</p>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="18" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">软件流水线：预取下一块，藏住访存延迟</text>
+  <!-- 上：非流水线 -->
+  <text x="20" y="46" font-size="12" fill="#6b7280" font-weight="bold">非流水线（串行）：load 和 compute 轮流干等</text>
+  <g font-family="monospace" font-size="9">
+    <!-- tile0 -->
+    <rect x="20"  y="56" width="60" height="24" fill="#e5e7eb" stroke="#6b7280"/><text x="50"  y="72" text-anchor="middle" fill="#6b7280">load0</text>
+    <rect x="80"  y="56" width="50" height="24" fill="#d5dbe0" stroke="#6b7280"/><text x="105" y="72" text-anchor="middle" fill="#374151">comp0</text>
+    <rect x="130" y="56" width="60" height="24" fill="#e5e7eb" stroke="#6b7280"/><text x="160" y="72" text-anchor="middle" fill="#6b7280">load1</text>
+    <rect x="190" y="56" width="50" height="24" fill="#d5dbe0" stroke="#6b7280"/><text x="215" y="72" text-anchor="middle" fill="#374151">comp1</text>
+    <rect x="240" y="56" width="60" height="24" fill="#e5e7eb" stroke="#6b7280"/><text x="270" y="72" text-anchor="middle" fill="#6b7280">load2</text>
+    <rect x="300" y="56" width="50" height="24" fill="#d5dbe0" stroke="#6b7280"/><text x="325" y="72" text-anchor="middle" fill="#374151">comp2</text>
+  </g>
+  <line x1="20" y1="92" x2="350" y2="92" stroke="#6b7280" stroke-width="1" marker-end="url(#tarr)"/>
+  <text x="355" y="96" font-size="10" fill="#6b7280">时间</text>
+  <text x="185" y="112" text-anchor="middle" font-size="10" fill="#e06a3b">总时间 = 3×(load + compute)，计算单元一半时间在等</text>
+  <!-- 下：流水线 -->
+  <text x="20" y="150" font-size="12" fill="#2b6cb0" font-weight="bold">流水线（预取）：load(k+1) 与 compute(k) 重叠</text>
+  <!-- load 行 -->
+  <text x="12" y="176" font-size="9" fill="#2b6cb0" text-anchor="end">load</text>
+  <g font-family="monospace" font-size="9">
+    <rect x="30"  y="164" width="60" height="22" fill="#eef6ff" stroke="#2b6cb0"/><text x="60"  y="179" text-anchor="middle" fill="#1a4a7a">load0</text>
+    <rect x="90"  y="164" width="60" height="22" fill="#eef6ff" stroke="#2b6cb0"/><text x="120" y="179" text-anchor="middle" fill="#1a4a7a">load1</text>
+    <rect x="150" y="164" width="60" height="22" fill="#eef6ff" stroke="#2b6cb0"/><text x="180" y="179" text-anchor="middle" fill="#1a4a7a">load2</text>
+  </g>
+  <!-- compute 行，右移一格与 load 重叠 -->
+  <text x="12" y="212" font-size="9" fill="#2b6cb0" text-anchor="end">comp</text>
+  <g font-family="monospace" font-size="9">
+    <rect x="90"  y="200" width="60" height="22" fill="#dcedff" stroke="#2b6cb0"/><text x="120" y="215" text-anchor="middle" fill="#1a4a7a">comp0</text>
+    <rect x="150" y="200" width="60" height="22" fill="#dcedff" stroke="#2b6cb0"/><text x="180" y="215" text-anchor="middle" fill="#1a4a7a">comp1</text>
+    <rect x="210" y="200" width="60" height="22" fill="#dcedff" stroke="#2b6cb0"/><text x="240" y="215" text-anchor="middle" fill="#1a4a7a">comp2</text>
+  </g>
+  <!-- 重叠标注 -->
+  <rect x="90" y="160" width="60" height="66" fill="none" stroke="#e06a3b" stroke-dasharray="3 2"/>
+  <text x="120" y="242" text-anchor="middle" font-size="9" fill="#e06a3b">load1 与 comp0 同时进行</text>
+  <line x1="30" y1="234" x2="290" y2="234" stroke="#2b6cb0" stroke-width="1" marker-end="url(#tarr)"/>
+  <text x="180" y="270" text-anchor="middle" font-size="10" fill="#e06a3b">总时间 ≈ load0 + 3×compute，稳态下访存被算完全藏住</text>
+  <defs>
+    <marker id="tarr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 19-2　非流水线时 load 与 compute 串行、计算单元一半时间干等；流水线让 load(k+1) 与 compute(k) 重叠，稳态下总时间趋近于"只有计算"，访存延迟被藏进计算里</div>
+</div><div class="keypoint">
+<strong>把三章串起来看</strong>
+这正是第 13、14 章 Triton 里那个 <code>num_stages</code> 自动调优参数的含义——它就是"开几级缓冲做流水线"。<code>num_stages=2</code> 是双缓冲，<code>=3、4</code> 是三级、四级，级数越多越能藏住延迟，但吃掉的 shared memory 也越多，要权衡。第 15 章的 CuTe DSL / CUTLASS 则把"异步拷贝 + 多级流水线 + Tensor Core"这套模式做成了可复用的抽象。<strong>你现在明白了：Triton 和 CuTe 这些高级 DSL 存在的理由，就是让你不必手写 <code>cp.async</code>、不必手算 Tensor Core 的寄存器排布，就能拼出这套高性能流水线。</strong>FlashAttention 快，就快在把这一切用到了极致。
+</div><h2>动手：流水线能省多少时间</h2>
+<p>下面这段程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它用一个简单的时间模型对比：处理 <code>K</code> 个 tile，<strong>非流水线</strong>（每块先 load 再 compute，串行）要多久，<strong>流水线</strong>（预取重叠）又要多久。你会看到：tile 数越多，流水线越接近&quot;只花计算时间&quot;，也就是从访存受限逼近算力受限。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E5%AF%B9%E6%AF%94%E6%B5%81%E6%B0%B4%E7%BA%BF%20vs%20%E9%9D%9E%E6%B5%81%E6%B0%B4%E7%BA%BF%EF%BC%9A%E5%A4%84%E7%90%86%20K%20%E4%B8%AA%20tile%20%E7%9A%84%E6%80%BB%E6%97%B6%E9%97%B4%0ALOAD%20%3D%20100%20%20%20%20%20%20%23%20%E6%90%AC%E4%B8%80%E4%B8%AA%20tile%20%E7%9A%84%E8%80%97%E6%97%B6%EF%BC%88%E6%97%B6%E9%92%9F%E5%91%A8%E6%9C%9F%EF%BC%8C%E7%A4%BA%E6%84%8F%E5%80%BC%EF%BC%89%0ACOMPUTE%20%3D%2060%20%20%20%20%23%20%E7%AE%97%E4%B8%80%E4%B8%AA%20tile%20%E7%9A%84%E8%80%97%E6%97%B6%0A%0Adef%20no_pipeline(K)%3A%0A%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20tile%EF%BC%9A%E5%85%88%20load%20%E5%8D%A1%E4%BD%8F%E7%AD%89%EF%BC%8C%E5%86%8D%20compute%E3%80%82%E4%B8%A4%E8%80%85%E4%B8%B2%E8%A1%8C%0A%20%20%20%20return%20K%20*%20(LOAD%20%2B%20COMPUTE)%0A%0Adef%20pipelined(K)%3A%0A%20%20%20%20%23%20%E7%A8%B3%E6%80%81%EF%BC%9Aload(k%2B1)%20%E4%B8%8E%20compute(k)%20%E9%87%8D%E5%8F%A0%EF%BC%8C%E6%AF%8F%E6%AD%A5%E8%80%97%E6%97%B6%20%3D%20max(load%2C%20compute)%0A%20%20%20%20%23%20%E4%BD%86%E7%AC%AC%E4%B8%80%E4%B8%AA%20tile%20%E8%A6%81%E5%85%88%20load%20%E8%BF%9B%E6%9D%A5%EF%BC%88%E5%A1%AB%E6%B5%81%E6%B0%B4%E7%BA%BF%EF%BC%89%EF%BC%8C%E6%9C%80%E5%90%8E%E4%B8%80%E6%AE%B5%E8%AE%A1%E7%AE%97%E6%B2%A1%E6%9C%89%20load%20%E5%8F%AF%E9%87%8D%E5%8F%A0%0A%20%20%20%20if%20K%20%3D%3D%200%3A%0A%20%20%20%20%20%20%20%20return%200%0A%20%20%20%20return%20LOAD%20%2B%20K%20*%20max(LOAD%2C%20COMPUTE)%0A%0Aprint(f%22%E6%AF%8F%20tile%EF%BC%9Aload%3D%7BLOAD%7D%EF%BC%8Ccompute%3D%7BCOMPUTE%7D%EF%BC%88%E5%91%A8%E6%9C%9F%EF%BC%89%5Cn%22)%0Aprint(f%22%7B'K(tile%E6%95%B0)'%3A%3E10%7D%20%7C%20%7B'%E9%9D%9E%E6%B5%81%E6%B0%B4%E7%BA%BF'%3A%3E8%7D%20%7C%20%7B'%E6%B5%81%E6%B0%B4%E7%BA%BF'%3A%3E7%7D%20%7C%20%7B'%E5%8A%A0%E9%80%9F%E6%AF%94'%3A%3E6%7D%22)%0Aprint(%22-%22%20*%2044)%0Afor%20K%20in%20%5B1%2C%202%2C%204%2C%208%2C%2016%2C%2064%5D%3A%0A%20%20%20%20a%20%3D%20no_pipeline(K)%0A%20%20%20%20b%20%3D%20pipelined(K)%0A%20%20%20%20print(f%22%7BK%3A%3E10%7D%20%7C%20%7Ba%3A%3E8%7D%20%7C%20%7Bb%3A%3E7%7D%20%7C%20%7Ba%2Fb%3A%3E5.2f%7Dx%22)%0A%0A%23%20%E5%BD%93%20K%20%E5%BE%88%E5%A4%A7%EF%BC%8C%E6%B5%81%E6%B0%B4%E7%BA%BF%E8%B6%8B%E8%BF%91%E4%BA%8E%22%E5%8F%AA%E8%8A%B1%E6%AF%8F%E6%AD%A5%20max(load%2Ccompute)%22%EF%BC%8C%E9%9D%9E%E6%B5%81%E6%B0%B4%E7%BA%BF%E6%98%AF%E5%AE%83%E4%BB%AC%E4%B9%8B%E5%92%8C%0Abig%20%3D%20100000%0Aratio%20%3D%20no_pipeline(big)%20%2F%20pipelined(big)%0Aprint(f%22%5CnK%20%E5%BE%88%E5%A4%A7%E6%97%B6%E5%8A%A0%E9%80%9F%E6%AF%94%E8%B6%8B%E8%BF%91%20(load%2Bcompute)%2Fmax(load%2Ccompute)%20%3D%20%22%0A%20%20%20%20%20%20f%22%7B(LOAD%2BCOMPUTE)%2Fmax(LOAD%2CCOMPUTE)%3A.2f%7Dx%22)%0Aprint(f%22%EF%BC%88K%3D%7Bbig%7D%20%E5%AE%9E%E6%B5%8B%20%7Bratio%3A.2f%7Dx%EF%BC%89%22)"># 对比流水线 vs 非流水线：处理 K 个 tile 的总时间
+LOAD = 100      # 搬一个 tile 的耗时（时钟周期，示意值）
+COMPUTE = 60    # 算一个 tile 的耗时
+
+def no_pipeline(K):
+    # 每个 tile：先 load 卡住等，再 compute。两者串行
+    return K * (LOAD + COMPUTE)
+
+def pipelined(K):
+    # 稳态：load(k+1) 与 compute(k) 重叠，每步耗时 = max(load, compute)
+    # 但第一个 tile 要先 load 进来（填流水线），最后一段计算没有 load 可重叠
+    if K == 0:
+        return 0
+    return LOAD + K * max(LOAD, COMPUTE)
+
+print(f"每 tile：load={LOAD}，compute={COMPUTE}（周期）\n")
+print(f"{'K(tile数)':&gt;10} | {'非流水线':&gt;8} | {'流水线':&gt;7} | {'加速比':&gt;6}")
+print("-" * 44)
+for K in [1, 2, 4, 8, 16, 64]:
+    a = no_pipeline(K)
+    b = pipelined(K)
+    print(f"{K:&gt;10} | {a:&gt;8} | {b:&gt;7} | {a/b:&gt;5.2f}x")
+
+# 当 K 很大，流水线趋近于"只花每步 max(load,compute)"，非流水线是它们之和
+big = 100000
+ratio = no_pipeline(big) / pipelined(big)
+print(f"\nK 很大时加速比趋近 (load+compute)/max(load,compute) = "
+      f"{(LOAD+COMPUTE)/max(LOAD,COMPUTE):.2f}x")
+print(f"（K={big} 实测 {ratio:.2f}x）")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">每 tile：load=100，compute=60（周期）
+
+  K(tile数) |     非流水线 |     流水线 |    加速比
+--------------------------------------------
+         1 |      160 |     200 |  0.80x
+         2 |      320 |     300 |  1.07x
+         4 |      640 |     500 |  1.28x
+         8 |     1280 |     900 |  1.42x
+        16 |     2560 |    1700 |  1.51x
+        64 |    10240 |    6500 |  1.58x
+
+K 很大时加速比趋近 (load+compute)/max(load,compute) = 1.60x
+K=100000 实测 1.60x</code></pre>
+</div><p>三个洞察：（1）<code>K=1</code> 时流水线反而<strong>更慢</strong>——只有一块，没得重叠，还白搭了填流水线的开销；流水线只有在 tile 多时才划算。（2）tile 越多，加速比越逼近上限 <code>(load+compute)/max(load,compute) = 160/100 = 1.6</code>——因为稳态下每步只花 <code>max(load, compute)</code>，较小的那个被完全藏住。（3）如果 <code>load</code> 远大于 <code>compute</code>（严重访存受限），流水线能把大部分 load 藏进 compute，但当 <code>load &gt; compute</code> 时上限受 <code>load</code> 主导。请动手改：把 <code>COMPUTE</code> 从 60 调到 100（让 load 和 compute 相等），再运行——加速比上限会变成 <code>2.0x</code>，这是流水线的理想情形：搬和算完美对半重叠。</p>
+<h2>动手：Tensor Core 到底快多少（算一算）</h2>
+<p>再用一个小模型量化 Tensor Core 相对 CUDA 核心的吞吐优势。核心事实：一个 SM 一拍能做的标量 FMA 数有限，而一条 MMA 指令一次吞下一整块乘加。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20%E7%B2%97%E7%95%A5%E5%AF%B9%E6%AF%94%EF%BC%9A%E7%AE%97%E4%B8%80%E4%B8%AA%20M%C3%97N%C3%97K%20%E7%9F%A9%E9%98%B5%E4%B9%98%EF%BC%8CCUDA%20%E6%A0%B8%E5%BF%83%20vs%20Tensor%20Core%20%E5%90%84%E9%9C%80%E5%A4%9A%E5%B0%91%22%E6%8C%87%E4%BB%A4%E5%8F%91%E5%B0%84%22%0AM%2C%20N%2C%20K%20%3D%20256%2C%20256%2C%20256%0Atotal_mac%20%3D%20M%20*%20N%20*%20K%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%80%BB%E4%B9%98%E5%8A%A0%E6%AC%A1%E6%95%B0%0Aprint(f%22%E7%9F%A9%E9%98%B5%E4%B9%98%20%7BM%7Dx%7BN%7Dx%7BK%7D%EF%BC%9A%E5%85%B1%20%7Btotal_mac%3A%2C%7D%20%E6%AC%A1%E4%B9%98%E5%8A%A0%5Cn%22)%0A%0A%23%20CUDA%20%E6%A0%B8%E5%BF%83%EF%BC%9A%E4%B8%80%E6%9D%A1%20FMA%20%E6%8C%87%E4%BB%A4%E5%81%9A%201%20%E6%AC%A1%E4%B9%98%E5%8A%A0%EF%BC%88%E4%B8%80%E4%B8%AA%E7%BA%BF%E7%A8%8B%E4%B8%80%E6%8B%8D%E4%B8%80%E6%AC%A1%EF%BC%89%0Acuda_core_insts%20%3D%20total_mac%0A%23%20Tensor%20Core%EF%BC%9A%E4%B8%80%E6%9D%A1%20MMA%20%E6%8C%87%E4%BB%A4%E5%81%9A%2016*16*16%20%E6%AC%A1%E4%B9%98%E5%8A%A0%0AMMA%20%3D%2016%20*%2016%20*%2016%0Atensor_core_insts%20%3D%20total_mac%20%2F%20MMA%0A%0Aprint(f%22CUDA%20%E6%A0%B8%E5%BF%83%EF%BC%9A%E9%9C%80%E5%8F%91%E5%B0%84%20%7Bcuda_core_insts%3A%2C%7D%20%E6%9D%A1%20FMA%20%E6%8C%87%E4%BB%A4%22)%0Aprint(f%22Tensor%20Core%EF%BC%9A%E4%B8%80%E6%9D%A1%20MMA%20%3D%20%7BMMA%7D%20%E6%AC%A1%E4%B9%98%E5%8A%A0%EF%BC%8C%E9%9C%80%E5%8F%91%E5%B0%84%20%7Btensor_core_insts%3A%2C.0f%7D%20%E6%9D%A1%20MMA%20%E6%8C%87%E4%BB%A4%22)%0Aprint(f%22%E6%8C%87%E4%BB%A4%E6%95%B0%E4%B9%8B%E6%AF%94%EF%BC%9A%7Bcuda_core_insts%20%2F%20tensor_core_insts%3A%2C.0f%7Dx%20%E6%9B%B4%E5%B0%91%E7%9A%84%E6%8C%87%E4%BB%A4%22)%0Aprint(%22%5Cn%E6%9B%B4%E5%B0%91%E7%9A%84%E6%8C%87%E4%BB%A4%20%3D%20%E6%9B%B4%E5%B0%91%E7%9A%84%E5%8F%96%E6%8C%87%2F%E8%AF%91%E7%A0%81%2F%E8%B0%83%E5%BA%A6%E5%BC%80%E9%94%80%EF%BC%8C%E8%BF%99%E6%98%AF%20Tensor%20Core%20%E5%90%9E%E5%90%90%E4%BC%98%E5%8A%BF%E7%9A%84%E6%A0%B9%E6%BA%90%E4%B9%8B%E4%B8%80%22)%0Aprint(%22%EF%BC%88%E7%9C%9F%E5%AE%9E%E5%8A%A0%E9%80%9F%E8%BF%98%E5%8F%A0%E5%8A%A0%E4%BA%86%E4%BD%8E%E7%B2%BE%E5%BA%A6%E5%B8%A6%E6%9D%A5%E7%9A%84%E5%B8%A6%E5%AE%BD%E4%B8%8E%E9%9D%A2%E7%A7%AF%E6%94%B6%E7%9B%8A%EF%BC%8C%E5%AE%9E%E6%B5%8B%E5%B8%B8%E8%BE%BE%E5%8D%81%E5%87%A0%E5%88%B0%E5%87%A0%E5%8D%81%E5%80%8D%EF%BC%89%22)"># 粗略对比：算一个 M×N×K 矩阵乘，CUDA 核心 vs Tensor Core 各需多少"指令发射"
+M, N, K = 256, 256, 256
+total_mac = M * N * K              # 总乘加次数
+print(f"矩阵乘 {M}x{N}x{K}：共 {total_mac:,} 次乘加\n")
+
+# CUDA 核心：一条 FMA 指令做 1 次乘加（一个线程一拍一次）
+cuda_core_insts = total_mac
+# Tensor Core：一条 MMA 指令做 16*16*16 次乘加
+MMA = 16 * 16 * 16
+tensor_core_insts = total_mac / MMA
+
+print(f"CUDA 核心：需发射 {cuda_core_insts:,} 条 FMA 指令")
+print(f"Tensor Core：一条 MMA = {MMA} 次乘加，需发射 {tensor_core_insts:,.0f} 条 MMA 指令")
+print(f"指令数之比：{cuda_core_insts / tensor_core_insts:,.0f}x 更少的指令")
+print("\n更少的指令 = 更少的取指/译码/调度开销，这是 Tensor Core 吞吐优势的根源之一")
+print("（真实加速还叠加了低精度带来的带宽与面积收益，实测常达十几到几十倍）")</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">矩阵乘 256x256x256：共 16,777,216 次乘加
+
+CUDA 核心：需发射 16,777,216 条 FMA 指令
+Tensor Core：一条 MMA = 4096 次乘加，需发射 4,096 条 MMA 指令
+指令数之比：4,096x 更少的指令</code></pre>
+</div><p>（运行时你还会看到最后两行说明文字。）这不是说 Tensor Core 就快 4096 倍——真实吞吐还受带宽、排布、精度等一堆因素约束——但它直观地说明了&quot;一条指令吞一整块&quot;为什么在指令开销上占尽便宜。请动手改：把 tile 从 <code>16×16×16</code> 换成新一代硬件更大的 MMA 形状，看指令数怎么进一步下降。</p>
+<h2>动手：认一眼 WMMA（不要求会写）</h2>
+<p>最后看一段 <strong>WMMA（Warp Matrix Multiply-Accumulate）API</strong> 的骨架。它是 CUDA C++ 里直接使用 Tensor Core 的相对高层的入口，一个 <strong>warp 协作</strong>算一块 <code>16×16</code> 的乘累加。下面是 <code>-norun</code> 片段，你<strong>不必会写</strong>，只要能认出这几个关键动作：声明 <strong>fragment</strong>（片段，warp 里的线程共同持有的一块矩阵）、<code>load_matrix_sync</code> 从 shared memory 装进 fragment、<code>mma_sync</code> 做矩阵乘累加、<code>store_matrix_sync</code> 写回。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;mma.h&gt;
+using namespace nvcuda;
+
+// 一个 warp 协作，用 Tensor Core 算 C(16x16) += A(16x16) * B(16x16)
+__global__ void wmma_tile(const half* A, const half* B, float* C) {
+    // fragment：一块矩阵在 warp 内 32 个线程间的分布式表示
+    wmma::fragment&lt;wmma::matrix_a, 16, 16, 16, half, wmma::row_major&gt; a_frag;
+    wmma::fragment&lt;wmma::matrix_b, 16, 16, 16, half, wmma::col_major&gt; b_frag;
+    wmma::fragment&lt;wmma::accumulator, 16, 16, 16, float&gt; acc_frag;
+
+    wmma::fill_fragment(acc_frag, 0.0f);        // 累加器清零
+
+    wmma::load_matrix_sync(a_frag, A, 16);      // 从内存装入 A 片段（FP16 输入）
+    wmma::load_matrix_sync(b_frag, B, 16);      // 装入 B 片段
+
+    wmma::mma_sync(acc_frag, a_frag, b_frag, acc_frag);  // ← 一条 MMA：FP32 累加
+
+    wmma::store_matrix_sync(C, acc_frag, 16, wmma::mem_row_major);  // 写回 FP32 结果
+}</code></pre>
+</div><p>看懂这段代码的三个要点就够了：（1）操作的单位是<strong>整块矩阵（fragment）</strong>，不是标量；（2）输入是 <code>half</code>（FP16），累加器是 <code>float</code>（FP32）——正是前面说的混合精度；（3）所有 <code>_sync</code> 结尾的函数都是<strong>一个 warp 一起做</strong>的，Tensor Core 的最小协作单位是 warp，不是单个线程。真实的高性能 GEMM 会在这之上叠加 tiling（第 11 章）、<code>cp.async</code> 预取、多级流水线——那就是 CUTLASS 干的活，也是为什么大多数人宁可调 cuBLAS 或写 Triton，而不手搓 WMMA。</p>
+<div class="note">
+<strong>你需要记住的分寸</strong>
+Tensor Core、<code>cp.async</code>、TMA、多级流水线——这些是<strong>库和编译器</strong>的战场。作为应用开发者，你的价值不在手写它们，而在：<strong>知道它们存在</strong>（于是能看懂性能分析工具里"Tensor Core 利用率""内存流水线停顿"这些指标），<strong>知道怎么触发它们</strong>（用对精度、对齐好数据、让矩阵维度是 tile 的整数倍、给 Triton 设合理的 <code>num_stages</code>），以及<strong>知道选哪个工具</strong>（简单矩阵乘用 cuBLAS，要融合用 Triton/CuTe）。这层"理解但不手写"的认知，恰恰是资深工程师和调库新手的分水岭。
+</div><h2>小结与下一步</h2>
+<p>现代 GPU 之所以是 AI 引擎，靠的是三样在前面章节没出现过的硬件能力，而它们环环相扣：<strong>Tensor Core</strong> 把矩阵乘加速几十倍，于是瓶颈回到喂数据；<strong>异步拷贝（cp.async / TMA）</strong> 让搬数据不再阻塞计算；<strong>软件流水线</strong>用多级缓冲把访存延迟藏进计算，让昂贵的 Tensor Core 尽量不空转。这三者拼在一起，就是 FlashAttention、CUTLASS 快得离谱的秘密，也是 Triton、CuTe DSL 存在的意义——把这套复杂机制封装起来，让你不必手写 PTX。</p>
+<p>你现在集齐了理解现代 GPU 高性能代码的全部拼图：从心智模型、执行层级、内存与同步，到四大技术、性能模型、访存优化、并行原语，再到这一章的现代硬件武器。下一章我们把它们<strong>收束到一个具体问题上</strong>：同一个 <strong>softmax</strong>，分别用 CUDA、SYCL、Triton、CuTe DSL 写一遍，让你在真实算子里看清四种技术的取舍与共性——你会发现，本章的归约（softmax 要求 max 和 sum）和上一章的原语，全都要用上。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>Tensor Core</strong> 一条 <strong>MMA</strong> 指令完成一块小矩阵乘累加（如 16×16×16 = 4096 次乘加），把取指/调度开销摊薄，矩阵乘吞吐达 CUDA 核心的十几到几十倍。</li>
+<li><strong>混合精度</strong>：输入用 FP16/BF16/FP8（省带宽、省面积），内部用 <strong>FP32 累加</strong>（保精度）——现代 AI 硬件的通用哲学。</li>
+<li>你几乎从不手写 Tensor Core，而是通过 <strong>cuBLAS / CUTLASS / Triton <code>tl.dot</code> / WMMA API</strong> 分层使用；WMMA 的单位是 warp 协作的 <strong>fragment</strong>。</li>
+<li><strong>异步拷贝（cp.async，Ampere）与 TMA（Hopper）</strong> 让&quot;全局 → shared&quot;的搬运不阻塞计算，是第 10 章 stream&quot;用重叠掩盖延迟&quot;思想在 tile 粒度上的延伸。</li>
+<li><strong>软件流水线 / 多级缓冲</strong>：算当前 tile 时预取下一 tile，稳态下把访存藏进计算——正是 Triton <code>num_stages</code>（第 14 章）调的东西，也是 CuTe / CUTLASS（第 15 章）封装的模式。</li>
+<li>作为应用开发者，价值在于<strong>理解、触发、选型</strong>这些能力，而非手写它们——这是高级 DSL 存在的理由，也是 FlashAttention 快的根源。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch18.html">← 第 18 章 并行原语：归约与扫描的经典模式</a>
+  <a class="nav-next" href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

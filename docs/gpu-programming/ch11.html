@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li class="active"><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章把 CUDA 的编程模型系统化了，但那些 kernel 都是"读一次、算一下、写一次"的访存受限类型。这一章讲 GPU 优化里<strong>最经典、最值得吃透</strong>的一个案例：<strong>矩阵乘法</strong>。你会先看到最朴素的写法为什么慢——它把同一份数据从慢速全局内存里反复读了几十上百遍；再学 <strong>tiling（分块）</strong> 这招：让一个 block 的线程<strong>协作</strong>把小块数据搬进 <code>__shared__</code> 高速内存，反复复用，把一个访存受限的问题硬生生推向算力受限。</p>
+<p>读完你能亲手推导 <code>__syncthreads()</code> 为什么一轮要放两个、各放在哪；用一个浏览器里能跑的模拟器数出 tiling 把全局内存读取次数砍掉了几倍；并读懂一个完整、正确、能和 CPU 结果对拍的 tiled 矩阵乘程序。</p>
+</div><h2>先看朴素矩阵乘：为什么它是访存灾难</h2>
+<p>矩阵乘 <code>C = A × B</code>，三者都是 N×N。定义你早就会：<code>C[i][j]</code> 等于 A 的第 i 行和 B 的第 j 列<strong>逐元素相乘再求和</strong>。搬到 GPU 上，最自然的写法就是第 1 章那套思路——<strong>一个线程负责算一个 <code>C[i][j]</code></strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 朴素矩阵乘：每个线程算一个 C[row][col]
+__global__ void matmul_naive(int N, const float* A, const float* B, float* C) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row &lt; N &amp;&amp; col &lt; N) {
+        float sum = 0.0f;
+        for (int k = 0; k &lt; N; ++k)
+            sum += A[row * N + k] * B[k * N + col];   // 每次都从全局内存读
+        C[row * N + col] = sum;
+    }
+}</code></pre>
+</div><p>代码没错，但看那个内层循环：算一个 <code>C[row][col]</code> 要从<strong>全局内存</strong>读一整行 A（N 个元素）加一整列 B（N 个元素）。全 N×N 个输出元素都这么干，总读取次数是 <strong>2N³</strong>。</p>
+<p>真正致命的是<strong>重复</strong>。想想 <code>C[0][0]</code> 和 <code>C[0][1]</code>：它俩都要读 A 的第 0 行——同一份数据被不同线程从慢速全局内存里<strong>各读了一遍</strong>。整个第 0 行 A，会被第 0 行所有 N 个输出线程各读一次，即读了 N 遍。B 的每一列同理。回忆第 3 章的算术强度：这个 kernel 每读一个 float（4 字节）只做一次乘加，强度低得可怜，<strong>妥妥的访存受限</strong>——算力单元大把时间在等数据从显存爬过来。</p>
+<div class="keypoint">
+<strong>问题的本质：复用没有被利用</strong>
+矩阵乘里数据的复用度极高（每个 A 元素要参与 N 个输出的计算），但朴素写法把每次复用都变成一次<strong>全局内存</strong>访问。优化的全部思路就一句话：<strong>把要反复用的数据，先搬到快的地方（shared memory），在那儿反复用完再说。</strong>这正是第 3 章那块"片上内存比显存快两个数量级"派上用场的地方。
+</div><h2>tiling：让一个 block 协作搬砖、就地复用</h2>
+<p><strong>tiling（分块 / blocking）</strong> 的想法：不要让每个线程各自跑去全局内存读整行整列，而是让<strong>一个 block 里的线程组成一个小方阵</strong>（比如 16×16），大家<strong>协作</strong>把 A 的一小块和 B 的一小块搬进 <code>__shared__</code> 内存，然后所有线程都从这块共享的快内存里取数做部分和。搬一次，被整个 block 复用 TILE 次。</p>
+<p>具体地，一个 block 负责算 C 的一个 TILE×TILE 小方块。因为算这个小方块需要 A 的一整条<strong>行带</strong>和 B 的一整条<strong>列带</strong>（都太大放不进 shared memory），就把它们沿 k 方向也切成一个个 TILE×TILE 的小块，<strong>一块一块地滑过去</strong>：</p>
+<ol>
+<li>block 里每个线程从全局内存<strong>各读一个</strong> A 元素和一个 B 元素，填进 <code>As[ty][tx]</code> 和 <code>Bs[ty][tx]</code>。TILE×TILE 个线程一起，正好把两个小块填满。</li>
+<li><strong>同步</strong>（<code>__syncthreads()</code>）：确保整块都装载完，谁都别提前开算。</li>
+<li>每个线程从 shared memory 里取 TILE 个数做部分和累加——这一步的访存全在<strong>快内存</strong>里，且每个搬进来的元素被复用了 TILE 次。</li>
+<li><strong>再同步</strong>：确保所有线程都算完这块、用完这块 shared memory，才能覆盖写下一块。</li>
+<li>滑到下一个 k 方向的 tile，回到第 1 步，直到覆盖完整条行带/列带。</li>
+</ol>
+<div class="concept">
+<svg viewBox="0 0 620 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="310" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#374151">tiling：滑动 A 的行带与 B 的列带，经 shared memory 算出 C 的一个小块</text>
+  <!-- A 矩阵：一条行带高亮 -->
+  <text x="95" y="52" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">A</text>
+  <rect x="40" y="60" width="150" height="150" fill="#f7fbff" stroke="#2b6cb0"/>
+  <rect x="40" y="96" width="150" height="36" fill="#cfe4fb" stroke="#2b6cb0"/>
+  <text x="115" y="119" text-anchor="middle" font-size="9" fill="#2b6cb0">行带（逐 tile 滑动 →）</text>
+  <!-- A 上被搬的一个 tile -->
+  <rect x="76" y="96" width="36" height="36" fill="#7fb2e8" stroke="#2b6cb0" stroke-width="1.5"/>
+  <!-- B 矩阵：一条列带高亮 -->
+  <text x="300" y="52" text-anchor="middle" font-size="12" fill="#3f9b5c" font-weight="bold">B</text>
+  <rect x="245" y="60" width="150" height="150" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <rect x="281" y="60" width="36" height="150" fill="#bfe6cc" stroke="#3f9b5c"/>
+  <text x="299" y="235" text-anchor="middle" font-size="9" fill="#2f7a45">列带（逐 tile 下滑 ↓）</text>
+  <rect x="281" y="96" width="36" height="36" fill="#7fcc94" stroke="#3f9b5c" stroke-width="1.5"/>
+  <!-- 箭头到 shared memory -->
+  <g stroke="#e06a3b" stroke-width="1.5" fill="none">
+    <path d="M112 114 L455 128" marker-end="url(#s1)"/>
+    <path d="M317 114 L455 152" marker-end="url(#s1)"/>
+  </g>
+  <!-- shared memory 盒 -->
+  <rect x="455" y="105" width="120" height="70" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="515" y="122" text-anchor="middle" font-size="10" fill="#a53f1c" font-weight="bold">shared memory</text>
+  <text x="515" y="140" text-anchor="middle" font-size="9" fill="#a53f1c">As[TILE][TILE]</text>
+  <text x="515" y="154" text-anchor="middle" font-size="9" fill="#a53f1c">Bs[TILE][TILE]</text>
+  <text x="515" y="169" text-anchor="middle" font-size="8" fill="#a53f1c">搬 1 次，复用 TILE 次</text>
+  <!-- C 矩阵：算出的小块 -->
+  <text x="150" y="255" text-anchor="middle" font-size="12" fill="#e06a3b" font-weight="bold">C（输出）</text>
+  <rect x="245" y="235" width="150" height="70" fill="#fdf6f3" stroke="#e06a3b"/>
+  <rect x="281" y="253" width="36" height="36" fill="#f0a884" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="299" y="275" text-anchor="middle" font-size="8" fill="#a53f1c">1 个 block</text>
+  <text x="450" y="255" font-size="9" fill="#6b7280">一个 block 负责 C 的一个</text>
+  <text x="450" y="270" font-size="9" fill="#6b7280">TILE×TILE 小块；沿 k 方向</text>
+  <text x="450" y="285" font-size="9" fill="#6b7280">滑过所有 tile，累加部分和</text>
+  <defs>
+    <marker id="s1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 11-1　tiling 方案：算 C 的一个小块，需要 A 的一条行带与 B 的一条列带；把它们切成 TILE×TILE 的小块逐个搬进 shared memory，block 内线程协作装载、就地复用、累加部分和，滑完整条带即得结果</div>
+</div><h2>两个 <code>__syncthreads()</code>，一个都不能省</h2>
+<p><code>__shared__</code> 内存是一个 block 内所有线程共享的，所以谁读谁写必须协调。每轮 tile 迭代放<strong>两个</strong> barrier，位置和理由如下：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">第一个 barrier：装载后、计算前</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">As[ty][tx] = A[...];   // 我只填一个格子
+Bs[ty][tx] = B[...];
+__syncthreads();       // ← 等全 block 填满
+// 若省掉：我可能用到别的线程
+// 还没写进去的格子 → 读到垃圾
+for (k) sum += As[ty][k]*Bs[k][tx];</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">第二个 barrier：计算后、覆盖前</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">for (k) sum += As[ty][k]*Bs[k][tx];
+__syncthreads();       // ← 等全 block 算完
+// 若省掉：跑得快的线程会用
+// 下一块数据覆盖 As/Bs，而慢线程
+// 还在读这一块 → 读到被冲掉的值
+// 下一轮再 As[ty][tx] = A[...];</code></pre>
+</div></div>
+</div><p>一句话记：<strong>第一个 barrier 保证&quot;数据都到齐了才开始算&quot;，第二个保证&quot;都算完了才敢覆盖&quot;</strong>。两个都是防止 shared memory 上的数据竞争，缺一个结果就会随机出错——而且往往在小矩阵上&quot;碰巧&quot;对，一放大就崩，是极难查的 bug。（barrier 的机制见第 8 章。）</p>
+<h2>动手：数一数 tiling 到底省了多少次全局读</h2>
+<p>下面这段程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它不做真的乘法，只<strong>数全局内存读取次数</strong>：朴素版每算一个输出读 2N 次（一行 A + 一列 B），tiling 版则是每个 block 沿 k 方向滑动、每个线程每 tile 只从全局内存读 2 个元素。对比两个数字，你会看到 tiling 恰好把全局读取砍掉约 <strong>TILE 倍</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%95%B0%E5%85%A8%E5%B1%80%E5%86%85%E5%AD%98%E8%AF%BB%E5%8F%96%E6%AC%A1%E6%95%B0%EF%BC%9A%E6%9C%B4%E7%B4%A0%E7%9F%A9%E9%98%B5%E4%B9%98%20vs%20tiling%20%E7%9F%A9%E9%98%B5%E4%B9%98%0Adef%20count_naive(N)%3A%0A%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20C%5Bi%5D%5Bj%5D%20%E8%AF%BB%E4%B8%80%E6%95%B4%E8%A1%8C%20A%EF%BC%88N%20%E4%B8%AA%EF%BC%89%2B%20%E4%B8%80%E6%95%B4%E5%88%97%20B%EF%BC%88N%20%E4%B8%AA%EF%BC%89%3D%202N%20%E6%AC%A1%EF%BC%8C%E5%85%B1%20N*N%20%E4%B8%AA%E8%BE%93%E5%87%BA%0A%20%20%20%20return%20N%20*%20N%20*%20(2%20*%20N)%0A%0Adef%20count_tiled(N%2C%20TILE)%3A%0A%20%20%20%20nb%20%3D%20(N%20%2B%20TILE%20-%201)%20%2F%2F%20TILE%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%E7%BB%B4%E5%BA%A6%E5%88%87%E6%88%90%E5%87%A0%E4%B8%AA%20tile%0A%20%20%20%20%23%20%E4%B8%80%E4%B8%AA%20block%20%E8%B4%9F%E8%B4%A3%20C%20%E7%9A%84%E4%B8%80%E4%B8%AA%20TILE%C3%97TILE%20%E5%B0%8F%E5%9D%97%EF%BC%8C%E6%B2%BF%20k%20%E6%96%B9%E5%90%91%E6%BB%91%E8%BF%87%20nb%20%E4%B8%AA%20tile%EF%BC%9B%0A%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20tile%20%E9%87%8C%20TILE%C3%97TILE%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%90%84%E4%BB%8E%E5%85%A8%E5%B1%80%E5%86%85%E5%AD%98%E8%AF%BB%20A%E3%80%81B%20%E5%90%84%201%20%E4%B8%AA%20%3D%202%20%E6%AC%A1%0A%20%20%20%20reads_per_block%20%3D%20nb%20*%20(TILE%20*%20TILE%20*%202)%0A%20%20%20%20return%20(nb%20*%20nb)%20*%20reads_per_block%20%20%20%20%20%23%20%E5%85%B1%20nb%C3%97nb%20%E4%B8%AA%20block%0A%0Afor%20N%2C%20TILE%20in%20%5B(64%2C%2016)%2C%20(1024%2C%2032)%5D%3A%0A%20%20%20%20na%20%3D%20count_naive(N)%0A%20%20%20%20ti%20%3D%20count_tiled(N%2C%20TILE)%0A%20%20%20%20print(f%22N%3D%7BN%7D%2C%20TILE%3D%7BTILE%7D%22)%0A%20%20%20%20print(f%22%20%20%E6%9C%B4%E7%B4%A0%E7%89%88%E5%85%A8%E5%B1%80%E8%AF%BB%E5%8F%96%EF%BC%9A%7Bna%3A%2C%7D%20%E6%AC%A1%22)%0A%20%20%20%20print(f%22%20%20tiling%20%E5%85%A8%E5%B1%80%E8%AF%BB%E5%8F%96%EF%BC%9A%7Bti%3A%2C%7D%20%E6%AC%A1%22)%0A%20%20%20%20print(f%22%20%20%E7%9C%81%E4%BA%86%20%7Bna%20%2F%20ti%3A.0f%7D%20%E5%80%8D%EF%BC%88%E2%89%88%20TILE%3D%7BTILE%7D%EF%BC%89%5Cn%22)"># 数全局内存读取次数：朴素矩阵乘 vs tiling 矩阵乘
+def count_naive(N):
+    # 每个 C[i][j] 读一整行 A（N 个）+ 一整列 B（N 个）= 2N 次，共 N*N 个输出
+    return N * N * (2 * N)
+
+def count_tiled(N, TILE):
+    nb = (N + TILE - 1) // TILE            # 每个维度切成几个 tile
+    # 一个 block 负责 C 的一个 TILE×TILE 小块，沿 k 方向滑过 nb 个 tile；
+    # 每个 tile 里 TILE×TILE 个线程各从全局内存读 A、B 各 1 个 = 2 次
+    reads_per_block = nb * (TILE * TILE * 2)
+    return (nb * nb) * reads_per_block     # 共 nb×nb 个 block
+
+for N, TILE in [(64, 16), (1024, 32)]:
+    na = count_naive(N)
+    ti = count_tiled(N, TILE)
+    print(f"N={N}, TILE={TILE}")
+    print(f"  朴素版全局读取：{na:,} 次")
+    print(f"  tiling 全局读取：{ti:,} 次")
+    print(f"  省了 {na / ti:.0f} 倍（≈ TILE={TILE}）\n")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">N=64, TILE=16
+  朴素版全局读取：524,288 次
+  tiling 全局读取：32,768 次
+  省了 16 倍（≈ TILE=16）
+
+N=1024, TILE=32
+  朴素版全局读取：2,147,483,648 次
+  tiling 全局读取：67,108,864 次
+  省了 32 倍（≈ TILE=32）</code></pre>
+</div><p>结论很干脆：<strong>tiling 把全局内存读取砍掉约 TILE 倍</strong>，砍掉的那部分变成了对 shared memory 的访问——而后者快两个数量级。用第 3 章的语言说，tiling 把算术强度提高了 TILE 倍，让 kernel 从访存受限往算力受限方向挪了一大步。请动手改：把 <code>TILE</code> 从 16 调到 32，再看 N=64 那组——省的倍数也跟着变成 32。这就是为什么 tile 越大理论上越省……但别急，看下面的警告。</p>
+<div class="warn">
+<strong>tile 不是越大越好</strong>
+shared memory 每个 SM 就那么几十到上百 KB，两个 TILE×TILE 的 <code>float</code> 数组要占 <code>2 × TILE² × 4</code> 字节。TILE=32 就要 8 KB，再大很快会撑爆 shared memory，或让每个 SM 能同时驻留的 block 数（occupancy，第 16 章）掉下来，反而更慢。实践中 16 或 32 是常见甜点值，具体要测。
+</div><h2>动手：一个完整、正确、能对拍的 tiled 矩阵乘</h2>
+<p>下面是<strong>完整可编译</strong>的程序：tiled 矩阵乘 kernel + host 端填充小矩阵、运行、和 CPU 参考实现逐元素对拍，最后打印 <code>OK</code>。这段代码的索引是这一章的重点，请对着图 11-1 慢慢读。点 <strong>🔗 在 Compiler Explorer 打开</strong> 看它编成的 PTX，或用下面的命令本地编译运行。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3N0ZGxpYj5cbiNpbmNsdWRlIDxjbWF0aD5cbiNpbmNsdWRlIDxjdWRhX3J1bnRpbWUuaD5cblxuI2RlZmluZSBUSUxFIDE2XG5cbi8vIHRpbGVkIOefqemYteS5mO%2B8mkMgPSBBIMOXIELvvIzkuInogIXpg73mmK8gTsOXTu%2B8jOihjOS4u%2BW6j1xuX19nbG9iYWxfXyB2b2lkIG1hdG11bF90aWxlZChpbnQgTiwgY29uc3QgZmxvYXQqIEEsIGNvbnN0IGZsb2F0KiBCLCBmbG9hdCogQykge1xuICAgIF9fc2hhcmVkX18gZmxvYXQgQXNbVElMRV1bVElMRV07ICAgICAgIC8vIOacrCBibG9jayDlhbHkuqvnmoQgQSDlsI%2FlnZdcbiAgICBfX3NoYXJlZF9fIGZsb2F0IEJzW1RJTEVdW1RJTEVdOyAgICAgICAvLyDmnKwgYmxvY2sg5YWx5Lqr55qEIEIg5bCP5Z2XXG5cbiAgICBpbnQgdHggPSB0aHJlYWRJZHgueCwgdHkgPSB0aHJlYWRJZHgueTtcbiAgICBpbnQgcm93ID0gYmxvY2tJZHgueSAqIFRJTEUgKyB0eTsgICAgICAvLyDmnKznur%2FnqIvotJ%2FotKPnmoQgQyDooYxcbiAgICBpbnQgY29sID0gYmxvY2tJZHgueCAqIFRJTEUgKyB0eDsgICAgICAvLyDmnKznur%2FnqIvotJ%2FotKPnmoQgQyDliJdcblxuICAgIGZsb2F0IHN1bSA9IDAuMGY7XG4gICAgaW50IG51bVRpbGVzID0gKE4gKyBUSUxFIC0gMSkgLyBUSUxFOyAgLy8g5rK%2FIGsg5pa55ZCR6KaB5ruR6L%2BH5Yeg5LiqIHRpbGVcbiAgICBmb3IgKGludCB0ID0gMDsgdCA8IG51bVRpbGVzOyArK3QpIHtcbiAgICAgICAgLy8gMS4g5Y2P5L2c6KOF6L2977ya5q%2BP5Liq57q%2F56iL5ZCE5aGrIEFz44CBQnMg55qE5LiA5Liq5qC85a2Q77yI5bim6L6555WM5qOA5p%2Bl77yM6LaK55WM5aGrIDDvvIlcbiAgICAgICAgaW50IGFDb2wgPSB0ICogVElMRSArIHR4OyAgICAgICAgICAvLyBBIOi%2FmeS4gCB0aWxlIOeahOWIl%2BS4i%2Bagh1xuICAgICAgICBpbnQgYlJvdyA9IHQgKiBUSUxFICsgdHk7ICAgICAgICAgIC8vIEIg6L%2BZ5LiAIHRpbGUg55qE6KGM5LiL5qCHXG4gICAgICAgIEFzW3R5XVt0eF0gPSAocm93IDwgTiAmJiBhQ29sIDwgTikgPyBBW3JvdyAqIE4gKyBhQ29sXSA6IDAuMGY7XG4gICAgICAgIEJzW3R5XVt0eF0gPSAoYlJvdyA8IE4gJiYgY29sIDwgTikgPyBCW2JSb3cgKiBOICsgY29sXSA6IDAuMGY7XG5cbiAgICAgICAgX19zeW5jdGhyZWFkcygpOyAgICAgICAgICAgICAgICAgICAvLyAyLiDnrYnlhaggYmxvY2sg6KOF6L295a6M77yM5omN6IO95byA566XXG5cbiAgICAgICAgLy8gMy4g5LuOIHNoYXJlZCBtZW1vcnkg5Y%2BW5pWw5YGa6YOo5YiG5ZKM77yI5b%2Br5YaF5a2Y77yM5LiU5q%2BP5Liq5YWD57Sg6KKr5aSN55SoIFRJTEUg5qyh77yJXG4gICAgICAgIGZvciAoaW50IGsgPSAwOyBrIDwgVElMRTsgKytrKVxuICAgICAgICAgICAgc3VtICs9IEFzW3R5XVtrXSAqIEJzW2tdW3R4XTtcblxuICAgICAgICBfX3N5bmN0aHJlYWRzKCk7ICAgICAgICAgICAgICAgICAgIC8vIDQuIOetieWFqCBibG9jayDnrpflrozvvIzmiY3og73opobnm5YgQXMvQnNcbiAgICB9XG4gICAgaWYgKHJvdyA8IE4gJiYgY29sIDwgTilcbiAgICAgICAgQ1tyb3cgKiBOICsgY29sXSA9IHN1bTsgICAgICAgICAgICAvLyDlhpnlm57nu5Pmnpxcbn1cblxuaW50IG1haW4oKSB7XG4gICAgY29uc3QgaW50IE4gPSAxMDA7ICAgICAgICAgICAgICAgICAgICAgLy8g5pWF5oSP5Y%2BW6Z2eIFRJTEUg5pW05pWw5YCN77yM5rWL6L6555WM5aSE55CGXG4gICAgc2l6ZV90IGJ5dGVzID0gTiAqIE4gKiBzaXplb2YoZmxvYXQpO1xuXG4gICAgZmxvYXQgKmhBID0gKGZsb2F0KiltYWxsb2MoYnl0ZXMpO1xuICAgIGZsb2F0ICpoQiA9IChmbG9hdCopbWFsbG9jKGJ5dGVzKTtcbiAgICBmbG9hdCAqaEMgPSAoZmxvYXQqKW1hbGxvYyhieXRlcyk7XG4gICAgZm9yIChpbnQgaSA9IDA7IGkgPCBOICogTjsgKytpKSB7ICAgICAgLy8g5aGr5LiA54K56Z2e5bmz5Yeh55qE5YC8XG4gICAgICAgIGhBW2ldID0gKGZsb2F0KSgoaSAlIDcpIC0gMyk7XG4gICAgICAgIGhCW2ldID0gKGZsb2F0KSgoaSAlIDUpIC0gMik7XG4gICAgfVxuXG4gICAgZmxvYXQgKmRBLCAqZEIsICpkQztcbiAgICBjdWRhTWFsbG9jKCZkQSwgYnl0ZXMpOyBjdWRhTWFsbG9jKCZkQiwgYnl0ZXMpOyBjdWRhTWFsbG9jKCZkQywgYnl0ZXMpO1xuICAgIGN1ZGFNZW1jcHkoZEEsIGhBLCBieXRlcywgY3VkYU1lbWNweUhvc3RUb0RldmljZSk7XG4gICAgY3VkYU1lbWNweShkQiwgaEIsIGJ5dGVzLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcblxuICAgIC8vIGJsb2NrIOaYryBUSUxFw5dUSUxFIOeahOe6v%2Beoi%2BaWuemYte%2B8m2dyaWQg6ZO65ruh5pW05LiqIENcbiAgICBkaW0zIGJsb2NrKFRJTEUsIFRJTEUpO1xuICAgIGRpbTMgZ3JpZCgoTiArIFRJTEUgLSAxKSAvIFRJTEUsIChOICsgVElMRSAtIDEpIC8gVElMRSk7XG4gICAgbWF0bXVsX3RpbGVkPDw8Z3JpZCwgYmxvY2s%2BPj4oTiwgZEEsIGRCLCBkQyk7XG4gICAgY3VkYURldmljZVN5bmNocm9uaXplKCk7XG5cbiAgICBjdWRhTWVtY3B5KGhDLCBkQywgYnl0ZXMsIGN1ZGFNZW1jcHlEZXZpY2VUb0hvc3QpO1xuXG4gICAgLy8gQ1BVIOWPguiAg%2BWunueOsO%2B8jOmAkOWFg%2Be0oOWvueaLjVxuICAgIGJvb2wgb2sgPSB0cnVlO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTiAmJiBvazsgKytpKVxuICAgICAgICBmb3IgKGludCBqID0gMDsgaiA8IE4gJiYgb2s7ICsraikge1xuICAgICAgICAgICAgZmxvYXQgcmVmID0gMC4wZjtcbiAgICAgICAgICAgIGZvciAoaW50IGsgPSAwOyBrIDwgTjsgKytrKSByZWYgKz0gaEFbaSAqIE4gKyBrXSAqIGhCW2sgKiBOICsgal07XG4gICAgICAgICAgICBpZiAoZmFic2YocmVmIC0gaENbaSAqIE4gKyBqXSkgPiAxZS0zZikgb2sgPSBmYWxzZTtcbiAgICAgICAgfVxuICAgIHByaW50ZihcIkNbMF1bMF0gPSAlLjFmLCDmoKHpqowgJXNcXG5cIiwgaENbMF0sIG9rID8gXCJPS1wiIDogXCJGQUlMRURcIik7XG5cbiAgICBjdWRhRnJlZShkQSk7IGN1ZGFGcmVlKGRCKTsgY3VkYUZyZWUoZEMpO1xuICAgIGZyZWUoaEEpOyBmcmVlKGhCKTsgZnJlZShoQyk7XG4gICAgcmV0dXJuIDA7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im52Y2MxMjkiLCJvcHRpb25zIjoiLXN0ZD1jKysyMCAtTzMgLS1ncHUtYXJjaGl0ZWN0dXJlPXNtXzkwIC1wdHgifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+#include &lt;cmath&gt;
+#include &lt;cuda_runtime.h&gt;
+
+#define TILE 16
+
+// tiled 矩阵乘：C = A × B，三者都是 N×N，行主序
+__global__ void matmul_tiled(int N, const float* A, const float* B, float* C) {
+    __shared__ float As[TILE][TILE];       // 本 block 共享的 A 小块
+    __shared__ float Bs[TILE][TILE];       // 本 block 共享的 B 小块
+
+    int tx = threadIdx.x, ty = threadIdx.y;
+    int row = blockIdx.y * TILE + ty;      // 本线程负责的 C 行
+    int col = blockIdx.x * TILE + tx;      // 本线程负责的 C 列
+
+    float sum = 0.0f;
+    int numTiles = (N + TILE - 1) / TILE;  // 沿 k 方向要滑过几个 tile
+    for (int t = 0; t &lt; numTiles; ++t) {
+        // 1. 协作装载：每个线程各填 As、Bs 的一个格子（带边界检查，越界填 0）
+        int aCol = t * TILE + tx;          // A 这一 tile 的列下标
+        int bRow = t * TILE + ty;          // B 这一 tile 的行下标
+        As[ty][tx] = (row &lt; N &amp;&amp; aCol &lt; N) ? A[row * N + aCol] : 0.0f;
+        Bs[ty][tx] = (bRow &lt; N &amp;&amp; col &lt; N) ? B[bRow * N + col] : 0.0f;
+
+        __syncthreads();                   // 2. 等全 block 装载完，才能开算
+
+        // 3. 从 shared memory 取数做部分和（快内存，且每个元素被复用 TILE 次）
+        for (int k = 0; k &lt; TILE; ++k)
+            sum += As[ty][k] * Bs[k][tx];
+
+        __syncthreads();                   // 4. 等全 block 算完，才能覆盖 As/Bs
+    }
+    if (row &lt; N &amp;&amp; col &lt; N)
+        C[row * N + col] = sum;            // 写回结果
+}
+
+int main() {
+    const int N = 100;                     // 故意取非 TILE 整数倍，测边界处理
+    size_t bytes = N * N * sizeof(float);
+
+    float *hA = (float*)malloc(bytes);
+    float *hB = (float*)malloc(bytes);
+    float *hC = (float*)malloc(bytes);
+    for (int i = 0; i &lt; N * N; ++i) {      // 填一点非平凡的值
+        hA[i] = (float)((i % 7) - 3);
+        hB[i] = (float)((i % 5) - 2);
+    }
+
+    float *dA, *dB, *dC;
+    cudaMalloc(&amp;dA, bytes); cudaMalloc(&amp;dB, bytes); cudaMalloc(&amp;dC, bytes);
+    cudaMemcpy(dA, hA, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(dB, hB, bytes, cudaMemcpyHostToDevice);
+
+    // block 是 TILE×TILE 的线程方阵；grid 铺满整个 C
+    dim3 block(TILE, TILE);
+    dim3 grid((N + TILE - 1) / TILE, (N + TILE - 1) / TILE);
+    matmul_tiled&lt;&lt;&lt;grid, block&gt;&gt;&gt;(N, dA, dB, dC);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(hC, dC, bytes, cudaMemcpyDeviceToHost);
+
+    // CPU 参考实现，逐元素对拍
+    bool ok = true;
+    for (int i = 0; i &lt; N &amp;&amp; ok; ++i)
+        for (int j = 0; j &lt; N &amp;&amp; ok; ++j) {
+            float ref = 0.0f;
+            for (int k = 0; k &lt; N; ++k) ref += hA[i * N + k] * hB[k * N + j];
+            if (fabsf(ref - hC[i * N + j]) &gt; 1e-3f) ok = false;
+        }
+    printf("C[0][0] = %.1f, 校验 %s\n", hC[0], ok ? "OK" : "FAILED");
+
+    cudaFree(dA); cudaFree(dB); cudaFree(dC);
+    free(hA); free(hB); free(hC);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><p>本地编译运行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc -arch=sm_80 matmul_tiled.cu -o matmul_tiled &amp;&amp; ./matmul_tiled
+# 输出：C[0][0] = ..., 校验 OK</code></pre>
+</div><div class="note">
+<strong>三处最容易写错的索引</strong>
+（1）装载 A 用 <code>A[row * N + aCol]</code>，行固定为本线程的 <code>row</code>、列随 tile 滑动（<code>aCol = t*TILE + tx</code>）；装载 B 用 <code>B[bRow * N + col]</code>，列固定为本线程的 <code>col</code>、行随 tile 滑动。方向别搞反。（2）内层累加是 <code>As[ty][k] * Bs[k][tx]</code>——共享的中间维 <code>k</code> 在 As 里做列下标、在 Bs 里做行下标。（3）边界越界时填 <code>0.0f</code>，这样部分和不受影响，N 不是 TILE 整数倍也正确。上面特意取 N=100 就是逼这条边界逻辑上场。
+</div><h2>这就是 CUDA 的&quot;超能力&quot;</h2>
+<p>回头看这一章做了什么：同一个矩阵乘，我们没换算法（还是 O(N³) 的乘加），只是<strong>换了数据放在哪、被谁复用</strong>——把反复要读的小块提到 <code>__shared__</code> 里就地复用，全局内存读取砍掉 TILE 倍。这种对<strong>片上内存的显式、精细控制</strong>，正是上一章说的&quot;CUDA 最贴近硬件、给你最多控制&quot;的含金量所在。cuBLAS 里真正的高性能矩阵乘还会在此之上叠寄存器分块、双缓冲、Tensor Core（第 19 章），但内核思想就是你刚学会的这个 tiling。</p>
+<h2>小结与下一步</h2>
+<p>你现在掌握了 GPU 优化的头号范式：<strong>用 shared memory 做 tiling，把访存受限的问题推向算力受限</strong>。这套&quot;协作搬砖 + 就地复用 + 两次同步&quot;的模式，会在归约、扫描、卷积、attention 等几乎所有重要 kernel 里反复出现。</p>
+<p>有意思的是，这个思想<strong>完全不是 CUDA 独有的</strong>——它是 GPU 硬件层级决定的普适规律。下一章我们切换到 <strong>SYCL</strong>：你会看到同样的 tiling 矩阵乘，用一套<strong>单一源码、跨厂商</strong>的现代 C++ 写出来——<code>__shared__</code> 变成 <code>local_accessor</code>、<code>__syncthreads()</code> 变成 <code>item.barrier()</code>，但那颗&quot;搬进快内存、协作复用&quot;的心，一模一样。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>朴素矩阵乘</strong>每个线程算一个 <code>C[i][j]</code>，从全局内存读一整行 A + 一整列 B，总读取 <strong>2N³</strong>，同一份数据被反复读几十上百遍——<strong>访存受限</strong>。</li>
+<li><strong>tiling（分块）</strong>：让一个 block 的线程<strong>协作</strong>把 A、B 的 TILE×TILE 小块搬进 <code>__shared__</code>，沿 k 方向滑动、就地复用，把全局读取砍掉约 <strong>TILE 倍</strong>，算术强度提高 TILE 倍（呼应第 3 章）。</li>
+<li>每轮 tile 迭代要放<strong>两个 <code>__syncthreads()</code></strong>：装载后（保证数据到齐再算）、计算后（保证算完再覆盖），防 shared memory 数据竞争，一个都不能省。</li>
+<li>关键索引：装载 A 行固定列随 tile 滑、装载 B 列固定行随 tile 滑；累加 <code>As[ty][k]*Bs[k][tx]</code>；越界填 0 以正确处理 N 非 TILE 整数倍。</li>
+<li>这种对片上内存的<strong>显式精细控制</strong>是 CUDA&quot;贴近硬件&quot;的招牌；同样的 tiling 思想在 SYCL/Triton/CuTe 里换个外衣照样成立（下一章起）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch10.html">← 第 10 章 CUDA：最贴近硬件的编程模型</a>
+  <a class="nav-next" href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++ →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

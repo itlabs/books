@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 章 SIMT 与 SIMD：一条指令，一大群线程</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li class="active"><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 2 章 SIMT 与 SIMD：一条指令，一大群线程</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章说 GPU 线程"变笨了"——它们齐步走同一条指令。这一章讲清那个机制到底是什么：<strong>SIMT（单指令多线程）</strong>。你会看到它和你可能用过的 <strong>SIMD（单指令多数据）</strong>是什么关系，以及一个绕不开的代价——<strong>warp 分歧（divergence）</strong>：当一群齐步走的线程遇到 <code>if</code> 各奔东西时会发生什么。</p>
+<p>读完你能亲手跑一个浏览器里的模拟器，看到分歧是怎么让代码悄悄变慢一倍的。</p>
+</div><h2>你可能已经见过它的哥哥：SIMD</h2>
+<p>如果你在 CPU 上做过性能优化，也许写过或读过 SIMD 代码。<strong>SIMD（Single Instruction, Multiple Data，单指令多数据）<strong>的意思是：一条 CPU 指令同时对</strong>一排数据</strong>做同样的运算。比如 AVX 指令一次能加 8 个 <code>float</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiLy8gQ1BVIOeahCBTSU1E77ya5LiA5p2h5oyH5Luk5YqgIDgg5LiqIGZsb2F077yIQVZY77yJXG4jaW5jbHVkZSA8aW1taW50cmluLmg%2BXG4jaW5jbHVkZSA8Y3N0ZGlvPlxuXG5pbnQgbWFpbigpIHtcbiAgICBmbG9hdCBhWzhdID0gezEsIDIsIDMsIDQsIDUsIDYsIDcsIDh9O1xuICAgIGZsb2F0IGJbOF0gPSB7MTAsIDIwLCAzMCwgNDAsIDUwLCA2MCwgNzAsIDgwfTtcbiAgICBmbG9hdCBjWzhdO1xuXG4gICAgX19tMjU2IHZhID0gX21tMjU2X2xvYWR1X3BzKGEpOyAgICAgLy8g5oqKIDgg5LiqIGZsb2F0IOijhei%2Fm%2BS4gOS4qiAyNTYg5L2N5a%2BE5a2Y5ZmoXG4gICAgX19tMjU2IHZiID0gX21tMjU2X2xvYWR1X3BzKGIpO1xuICAgIF9fbTI1NiB2YyA9IF9tbTI1Nl9hZGRfcHModmEsIHZiKTsgIC8vIOS4gOadoeaMh%2BS7pO%2B8jDgg5Liq5Yqg5rOV5ZCM5pe25YGaXG4gICAgX21tMjU2X3N0b3JldV9wcyhjLCB2Yyk7XG5cbiAgICBmb3IgKGludCBpID0gMDsgaSA8IDg7ICsraSkgcHJpbnRmKFwiJS4wZiBcIiwgY1tpXSk7ICAvLyAxMSAyMiAzMyAuLi4gODhcbiAgICBwcmludGYoXCJcXG5cIik7XG59IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// CPU 的 SIMD：一条指令加 8 个 float（AVX）
+#include &lt;immintrin.h&gt;
+#include &lt;cstdio&gt;
+
+int main() {
+    float a[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    float b[8] = {10, 20, 30, 40, 50, 60, 70, 80};
+    float c[8];
+
+    __m256 va = _mm256_loadu_ps(a);     // 把 8 个 float 装进一个 256 位寄存器
+    __m256 vb = _mm256_loadu_ps(b);
+    __m256 vc = _mm256_add_ps(va, vb);  // 一条指令，8 个加法同时做
+    _mm256_storeu_ps(c, vc);
+
+    for (int i = 0; i &lt; 8; ++i) printf("%.0f ", c[i]);  // 11 22 33 ... 88
+    printf("\n");
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>SIMD 很强，但写起来别扭：你得把数据手动打包进 <code>__m256</code> 这样的<strong>向量寄存器</strong>，用一套专门的 intrinsic 函数（<code>_mm256_add_ps</code>…），处理不够 8 个的&quot;尾巴&quot;，换个数据宽度还得重写。你写的是<strong>向量</strong>，不是标量——心智负担全在你身上。</p>
+<div class="note">
+<strong>一句话记住 SIMD</strong>
+一条指令，一个"宽"寄存器里的多个数据，被同一个运算处理。宽度是硬件定死的（AVX 是 8 个 float，AVX-512 是 16 个）。<strong>是你（或编译器的自动向量化）负责把标量代码改写成向量形式。</strong>
+</div><h2>GPU 的做法：SIMT——你写标量，硬件替你并起来</h2>
+<p>GPU 换了个思路。它让你<strong>照常写标量代码</strong>——就像上一章那个 <code>c[i] = a[i] + b[i]</code>，一个线程只管一个元素，读起来完全是普通的单线程代码。然后硬件在背后，把<strong>一组线程</strong>（NVIDIA 叫一个 <strong>warp</strong>，32 个线程；后面章节细讲）绑在一起，让它们<strong>同一时刻执行同一条指令</strong>，只是各自作用在自己的数据上。</p>
+<p>这就是 <strong>SIMT（Single Instruction, Multiple Threads，单指令多线程）</strong>。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">SIMD：你写向量</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 数据要手动打包成向量
+__m256 va = _mm256_loadu_ps(a);
+__m256 vc = _mm256_add_ps(va, vb);
+// 一个"线程"操作一整排数据
+// 宽度写死在指令里</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SIMT：你写标量</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 照常写标量，像单线程
+int i = threadIdx.x;
+c[i] = a[i] + b[i];
+// 硬件把 32 个这样的线程绑成
+// 一个 warp，齐步执行同一条指令</code></pre>
+</div></div>
+</div><p>结果是：<strong>SIMT 写起来像标量，跑起来像向量。</strong> 你不用管向量宽度、不用打包数据、不用处理尾巴，只描述&quot;一个线程做什么&quot;，硬件负责把成百上千个这样的线程编成一个个 warp 齐步跑。这就是为什么 GPU 代码看着比 SIMD 干净得多——复杂度被移进了硬件和编译器。</p>
+<div class="concept">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">SIMT：一条指令流，驱动一整组线程</text>
+  <!-- 指令流 -->
+  <rect x="30" y="45" width="120" height="30" rx="5" fill="#fbe6dc" stroke="#e06a3b"/>
+  <text x="90" y="65" text-anchor="middle" font-size="13" font-family="monospace">c[i]=a[i]+b[i]</text>
+  <text x="90" y="92" text-anchor="middle" font-size="11" fill="#e06a3b">同一条指令</text>
+  <!-- 分发箭头到多个线程 -->
+  <g stroke="#e06a3b" stroke-width="1.5" fill="none">
+    <path d="M150 60 L210 50" marker-end="url(#a2)"/>
+    <path d="M150 60 L210 90" marker-end="url(#a2)"/>
+    <path d="M150 60 L210 130" marker-end="url(#a2)"/>
+    <path d="M150 60 L210 170" marker-end="url(#a2)"/>
+    <path d="M150 60 L210 210" marker-end="url(#a2)"/>
+  </g>
+  <!-- 线程们，各自不同的 i 和数据 -->
+  <g font-family="monospace" font-size="11">
+    <rect x="215" y="38" width="300" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="225" y="55" fill="#2b6cb0">线程 0：i=0  c[0]=a[0]+b[0]</text>
+    <rect x="215" y="78" width="300" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="225" y="95" fill="#2b6cb0">线程 1：i=1  c[1]=a[1]+b[1]</text>
+    <rect x="215" y="118" width="300" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="225" y="135" fill="#2b6cb0">线程 2：i=2  c[2]=a[2]+b[2]</text>
+    <text x="360" y="165" text-anchor="middle" fill="#6b7280">⋮（一个 warp 共 32 个线程）</text>
+    <rect x="215" y="178" width="300" height="26" rx="4" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="225" y="195" fill="#2b6cb0">线程 31：i=31 c[31]=a[31]+b[31]</text>
+  </g>
+  <text x="280" y="235" text-anchor="middle" font-size="11" fill="#6b7280">同一时刻、同一条指令，各自处理自己的数据——这就是 SIMT</text>
+  <defs>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 2-1　SIMT：你只写"一个线程做什么"，硬件把一组线程绑起来，让它们齐步执行同一条指令，各自作用于自己的数据</div>
+</div><h2>SIMT 的代价：warp 分歧</h2>
+<p>天下没有免费的抽象。SIMT 让你写标量的爽快，是建立在一个硬性约束上的：<strong>一个 warp 里的 32 个线程，任一时刻只能执行同一条指令</strong>。</p>
+<p>那问题来了——如果代码里有 <code>if</code>，warp 里一半线程条件为真、一半为假，怎么办？它们要执行的可是<strong>不同的指令</strong>啊。</p>
+<p>硬件的处理方式简单粗暴：<strong>两条分支都执行，但每条分支只让&quot;该走这条路&quot;的线程生效，其余线程暂时&quot;关灯&quot;（掩码屏蔽）。</strong> 也就是说，<code>if</code> 和 <code>else</code> 不再是二选一并行跑完，而是<strong>先跑 if（else 那批线程干等），再跑 else（if 那批线程干等）</strong>——串行化了！这就是 <strong>warp 分歧（warp divergence）</strong>。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 一个会造成 warp 分歧的 kernel
+__global__ void diverge(float* x) {
+    int i = threadIdx.x;
+    if (i % 2 == 0) {        // 偶数线程走这里
+        x[i] = expensive_a(x[i]);   // 奇数线程被"关灯"，干等
+    } else {                 // 奇数线程走这里
+        x[i] = expensive_b(x[i]);   // 换偶数线程"关灯"，干等
+    }
+    // 结果：这个 warp 的耗时 ≈ 分支A + 分支B，而不是 max(A, B)
+}</code></pre>
+</div><p>在 CPU 上，分支预测让 <code>if</code> 几乎免费，你从不为写分支而心虚。在 GPU 上，<strong>warp 内的分歧是真金白银的性能损失</strong>：分支越多、越&quot;参差不齐&quot;，串行化越严重。这是上一章说的&quot;GPU 直觉和 CPU 相反&quot;的头号例子。</p>
+<div class="warn">
+<strong>关键限定：分歧只在 warp <em>内部</em> 才有代价</strong>
+如果整个 warp 的 32 个线程都走同一条分支（比如按 warp 边界对齐地分工），那就<strong>没有分歧</strong>——大家还是齐步走，只是走的是同一条路。所以优化的方向不是"消灭所有 if"，而是"让走向不同的线程尽量落在<strong>不同的 warp</strong> 里"。这个"warp 是 32 个线程"的边界意识，第 6 章会专门讲。
+</div><h2>动手：亲眼看分歧让代码变慢</h2>
+<p>下面这个模拟器<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它不真用 GPU，而是用 Python 忠实地模拟 SIMT 的执行规则：一个 warp 一次只能执行一条指令；遇到分支时，先让走 <code>if</code> 的线程执行（其余&quot;关灯&quot;），再让走 <code>else</code> 的执行。我们数&quot;这个 warp 一共花了几个执行步（cycle）&quot;，对比&quot;全员走同一条路&quot;和&quot;参差不齐地分歧&quot;两种数据，你会看到时间差。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20SIMT%EF%BC%9A%E4%B8%80%E4%B8%AA%20warp%20%E9%81%87%E5%88%B0%20if%2Felse%20%E6%97%B6%E5%A6%82%E4%BD%95%E4%B8%B2%E8%A1%8C%E5%8C%96%EF%BC%88warp%20%E5%88%86%E6%AD%A7%EF%BC%89%0AWARP_SIZE%20%3D%208%20%20%20%23%20%E7%9C%9F%E5%AE%9E%20GPU%20%E6%98%AF%2032%EF%BC%8C%E8%BF%99%E9%87%8C%E7%94%A8%208%20%E6%96%B9%E4%BE%BF%E8%A7%82%E5%AF%9F%0A%0Adef%20run_warp(values%2C%20if_cost%3D3%2C%20else_cost%3D3)%3A%0A%20%20%20%20%22%22%22%E6%A8%A1%E6%8B%9F%E4%B8%80%E4%B8%AA%20warp%20%E6%89%A7%E8%A1%8C%20if(v%3E0)%7B%E8%8A%B1%20if_cost%20%E6%AD%A5%7D%20else%20%7B%E8%8A%B1%20else_cost%20%E6%AD%A5%7D%E3%80%82%0A%20%20%20%20%E8%BF%94%E5%9B%9E%E8%BF%99%E4%B8%AA%20warp%20%E5%AE%9E%E9%99%85%E6%B6%88%E8%80%97%E7%9A%84%E6%89%A7%E8%A1%8C%E6%AD%A5%E6%95%B0%E3%80%82%22%22%22%0A%20%20%20%20go_if%20%20%20%3D%20%5Bv%20for%20v%20in%20values%20if%20v%20%3E%200%5D%20%20%20%20%20%23%20%E4%BC%9A%E8%B5%B0%20if%20%E5%88%86%E6%94%AF%E7%9A%84%E7%BA%BF%E7%A8%8B%0A%20%20%20%20go_else%20%3D%20%5Bv%20for%20v%20in%20values%20if%20v%20%3C%3D%200%5D%20%20%20%20%23%20%E4%BC%9A%E8%B5%B0%20else%20%E5%88%86%E6%94%AF%E7%9A%84%E7%BA%BF%E7%A8%8B%0A%0A%20%20%20%20cost%20%3D%200%0A%20%20%20%20if%20go_if%3A%20%20%20%20%20%20%23%20%E5%8F%AA%E8%A6%81%20warp%20%E9%87%8C%E6%9C%89%E4%BB%BB%E4%BD%95%E7%BA%BF%E7%A8%8B%E8%B5%B0%20if%EF%BC%8C%E6%95%B4%E4%B8%AA%20warp%20%E5%B0%B1%E5%BE%97%E4%B8%BA%20if%20%E8%8A%B1%E6%97%B6%E9%97%B4%0A%20%20%20%20%20%20%20%20cost%20%2B%3D%20if_cost%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E6%89%A7%E8%A1%8C%20if%20%E5%88%86%E6%94%AF%EF%BC%9A%7Blen(go_if)%7D%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%B9%B2%E6%B4%BB%EF%BC%8C%7Blen(go_else)%7D%20%E4%B8%AA%E8%A2%AB%E5%85%B3%E7%81%AF%E5%B9%B2%E7%AD%89%22)%0A%20%20%20%20if%20go_else%3A%20%20%20%20%23%20%E5%8F%AA%E8%A6%81%E6%9C%89%E4%BB%BB%E4%BD%95%E7%BA%BF%E7%A8%8B%E8%B5%B0%20else%EF%BC%8C%E6%95%B4%E4%B8%AA%20warp%20%E5%86%8D%E4%B8%BA%20else%20%E8%8A%B1%E4%B8%80%E6%AC%A1%E6%97%B6%E9%97%B4%0A%20%20%20%20%20%20%20%20cost%20%2B%3D%20else_cost%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E6%89%A7%E8%A1%8C%20else%20%E5%88%86%E6%94%AF%EF%BC%9A%7Blen(go_else)%7D%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%B9%B2%E6%B4%BB%EF%BC%8C%7Blen(go_if)%7D%20%E4%B8%AA%E8%A2%AB%E5%85%B3%E7%81%AF%E5%B9%B2%E7%AD%89%22)%0A%20%20%20%20return%20cost%0A%0Aprint(%22%E6%83%85%E5%86%B5%E4%B8%80%EF%BC%9A%E5%85%A8%E5%91%98%E8%B5%B0%E5%90%8C%E4%B8%80%E6%9D%A1%E5%88%86%E6%94%AF%EF%BC%88%E6%97%A0%E5%88%86%E6%AD%A7%EF%BC%89%22)%0Auniform%20%3D%20%5B1%2C%202%2C%203%2C%204%2C%205%2C%206%2C%207%2C%208%5D%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%A8%E9%83%A8%20%3E%200%EF%BC%8C%E9%83%BD%E8%B5%B0%20if%0Ac1%20%3D%20run_warp(uniform)%0Aprint(f%22%20%20%E2%86%92%20%E8%BF%99%E4%B8%AA%20warp%20%E8%8A%B1%E4%BA%86%20%7Bc1%7D%20%E6%AD%A5%5Cn%22)%0A%0Aprint(%22%E6%83%85%E5%86%B5%E4%BA%8C%EF%BC%9A%E4%B8%80%E5%8D%8A%E8%B5%B0%20if%E3%80%81%E4%B8%80%E5%8D%8A%E8%B5%B0%20else%EF%BC%88%E4%B8%A5%E9%87%8D%E5%88%86%E6%AD%A7%EF%BC%89%22)%0Amixed%20%3D%20%5B1%2C%20-1%2C%202%2C%20-2%2C%203%2C%20-3%2C%204%2C%20-4%5D%20%20%20%20%20%20%20%20%23%20%E6%AD%A3%E8%B4%9F%E4%BA%A4%E9%94%99%0Ac2%20%3D%20run_warp(mixed)%0Aprint(f%22%20%20%E2%86%92%20%E8%BF%99%E4%B8%AA%20warp%20%E8%8A%B1%E4%BA%86%20%7Bc2%7D%20%E6%AD%A5%5Cn%22)%0A%0Aprint(f%22%E7%BB%93%E8%AE%BA%EF%BC%9A%E5%90%8C%E6%A0%B7%208%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E3%80%81%E5%90%8C%E6%A0%B7%E7%9A%84%E6%B4%BB%EF%BC%8C%E5%88%86%E6%AD%A7%E8%AE%A9%E8%80%97%E6%97%B6%E4%BB%8E%20%7Bc1%7D%20%E6%AD%A5%E6%B6%A8%E5%88%B0%20%7Bc2%7D%20%E6%AD%A5%EF%BC%8C%E6%85%A2%E4%BA%86%20%7Bc2%2Fc1%3A.0f%7D%20%E5%80%8D%E3%80%82%22)%0Aprint(%22%E5%8E%9F%E5%9B%A0%EF%BC%9Aif%20%E5%92%8C%20else%20%E8%A2%AB%E8%BF%AB%E4%B8%B2%E8%A1%8C%E6%89%A7%E8%A1%8C%EF%BC%8C%E8%80%8C%E4%B8%8D%E6%98%AF%E5%B9%B6%E8%A1%8C%E4%BA%8C%E9%80%89%E4%B8%80%E3%80%82%22)"># 模拟 SIMT：一个 warp 遇到 if/else 时如何串行化（warp 分歧）
+WARP_SIZE = 8   # 真实 GPU 是 32，这里用 8 方便观察
+
+def run_warp(values, if_cost=3, else_cost=3):
+    """模拟一个 warp 执行 if(v&gt;0){花 if_cost 步} else {花 else_cost 步}。
+    返回这个 warp 实际消耗的执行步数。"""
+    go_if   = [v for v in values if v &gt; 0]     # 会走 if 分支的线程
+    go_else = [v for v in values if v &lt;= 0]    # 会走 else 分支的线程
+
+    cost = 0
+    if go_if:      # 只要 warp 里有任何线程走 if，整个 warp 就得为 if 花时间
+        cost += if_cost
+        print(f"  执行 if 分支：{len(go_if)} 个线程干活，{len(go_else)} 个被关灯干等")
+    if go_else:    # 只要有任何线程走 else，整个 warp 再为 else 花一次时间
+        cost += else_cost
+        print(f"  执行 else 分支：{len(go_else)} 个线程干活，{len(go_if)} 个被关灯干等")
+    return cost
+
+print("情况一：全员走同一条分支（无分歧）")
+uniform = [1, 2, 3, 4, 5, 6, 7, 8]          # 全部 &gt; 0，都走 if
+c1 = run_warp(uniform)
+print(f"  → 这个 warp 花了 {c1} 步\n")
+
+print("情况二：一半走 if、一半走 else（严重分歧）")
+mixed = [1, -1, 2, -2, 3, -3, 4, -4]        # 正负交错
+c2 = run_warp(mixed)
+print(f"  → 这个 warp 花了 {c2} 步\n")
+
+print(f"结论：同样 8 个线程、同样的活，分歧让耗时从 {c1} 步涨到 {c2} 步，慢了 {c2/c1:.0f} 倍。")
+print("原因：if 和 else 被迫串行执行，而不是并行二选一。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">情况一：全员走同一条分支（无分歧）
+  执行 if 分支：8 个线程干活，0 个被关灯干等
+  → 这个 warp 花了 3 步
+
+情况二：一半走 if、一半走 else（严重分歧）
+  执行 if 分支：4 个线程干活，4 个被关灯干等
+  执行 else 分支：4 个线程干活，4 个被关灯干等
+  → 这个 warp 花了 6 步
+
+结论：同样 8 个线程、同样的活，分歧让耗时从 3 步涨到 6 步，慢了 2 倍。
+原因：if 和 else 被迫串行执行，而不是并行二选一。</code></pre>
+</div><p>看到了吗？同样的 8 个线程、同样的工作量，只因为它们<strong>走向不同</strong>，耗时就翻倍。请动手改一下：把 <code>mixed</code> 改成 <code>[1, 2, 3, 4, 5, 6, 7, -1]</code>（只有一个线程走 else），再运行——你会发现耗时<strong>还是</strong> 6 步！这揭示了分歧最反直觉的一点：<strong>哪怕 warp 里只有一个线程&quot;不合群&quot;，整个 warp 都要为那条分支付出完整代价</strong>。这也是为什么后面讲优化时，我们会那么在意&quot;让一个 warp 里的线程尽量走同一条路&quot;。</p>
+<h2>SIMT ≠ SIMD：三个关键区别</h2>
+<p>它们思路相通（都是一条指令驱动多份数据），但别混为一谈：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>SIMD（CPU 向量）</th>
+<th>SIMT（GPU）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>你写的代码</td>
+<td><strong>向量</strong>：手动打包、用 intrinsic</td>
+<td><strong>标量</strong>：像单线程，硬件替你并起来</td>
+</tr>
+<tr>
+<td>分支怎么办</td>
+<td>你得用掩码手动处理</td>
+<td>硬件自动掩码，但会<strong>分歧串行化</strong></td>
+</tr>
+<tr>
+<td>宽度</td>
+<td>写死在指令里（8、16…）</td>
+<td>逻辑上任意多线程，硬件按 warp（32）打包调度</td>
+</tr>
+<tr>
+<td>访存</td>
+<td>通常要求连续</td>
+<td>灵活，但<strong>合并访问</strong>才快（第 7 章）</td>
+</tr>
+</tbody></table>
+<p>一句话：<strong>SIMD 把并行的复杂度交给你，SIMT 把它藏进硬件——代价是你要理解 warp 这个&quot;隐形的 32 人小队&quot;，否则会在分歧和访存上莫名其妙地慢。</strong> 理解这个隐形小队，正是第 6 章的任务。</p>
+<h2>小结与下一步</h2>
+<p>你现在懂了 GPU&quot;线程齐步走&quot;的机制，也懂了它的头号代价。但线程不是凭空齐步走的——它们跑在具体的硬件上：一颗 GPU 有几十个 <strong>SM（流多处理器）</strong>，每个 SM 有一堆计算核心、一块共享内存、还有那个负责调度 warp 的硬件。下一章我们就把 GPU 芯片&quot;拆开&quot;看一眼，建立硬件的心智模型——这样第 4 章开始讲 Grid/Block/Thread 时，你就知道这些软件概念到底落在哪块硅片上。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>SIMD</strong>（CPU）：你手写向量代码，一条指令处理一&quot;宽&quot;寄存器里的多个数据，宽度写死。</li>
+<li><strong>SIMT</strong>（GPU）：你照常写<strong>标量</strong>代码，硬件把一组线程（一个 <strong>warp = 32 线程</strong>）绑起来齐步执行同一条指令——写着像标量，跑着像向量。</li>
+<li>SIMT 的代价是 <strong>warp 分歧</strong>：warp 内线程走进不同 <code>if</code> 分支时，各分支被<strong>串行执行</strong>（该走的干活，其余关灯干等），哪怕只有一个线程不合群也要付全价。</li>
+<li>分歧只在 <strong>warp 内部</strong>才有代价；优化方向是让走向不同的线程落在<strong>不同的 warp</strong>，而不是消灭所有分支。</li>
+<li>SIMT 把并行复杂度藏进硬件，代价是你必须理解 warp 这个&quot;隐形的 32 人小队&quot;（第 6 章）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch01.html">← 第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a>
+  <a class="nav-next" href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

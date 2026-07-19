@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 章 内存层级：global、shared、register 与合并访问</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li class="active"><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 7 章 内存层级：global、shared、register 与合并访问</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 3 章说过：多数 kernel 的瓶颈不是算得慢，而是<strong>数据喂不上来</strong>。这一章把 GPU 的内存层级摊开讲清楚：每个线程私有的<strong>寄存器（register）</strong>最快、每个 block 共享的<strong>shared memory</strong> 是你亲手管理的片上暂存区、片外的<strong>全局内存（global memory）</strong>又大又慢。</p>
+<p>更重要的是那个能让性能差出几十倍的核心概念——<strong>合并访问（memory coalescing）</strong>：当一个 warp 的 32 条 lane 访问<strong>连续</strong>地址时，硬件把它们合并成一次宽传输；访问<strong>跨步/散乱</strong>时，则退化成几十次小传输。读完你会跑一个模拟器数清楚每种访存模式要几次传输，还会读到一个完整可编译的 CUDA 程序，第一次亲手用上 shared memory。</p>
+</div><h2>三级内存：越快越小，越大越慢</h2>
+<p>CPU 也有内存层级（寄存器 → L1 → L2 → L3 → 主存），但那套层级对你是<strong>透明</strong>的：你只管访问变量，硬件自动决定放哪级缓存。GPU 的层级不但更陡，还有一部分<strong>要你亲手管理</strong>。从快到慢，三个你必须区分的层级：</p>
+<ul>
+<li><strong>寄存器（register）</strong>：每个线程<strong>私有</strong>，就在计算核心旁边，<strong>最快</strong>（0 延迟量级）。你 kernel 里的局部变量（<code>int i</code>、<code>float sum</code>）默认就住在寄存器里。每个线程能用的寄存器有限——用超了会&quot;溢出&quot;到慢的本地内存。</li>
+<li><strong>shared memory（共享内存）</strong>：每个 <strong>block 内共享</strong>，物理上就是第 3 章说的那块片上 L1 高速内存，比全局内存快一两个数量级。关键在于：<strong>它由你的程序显式管理</strong>——你决定往里放什么、什么时候放。它是这一章的主角。</li>
+<li><strong>全局内存（global memory）</strong>：就是你买卡看的&quot;24GB 显存&quot;，片外 DRAM，<strong>又大又慢</strong>（一次访问几百个时钟周期）。所有线程都能读写，是 host 和 device 之间搬数据的落脚点。</li>
+</ul>
+<p>此外还有两个你会偶尔碰到的：<strong>常量内存（constant memory）</strong>——小、只读、带专门缓存，适合放所有线程都读同一个值的参数；<strong>L2 缓存</strong>——全片共享，介于 SM 和全局内存之间，自动工作、不用你管。</p>
+<div class="concept">
+<svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">GPU 内存金字塔：越往上越快越小</text>
+  <!-- register -->
+  <polygon points="230,36 330,36 310,74 250,74" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="280" y="60" text-anchor="middle" font-size="12" fill="#2f7a45" font-weight="bold">寄存器</text>
+  <text x="345" y="52" font-size="10" fill="#2f7a45">最快 · 每线程私有 · ~几十 KB/SM</text>
+  <text x="345" y="66" font-size="10" fill="#6b7280">作用域：单个线程</text>
+  <!-- shared -->
+  <polygon points="250,78 310,78 290,116 270,116" fill="#fff4ec" stroke="#e06a3b"/>
+  <polygon points="200,78 250,78 270,116 180,116" fill="#fff4ec" stroke="#e06a3b"/>
+  <polygon points="310,78 360,78 380,116 290,116" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="280" y="102" text-anchor="middle" font-size="12" fill="#a53f1c" font-weight="bold">shared memory / L1</text>
+  <text x="395" y="94" font-size="10" fill="#a53f1c">很快 · 片上 · 你亲手管 · ~百 KB/SM</text>
+  <text x="395" y="108" font-size="10" fill="#6b7280">作用域：一个 block</text>
+  <!-- L2 -->
+  <polygon points="160,120 400,120 420,158 140,158" fill="#e5edf5" stroke="#2b6cb0"/>
+  <text x="280" y="144" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">L2 缓存（全片共享，自动）</text>
+  <text x="435" y="142" font-size="10" fill="#6b7280">作用域：整颗 GPU</text>
+  <!-- global -->
+  <polygon points="120,162 440,162 470,300 90,300" fill="#3c3c3c"/>
+  <text x="280" y="215" text-anchor="middle" font-size="14" fill="#9fe3b0" font-weight="bold">全局内存 / 显存（DRAM）</text>
+  <text x="280" y="238" text-anchor="middle" font-size="11" fill="#cbd5e1">最慢（~几百周期）· 最大（GB 级）· 所有线程可见</text>
+  <text x="280" y="262" text-anchor="middle" font-size="11" fill="#cbd5e1">host↔device 拷贝的落脚点</text>
+  <!-- arrows -->
+  <text x="70" y="60" font-size="11" fill="#6b7280">快</text>
+  <text x="70" y="290" font-size="11" fill="#6b7280">慢</text>
+  <line x1="75" y1="70" x2="75" y2="280" stroke="#6b7280" stroke-width="1.5" marker-end="url(#dn)"/>
+  <defs><marker id="dn" markerWidth="9" markerHeight="9" refX="4" refY="7" orient="auto"><path d="M0,0 L8,0 L4,7 Z" fill="#6b7280"/></marker></defs>
+</svg>
+<div class="caption">图 7-1　GPU 内存金字塔。寄存器/shared 在 SM 片上、极快极小；全局内存在片外、又大又慢。速度和容量差着一两个数量级，作用域也各不相同</div>
+</div><h2>shared memory：你自己管的缓存</h2>
+<p>CPU 的缓存对你是自动、透明的：你访问一个数组，硬件默默把它周围的数据拉进 L1，下次命中就快。你从不写&quot;把这块数据放进 L1&quot;的代码——你<strong>没法</strong>这么写。</p>
+<p>GPU 的 shared memory 恰恰相反：它是一块<strong>由你显式管理</strong>的片上高速内存。你在 kernel 里用 <code>__shared__</code> 声明一块，然后<strong>亲手</strong>把全局内存里的数据搬进去、用完再说。硬件不会替你决定放什么。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CPU 缓存：自动、透明</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 你只管访问，硬件自动缓存
+for (int i = 0; i &lt; n; ++i)
+    sum += a[i];   // a[] 被自动拉进 L1
+// 你无法、也不需要控制"放什么进缓存"
+// 命中与否由硬件的替换策略决定</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">GPU shared memory：显式、手动</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 你亲手声明、亲手搬、亲手同步
+__shared__ float tile[256];
+tile[threadIdx.x] = a[globalIdx]; // 你决定放什么
+__syncthreads();                  // 等全组搬完
+// 之后大家反复读 tile[]，不再碰慢的全局内存</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>一句话记住 shared memory</strong>
+它是"<strong>你自己管的缓存</strong>"。CPU 的缓存是硬件替你猜哪些数据该留在近处；GPU 把这个决定权交给了你。它的黄金用法是<strong>数据复用</strong>：如果一块数据要被 block 里很多线程反复读，就先花一次慢的全局内存访问把它搬进 shared memory，之后所有复用都走快的片上访问。第 11 章的 tiling 矩阵乘就是这招的教科书级应用。
+</div><h2>合并访问：这一章最值钱的概念</h2>
+<p>现在讲那个能让性能差出几十倍、却常被新手忽略的东西。回忆第 6 章：全局内存访问不是一个线程一个线程发出的，而是<strong>以 warp 为单位</strong>——一个 warp 的 32 条 lane 在同一条 load 指令上，同时各自要一个地址的数据。</p>
+<p>硬件访问全局内存有个物理特性：它一次只能按<strong>固定大小的对齐块</strong>搬运（典型是 128 字节一段，即 32 个 <code>float</code>）。于是关键问题变成：<strong>这个 warp 的 32 个地址，落在几个 128 字节的段里？</strong></p>
+<ul>
+<li>如果 32 条 lane 要的是<strong>连续</strong>的 32 个 <code>float</code>（lane <em>i</em> 读 <code>a[base+i]</code>），它们正好落在<strong>同一个</strong> 128 字节段里——硬件一次传输就全部搞定。这叫<strong>合并访问（memory coalescing）</strong>。</li>
+<li>如果 32 条 lane 的地址<strong>跨步或散乱</strong>（比如 lane <em>i</em> 读 <code>a[i*32]</code>），32 个地址落进 32 个不同的段——硬件只能发 <strong>32 次</strong>传输，其中每次搬来的 128 字节里只用了 4 字节，<strong>97% 的带宽被浪费</strong>。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="18" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">合并 vs 跨步：同样 32 次读取，传输次数天差地别</text>
+  <!-- coalesced -->
+  <text x="140" y="44" text-anchor="middle" font-size="12" fill="#3f9b5c" font-weight="bold">合并（stride=1）</text>
+  <text x="140" y="60" text-anchor="middle" font-size="10" fill="#6b7280">32 条 lane 读连续 32 个 float</text>
+  <g font-size="9">
+    <text x="20" y="82" fill="#2b6cb0">lane 0..31</text>
+    <g fill="#eef6ff" stroke="#2b6cb0" stroke-width="0.6">
+      <rect x="20" y="88" width="7" height="16"/><rect x="27" y="88" width="7" height="16"/><rect x="34" y="88" width="7" height="16"/><rect x="41" y="88" width="7" height="16"/><rect x="48" y="88" width="7" height="16"/><rect x="55" y="88" width="7" height="16"/><rect x="62" y="88" width="7" height="16"/><rect x="69" y="88" width="7" height="16"/><rect x="76" y="88" width="7" height="16"/><rect x="83" y="88" width="7" height="16"/><rect x="90" y="88" width="7" height="16"/><rect x="97" y="88" width="7" height="16"/><rect x="104" y="88" width="7" height="16"/><rect x="111" y="88" width="7" height="16"/><rect x="118" y="88" width="7" height="16"/><rect x="125" y="88" width="7" height="16"/><rect x="132" y="88" width="7" height="16"/><rect x="139" y="88" width="7" height="16"/><rect x="146" y="88" width="7" height="16"/><rect x="153" y="88" width="7" height="16"/><rect x="160" y="88" width="7" height="16"/><rect x="167" y="88" width="7" height="16"/><rect x="174" y="88" width="7" height="16"/><rect x="181" y="88" width="7" height="16"/><rect x="188" y="88" width="7" height="16"/><rect x="195" y="88" width="7" height="16"/><rect x="202" y="88" width="7" height="16"/><rect x="209" y="88" width="7" height="16"/><rect x="216" y="88" width="7" height="16"/><rect x="223" y="88" width="7" height="16"/><rect x="230" y="88" width="7" height="16"/><rect x="237" y="88" width="7" height="16"/>
+    </g>
+    <line x1="130" y1="112" x2="130" y2="130" stroke="#3f9b5c" stroke-width="1"/>
+    <rect x="20" y="132" width="224" height="20" rx="3" fill="#f0fdf4" stroke="#3f9b5c"/>
+    <text x="132" y="146" text-anchor="middle" font-size="10" fill="#2f7a45">1 段 128 字节 → 1 次传输 ✓</text>
+  </g>
+  <!-- strided -->
+  <text x="420" y="44" text-anchor="middle" font-size="12" fill="#e06a3b" font-weight="bold">跨步（stride=32）</text>
+  <text x="420" y="60" text-anchor="middle" font-size="10" fill="#6b7280">32 条 lane 读散在各处的 float</text>
+  <g font-size="9">
+    <text x="300" y="82" fill="#2b6cb0">lane 0</text>
+    <text x="360" y="82" fill="#2b6cb0">lane 1</text>
+    <text x="480" y="82" fill="#2b6cb0">…lane 31</text>
+    <g fill="#fbe6dc" stroke="#e06a3b" stroke-width="0.6">
+      <rect x="300" y="88" width="7" height="16"/>
+      <rect x="360" y="88" width="7" height="16"/>
+      <rect x="420" y="88" width="7" height="16"/>
+      <rect x="480" y="88" width="7" height="16"/>
+      <rect x="520" y="88" width="7" height="16"/>
+    </g>
+    <line x1="303" y1="112" x2="303" y2="128" stroke="#e06a3b" stroke-width="1"/>
+    <line x1="363" y1="112" x2="363" y2="128" stroke="#e06a3b" stroke-width="1"/>
+    <line x1="423" y1="112" x2="423" y2="128" stroke="#e06a3b" stroke-width="1"/>
+    <line x1="483" y1="112" x2="483" y2="128" stroke="#e06a3b" stroke-width="1"/>
+    <g fill="#fff4ec" stroke="#e06a3b">
+      <rect x="292" y="130" width="22" height="18" rx="2"/><rect x="352" y="130" width="22" height="18" rx="2"/><rect x="412" y="130" width="22" height="18" rx="2"/><rect x="472" y="130" width="22" height="18" rx="2"/><rect x="510" y="130" width="22" height="18" rx="2"/>
+    </g>
+    <text x="420" y="168" text-anchor="middle" font-size="10" fill="#a53f1c">32 个段 → 32 次传输 ✗（每次只用 1/32）</text>
+  </g>
+  <line x1="280" y1="70" x2="280" y2="180" stroke="#d1d5db" stroke-dasharray="4 3"/>
+  <text x="280" y="215" text-anchor="middle" font-size="11" fill="#6b7280">同样是 32 个 float 的读取，合并只需 1 次传输，跨步要 32 次</text>
+  <text x="280" y="236" text-anchor="middle" font-size="11" fill="#e06a3b" font-weight="bold">访存的"顺序"比"次数"更影响速度——这是 GPU 最反 CPU 直觉的一点</text>
+</svg>
+<div class="caption">图 7-2　合并访问 vs 跨步访问。warp 的 32 个地址落在同一个 128 字节段里就是 1 次传输；散落在 32 个段里就是 32 次传输，带宽利用率天差地别</div>
+</div><div class="warn">
+<strong>合并的判据是"warp 内相邻 lane 访问相邻地址"</strong>
+这解释了一个新手常犯的错：处理二维数据时，让相邻线程沿<strong>列</strong>方向走（<code>a[tid * width + col]</code>），相邻 lane 的地址就差了一整行，彻底不合并；改成沿<strong>行</strong>走（<code>a[row * width + tid]</code>），相邻 lane 访问相邻地址，立刻合并。同样的算法、同样的数据量，仅仅换了循环下标的角色，就可能快几十倍。第 17 章会把访存优化（合并、向量化、bank conflict）讲成一套系统方法。
+</div><h2>bank conflict：shared memory 也有它的&quot;访存模式&quot;（先一瞥）</h2>
+<p>shared memory 快，但它内部被分成 32 个 <strong>bank（存储体）</strong>，一个 warp 同时访问时，如果多条 lane 撞进<strong>同一个 bank 的不同地址</strong>，就会 <strong>bank conflict（存储体冲突）</strong>——硬件被迫串行处理，快内存也变慢。规律和合并类似：warp 内 lane 访问 shared 数组的下标错开成不同 bank 才最快。这里先埋个点，第 17 章详解；现在只需知道&quot;shared memory 也讲究访问模式&quot;。</p>
+<h2>动手：数一数每种访存模式要几次传输</h2>
+<p>下面这个模拟器<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它把上面那张图变成可计算的：给定一个 warp 的访问步长（stride），算出这 32 条 lane 的地址落进几个 128 字节段，也就是需要几次内存传输。你会看到 stride=1 只要 1 次，stride=32 要 32 次。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%EF%BC%9A%E4%B8%80%E4%B8%AA%20warp%EF%BC%8832%20%E6%9D%A1%20lane%EF%BC%89%E6%8C%89%E6%9F%90%E6%AD%A5%E9%95%BF%E8%AE%BF%E9%97%AE%20float%EF%BC%8C%E9%9C%80%E8%A6%81%E5%87%A0%E6%AC%A1%20128%20%E5%AD%97%E8%8A%82%E4%BC%A0%E8%BE%93%0AWARP%20%3D%2032%0ABYTES_PER_FLOAT%20%3D%204%0ASEGMENT%20%3D%20128%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%A1%AC%E4%BB%B6%E4%B8%80%E6%AC%A1%E6%90%AC%E8%BF%90%E7%9A%84%E5%AF%B9%E9%BD%90%E5%9D%97%E5%A4%A7%E5%B0%8F%EF%BC%88%E5%AD%97%E8%8A%82%EF%BC%89%0A%0Adef%20transactions(stride%2C%20base_elem%3D0)%3A%0A%20%20%20%20%22%22%22%E6%AF%8F%E6%9D%A1%20lane%20%E8%AF%BB%20a%5Bbase%20%2B%20lane*stride%5D%EF%BC%8C%E8%BF%94%E5%9B%9E%E8%A6%86%E7%9B%96%E5%88%B0%E7%9A%84%20128%20%E5%AD%97%E8%8A%82%E6%AE%B5%E6%95%B0%E3%80%82%22%22%22%0A%20%20%20%20segments%20%3D%20set()%0A%20%20%20%20for%20lane%20in%20range(WARP)%3A%0A%20%20%20%20%20%20%20%20byte_addr%20%3D%20(base_elem%20%2B%20lane%20*%20stride)%20*%20BYTES_PER_FLOAT%0A%20%20%20%20%20%20%20%20segments.add(byte_addr%20%2F%2F%20SEGMENT)%20%20%20%20%20%23%20%E8%BF%99%E4%B8%AA%E5%9C%B0%E5%9D%80%E5%B1%9E%E4%BA%8E%E5%93%AA%E4%B8%AA%E6%AE%B5%0A%20%20%20%20return%20len(segments)%0A%0Aprint(f%22%E4%B8%80%E4%B8%AA%20warp%20%3D%20%7BWARP%7D%20%E6%9D%A1%20lane%EF%BC%8C%E6%AF%8F%E6%AC%A1%E6%90%AC%E8%BF%90%E4%B8%80%E4%B8%AA%E5%AF%B9%E9%BD%90%E7%9A%84%20%7BSEGMENT%7D%20%E5%AD%97%E8%8A%82%E6%AE%B5%5Cn%22)%0Aprint(%22%E6%AD%A5%E9%95%BF%20stride%20%7C%20%E9%9C%80%E8%A6%81%E7%9A%84%E4%BC%A0%E8%BE%93%E6%AC%A1%E6%95%B0%20%7C%20%E5%B8%A6%E5%AE%BD%E5%88%A9%E7%94%A8%E7%8E%87%22)%0Aprint(%22-%22%20*%2046)%0Afor%20stride%20in%20%5B1%2C%202%2C%204%2C%208%2C%2016%2C%2032%5D%3A%0A%20%20%20%20n%20%3D%20transactions(stride)%0A%20%20%20%20used%20%3D%20WARP%20*%20BYTES_PER_FLOAT%20%20%20%20%20%20%20%20%20%20%23%20%E7%9C%9F%E6%AD%A3%E9%9C%80%E8%A6%81%E7%9A%84%E5%AD%97%E8%8A%82%0A%20%20%20%20moved%20%3D%20n%20*%20SEGMENT%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%AE%9E%E9%99%85%E6%90%AC%E8%BF%90%E7%9A%84%E5%AD%97%E8%8A%82%0A%20%20%20%20print(f%22%7Bstride%3A%3E9%7D%20%20%20%7C%20%7Bn%3A%3E10%7D%20%E6%AC%A1%20%20%20%7C%20%7Bused%2Fmoved*100%3A5.1f%7D%25%22)%0A%0Aprint(%22%5Cn%E7%BB%93%E8%AE%BA%EF%BC%9A%22)%0Aprint(%22%20%20stride%3D1%EF%BC%88%E5%90%88%E5%B9%B6%EF%BC%89%EF%BC%9A32%20%E4%B8%AA%20float%20%E6%AD%A3%E5%A5%BD%E9%93%BA%E6%BB%A1%201%20%E4%B8%AA%E6%AE%B5%20%E2%86%92%201%20%E6%AC%A1%E4%BC%A0%E8%BE%93%EF%BC%8C100%25%20%E6%9C%89%E6%95%88%E3%80%82%22)%0Aprint(%22%20%20stride%20%E8%B6%8A%E5%A4%A7%E8%B6%8A%E6%95%A3%EF%BC%9A%E6%AE%B5%E6%95%B0%E8%B6%8A%E5%A4%9A%E3%80%81%E6%AF%8F%E6%AE%B5%E6%B5%AA%E8%B4%B9%E8%B6%8A%E7%8B%A0%E3%80%82%22)%0Aprint(%22%20%20stride%3D32%EF%BC%9A32%20%E4%B8%AA%E5%9C%B0%E5%9D%80%E8%90%BD%E8%BF%9B%2032%20%E4%B8%AA%E6%AE%B5%20%E2%86%92%2032%20%E6%AC%A1%E4%BC%A0%E8%BE%93%EF%BC%8C%E5%8F%AA%E7%94%A8%E4%BA%86%201%2F32%20%E7%9A%84%E5%B8%A6%E5%AE%BD%E3%80%82%22)"># 模拟：一个 warp（32 条 lane）按某步长访问 float，需要几次 128 字节传输
+WARP = 32
+BYTES_PER_FLOAT = 4
+SEGMENT = 128                       # 硬件一次搬运的对齐块大小（字节）
+
+def transactions(stride, base_elem=0):
+    """每条 lane 读 a[base + lane*stride]，返回覆盖到的 128 字节段数。"""
+    segments = set()
+    for lane in range(WARP):
+        byte_addr = (base_elem + lane * stride) * BYTES_PER_FLOAT
+        segments.add(byte_addr // SEGMENT)     # 这个地址属于哪个段
+    return len(segments)
+
+print(f"一个 warp = {WARP} 条 lane，每次搬运一个对齐的 {SEGMENT} 字节段\n")
+print("步长 stride | 需要的传输次数 | 带宽利用率")
+print("-" * 46)
+for stride in [1, 2, 4, 8, 16, 32]:
+    n = transactions(stride)
+    used = WARP * BYTES_PER_FLOAT          # 真正需要的字节
+    moved = n * SEGMENT                    # 实际搬运的字节
+    print(f"{stride:&gt;9}   | {n:&gt;10} 次   | {used/moved*100:5.1f}%")
+
+print("\n结论：")
+print("  stride=1（合并）：32 个 float 正好铺满 1 个段 → 1 次传输，100% 有效。")
+print("  stride 越大越散：段数越多、每段浪费越狠。")
+print("  stride=32：32 个地址落进 32 个段 → 32 次传输，只用了 1/32 的带宽。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">一个 warp = 32 条 lane，每次搬运一个对齐的 128 字节段
+
+步长 stride | 需要的传输次数 | 带宽利用率
+----------------------------------------------
+        1   |          1 次   | 100.0%
+        2   |          2 次   |  50.0%
+        4   |          4 次   |  25.0%
+        8   |          8 次   |  12.5%
+       16   |         16 次   |   6.2%
+       32   |         32 次   |   3.1%</code></pre>
+</div><p>一张表把&quot;访存模式决定性能&quot;讲透了：从合并（stride=1，一次传输、满带宽）到最散（stride=32，32 次传输、只用 3% 带宽），<strong>算的活一模一样，仅仅因为地址的排布，带宽利用率就差了 32 倍</strong>。请动手改：把 <code>transactions(stride)</code> 调用改成 <code>transactions(1, base_elem=1)</code>（连续访问，但整体偏移一个 float）——你可能以为还是 1 次，但因为地址不再对齐到 128 字节边界，它会变成 2 次。这就是为什么真实优化里除了&quot;连续&quot;还讲究&quot;对齐&quot;。</p>
+<h2>动手：第一个用上 shared memory 的完整 kernel</h2>
+<p>下面是一个<strong>完整可编译</strong>的 CUDA 程序：每个 block 把自己那段数据搬进 shared memory，<code>__syncthreads()</code> 等全组搬完，然后每个线程去读<strong>自己 block 内的邻居</strong>——做一个&quot;在 block 内把数据首尾颠倒&quot;的操作。它同时演示了 shared memory 的两大要素：<strong>显式搬运</strong> 和 <strong>同步等待</strong>。点 <strong>🔗 在 Compiler Explorer 打开</strong> 可以看它编译出的 PTX。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6Ii8vIOeUqCBzaGFyZWQgbWVtb3J5IOWcqOavj%2BS4qiBibG9jayDlhoXpg6jmiormlbDmja7pppblsL7poqDlgJJcbiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3VkYV9ydW50aW1lLmg%2BXG5cbiNkZWZpbmUgQkxPQ0sgMjU2XG5cbl9fZ2xvYmFsX18gdm9pZCByZXZlcnNlSW5CbG9jayhmbG9hdCogb3V0LCBjb25zdCBmbG9hdCogaW4sIGludCBuKSB7XG4gICAgX19zaGFyZWRfXyBmbG9hdCB0aWxlW0JMT0NLXTsgICAgICAgICAgICAgICAgIC8vIOavj%2BS4qiBibG9jayDkuIDlnZfniYfkuIrmmoLlrZjljLpcblxuICAgIGludCBnaWQgPSBibG9ja0lkeC54ICogYmxvY2tEaW0ueCArIHRocmVhZElkeC54O1xuICAgIGludCB0ICAgPSB0aHJlYWRJZHgueDtcblxuICAgIC8vIDEpIOWQiOW5tuiuv%2BmXru%2B8muebuOmCu%2Be6v%2Beoi%2Bivu%2BebuOmCu%2BWcsOWdgO%2B8jOaKiuacrCBibG9jayDnmoTmlbDmja7mkKzov5sgc2hhcmVkIG1lbW9yeVxuICAgIGlmIChnaWQgPCBuKSB0aWxlW3RdID0gaW5bZ2lkXTtcbiAgICBfX3N5bmN0aHJlYWRzKCk7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8g562J5pysIGJsb2NrIOaJgOaciee6v%2Beoi%2BmDveaQrOWujFxuXG4gICAgLy8gMikg5q%2BP5Liq57q%2F56iL6K%2B7XCJibG9jayDlhoXnmoTplZzlg4%2FpgrvlsYVcIuKAlOKAlOaVsOaNruW3suWcqOW%2Fq%2BWGheWtmOmHjO%2B8jOmaj%2BS%2Bv%2BaMkVxuICAgIGludCBtaXJyb3IgPSBibG9ja0RpbS54IC0gMSAtIHQ7XG4gICAgaWYgKGdpZCA8IG4pIG91dFtnaWRdID0gdGlsZVttaXJyb3JdO1xufVxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgTiA9IDEwMjQ7XG4gICAgc2l6ZV90IGJ5dGVzID0gTiAqIHNpemVvZihmbG9hdCk7XG5cbiAgICBmbG9hdCAqaEluID0gKGZsb2F0KiltYWxsb2MoYnl0ZXMpLCAqaE91dCA9IChmbG9hdCopbWFsbG9jKGJ5dGVzKTtcbiAgICBmb3IgKGludCBpID0gMDsgaSA8IE47ICsraSkgaEluW2ldID0gKGZsb2F0KWk7ICAgIC8vIDAsMSwyLC4uLlxuXG4gICAgZmxvYXQgKmRJbiwgKmRPdXQ7XG4gICAgY3VkYU1hbGxvYygmZEluLCBieXRlcyk7XG4gICAgY3VkYU1hbGxvYygmZE91dCwgYnl0ZXMpO1xuICAgIGN1ZGFNZW1jcHkoZEluLCBoSW4sIGJ5dGVzLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcblxuICAgIGludCBibG9ja3MgPSAoTiArIEJMT0NLIC0gMSkgLyBCTE9DSztcbiAgICByZXZlcnNlSW5CbG9jazw8PGJsb2NrcywgQkxPQ0s%2BPj4oZE91dCwgZEluLCBOKTtcbiAgICBjdWRhRGV2aWNlU3luY2hyb25pemUoKTtcblxuICAgIGN1ZGFNZW1jcHkoaE91dCwgZE91dCwgYnl0ZXMsIGN1ZGFNZW1jcHlEZXZpY2VUb0hvc3QpO1xuXG4gICAgLy8g56ysIDAg5LiqIGJsb2NrIOWGheW6lOS7jiAyNTUg5Y%2BN5YiwIDDvvJvmiZPljbDlpLTlsL7pqozor4FcbiAgICBwcmludGYoXCJvdXRbMF0gICA9ICUuMGYgICjmnJ%2FmnJsgMjU1KVxcblwiLCBoT3V0WzBdKTtcbiAgICBwcmludGYoXCJvdXRbMjU1XSA9ICUuMGYgICjmnJ%2FmnJsgMClcXG5cIiwgICBoT3V0WzI1NV0pO1xuICAgIHByaW50ZihcIm91dFsyNTZdID0gJS4wZiAgKOacn%2BacmyA1MTHvvIznrKzkuozkuKogYmxvY2sg5YaF6YOo5Y%2BN6L2sKVxcblwiLCBoT3V0WzI1Nl0pO1xuXG4gICAgY3VkYUZyZWUoZEluKTsgY3VkYUZyZWUoZE91dCk7XG4gICAgZnJlZShoSW4pOyBmcmVlKGhPdXQpO1xuICAgIHJldHVybiAwO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJudmNjMTI5Iiwib3B0aW9ucyI6Ii1zdGQ9YysrMjAgLU8zIC0tZ3B1LWFyY2hpdGVjdHVyZT1zbV85MCAtcHR4In1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// 用 shared memory 在每个 block 内部把数据首尾颠倒
+#include &lt;cstdio&gt;
+#include &lt;cuda_runtime.h&gt;
+
+#define BLOCK 256
+
+__global__ void reverseInBlock(float* out, const float* in, int n) {
+    __shared__ float tile[BLOCK];                 // 每个 block 一块片上暂存区
+
+    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    int t   = threadIdx.x;
+
+    // 1) 合并访问：相邻线程读相邻地址，把本 block 的数据搬进 shared memory
+    if (gid &lt; n) tile[t] = in[gid];
+    __syncthreads();                              // 等本 block 所有线程都搬完
+
+    // 2) 每个线程读"block 内的镜像邻居"——数据已在快内存里，随便挑
+    int mirror = blockDim.x - 1 - t;
+    if (gid &lt; n) out[gid] = tile[mirror];
+}
+
+int main() {
+    const int N = 1024;
+    size_t bytes = N * sizeof(float);
+
+    float *hIn = (float*)malloc(bytes), *hOut = (float*)malloc(bytes);
+    for (int i = 0; i &lt; N; ++i) hIn[i] = (float)i;    // 0,1,2,...
+
+    float *dIn, *dOut;
+    cudaMalloc(&amp;dIn, bytes);
+    cudaMalloc(&amp;dOut, bytes);
+    cudaMemcpy(dIn, hIn, bytes, cudaMemcpyHostToDevice);
+
+    int blocks = (N + BLOCK - 1) / BLOCK;
+    reverseInBlock&lt;&lt;&lt;blocks, BLOCK&gt;&gt;&gt;(dOut, dIn, N);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(hOut, dOut, bytes, cudaMemcpyDeviceToHost);
+
+    // 第 0 个 block 内应从 255 反到 0；打印头尾验证
+    printf("out[0]   = %.0f  (期望 255)\n", hOut[0]);
+    printf("out[255] = %.0f  (期望 0)\n",   hOut[255]);
+    printf("out[256] = %.0f  (期望 511，第二个 block 内部反转)\n", hOut[256]);
+
+    cudaFree(dIn); cudaFree(dOut);
+    free(hIn); free(hOut);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><p>编译运行（本地有 NVIDIA GPU 时）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc reverse.cu -o reverse &amp;&amp; ./reverse</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">out[0]   = 255  (期望 255)
+out[255] = 0  (期望 0)
+out[256] = 511  (期望 511，第二个 block 内部反转)</code></pre>
+</div><p>注意这个 kernel 的结构，它是后面几乎所有&quot;用 shared memory 提速&quot;的 kernel 的骨架：<strong>搬进来 → <code>__syncthreads()</code> → 反复读</strong>。这里为什么必须 <code>__syncthreads()</code>？因为线程 0 想读 <code>tile[255]</code>，而 <code>tile[255]</code> 是线程 255 搬进去的——如果不等线程 255 写完就读，线程 0 会读到垃圾。这就是 GPU 上代替锁的协作方式：<strong>barrier（栅栏同步）</strong>。请动手改：把 <code>mirror</code> 那行改成 <code>int mirror = (t + 1) % blockDim.x;</code>（读右边邻居，循环回卷），重新编译运行，看输出怎么变——你会看到每个 block 内的数据整体左移了一位。</p>
+<h2>小结与下一步</h2>
+<p>你现在有了 GPU 内存的完整地图：寄存器（每线程、最快）、shared memory（每 block、片上、你亲手管）、全局内存（片外、又大又慢），以及那条铁律——<strong>warp 内相邻 lane 访问相邻地址才能合并成一次传输，否则退化成几十次</strong>。访存的顺序，比访存的次数更决定速度。</p>
+<p>上面那个 reverse kernel 里，你不得不写下一行 <code>__syncthreads()</code>——没有它，程序就是错的。这个&quot;等所有线程到齐再往下走&quot;的动作，正是 GPU 协作的核心。下一章我们就专门讲<strong>协作与同步</strong>：<code>__syncthreads()</code> 这样的 barrier 到底保证了什么、第 6 章埋下的 warp 级 shuffle 怎么用、以及当多个线程要往同一个地址累加时，如何用<strong>原子操作</strong>避免数据竞争。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>GPU 内存分三级：<strong>寄存器</strong>（每线程私有、最快）、<strong>shared memory</strong>（每 block 共享、片上、你显式管理）、<strong>全局内存</strong>（片外、又大又慢、所有线程可见）；另有常量内存和自动的 L2。</li>
+<li>shared memory 是&quot;<strong>你自己管的缓存</strong>&quot;：与 CPU 自动透明的缓存不同，你亲手声明、亲手搬数据、亲手同步。黄金用法是<strong>数据复用</strong>（第 11 章 tiling）。</li>
+<li><strong>合并访问（memory coalescing）</strong> 是本章最值钱的概念：warp 的 32 条 lane 访问<strong>连续对齐</strong>地址时合并成 1 次宽传输；<strong>跨步/散乱</strong>时退化成多达 32 次小传输，带宽利用率暴跌。</li>
+<li>判据是&quot;<strong>warp 内相邻 lane 访问相邻地址</strong>&quot;；二维数据里沿行还是沿列遍历，可能带来几十倍性能差。</li>
+<li>shared memory 也讲访问模式：多条 lane 撞进同一 <strong>bank</strong> 会 bank conflict（第 17 章详解）。</li>
+<li>用 shared memory 的骨架是：<strong>搬进来 → <code>__syncthreads()</code> → 反复读</strong>；那句同步不是可选的，缺了就是数据竞争——下一章展开。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch06.html">← 第 6 章 真正的调度单位：Warp 与 Sub-group</a>
+  <a class="nav-next" href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

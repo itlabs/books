@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>看得见的 GPU 编程</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>看得见的 GPU 编程</h1>
+<blockquote>
+<p>写给资深程序员的并行心智模型：CUDA、SYCL、Triton 与 CuTe DSL。
+你已经会写多线程、懂缓存和内存带宽了——这本书要讲的，是当成千上万个线程同时跑起来时，你脑子里那套 CPU 模型要怎么改。</p>
+</blockquote>
+<h2>这本书写给谁</h2>
+<p>你是一名资深工程师，能熟练用 C++ 或 Python 解决真实问题，理解线程、锁、缓存、SIMD 这些概念。你<strong>不需要</strong>别人再教你什么是循环、什么是数组。</p>
+<p>你缺的不是编程经验，而是一套新的<strong>心智模型</strong>：</p>
+<ul>
+<li>在 CPU 上，你习惯让<strong>几个</strong>线程各干各的活，靠缓存和乱序执行把单线程跑到极致；</li>
+<li>在 GPU 上，你要让<strong>成千上万个</strong>线程齐步走，靠海量并行和内存带宽取胜——单个线程慢得可怜，但一起上就快得惊人。</li>
+</ul>
+<p>这本书帮你完成这次切换。我们不从&quot;什么是并行&quot;讲起，而是不断把 GPU 的做法和你已经会的 <strong>CPU 多线程 / SIMD</strong> 做法对照，讲清<strong>差异</strong>和<strong>差异背后的原因</strong>。</p>
+<h2>这本书的特别之处</h2>
+<ul>
+<li><strong>对照式讲解</strong>：每个新概念都尽量先用一段你熟悉的 CPU 代码建立锚点，再看 GPU 怎么做、为什么这么做。</li>
+<li><strong>看得见的并行</strong>：Grid/Block/Warp/Thread、内存层级、合并访问、bank conflict、warp 分歧——这些抽象概念全部配<strong>图示</strong>，而不是只有文字。</li>
+<li><strong>一个概念，四种写法</strong>：同一件事（比如向量加法、softmax），分别用 <strong>CUDA / SYCL / Triton / CuTe DSL</strong> 写出来横向对比，你会看清它们其实是同一个模型的不同外衣。</li>
+<li><strong>可运行 + 看得见编译器</strong>：<ul>
+<li><strong>CUDA / SYCL</strong> 代码块带 <strong>🔗 在 Compiler Explorer 打开</strong>：点开就能在线编译、看生成的 PTX；每段都附<strong>本地编译命令</strong>（<code>nvcc</code> / <code>icpx</code>）。</li>
+<li><strong>概念模拟</strong>：SIMT 调度、warp 分歧、归约树这些机制，用<strong>能在浏览器里直接跑的 Python</strong>做成小模拟器，点&quot;▶ 运行&quot;就能看到线程们怎么动——<strong>不需要 GPU 也能理解</strong>。</li>
+<li><strong>Triton / CuTe DSL</strong> 附完整可跑的 Python 程序与运行命令，在你自己的 GPU 上执行。</li>
+</ul>
+</li>
+<li><strong>示例全部可编译可执行</strong>：书中的完整程序都能独立编译运行，不是伪代码。</li>
+</ul>
+<h2>目录</h2>
+<h3>第一部分 · 换个心智模型</h3>
+<ul>
+<li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+</ul>
+<h3>第二部分 · 核心编程模型（本书的地基）</h3>
+<ul>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+</ul>
+<h3>第三部分 · 四大技术，逐一展开</h3>
+<ul>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+</ul>
+<h3>第四部分 · 性能与优化</h3>
+<ul>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+</ul>
+<h3>第五部分 · 融会贯通</h3>
+<ul>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+</ul>
+<h3>附录</h3>
+<ul>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li>
+</ul>
+<h2>怎么用这本书</h2>
+<ol>
+<li><strong>按顺序读第一、二部分。</strong> 第 1—9 章是全书地基：SIMT 模型、执行层级、warp、内存层级、同步。这套模型立住了，后面四大技术都只是它的不同语法。</li>
+<li><strong>点开代码块动手改。</strong> CUDA/SYCL 段落点 <strong>🔗 在 Compiler Explorer 打开</strong> 看生成的 PTX；概念段落点 <strong>▶ 运行</strong> 跑浏览器里的 Python 模拟，亲眼看线程怎么调度。</li>
+<li><strong>用附录 B 查术语。</strong> CUDA 的 block = SYCL 的 work-group = Triton 的 program，一张表帮你在四套术语间自由换算。</li>
+<li><strong>没有 GPU 也能学。</strong> 概念、模拟、PTX 都不需要显卡；等你有了 GPU（或云实例），再回来跑 Triton / CuTe 的完整例子。</li>
+</ol>
+<p>准备好从&quot;几个线程&quot;升级到&quot;成千上万个线程&quot;了吗？从<a href="ch01.html">第 1 章</a>开始。</p>
+
+<div class="chapter-nav">
+  <span></span>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li class="active"><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>正文里反复承诺过的那张"罗塞塔石碑"就在这里。四种技术——<strong>CUDA、SYCL、OpenCL、Triton</strong>——本质上在描述同一套 GPU 执行模型，只是换了名字和外衣。这一节把等价概念<strong>横向对齐成表</strong>，让你读任何一份文档、任何一段别人的代码时，都能立刻在脑子里翻译成你熟悉的那套词。</p>
+<p>表格之外，我们还挑出几个<strong>最容易咬人的"假朋友"</strong>——尤其是 SYCL 的 nd_range 尺寸约定和 CUDA 的 <code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 完全相反这件事（第 5 章的经典困惑），专门讲透。</p>
+</div><h2>怎么用这份表</h2>
+<p>四种技术的心智模型高度同构，但<strong>词汇和默认约定不同</strong>，混用时最容易出错的不是概念本身，而是&quot;同一个词在两边指的东西不一样&quot;或&quot;同一个意思两边写法相反&quot;。下面按主题分组给出对照表，每组后面跟一句要点。查表时记住一条主线索：</p>
+<div class="keypoint">
+<strong>贯穿全表的核心对应</strong>
+<strong>CUDA block = SYCL work-group = OpenCL work-group ≈ 一个 Triton program 处理的数据块</strong>；<strong>CUDA thread = SYCL work-item = OpenCL work-item</strong>。而 Triton 特殊：它<strong>没有暴露"单个线程"</strong>这一层——你写的一个 Triton program 直接操作一整块数据（一个向量/张量块），线程级并行由编译器在底层生成。所以把 Triton 的 program 类比成 CUDA 的 <strong>block</strong>，而不是 thread，是读懂 Triton 的第一把钥匙。
+</div><h2>一、执行层级</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>整个启动的线程集合</td>
+<td>grid</td>
+<td>NDRange</td>
+<td>NDRange</td>
+<td>一维/多维的 program 网格（grid）</td>
+</tr>
+<tr>
+<td>中层分组（映射到一个 SM）</td>
+<td>block（thread block）</td>
+<td>work-group</td>
+<td>work-group</td>
+<td>一个 <strong>program</strong>（处理一块数据）</td>
+</tr>
+<tr>
+<td>最小执行个体</td>
+<td>thread</td>
+<td>work-item</td>
+<td>work-item</td>
+<td>—（不暴露单线程，编译器生成）</td>
+</tr>
+<tr>
+<td>维度</td>
+<td>1D/2D/3D</td>
+<td>1D/2D/3D</td>
+<td>1D/2D/3D</td>
+<td>1D/2D/3D 的 program id</td>
+</tr>
+</tbody></table>
+<p>要点：CUDA/SYCL/OpenCL 都是<strong>三层</strong>（grid/网格 → block/组 → thread/项）。Triton 砍掉了最下面的 thread 层，让你只在<strong>块级</strong>思考——一个 program 就是&quot;我负责这一块数据，我对它整块做 load/compute/store&quot;。</p>
+<h2>二、索引：我是谁、我在哪</h2>
+<table>
+<thead>
+<tr>
+<th>想问</th>
+<th>CUDA</th>
+<th>SYCL（<code>nd_item</code> it）</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>我在哪个 block/组？</td>
+<td><code>blockIdx.x</code></td>
+<td><code>it.get_group(0)</code></td>
+<td><code>get_group_id(0)</code></td>
+<td><code>tl.program_id(0)</code></td>
+</tr>
+<tr>
+<td>block/组内我是第几个？</td>
+<td><code>threadIdx.x</code></td>
+<td><code>it.get_local_id(0)</code></td>
+<td><code>get_local_id(0)</code></td>
+<td>—（无线程内索引）</td>
+</tr>
+<tr>
+<td>全局唯一编号</td>
+<td><code>blockIdx.x*blockDim.x+threadIdx.x</code></td>
+<td><code>it.get_global_id(0)</code></td>
+<td><code>get_global_id(0)</code></td>
+<td><code>pid*BLOCK + tl.arange(0,BLOCK)</code>（一整块偏移）</td>
+</tr>
+<tr>
+<td>block/组大小</td>
+<td><code>blockDim.x</code></td>
+<td><code>it.get_local_range(0)</code></td>
+<td><code>get_local_size(0)</code></td>
+<td><code>BLOCK</code>（<code>tl.constexpr</code> 常量）</td>
+</tr>
+<tr>
+<td>grid 大小（组数）</td>
+<td><code>gridDim.x</code></td>
+<td><code>it.get_group_range(0)</code></td>
+<td><code>get_num_groups(0)</code></td>
+<td>启动时 grid 的形状</td>
+</tr>
+</tbody></table>
+<p>要点：SYCL 有一个便利处——<code>get_global_id()</code> 直接给你全局编号，省掉 CUDA 里 <code>blockIdx*blockDim+threadIdx</code> 的手算。Triton 则完全不同：它没有&quot;我是第几个线程&quot;，你拿到 <code>program_id</code> 后用 <code>tl.arange</code> 生成<strong>一整块</strong>下标向量，一次处理整块。</p>
+<h2>三、调度单位（硬件真正齐步走的那一组）</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>SIMT 调度单位</td>
+<td><strong>warp</strong>（32 线程，NVIDIA）</td>
+<td><strong>sub-group</strong></td>
+<td><strong>sub-group</strong></td>
+<td>由编译器处理（不直接暴露）</td>
+</tr>
+<tr>
+<td>组内 lane 编号</td>
+<td><code>laneid</code>（0–31）</td>
+<td><code>sg.get_local_id()</code></td>
+<td><code>get_sub_group_local_id()</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>组内广播/洗牌</td>
+<td><code>__shfl_sync</code> 系</td>
+<td><code>sycl::select_from_group</code> 等</td>
+<td><code>sub_group_shuffle</code></td>
+<td>由编译器/<code>tl</code> 原语间接实现</td>
+</tr>
+</tbody></table>
+<p>要点：warp（第 6 章）是 NVIDIA 的 32 线程，SYCL/OpenCL 的对应物叫 <strong>sub-group</strong>，但其大小依设备而定，不一定是 32——写可移植代码时要查询而非假设。Triton 不让你直接碰这一层，warp 级的优化交给它的编译器。</p>
+<h2>四、内存空间</h2>
+<table>
+<thead>
+<tr>
+<th>语义</th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>大而慢的显存</td>
+<td>global memory</td>
+<td>global</td>
+<td><code>__global</code></td>
+<td>指针（<code>tl.load/tl.store</code> 访问 DRAM）</td>
+</tr>
+<tr>
+<td>block/组内共享的片上高速内存</td>
+<td><strong>shared memory</strong>（<code>__shared__</code>）</td>
+<td><strong>local</strong>（<code>local_accessor</code>）</td>
+<td><code>__local</code></td>
+<td>由编译器管理（<code>tl</code> 抽象掉）</td>
+</tr>
+<tr>
+<td>每线程私有</td>
+<td>registers / local memory</td>
+<td>private</td>
+<td><code>__private</code></td>
+<td>块内张量（存于寄存器/共享，编译器定）</td>
+</tr>
+<tr>
+<td>只读常量</td>
+<td>constant（<code>__constant__</code>）</td>
+<td>constant</td>
+<td><code>__constant</code></td>
+<td>编译期常量（<code>tl.constexpr</code>）</td>
+</tr>
+</tbody></table>
+<div class="warn">
+<strong>假朋友警报：CUDA 的 "local" ≠ SYCL/OpenCL 的 "local"</strong>
+在 <strong>CUDA</strong> 里，"local memory" 指的是<strong>每个线程私有</strong>、寄存器放不下时溢出到显存的那块空间（慢）。而在 <strong>SYCL/OpenCL</strong> 里，"local" 指的是<strong>整个 work-group 共享的片上高速内存</strong>——也就是 CUDA 说的 <strong>shared memory</strong>！这是四种技术间最坑的一个术语撞车：同一个词 "local"，在 CUDA 是"线程私有的慢内存"，在 SYCL/OpenCL 是"组内共享的快内存"。读代码时务必先确认是谁的方言。
+</div><p>要点：记住这条映射链——CUDA <strong>shared</strong> = SYCL/OpenCL <strong>local</strong>；CUDA <strong>local</strong>（私有慢内存）在 SYCL/OpenCL 里归入 <strong>private</strong>（寄存器溢出）。Triton 把这一整层都藏了起来，你只管声明块级张量，它决定放寄存器还是共享内存。</p>
+<h2>五、函数/内核限定符</h2>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>标记&quot;这是一个 kernel&quot;</td>
+<td><code>__global__</code></td>
+<td>传给 <code>parallel_for</code> 的 lambda / functor</td>
+<td><code>__kernel</code></td>
+<td><code>@triton.jit</code></td>
+</tr>
+<tr>
+<td>device 端可调用的辅助函数</td>
+<td><code>__device__</code></td>
+<td>普通函数（在 device 代码里调用即可）</td>
+<td>普通函数（OpenCL C 内）</td>
+<td><code>@triton.jit</code>（可被其他 jit 函数调用）</td>
+</tr>
+<tr>
+<td>host 端函数</td>
+<td><code>__host__</code>（默认）</td>
+<td>普通 C++</td>
+<td>host 用 C/C++ API</td>
+<td>普通 Python</td>
+</tr>
+<tr>
+<td>声明共享内存</td>
+<td><code>__shared__ float s[N];</code></td>
+<td><code>sycl::local_accessor&lt;float&gt;</code></td>
+<td><code>__local float s[N];</code></td>
+<td>编译器管理（无显式声明）</td>
+</tr>
+</tbody></table>
+<p>要点：CUDA 用<strong>函数属性</strong>区分 host/device；SYCL 走**现代 C++**路线，kernel 就是一个传给 <code>parallel_for</code> 的 lambda，没有特殊关键字；OpenCL 用 <code>__kernel</code>；Triton 用装饰器 <code>@triton.jit</code>，写的是 Python 但被编译成 GPU 代码。</p>
+<h2>六、同步</h2>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>CUDA</th>
+<th>SYCL（<code>nd_item</code> it）</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>block/组内 barrier</td>
+<td><code>__syncthreads()</code></td>
+<td><code>it.barrier()</code></td>
+<td><code>barrier(CLK_LOCAL_MEM_FENCE)</code></td>
+<td>program 内隐式（无显式 barrier）</td>
+</tr>
+<tr>
+<td>内存栅栏</td>
+<td><code>__threadfence()</code> 系</td>
+<td><code>sycl::atomic_fence</code></td>
+<td><code>mem_fence(...)</code></td>
+<td>由编译器保证</td>
+</tr>
+<tr>
+<td>warp/sub-group 内同步</td>
+<td><code>__syncwarp()</code></td>
+<td>sub-group barrier</td>
+<td>sub-group barrier</td>
+<td>编译器处理</td>
+</tr>
+</tbody></table>
+<div class="warn">
+<strong>Triton 没有 <code>__syncthreads()</code></strong>
+因为一个 Triton program 在语义上是"对一整块数据做操作"，块内的线程级同步由编译器在生成代码时自动插入——你在 Triton 里<strong>看不到也写不出</strong> barrier。这既是省心（不会漏同步），也意味着你放弃了 CUDA 那种手动编排 shared memory + barrier 的细粒度控制（对比第 8、11 章）。
+</div><p>要点：CUDA/SYCL/OpenCL 都要你<strong>显式</strong>在组内设 barrier 来协调共享内存读写（第 8 章）；漏了或放错位置就是数据竞争。Triton 把这层隐式化了。</p>
+<h2>七、原子操作</h2>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>原子加</td>
+<td><code>atomicAdd(&amp;x, v)</code></td>
+<td><code>sycl::atomic_ref&lt;...&gt;{x} += v</code></td>
+<td><code>atomic_add(&amp;x, v)</code></td>
+<td><code>tl.atomic_add(ptr, v)</code></td>
+</tr>
+<tr>
+<td>原子 CAS</td>
+<td><code>atomicCAS(...)</code></td>
+<td><code>atomic_ref::compare_exchange_*</code></td>
+<td><code>atomic_cmpxchg(...)</code></td>
+<td><code>tl.atomic_cas(...)</code></td>
+</tr>
+<tr>
+<td>原子 max/min 等</td>
+<td><code>atomicMax/Min/...</code></td>
+<td><code>atomic_ref::fetch_max/min</code></td>
+<td><code>atomic_max/min</code></td>
+<td><code>tl.atomic_max/min</code></td>
+</tr>
+</tbody></table>
+<p>要点：语义一致（对全局/共享内存做不可分割的读改写），只是 SYCL 走的是 C++ 的 <code>atomic_ref</code> 风格，其余三者是函数调用风格。</p>
+<h2>八、内核启动语法</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>启动写法</td>
+<td><code>kernel&lt;&lt;&lt;grid, block&gt;&gt;&gt;(args)</code></td>
+<td><code>q.parallel_for(nd_range&lt;1&gt;{{global},{local}}, kernel)</code></td>
+<td><code>clEnqueueNDRangeKernel(q, k, ..., global, local, ...)</code></td>
+<td><code>kernel[grid](args, BLOCK=...)</code></td>
+</tr>
+<tr>
+<td>第一个尺寸参数</td>
+<td><strong>block 的数量</strong>（grid 大小）</td>
+<td><strong>全局总工作量</strong>（global size）</td>
+<td><strong>全局总工作量</strong>（global size）</td>
+<td>grid：<strong>program 的数量</strong></td>
+</tr>
+<tr>
+<td>第二个尺寸参数</td>
+<td>每个 block 的<strong>线程数</strong></td>
+<td>每个 work-group 的大小（local size）</td>
+<td>每个 work-group 的大小（local size）</td>
+<td><code>BLOCK</code>：每个 program 处理的元素数（作为 <code>constexpr</code>）</td>
+</tr>
+</tbody></table>
+<div class="warn">
+<strong>头号经典困惑（第 5 章）：CUDA 的 <code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 和 SYCL 的 nd_range 尺寸约定<em>相反</em></strong>
+<p>CUDA：<code>kernel&lt;&lt;&lt;num_blocks, block_size&gt;&gt;&gt;</code> 的第一个数是 <strong>block 的个数</strong>，总线程数 = num_blocks × block_size，要你自己乘出来。</p>
+<p>SYCL：<code>nd_range&lt;1&gt;{global, local}</code> 的第一个数 <code>global</code> 是<strong>线程总数</strong>（不是组数！），<code>local</code> 是每组大小，组数 = global ÷ local，由运行时替你除。</p>
+<p>于是同样想要"256 个组、每组 128 线程"（共 32768 个线程），两边写法是：CUDA 写 <code>&lt;&lt;&lt;256, 128&gt;&gt;&gt;</code>；SYCL 写 <code>nd_range&lt;1&gt;{ {32768}, {128} }</code>。一个填"组数"，一个填"总数"——把 SYCL 的 <code>global</code> 当成组数（填 256）是最常见的错，会导致只处理了 1/128 的数据。<strong>记法：CUDA 说"几个组、每组几人"，SYCL 说"一共几人、每组几人"。</strong></p>
+</div><p>对照代码，一眼看清这个差别：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：第一个数 = 组数</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 想要 32768 个线程，每组 128
+int block = 128;
+int grid  = 32768 / 128;   // = 256 个 block
+kernel&lt;&lt;&lt;grid, block&gt;&gt;&gt;(...);
+// 第一个参数填"组数"256</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SYCL：第一个数 = 总数</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 想要 32768 个线程，每组 128
+sycl::nd_range&lt;1&gt; ndr{ sycl::range&lt;1&gt;(32768),   // 全局总数！
+                       sycl::range&lt;1&gt;(128) };   // 每组大小
+q.parallel_for(ndr, [=](sycl::nd_item&lt;1&gt; it){ ... });
+// 第一个参数填"总数"32768，不是 256</code></pre>
+</div></div>
+</div><h2>九、编译器 / 工具链</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>编译方式</td>
+<td>AOT（提前编译，<code>nvcc</code>）</td>
+<td>AOT 或 JIT（<code>icpx -fsycl</code> / AdaptiveCpp <code>acpp</code>）</td>
+<td>运行时 JIT（把 kernel 源码字符串编译）或 SPIR-V</td>
+<td>JIT（首次调用时即时编译）</td>
+</tr>
+<tr>
+<td>中间表示</td>
+<td>PTX → SASS</td>
+<td>SPIR-V / PTX（视后端）</td>
+<td>SPIR-V / 厂商 IR</td>
+<td>经 Triton IR → LLVM → PTX</td>
+</tr>
+<tr>
+<td>主要语言</td>
+<td>C++（扩展）</td>
+<td>标准 C++</td>
+<td>C（OpenCL C）/ C++</td>
+<td>Python</td>
+</tr>
+<tr>
+<td>看编译产物</td>
+<td>Compiler Explorer（nvcc）看 PTX</td>
+<td>Compiler Explorer（icpx）看 SPIR-V/PTX</td>
+<td>各厂商工具</td>
+<td>打印 <code>.asm</code> 属性看 PTX</td>
+</tr>
+</tbody></table>
+<p>要点：CUDA 是提前编译，Triton 是<strong>运行时即时编译</strong>（第一次调用某个形状时才编译，之后缓存），这也是 Triton 里首次调用偏慢、之后飞快的原因。SYCL 两种模式都支持。</p>
+<h2>一页速查（打印贴墙版）</h2>
+<table>
+<thead>
+<tr>
+<th>主题</th>
+<th>CUDA</th>
+<th>SYCL</th>
+<th>OpenCL</th>
+<th>Triton</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>组</td>
+<td>block</td>
+<td>work-group</td>
+<td>work-group</td>
+<td>program（≈ block）</td>
+</tr>
+<tr>
+<td>项</td>
+<td>thread</td>
+<td>work-item</td>
+<td>work-item</td>
+<td>（不暴露）</td>
+</tr>
+<tr>
+<td>组索引</td>
+<td><code>blockIdx</code></td>
+<td><code>get_group</code></td>
+<td><code>get_group_id</code></td>
+<td><code>program_id</code></td>
+</tr>
+<tr>
+<td>项索引</td>
+<td><code>threadIdx</code></td>
+<td><code>get_local_id</code></td>
+<td><code>get_local_id</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>调度单位</td>
+<td>warp(32)</td>
+<td>sub-group</td>
+<td>sub-group</td>
+<td>编译器</td>
+</tr>
+<tr>
+<td>共享快内存</td>
+<td><code>__shared__</code></td>
+<td>local（<code>local_accessor</code>）</td>
+<td><code>__local</code></td>
+<td>编译器管理</td>
+</tr>
+<tr>
+<td>私有慢内存</td>
+<td>local</td>
+<td>private</td>
+<td><code>__private</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>kernel 标记</td>
+<td><code>__global__</code></td>
+<td>lambda</td>
+<td><code>__kernel</code></td>
+<td><code>@triton.jit</code></td>
+</tr>
+<tr>
+<td>组内同步</td>
+<td><code>__syncthreads()</code></td>
+<td><code>it.barrier()</code></td>
+<td><code>barrier(...)</code></td>
+<td>隐式</td>
+</tr>
+<tr>
+<td>启动第一参数</td>
+<td><strong>组数</strong></td>
+<td><strong>总线程数</strong></td>
+<td><strong>总线程数</strong></td>
+<td><strong>program 数</strong></td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>四种技术描述的是<strong>同一套模型</strong>：核心对应是 <strong>CUDA block = SYCL/OpenCL work-group ≈ Triton program</strong>，<strong>CUDA thread = SYCL/OpenCL work-item</strong>；Triton <strong>不暴露单线程</strong>，一个 program 直接处理一整块数据。</li>
+<li>最坑的假朋友：<strong>&quot;local&quot; 一词</strong>在 CUDA 指线程私有的慢内存，在 SYCL/OpenCL 却指组内共享的快内存（= CUDA 的 shared）。</li>
+<li>最坑的语法差：<strong>CUDA <code>&lt;&lt;&lt;num_blocks, block_size&gt;&gt;&gt;</code> 的第一个数是&quot;组数&quot;，SYCL <code>nd_range{global, local}</code> 的第一个数是&quot;线程总数&quot;</strong>——填错会只算一小部分数据（第 5 章经典坑）。</li>
+<li>warp（NVIDIA 32 线程）在 SYCL/OpenCL 里叫 <strong>sub-group</strong>，大小不保证是 32；Triton 把 warp 级和 barrier 都交给编译器。</li>
+<li>Triton 是<strong>运行时 JIT</strong>，CUDA 是 AOT——这解释了 Triton 首次调用慢、之后快的现象。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-a.html">← 附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a>
+  <a class="nav-next" href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

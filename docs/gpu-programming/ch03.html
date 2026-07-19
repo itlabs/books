@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li class="active"><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前两章讲了软件层面的"海量弱小线程"和"齐步走的 SIMT"。这一章把 GPU 芯片<strong>拆开</strong>给你看：一颗 GPU 由几十个 <strong>SM（流多处理器）</strong>组成，每个 SM 里有计算核心、寄存器、一块自管的高速内存和调度 warp 的硬件；芯片外面挂着大容量但相对慢的<strong>显存</strong>。</p>
+<p>读完你会有一张清晰的硬件地图，知道后面每一个软件概念（block、warp、shared memory）落在哪块硅片上；还会用一个可运行的小程序，算清"为什么说 GPU 卡在内存带宽上"。</p>
+</div><h2>从 CPU 芯片的样子说起</h2>
+<p>你对 CPU 芯片有个大致印象：几个（到几十个）<strong>又大又复杂</strong>的核心，每个核心有自己的 L1/L2 缓存，还有巨大的乱序执行引擎、分支预测器；几个核心共享一块 L3 缓存；芯片外是主存（DRAM）。晶体管的预算，大量花在了<strong>让单个核心变聪明</strong>上——缓存、预测、调度，全为降低单线程延迟。</p>
+<p>GPU 把同样的晶体管预算花在了<strong>完全不同</strong>的地方：几乎全砸在<strong>算术单元</strong>上，只留很少给控制和缓存。结果是一颗 GPU 上有<strong>成千上万个</strong>极其简单的计算核心，但它们必须共享控制逻辑（这正是上一章 SIMT 的物理原因）。</p>
+<div class="concept">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- CPU -->
+  <text x="140" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#6b7280">CPU：少数聪明的大核</text>
+  <g>
+    <rect x="40" y="35" width="90" height="70" rx="6" fill="#d5dbe0" stroke="#6b7280"/>
+    <text x="85" y="65" text-anchor="middle" font-size="11" fill="#374151">大核心</text>
+    <text x="85" y="82" text-anchor="middle" font-size="9" fill="#6b7280">缓存+预测+乱序</text>
+    <rect x="140" y="35" width="90" height="70" rx="6" fill="#d5dbe0" stroke="#6b7280"/>
+    <text x="185" y="65" text-anchor="middle" font-size="11" fill="#374151">大核心</text>
+    <text x="185" y="82" text-anchor="middle" font-size="9" fill="#6b7280">缓存+预测+乱序</text>
+  </g>
+  <rect x="40" y="112" width="190" height="24" rx="4" fill="#eef0f2" stroke="#6b7280"/>
+  <text x="135" y="128" text-anchor="middle" font-size="10" fill="#6b7280">大块 L3 缓存</text>
+  <text x="135" y="160" text-anchor="middle" font-size="10" fill="#6b7280">晶体管多花在"让单核变聪明"</text>
+  <!-- GPU -->
+  <text x="410" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">GPU：海量简单的小核</text>
+  <g fill="#cfe4fb" stroke="#2b6cb0">
+    <!-- 一片小核 -->
+    <rect x="300" y="35" width="220" height="105" rx="6" fill="#eef6ff"/>
+  </g>
+  <g fill="#7fb2e8" stroke="#2b6cb0" stroke-width="0.5">
+    <!-- 密密麻麻的小方块表示很多 ALU -->
+    <rect x="308" y="43" width="14" height="14"/><rect x="326" y="43" width="14" height="14"/><rect x="344" y="43" width="14" height="14"/><rect x="362" y="43" width="14" height="14"/><rect x="380" y="43" width="14" height="14"/><rect x="398" y="43" width="14" height="14"/><rect x="416" y="43" width="14" height="14"/><rect x="434" y="43" width="14" height="14"/><rect x="452" y="43" width="14" height="14"/><rect x="470" y="43" width="14" height="14"/><rect x="488" y="43" width="14" height="14"/><rect x="506" y="43" width="8" height="14"/>
+    <rect x="308" y="61" width="14" height="14"/><rect x="326" y="61" width="14" height="14"/><rect x="344" y="61" width="14" height="14"/><rect x="362" y="61" width="14" height="14"/><rect x="380" y="61" width="14" height="14"/><rect x="398" y="61" width="14" height="14"/><rect x="416" y="61" width="14" height="14"/><rect x="434" y="61" width="14" height="14"/><rect x="452" y="61" width="14" height="14"/><rect x="470" y="61" width="14" height="14"/><rect x="488" y="61" width="14" height="14"/><rect x="506" y="61" width="8" height="14"/>
+    <rect x="308" y="79" width="14" height="14"/><rect x="326" y="79" width="14" height="14"/><rect x="344" y="79" width="14" height="14"/><rect x="362" y="79" width="14" height="14"/><rect x="380" y="79" width="14" height="14"/><rect x="398" y="79" width="14" height="14"/><rect x="416" y="79" width="14" height="14"/><rect x="434" y="79" width="14" height="14"/><rect x="452" y="79" width="14" height="14"/><rect x="470" y="79" width="14" height="14"/><rect x="488" y="79" width="14" height="14"/><rect x="506" y="79" width="8" height="14"/>
+    <rect x="308" y="97" width="14" height="14"/><rect x="326" y="97" width="14" height="14"/><rect x="344" y="97" width="14" height="14"/><rect x="362" y="97" width="14" height="14"/><rect x="380" y="97" width="14" height="14"/><rect x="398" y="97" width="14" height="14"/><rect x="416" y="97" width="14" height="14"/><rect x="434" y="97" width="14" height="14"/><rect x="452" y="97" width="14" height="14"/><rect x="470" y="97" width="14" height="14"/><rect x="488" y="97" width="14" height="14"/><rect x="506" y="97" width="8" height="14"/>
+    <rect x="308" y="115" width="14" height="14"/><rect x="326" y="115" width="14" height="14"/><rect x="344" y="115" width="14" height="14"/><rect x="362" y="115" width="14" height="14"/><rect x="380" y="115" width="14" height="14"/><rect x="398" y="115" width="14" height="14"/><rect x="416" y="115" width="14" height="14"/><rect x="434" y="115" width="14" height="14"/><rect x="452" y="115" width="14" height="14"/><rect x="470" y="115" width="14" height="14"/><rect x="488" y="115" width="14" height="14"/><rect x="506" y="115" width="8" height="14"/>
+  </g>
+  <text x="410" y="160" text-anchor="middle" font-size="10" fill="#2b6cb0">晶体管几乎全花在"算术单元"上</text>
+</svg>
+<div class="caption">图 3-1　同样的晶体管预算，CPU 花在让少数核变聪明，GPU 花在堆砌海量简单的算术单元</div>
+</div><h2>GPU 的基本积木：SM（流多处理器）</h2>
+<p>一颗 GPU 不是一整块，而是由几十个（旗舰卡上百个）相同的单元拼起来，NVIDIA 叫它 <strong>SM（Streaming Multiprocessor，流多处理器）</strong>。SM 是 GPU 真正的&quot;干活单元&quot;，你可以把它类比成 <strong>CPU 的一个物理核心</strong>——只不过它内部宽得多。一个 SM 里有：</p>
+<ul>
+<li>一堆 <strong>CUDA 核心</strong>（算术单元），还有专门的单元如 <strong>Tensor Core</strong>（做矩阵乘，第 19 章）；</li>
+<li>一个巨大的<strong>寄存器堆</strong>，分给驻留在这个 SM 上的所有线程；</li>
+<li>一块 <strong>shared memory / L1</strong>（片上高速内存，几十到几百 KB，由你的程序显式管理，第 7 章的主角）；</li>
+<li>若干 <strong>warp 调度器</strong>：负责在众多就绪的 warp 之间快速切换，用别的 warp 的计算填满某个 warp 等内存的空档——这就是第 1 章说的&quot;用并行掩盖延迟&quot;的硬件实现。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一颗 GPU 的层级结构</text>
+  <!-- 外框：整颗 GPU -->
+  <rect x="20" y="30" width="520" height="215" rx="10" fill="#f7fbff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="35" y="48" font-size="12" fill="#2b6cb0" font-weight="bold">GPU 芯片（含 N 个 SM）</text>
+  <!-- 几个 SM -->
+  <g>
+    <rect x="35" y="58" width="150" height="120" rx="6" fill="#fff" stroke="#2b6cb0"/>
+    <text x="110" y="74" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">SM 0</text>
+    <!-- 核心小格 -->
+    <g fill="#cfe4fb" stroke="#2b6cb0" stroke-width="0.5">
+      <rect x="45" y="82" width="12" height="12"/><rect x="60" y="82" width="12" height="12"/><rect x="75" y="82" width="12" height="12"/><rect x="90" y="82" width="12" height="12"/><rect x="105" y="82" width="12" height="12"/><rect x="120" y="82" width="12" height="12"/><rect x="135" y="82" width="12" height="12"/><rect x="150" y="82" width="12" height="12"/>
+      <rect x="45" y="97" width="12" height="12"/><rect x="60" y="97" width="12" height="12"/><rect x="75" y="97" width="12" height="12"/><rect x="90" y="97" width="12" height="12"/><rect x="105" y="97" width="12" height="12"/><rect x="120" y="97" width="12" height="12"/><rect x="135" y="97" width="12" height="12"/><rect x="150" y="97" width="12" height="12"/>
+    </g>
+    <text x="110" y="124" text-anchor="middle" font-size="9" fill="#374151">CUDA 核心 + 寄存器堆</text>
+    <rect x="45" y="130" width="130" height="18" rx="3" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="110" y="143" text-anchor="middle" font-size="9" fill="#a53f1c">shared memory / L1（片上，快）</text>
+    <rect x="45" y="152" width="130" height="18" rx="3" fill="#f0fdf4" stroke="#3f9b5c"/>
+    <text x="110" y="165" text-anchor="middle" font-size="9" fill="#2f7a45">warp 调度器</text>
+  </g>
+  <!-- SM1 SM2 简化 -->
+  <rect x="200" y="58" width="150" height="120" rx="6" fill="#fff" stroke="#2b6cb0"/>
+  <text x="275" y="74" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">SM 1</text>
+  <text x="275" y="120" text-anchor="middle" font-size="10" fill="#9ca3af">（同 SM 0 结构）</text>
+  <rect x="365" y="58" width="160" height="120" rx="6" fill="#fff" stroke="#2b6cb0"/>
+  <text x="445" y="74" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">SM 2 … SM N-1</text>
+  <text x="445" y="120" text-anchor="middle" font-size="10" fill="#9ca3af">（几十~上百个）</text>
+  <!-- L2 -->
+  <rect x="35" y="186" width="490" height="20" rx="4" fill="#e5edf5" stroke="#2b6cb0"/>
+  <text x="280" y="200" text-anchor="middle" font-size="10" fill="#2b6cb0">全片共享 L2 缓存</text>
+  <text x="280" y="228" text-anchor="middle" font-size="11" fill="#6b7280">↕ 通过内存总线连接 ↕</text>
+  <!-- 显存 -->
+  <rect x="120" y="258" width="320" height="30" rx="6" fill="#3c3c3c"/>
+  <text x="280" y="278" text-anchor="middle" font-size="12" fill="#9fe3b0">显存 / 全局内存（GB 级，大但相对慢）</text>
+</svg>
+<div class="caption">图 3-2　GPU 的物理层级：芯片 → 多个 SM → 每个 SM 内含核心/寄存器/shared memory/调度器；芯片外挂大容量显存。记住这张图，后面的软件概念都往上贴</div>
+</div><div class="keypoint">
+<strong>软件概念 → 硬件位置（本书会反复用到的对应）</strong>
+你后面写的一个 <strong>block</strong>（CUDA）/ <strong>work-group</strong>（SYCL）会被整个调度到<strong>一个 SM</strong> 上执行；block 里的线程被切成一个个 <strong>warp</strong>（32 线程）交给 warp 调度器；block 能用的 <strong>shared memory</strong> 就是那块片上高速内存；成千上万个 block 组成的 <strong>grid</strong> 被分发到全片所有 SM 上。第 4 章起我们就正式讲这套软件层级——现在你已经知道它们各自落在硅片的哪里了。
+</div><h2>两种内存，两个数量级的速度差</h2>
+<p>GPU 上最影响性能的硬件事实，是<strong>内存的层级</strong>。粗分两大类：</p>
+<ul>
+<li><strong>片上内存</strong>：寄存器、shared memory/L1、L2。就在 SM 里或紧挨着，<strong>极快</strong>，但<strong>极小</strong>（KB 到 MB 级）。</li>
+<li><strong>片外显存（全局内存）</strong>：就是你买卡时看的&quot;24GB 显存&quot;。<strong>大</strong>（GB 级），但相对<strong>慢</strong>得多——访问一次要几百个时钟周期。</li>
+</ul>
+<p>这个速度差是理解 GPU 性能的钥匙。回忆第 1 章：GPU 算力严重过剩，所以绝大多数真实 kernel 的瓶颈不是&quot;算得慢&quot;，而是&quot;<strong>数据喂不上来</strong>&quot;——卡在从显存搬数据。于是有了一个衡量 kernel 的核心指标：<strong>算术强度（arithmetic intensity）= 每从显存读一个字节，能做多少次计算</strong>。强度低（读一次只算一两下）的 kernel 叫 <strong>memory-bound（访存受限）</strong>，它的速度由<strong>显存带宽</strong>决定，跟你的 GPU 算力(FLOPS)几乎无关。这就是&quot;GPU 卡在内存带宽上&quot;这句话的确切含义，第 16 章的 Roofline 模型会把它讲成一套可计算的方法。</p>
+<h2>动手：算清&quot;访存受限&quot;到底意味着什么</h2>
+<p>下面这个程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它用一块真实旗舰 GPU 的大致参数（算力和带宽），帮你算：像向量加法这种&quot;读得多、算得少&quot;的 kernel，到底是被算力卡住，还是被带宽卡住。这解释了为什么本书后半本花那么多篇幅优化访存，而不是优化计算。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%94%A8%E7%9C%9F%E5%AE%9E%E9%87%8F%E7%BA%A7%E7%9A%84%20GPU%20%E5%8F%82%E6%95%B0%EF%BC%8C%E5%88%A4%E6%96%AD%E4%B8%80%E4%B8%AA%20kernel%20%E6%98%AF%22%E7%AE%97%E5%8A%9B%E5%8F%97%E9%99%90%22%E8%BF%98%E6%98%AF%22%E5%B8%A6%E5%AE%BD%E5%8F%97%E9%99%90%22%0A%23%20%E5%8F%82%E6%95%B0%E5%8F%96%E8%87%AA%E6%9F%90%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83%E7%BA%A7%20GPU%20%E7%9A%84%E5%A4%A7%E8%87%B4%E5%85%AC%E5%BC%80%E9%87%8F%E7%BA%A7%EF%BC%88FP32%EF%BC%89%0Apeak_flops%20%20%20%3D%2060e12%20%20%20%20%20%20%23%20%E5%B3%B0%E5%80%BC%E7%AE%97%E5%8A%9B%EF%BC%9A60%20%E4%B8%87%E4%BA%BF%E6%AC%A1%E6%B5%AE%E7%82%B9%E8%BF%90%E7%AE%97%2F%E7%A7%92%EF%BC%8860%20TFLOP%2Fs%EF%BC%89%0Apeak_bw%20%20%20%20%20%20%3D%203.0e12%20%20%20%20%20%23%20%E6%98%BE%E5%AD%98%E5%B8%A6%E5%AE%BD%EF%BC%9A3%20%E4%B8%87%E4%BA%BF%E5%AD%97%E8%8A%82%2F%E7%A7%92%EF%BC%883%20TB%2Fs%EF%BC%89%0A%0A%23%20%E6%9C%BA%E5%99%A8%E7%9A%84%22%E5%B9%B3%E8%A1%A1%E7%82%B9%22%EF%BC%9A%E6%AF%8F%E8%AF%BB%201%20%E5%AD%97%E8%8A%82%EF%BC%8C%E9%9C%80%E8%A6%81%E9%85%8D%E5%A4%9A%E5%B0%91%E6%AC%A1%E8%AE%A1%E7%AE%97%EF%BC%8C%E6%89%8D%E8%83%BD%E5%88%9A%E5%A5%BD%E5%96%82%E9%A5%B1%E7%AE%97%E5%8A%9B%E5%8D%95%E5%85%83%0Abalance%20%3D%20peak_flops%20%2F%20peak_bw%0Aprint(f%22%E8%BF%99%E5%9D%97%20GPU%20%E7%9A%84%E5%B9%B3%E8%A1%A1%E7%82%B9%EF%BC%9A%E6%AF%8F%E8%AF%BB%201%20%E5%AD%97%E8%8A%82%E9%9C%80%E8%A6%81%20%7Bbalance%3A.0f%7D%20%E6%AC%A1%E6%B5%AE%E7%82%B9%E8%BF%90%E7%AE%97%EF%BC%8C%E6%89%8D%E4%B8%8D%E6%B5%AA%E8%B4%B9%E7%AE%97%E5%8A%9B%5Cn%22)%0A%0Adef%20analyze(name%2C%20flops_per_elem%2C%20bytes_per_elem)%3A%0A%20%20%20%20ai%20%3D%20flops_per_elem%20%2F%20bytes_per_elem%20%20%20%20%20%20%20%20%20%20%23%20%E7%AE%97%E6%9C%AF%E5%BC%BA%E5%BA%A6%0A%20%20%20%20%23%20%E5%AE%8C%E6%88%90%201%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%8C%E7%AE%97%E5%8A%9B%E8%B7%AF%E5%BE%84%E8%A6%81%E5%A4%9A%E4%B9%85%20vs%20%E8%AE%BF%E5%AD%98%E8%B7%AF%E5%BE%84%E8%A6%81%E5%A4%9A%E4%B9%85%0A%20%20%20%20t_compute%20%3D%20flops_per_elem%20%2F%20peak_flops%0A%20%20%20%20t_memory%20%20%3D%20bytes_per_elem%20%2F%20peak_bw%0A%20%20%20%20bound%20%3D%20%22%E7%AE%97%E5%8A%9B%E5%8F%97%E9%99%90%EF%BC%88compute-bound%EF%BC%89%22%20if%20t_compute%20%3E%20t_memory%20else%20%22%E5%B8%A6%E5%AE%BD%E5%8F%97%E9%99%90%EF%BC%88memory-bound%EF%BC%89%22%0A%20%20%20%20print(f%22%7Bname%7D%EF%BC%9A%22)%0A%20%20%20%20print(f%22%20%20%E6%AF%8F%E5%85%83%E7%B4%A0%20%7Bflops_per_elem%7D%20%E6%AC%A1%E8%BF%90%E7%AE%97%E3%80%81%E6%90%AC%20%7Bbytes_per_elem%7D%20%E5%AD%97%E8%8A%82%20%E2%86%92%20%E7%AE%97%E6%9C%AF%E5%BC%BA%E5%BA%A6%20%7Bai%3A.3f%7D%20%E6%AC%A1%2F%E5%AD%97%E8%8A%82%22)%0A%20%20%20%20print(f%22%20%20%E2%86%92%20%7Bbound%7D%22)%0A%0A%23%20%E5%90%91%E9%87%8F%E5%8A%A0%E6%B3%95%20c%3Da%2Bb%EF%BC%9A%E8%AF%BB%20a%E3%80%81%E8%AF%BB%20b%E3%80%81%E5%86%99%20c%20%E5%85%B1%203%20%E4%B8%AA%20float%20%3D%2012%20%E5%AD%97%E8%8A%82%EF%BC%8C%E5%8F%AA%E5%81%9A%201%20%E6%AC%A1%E5%8A%A0%E6%B3%95%0Aanalyze(%22%E5%90%91%E9%87%8F%E5%8A%A0%E6%B3%95%20c%3Da%2Bb%22%2C%20flops_per_elem%3D1%2C%20bytes_per_elem%3D12)%0Aprint()%0A%23%20%E4%B8%80%E4%B8%AA%E8%AE%A1%E7%AE%97%E5%AF%86%E9%9B%86%E7%9A%84%E5%81%87%E6%83%B3%20kernel%EF%BC%9A%E6%90%AC%E5%90%8C%E6%A0%B7%E7%9A%84%E5%AD%97%E8%8A%82%EF%BC%8C%E5%8D%B4%E5%81%9A%20500%20%E6%AC%A1%E8%BF%90%E7%AE%97%0Aanalyze(%22%E6%9F%90%E8%AE%A1%E7%AE%97%E5%AF%86%E9%9B%86%20kernel%22%2C%20flops_per_elem%3D500%2C%20bytes_per_elem%3D12)"># 用真实量级的 GPU 参数，判断一个 kernel 是"算力受限"还是"带宽受限"
+# 参数取自某数据中心级 GPU 的大致公开量级（FP32）
+peak_flops   = 60e12      # 峰值算力：60 万亿次浮点运算/秒（60 TFLOP/s）
+peak_bw      = 3.0e12     # 显存带宽：3 万亿字节/秒（3 TB/s）
+
+# 机器的"平衡点"：每读 1 字节，需要配多少次计算，才能刚好喂饱算力单元
+balance = peak_flops / peak_bw
+print(f"这块 GPU 的平衡点：每读 1 字节需要 {balance:.0f} 次浮点运算，才不浪费算力\n")
+
+def analyze(name, flops_per_elem, bytes_per_elem):
+    ai = flops_per_elem / bytes_per_elem          # 算术强度
+    # 完成 1 个元素，算力路径要多久 vs 访存路径要多久
+    t_compute = flops_per_elem / peak_flops
+    t_memory  = bytes_per_elem / peak_bw
+    bound = "算力受限（compute-bound）" if t_compute &gt; t_memory else "带宽受限（memory-bound）"
+    print(f"{name}：")
+    print(f"  每元素 {flops_per_elem} 次运算、搬 {bytes_per_elem} 字节 → 算术强度 {ai:.3f} 次/字节")
+    print(f"  → {bound}")
+
+# 向量加法 c=a+b：读 a、读 b、写 c 共 3 个 float = 12 字节，只做 1 次加法
+analyze("向量加法 c=a+b", flops_per_elem=1, bytes_per_elem=12)
+print()
+# 一个计算密集的假想 kernel：搬同样的字节，却做 500 次运算
+analyze("某计算密集 kernel", flops_per_elem=500, bytes_per_elem=12)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">这块 GPU 的平衡点：每读 1 字节需要 20 次浮点运算，才不浪费算力
+
+向量加法 c=a+b：
+  每元素 1 次运算、搬 12 字节 → 算术强度 0.083 次/字节
+  → 带宽受限（memory-bound）
+
+某计算密集 kernel：
+  每元素 500 次运算、搬 12 字节 → 算术强度 41.667 次/字节
+  → 算力受限（compute-bound）</code></pre>
+</div><p>结论很扎心：向量加法的算术强度只有 0.083，离平衡点 20 差了两百多倍——它 <strong>99% 的时间在等内存，算力单元基本闲着</strong>。你把这块卡换成算力翻倍的新卡，向量加法<strong>一点都不会变快</strong>，因为瓶颈在带宽。请动手改：把 <code>analyze(&quot;向量加法&quot;...)</code> 的 <code>flops_per_elem</code> 从 1 慢慢调大，看要调到多少它才从&quot;带宽受限&quot;翻转成&quot;算力受限&quot;——那个翻转点，正好就是这块机器的平衡点。</p>
+<div class="note">
+<strong>这对你写 kernel 意味着什么</strong>
+既然多数 kernel 卡在带宽，那么<strong>减少访存、优化访存模式</strong>往往比减少计算更能提速：把数据搬进 shared memory 复用（第 7、11 章）、让一个 warp 的访存能"合并"成一次大传输（第 7、17 章）、把多个算子融合成一个 kernel 少读写几趟显存（第 14 章）。这些都是本书后半本的主线，它们的共同出发点就是这张"两种内存差两个数量级"的图。
+</div><h2>一次 kernel 启动，硬件上发生了什么（先建立轮廓）</h2>
+<p>把这一章串起来，一次 GPU 计算的大致流程是这样的（细节在第 9 章）：</p>
+<ol>
+<li>CPU（host）把数据从内存拷进 GPU 的<strong>显存</strong>；</li>
+<li>CPU 发起一次 <strong>kernel 启动</strong>，告诉 GPU：&quot;用这么多 block、每 block 这么多线程，去跑这个函数&quot;；</li>
+<li>GPU 的调度器把这些 <strong>block 分发到各个 SM</strong> 上，一个 SM 可同时驻留多个 block；</li>
+<li>每个 SM 把 block 里的线程切成 <strong>warp</strong>，warp 调度器让就绪的 warp 轮流上算术单元，谁等内存就切别人上——<strong>延迟被并行掩盖</strong>；</li>
+<li>算完，结果留在显存，CPU 再把它拷回内存。</li>
+</ol>
+<div class="warn">
+<strong>别忽视第 1 步和第 5 步的搬运成本</strong>
+CPU 内存 ↔ GPU 显存 的拷贝要走 PCIe 总线，比显存本身还慢一截。如果你只是为了做一次向量加法就把数据搬上 GPU 再搬回来，光搬运的时间可能就远超省下的计算——这又一次说明第 1 章那句话：<strong>GPU 只在"又多又独立、值得搬过去反复算"的活儿上才划算。</strong>
+</div><h2>小结与下一步</h2>
+<p>你现在有了一张 GPU 硬件地图：芯片由几十个 SM 组成，每个 SM 是个&quot;很宽的核&quot;，内含核心、寄存器、片上高速内存和 warp 调度器；片外是又大又相对慢的显存，而<strong>带宽</strong>常常才是真正的瓶颈。</p>
+<p>有了硬件地图，我们终于可以正式讲<strong>软件层级</strong>了。下一章开始进入本书的地基部分：你启动 kernel 时写的 <code>&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;</code> 到底是什么——<strong>Grid、Block、Thread</strong> 这套三层结构，以及它们怎么映射到你刚认识的这些 SM 上。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>CPU 把晶体管花在<strong>让少数核变聪明</strong>（缓存、预测、乱序）；GPU 把晶体管花在<strong>堆砌海量简单算术单元</strong>，代价是它们共享控制逻辑（SIMT 的物理原因）。</li>
+<li>GPU 的基本积木是 <strong>SM（流多处理器）</strong>，类比一个&quot;很宽的 CPU 核&quot;：内含 CUDA/Tensor 核心、寄存器堆、<strong>shared memory/L1</strong>、和调度 warp 的硬件。</li>
+<li>软件概念的落点：<strong>block → 一个 SM</strong>，block 内线程切成 <strong>warp</strong> 交给调度器，<strong>grid</strong> 铺满全片 SM。</li>
+<li>内存分<strong>片上</strong>（寄存器/shared/L2，快而小）和<strong>片外显存</strong>（大而慢，差两个数量级）；<strong>带宽</strong>常是真正瓶颈。</li>
+<li>用<strong>算术强度</strong>判断 kernel 是<strong>算力受限</strong>还是<strong>带宽受限</strong>——多数真实 kernel 带宽受限，这决定了本书后半本以<strong>优化访存</strong>为主线。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch02.html">← 第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a>
+  <a class="nav-next" href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
