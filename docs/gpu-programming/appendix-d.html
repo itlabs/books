@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 D 继续前进：文档、书目与工具链</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li class="active"><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 D 继续前进：文档、书目与工具链</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>这本书给了你一套<strong>心智模型</strong>——从"海量弱小线程"到 SIMT、执行层级、内存层级，再到四种技术怎么把同一个模型换不同外衣写出来。但一本书装不下整个领域。这一节是一张<strong>带注解的路标图</strong>：官方文档、关键库、值得读的经典论文/思想、社区，以及针对不同目标（ML 算子、HPC、系统底层）的<strong>进阶路线</strong>。</p>
+<p>每条都标明"这是什么、什么时候该用它"，而不是一堆干链接。URL 只在我确信是官方规范地址时才给。</p>
+</div><h2>官方文档：先读这些</h2>
+<p>任何时候有疑问，官方文档都应是第一信源——它们比二手教程更准、更新更快。</p>
+<ul>
+<li><strong>CUDA C++ Programming Guide</strong>（<code>docs.nvidia.com/cuda</code>）：CUDA 编程模型的权威参考，执行层级、内存模型、同步、协作组、Tensor Core 等都以此为准。<strong>当你对某个 CUDA 概念的确切语义不确定时查它</strong>，是本书第 4–11、19 章的官方底本。</li>
+<li><strong>CUDA C++ Best Practices Guide</strong>（同站）：从&quot;能跑&quot;到&quot;跑得快&quot;的官方优化清单——合并访问、occupancy、传输优化、指令级建议。<strong>本书第 16、17 章的思路和它一脉相承</strong>，读完本书后通读它一遍收获很大。</li>
+<li><strong>CUDA Runtime / Driver API Reference</strong>：查具体 API 签名和错误码（配合附录 C）。</li>
+<li><strong>SYCL 规范（Khronos）与 Intel oneAPI 文档</strong>（<code>spec.oneapi.io</code>、Intel oneAPI 编程指南）：SYCL 语言语义的权威来源，<code>nd_range</code>、accessor、USM 的确切行为查这里（第 5、12 章）。AdaptiveCpp 有自己的文档讲它的后端和编译选项。</li>
+<li><strong>OpenCL 规范（Khronos）</strong>：需要跨最广厂商、或维护既有 OpenCL 代码时的参考（附录 B 的对照基准之一）。</li>
+<li><strong>Triton 文档与教程</strong>（<code>triton-lang.org</code>）：官方教程尤其好——向量加法、融合 softmax、矩阵乘、dropout、layer norm 一路带你走，<strong>是第 13、14 章之后最该做的动手练习</strong>。<code>triton.language</code> 的 API 参考也在这里。</li>
+<li><strong>CUTLASS / CuTe 文档</strong>（CUTLASS 的 GitHub 仓库与其中的 <code>media/docs</code>）：CuTe 的 Layout 代数、Tensor、以及 CUTLASS 的模板化 GEMM。第 15 章之后深入的官方材料。</li>
+</ul>
+<div class="note">
+<strong>读文档的姿势</strong>
+不要试图通读 Programming Guide——太长。<strong>把它当字典</strong>：带着一个具体问题去查（"shared memory 的 bank 到底怎么分？""nd_range 的 global 是总数还是组数？"），读那一节，验证在代码里。Best Practices Guide 则相反，值得从头到尾读一遍建立全局优化观。
+</div><h2>关键库：别重复造轮子</h2>
+<p>生产代码里，很多高性能原语已经有厂商调到极致的实现，直接用往往比自己写快得多。</p>
+<ul>
+<li><strong>cuBLAS</strong>：稠密线性代数（GEMM 等）的 NVIDIA 官方实现。<strong>要做矩阵乘先想它</strong>，你手写的 tiling 版（第 11 章）是为了理解原理，生产上很难拼过 cuBLAS。</li>
+<li><strong>cuDNN</strong>：深度学习原语（卷积、pooling、归一化、attention 等）。框架底层大量依赖它。</li>
+<li><strong>CUB</strong>：CUDA 的<strong>设备级/块级并行原语</strong>模板库——归约、扫描、排序、直方图。<strong>第 18 章那些归约/扫描模式，生产中直接用 CUB</strong>，它替你处理了所有边界和架构差异。</li>
+<li><strong>Thrust</strong>：CUDA 上的 STL 风格高层库（<code>thrust::sort</code>、<code>reduce</code>、<code>transform</code>），快速原型和 host 端友好的接口。</li>
+<li><strong>oneMKL</strong>：Intel oneAPI 的数学核心库，SYCL 世界里 BLAS/FFT/随机数的对应物（第 12 章之后）。</li>
+<li><strong>PyTorch custom ops / <code>torch.compile</code></strong>：把你写的 Triton/CUDA kernel 接进 PyTorch 的正道。<strong>ML 方向的读者</strong>这是把第 13–14 章成果用起来的关键——写个自定义算子替换掉框架里慢的那一环。</li>
+<li><strong>CUTLASS</strong>：当 cuBLAS 的固定接口满足不了你（要融合、要特殊数据类型、要自定义 epilogue）时，用 CUTLASS 的模板拼一个定制 GEMM。CuTe（第 15 章）是它的底层。</li>
+</ul>
+<h2>值得读的经典思想与论文</h2>
+<p>工具会过时，思想不会。下面几组是这个领域的&quot;必读经典&quot;，按主题给出——都能按名字搜到原文。</p>
+<ul>
+<li><strong>Roofline 模型</strong>（Williams、Waterman、Patterson 提出的性能模型）：本书第 16 章的理论根基。理解&quot;算术强度决定你受限于带宽还是算力&quot;这一个模型，胜过记一百条优化技巧。</li>
+<li><strong>并行归约与扫描（scan）的经典讲法</strong>：Mark Harris 的《Optimizing Parallel Reduction in CUDA》是归约优化的启蒙经典，一步步把归约从朴素版优化到打满带宽；Blelloch 的 work-efficient scan 是前缀和的理论基础（第 18 章）。</li>
+<li><strong>FlashAttention</strong>（Dao 等）：把 attention 从 memory-bound 的多趟读写，通过分块 + 在线 softmax + 算子融合变成一趟搞定的里程碑工作。<strong>它几乎用上了本书后半本的每一个概念</strong>（tiling、shared memory、融合、在线归约），是第 20、21 章 fused attention 的思想来源。读它的论文，你会对&quot;为什么融合、为什么分块&quot;有豁然开朗的理解。</li>
+<li><strong>在线 softmax / 数值稳定的 softmax</strong>（online softmax，Milakov &amp; Gimelshein 一类工作）：FlashAttention 的关键子技术，第 20 章 softmax 的进阶版。</li>
+<li><strong>memory-bound 优化文献</strong>：围绕&quot;多数真实 kernel 卡在访存&quot;展开的一系列工作，呼应本书从第 3 章就立下的主线。</li>
+</ul>
+<div class="keypoint">
+<strong>读论文的性价比</strong>
+不必啃全部证明。<strong>先读 FlashAttention 和 Mark Harris 的归约那篇</strong>——它们把本书教的抽象概念落到了两个真实、影响巨大的 kernel 上，读完你会发现本书的每一章都在那里各就各位。这种"概念→真实 kernel"的闭环，比再读十篇教程都值。
+</div><h2>社区与持续跟进</h2>
+<ul>
+<li><strong>NVIDIA Developer 论坛 与 CUDA 相关的技术博客</strong>：官方工程师答疑、新架构特性的第一手解读。</li>
+<li><strong>Triton 的 GitHub 仓库（issue / discussion）</strong>：Triton 迭代快，遇到 API 变动或 bug，仓库里往往有最新答案。</li>
+<li><strong>PyTorch 论坛与其 GPU/编译相关讨论</strong>：ML 算子方向的问题集散地。</li>
+<li><strong>各技术的 GitHub 仓库本身</strong>：CUTLASS、Triton、AdaptiveCpp 的 example / test 目录是最好的&quot;实战代码库&quot;，比教程更贴近真实用法。</li>
+</ul>
+<h2>三条进阶路线：按你的目标选</h2>
+<p>学完本书，往哪走取决于你想解决什么问题。三条典型路线：</p>
+<div class="concept">
+<svg viewBox="0 0 560 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">本书之后，三条路</text>
+  <!-- 共同起点 -->
+  <rect x="200" y="32" width="160" height="30" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="280" y="52" text-anchor="middle" font-size="11" fill="#2b6cb0">本书：GPU 心智模型 + 四种技术</text>
+  <!-- 三条分叉 -->
+  <g stroke="#6b7280" stroke-width="1.2" fill="none">
+    <path d="M240 62 L110 95" marker-end="url(#ad)"/>
+    <path d="M280 62 L280 95" marker-end="url(#ad)"/>
+    <path d="M320 62 L450 95" marker-end="url(#ad)"/>
+  </g>
+  <!-- ML -->
+  <rect x="20" y="98" width="170" height="120" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="105" y="116" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f7a45">ML 算子作者</text>
+  <text x="105" y="138" text-anchor="middle" font-size="10" fill="#2f7a45">Triton → CuTe DSL</text>
+  <text x="105" y="156" text-anchor="middle" font-size="10" fill="#2f7a45">+ PyTorch custom ops</text>
+  <text x="105" y="174" text-anchor="middle" font-size="10" fill="#2f7a45">读 FlashAttention</text>
+  <text x="105" y="192" text-anchor="middle" font-size="10" fill="#2f7a45">目标：写快过框架的</text>
+  <text x="105" y="207" text-anchor="middle" font-size="10" fill="#2f7a45">融合算子</text>
+  <!-- HPC -->
+  <rect x="200" y="98" width="160" height="120" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="280" y="116" text-anchor="middle" font-size="12" font-weight="bold" fill="#a53f1c">HPC / 科学计算</text>
+  <text x="280" y="138" text-anchor="middle" font-size="10" fill="#a53f1c">CUDA + SYCL</text>
+  <text x="280" y="156" text-anchor="middle" font-size="10" fill="#a53f1c">跨厂商可移植</text>
+  <text x="280" y="174" text-anchor="middle" font-size="10" fill="#a53f1c">cuBLAS / oneMKL</text>
+  <text x="280" y="192" text-anchor="middle" font-size="10" fill="#a53f1c">目标：把物理模拟</text>
+  <text x="280" y="207" text-anchor="middle" font-size="10" fill="#a53f1c">/ 求解器搬上 GPU</text>
+  <!-- Systems -->
+  <rect x="370" y="98" width="170" height="120" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="455" y="116" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">系统 / 底层</text>
+  <text x="455" y="138" text-anchor="middle" font-size="10" fill="#2b6cb0">CUDA 深挖</text>
+  <text x="455" y="156" text-anchor="middle" font-size="10" fill="#2b6cb0">PTX / SASS、异步拷贝</text>
+  <text x="455" y="174" text-anchor="middle" font-size="10" fill="#2b6cb0">CUTLASS / CuTe</text>
+  <text x="455" y="192" text-anchor="middle" font-size="10" fill="#2b6cb0">目标：榨干硬件、</text>
+  <text x="455" y="207" text-anchor="middle" font-size="10" fill="#2b6cb0">写库级 kernel</text>
+  <defs>
+    <marker id="ad" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 D-1　三条进阶路线共享本书这套心智模型，再按目标各自深入不同的技术栈</div>
+</div><ul>
+<li><strong>ML 算子作者</strong>（想给模型写更快的算子）：深耕 <strong>Triton</strong>（第 13、14 章）打好块级 kernel 的手感，再上 <strong>CuTe DSL</strong>（第 15 章）应对更复杂的张量布局；学会用 <strong>PyTorch custom ops / <code>torch.compile</code></strong> 把 kernel 接进真实模型；精读 <strong>FlashAttention</strong> 作为范本。第 21 章的 fused attention 就是这条路的缩影。</li>
+<li><strong>HPC / 科学计算</strong>（想把模拟、求解器搬上 GPU）：以 <strong>CUDA</strong> 为主力打底，用 <strong>SYCL</strong>（第 12 章）获得跨厂商可移植性；重度依赖 <strong>cuBLAS / oneMKL</strong> 等成熟库；把精力放在算法的并行化和访存优化（第 16–18 章）上。</li>
+<li><strong>系统 / 底层</strong>（想写库、榨干硬件）：把 <strong>CUDA 往深里挖</strong>——读 PTX/SASS、玩转异步拷贝与流水线（第 19 章）、精通 profiler（附录 C）；进入 <strong>CUTLASS / CuTe</strong> 的模板世界写库级 GEMM。这条路最硬核，也最接近硬件的极限。</li>
+</ul>
+<h2>写在最后</h2>
+<p>如果你从第 1 章一路走到这里，回头看看你已经跨过的那道坎：一开始，&quot;启动一百万个线程、每个只算一个元素&quot;听起来近乎荒谬；现在，你不但接受了它，还能推理出为什么分支会串行、为什么访存顺序比次数重要、为什么多数 kernel 卡在带宽、为什么融合能救命。你换掉的不是几个 API，而是<strong>整套关于&quot;一个线程值多少钱&quot;的直觉</strong>。</p>
+<p>四种技术——CUDA、SYCL、Triton、CuTe DSL——你现在应该能看穿：它们是同一个模型的不同外衣，学会看穿外衣，比记住任何一套语法都重要，因为语法会变，模型不会。</p>
+<p>真正的功夫在书外的键盘上。找一个你手头真实的、又多又独立的计算，把它搬上 GPU，用附录 C 的 profiler 量一量，再对着 Roofline 优化到打满带宽。那一刻你会明白，这本书教的从来不是&quot;怎么写 GPU 代码&quot;，而是<strong>怎么像 GPU 一样思考</strong>。</p>
+<p>去写吧。GPU 在等你喂满它的带宽。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>官方文档是第一信源</strong>：CUDA Programming Guide / Best Practices Guide、SYCL 规范与 oneAPI 文档、Triton 文档（<code>triton-lang.org</code>）、CUTLASS/CuTe 文档。当字典查，Best Practices 值得通读。</li>
+<li><strong>别重复造轮子</strong>：矩阵乘用 cuBLAS/CUTLASS，归约扫描用 CUB/Thrust，SYCL 数学用 oneMKL，接进 ML 用 PyTorch custom ops。</li>
+<li><strong>必读经典</strong>：Roofline 模型、Mark Harris 的并行归约、FlashAttention——后者几乎用上了本书后半本的全部概念。</li>
+<li><strong>三条路线</strong>：ML 算子 → Triton + CuTe；HPC → CUDA + SYCL；系统底层 → CUDA 深挖 + CUTLASS。都共享本书这套心智模型。</li>
+<li><strong>看穿外衣</strong>：四种技术是同一个模型的不同写法；模型不变，语法会变。剩下的功夫，在你自己的键盘上。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-c.html">← 附录 C 读懂 GPU 报错与用好 profiler</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

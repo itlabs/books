@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 Triton：用 Python 写块级 kernel</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li class="active"><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 13 章 Triton：用 Python 写块级 kernel</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面三章（CUDA、SYCL）你都在<strong>线程级</strong>思考：算全局下标、管 shared memory、写 barrier，每一行都在操心"我这一个线程/work-item 做什么"。这一章是全书最大的一次心智跳跃：OpenAI 的 <strong>Triton</strong> 把抽象层从<strong>线程级</strong>抬到了<strong>块级（block-level）</strong>。</p>
+<p>你用 Python 写 kernel，<code>@triton.jit</code> 把它编译到 GPU。你<strong>不再</strong>写带 <code>threadIdx</code> 的逐线程代码——每个"program"（<code>tl.program_id</code>）处理<strong>一整块</strong>元素，你操作的是长度为 <code>BLOCK_SIZE</code> 的向量，用"指针+偏移+掩码"来 <code>tl.load</code>/<code>tl.store</code>。块内的线程调度、合并访问、大部分 shared memory 管理，<strong>编译器替你做了</strong>。读完你会用一个浏览器里能跑的模拟器亲手体会"块级下标 + 掩码"，再看到教科书级的 Triton 向量加法长什么样。</p>
+</div><h2>一次抽象层的跃迁：从&quot;一个线程&quot;到&quot;一个 program&quot;</h2>
+<p>回忆第 1 章的 CUDA 向量加法：你写的是&quot;<strong>一个线程处理一个元素</strong>&quot;，然后启动上百万个线程。写 kernel 时你满脑子是 <code>blockIdx.x * blockDim.x + threadIdx.x</code>——线程级的下标算术。</p>
+<p>Triton 让你换个粒度想问题。你写的是一个 <strong>program（程序实例）</strong>，每个 program 负责处理<strong>一整块（BLOCK_SIZE 个）连续元素</strong>。program 之间由一个网格（grid）组织，<code>grid = 需要多少个 program</code>。在一个 program 内部，你<strong>不碰单个线程</strong>——你操作的是长度为 <code>BLOCK_SIZE</code> 的<strong>向量</strong>：一次 <code>tl.load</code> 读进一整块，做一次向量加法，一次 <code>tl.store</code> 写回一整块。至于这一块 512 个元素在硬件上被切成多少个线程、怎么合并访存、要不要走 shared memory——<strong>Triton 编译器全包了</strong>。</p>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 左：CUDA 逐线程视角 -->
+  <text x="140" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#6b7280">CUDA：逐线程视角</text>
+  <text x="140" y="40" text-anchor="middle" font-size="10" fill="#6b7280">你写"一个线程处理一个元素"</text>
+  <g font-family="monospace" font-size="9" fill="#6b7280">
+    <rect x="30" y="52" width="30" height="26" rx="3" fill="#e5e7eb" stroke="#6b7280"/><text x="45" y="69" text-anchor="middle">t0</text>
+    <rect x="62" y="52" width="30" height="26" rx="3" fill="#e5e7eb" stroke="#6b7280"/><text x="77" y="69" text-anchor="middle">t1</text>
+    <rect x="94" y="52" width="30" height="26" rx="3" fill="#e5e7eb" stroke="#6b7280"/><text x="109" y="69" text-anchor="middle">t2</text>
+    <rect x="126" y="52" width="30" height="26" rx="3" fill="#e5e7eb" stroke="#6b7280"/><text x="141" y="69" text-anchor="middle">t3</text>
+    <text x="180" y="69" font-size="11">…</text>
+    <rect x="200" y="52" width="46" height="26" rx="3" fill="#e5e7eb" stroke="#6b7280"/><text x="223" y="69" text-anchor="middle">t31</text>
+  </g>
+  <text x="140" y="100" text-anchor="middle" font-size="10" fill="#6b7280">32 个线程，每个负责 1 个元素</text>
+  <text x="140" y="118" text-anchor="middle" font-size="10" fill="#6b7280">你手算 i = blockIdx*blockDim+threadIdx</text>
+  <text x="140" y="136" text-anchor="middle" font-size="10" fill="#6b7280">合并访问、shared memory 你自己管</text>
+  <!-- 分隔线 -->
+  <line x1="280" y1="45" x2="280" y2="270" stroke="#d1d5db" stroke-dasharray="4 3"/>
+  <!-- 右：Triton 块级视角 -->
+  <text x="420" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">Triton：块级视角</text>
+  <text x="420" y="40" text-anchor="middle" font-size="10" fill="#2b6cb0">你写"一个 program 处理一整块"</text>
+  <!-- 一个 program = 一个长条向量 -->
+  <rect x="310" y="52" width="220" height="30" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="420" y="72" text-anchor="middle" font-size="11" fill="#2b6cb0" font-family="monospace">program 0：一个 BLOCK_SIZE 向量</text>
+  <text x="420" y="100" text-anchor="middle" font-size="10" fill="#2b6cb0">1 个 program，操作长度 BLOCK_SIZE 的向量</text>
+  <text x="420" y="118" text-anchor="middle" font-size="10" fill="#2b6cb0">pid = tl.program_id(0)</text>
+  <text x="420" y="136" text-anchor="middle" font-size="10" fill="#2b6cb0">合并访问、块内线程调度 → 编译器包办</text>
+  <!-- 下方：Triton 编译器把块摊开成线程 -->
+  <rect x="310" y="160" width="220" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="420" y="176" text-anchor="middle" font-size="10" fill="#a53f1c">↓ Triton 编译器自动摊开成线程 ↓</text>
+  <g font-family="monospace" font-size="8" fill="#e06a3b">
+    <rect x="312" y="190" width="20" height="20" rx="2" fill="#fbe6dc" stroke="#e06a3b"/>
+    <rect x="334" y="190" width="20" height="20" rx="2" fill="#fbe6dc" stroke="#e06a3b"/>
+    <rect x="356" y="190" width="20" height="20" rx="2" fill="#fbe6dc" stroke="#e06a3b"/>
+    <rect x="378" y="190" width="20" height="20" rx="2" fill="#fbe6dc" stroke="#e06a3b"/>
+    <text x="410" y="205" font-size="10">…（编译器决定）</text>
+  </g>
+  <text x="420" y="232" text-anchor="middle" font-size="10" fill="#6b7280">你想的是向量，不是线程</text>
+</svg>
+<div class="caption">图 13-1　同一个向量加法：CUDA 让你面对 32 个线程、每个 1 个元素、下标全靠手算；Triton 让你面对 1 个 program、一个 BLOCK_SIZE 长的向量，线程和访存由编译器在底下自动摊开</div>
+</div><h2>grid、program_id 与掩码：块级模型的三件套</h2>
+<p>要读懂任何 Triton kernel，先掌握三个概念。</p>
+<p><strong>grid（网格）= program 的数量。</strong> 假设数组有 <code>n_elements</code> 个元素、每块 <code>BLOCK_SIZE</code> 个，那你需要 <code>ceil(n_elements / BLOCK_SIZE)</code> 个 program。Triton 提供 <code>triton.cdiv(a, b)</code>（向上取整除法）帮你算，启动语法是 <code>kernel[grid](...)</code>——方括号里放网格。</p>
+<p><strong>program_id = 我是第几个 program。</strong> kernel 内用 <code>pid = tl.program_id(axis=0)</code> 取到自己的编号（一维网格用 axis=0）。这正对应 CUDA 的 <code>blockIdx.x</code>。有了 pid，我这一块负责的元素下标就是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">块起点 = pid * BLOCK_SIZE
+这一块的所有下标 = 块起点 + [0, 1, 2, ..., BLOCK_SIZE-1]</code></pre>
+</div><p>其中那个 <code>[0, 1, ..., BLOCK_SIZE-1]</code> 用 <code>tl.arange(0, BLOCK_SIZE)</code> 生成——它是一个<strong>向量</strong>，这就是&quot;块级&quot;的精髓：<code>offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)</code> 一次算出一整块的下标。</p>
+<p><strong>掩码（mask）= 处理&quot;最后一块凑不齐&quot;。</strong> 如果 <code>n_elements</code> 不能被 <code>BLOCK_SIZE</code> 整除，最后一个 program 会算出一些<strong>越界的下标</strong>。你不能让它们真的去读写内存。解决办法是造一个布尔向量 <code>mask = offsets &lt; n_elements</code>，把它传给 <code>tl.load(ptr + offsets, mask=mask)</code> 和 <code>tl.store(...)</code>——为真的位置才真读写，为假的位置被安全地丢弃（load 时可给 <code>other=</code> 指定默认值）。这是 CUDA 里 <code>if (i &lt; n)</code> 边界检查的<strong>向量化版本</strong>。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：线程级下标 + 手动合并</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">__global__ void add(float* c, const float* a,
+                    const float* b, int n) {
+    // 每个线程一个标量下标
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; n)                 // 逐线程边界检查
+        c[i] = a[i] + b[i];    // 标量读、算、写
+    // 合并访问是否达成？靠你安排下标
+    // shared memory？要用就得自己声明、自己 sync
+}</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">Triton：块级向量 + 掩码</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def add(a_ptr, b_ptr, c_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(axis=0)          # 我是第几块
+    offs = pid * BLOCK + tl.arange(0, BLOCK)  # 一整块下标(向量)
+    mask = offs &lt; n                      # 向量化边界检查
+    a = tl.load(a_ptr + offs, mask=mask) # 一次读一整块
+    b = tl.load(b_ptr + offs, mask=mask)
+    tl.store(c_ptr + offs, a + b, mask=mask)  # 一次写一整块
+    # 合并访问、线程切分：编译器自动处理
+}</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>一句话记住 Triton 的映射关系</strong>
+一个 <strong>Triton program ≈ 一个 CUDA block</strong>；一个 program 处理的 <strong>BLOCK_SIZE 个元素 ≈ 一个 CUDA block 负责的那片数据</strong>。但关键区别在于：写 CUDA 你在 block 内部还要继续想"每个线程"；写 Triton 你<strong>停在块这一层，操作整块向量</strong>，块内的线程、合并访问、shared memory 交给编译器。你从"想线程"升级成了"想向量"。
+</div><h2>为什么这对 ML kernel 更高效</h2>
+<p>块级抽象不是为了偷懒，是为了<strong>生产力和性能兼得</strong>，这在写机器学习算子时尤其明显：</p>
+<ul>
+<li><strong>少写易错的下标算术</strong>：ML 里满是 softmax、layernorm、attention 这类&quot;沿某个维度做归约再广播&quot;的模式。用 CUDA 手写，光是把 tile 搬进 shared memory、算好每个线程的下标、插对 barrier，就能耗掉你大半天还容易错。Triton 里这些多数是编译器的活。</li>
+<li><strong>编译器接管访存优化</strong>：合并访问、向量化、shared memory 的分配与同步——这些在 CUDA 里是你反复调优的重点，Triton 编译器会根据 BLOCK_SIZE 和硬件自动生成。</li>
+<li><strong>BLOCK_SIZE 是可调旋钮</strong>：它是一个 <code>tl.constexpr</code>（编译期常量）。改一个数字重编译，就能为不同 GPU 找到最优块大小——下一章的<strong>自动调优（autotuning）</strong> 就建立在这上面。</li>
+<li><strong>融合天然</strong>：因为你在块级操作整块向量，把&quot;读—算—算—写&quot;多个步骤写进一个 kernel（算子融合）非常自然，能省掉中间结果反复读写显存的开销。这是 Triton 相对手写 CUDA 的真正杀手锏，下一章细讲。</li>
+</ul>
+<h2>动手（一）：用纯 Python 模拟块级下标 + 掩码</h2>
+<p>在碰真 Triton 之前，先在浏览器里跑一个只用标准库的模拟器，把&quot;grid → program → offsets → mask&quot;这条链亲手走一遍。我们故意选一个<strong>不能被块大小整除</strong>的长度（10 个元素，块大小 4），好让你看清最后一块的掩码是怎么救场的。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%94%A8%E7%BA%AF%20Python%20%E6%A8%A1%E6%8B%9F%20Triton%20%E7%9A%84%E5%9D%97%E7%BA%A7%E7%BC%96%E7%A8%8B%E6%A8%A1%E5%9E%8B%EF%BC%9Aprogram%20%2F%20offsets%20%2F%20mask%0A%23%20%E5%85%B3%E9%94%AE%EF%BC%9A%E6%95%B0%E7%BB%84%E9%95%BF%E5%BA%A6%2010%20%E4%B8%8D%E8%83%BD%E8%A2%AB%20BLOCK%204%20%E6%95%B4%E9%99%A4%EF%BC%8C%E7%9C%8B%E6%9C%80%E5%90%8E%E4%B8%80%E5%9D%97%E6%80%8E%E4%B9%88%E9%9D%A0%E6%8E%A9%E7%A0%81%E5%A4%84%E7%90%86%E8%B6%8A%E7%95%8C%0A%0AN%20%3D%2010%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%83%E7%B4%A0%E6%80%BB%E6%95%B0%EF%BC%88%E6%95%85%E6%84%8F%E4%B8%8D%E6%98%AF%204%20%E7%9A%84%E5%80%8D%E6%95%B0%EF%BC%89%0ABLOCK%20%3D%204%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20program%20%E5%A4%84%E7%90%86%E4%B8%80%E5%9D%97%0A%0Aa%20%3D%20%5Bi%20for%20i%20in%20range(N)%5D%20%20%20%20%20%20%20%20%23%20%5B0%2C1%2C2%2C...%2C9%5D%0Ab%20%3D%20%5Bi%20*%2010%20for%20i%20in%20range(N)%5D%20%20%20%23%20%5B0%2C10%2C20%2C...%2C90%5D%0Ac%20%3D%20%5B0%5D%20*%20N%0A%0Adef%20cdiv(x%2C%20y)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%90%91%E4%B8%8A%E5%8F%96%E6%95%B4%E9%99%A4%E6%B3%95%EF%BC%8C%E7%AD%89%E4%BB%B7%E4%BA%8E%20triton.cdiv%0A%20%20%20%20return%20(x%20%2B%20y%20-%201)%20%2F%2F%20y%0A%0Anum_programs%20%3D%20cdiv(N%2C%20BLOCK)%20%20%20%20%23%20grid%EF%BC%9A%E9%9C%80%E8%A6%81%E5%A4%9A%E5%B0%91%E4%B8%AA%20program%0Aprint(f%22%E5%85%83%E7%B4%A0%E6%80%BB%E6%95%B0%20N%3D%7BN%7D%2C%20BLOCK%3D%7BBLOCK%7D%20%E2%86%92%20%E9%9C%80%E8%A6%81%20%7Bnum_programs%7D%20%E4%B8%AA%20program%5Cn%22)%0A%0Adef%20program(pid)%3A%0A%20%20%20%20%23%20%E4%B8%80%E4%B8%AA%20program%20%E5%81%9A%E7%9A%84%E4%BA%8B%EF%BC%9A%E7%AE%97%E4%B8%80%E6%95%B4%E5%9D%97%E7%9A%84%E4%B8%8B%E6%A0%87%E5%90%91%E9%87%8F%EF%BC%8C%E9%80%A0%E6%8E%A9%E7%A0%81%EF%BC%8C%E8%AF%BB%E2%80%94%E5%8A%A0%E2%80%94%E5%86%99%0A%20%20%20%20offs%20%3D%20%5Bpid%20*%20BLOCK%20%2B%20k%20for%20k%20in%20range(BLOCK)%5D%20%20%20%23%20%E8%BF%99%E4%B8%80%E5%9D%97%E7%9A%84%E4%B8%8B%E6%A0%87(%E5%90%91%E9%87%8F)%0A%20%20%20%20mask%20%3D%20%5Bo%20%3C%20N%20for%20o%20in%20offs%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%BE%B9%E7%95%8C%E6%8E%A9%E7%A0%81%EF%BC%9A%E8%B6%8A%E7%95%8C%E7%9A%84%E4%B8%BA%20False%0A%20%20%20%20%23%20%E5%90%91%E9%87%8F%E5%8C%96%20load%EF%BC%9A%E6%8E%A9%E7%A0%81%E4%B8%BA%E5%81%87%E7%9A%84%E4%BD%8D%E7%BD%AE%E4%B8%8D%E7%9C%9F%E8%AF%BB%EF%BC%8C%E7%94%A8%E9%BB%98%E8%AE%A4%E5%80%BC%200%20%E9%A1%B6%E6%9B%BF%0A%20%20%20%20va%20%3D%20%5Ba%5Bo%5D%20if%20m%20else%200%20for%20o%2C%20m%20in%20zip(offs%2C%20mask)%5D%0A%20%20%20%20vb%20%3D%20%5Bb%5Bo%5D%20if%20m%20else%200%20for%20o%2C%20m%20in%20zip(offs%2C%20mask)%5D%0A%20%20%20%20vc%20%3D%20%5Bx%20%2B%20y%20for%20x%2C%20y%20in%20zip(va%2C%20vb)%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%80%E6%95%B4%E5%9D%97%E4%B8%80%E8%B5%B7%E5%8A%A0%0A%20%20%20%20print(f%22program%20%7Bpid%7D%3A%20offs%3D%7Boffs%7D%20mask%3D%7Bmask%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%20%20load%20a%3D%7Bva%7D%20b%3D%7Bvb%7D%20%E2%86%92%20c%3D%7Bvc%7D%22)%0A%20%20%20%20%23%20%E5%90%91%E9%87%8F%E5%8C%96%20store%EF%BC%9A%E5%8F%AA%E5%86%99%E6%8E%A9%E7%A0%81%E4%B8%BA%E7%9C%9F%E7%9A%84%E4%BD%8D%E7%BD%AE%EF%BC%8C%E8%B6%8A%E7%95%8C%E7%9A%84%E4%B8%A2%E5%BC%83%0A%20%20%20%20for%20o%2C%20m%2C%20val%20in%20zip(offs%2C%20mask%2C%20vc)%3A%0A%20%20%20%20%20%20%20%20if%20m%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20c%5Bo%5D%20%3D%20val%0A%0Afor%20pid%20in%20range(num_programs)%3A%20%20%23%20%E6%83%B3%E8%B1%A1%E8%BF%99%E5%87%A0%E4%B8%AA%20program%20%E5%9C%A8%20GPU%20%E4%B8%8A%E5%B9%B6%E8%A1%8C%0A%20%20%20%20program(pid)%0A%0Aprint(%22%5Cn%E6%9C%80%E7%BB%88%20c%20%3D%22%2C%20c)%0Aprint(%22%E9%AA%8C%E8%AF%81%EF%BC%9Ac%5Bi%5D%20%E5%BA%94%E7%AD%89%E4%BA%8E%20a%5Bi%5D%2Bb%5Bi%5D%20%3D%22%2C%20%5Ba%5Bi%5D%20%2B%20b%5Bi%5D%20for%20i%20in%20range(N)%5D)%0Aprint(%22%E4%B8%80%E8%87%B4%E5%90%97%EF%BC%9F%22%2C%20c%20%3D%3D%20%5Ba%5Bi%5D%20%2B%20b%5Bi%5D%20for%20i%20in%20range(N)%5D)"># 用纯 Python 模拟 Triton 的块级编程模型：program / offsets / mask
+# 关键：数组长度 10 不能被 BLOCK 4 整除，看最后一块怎么靠掩码处理越界
+
+N = 10          # 元素总数（故意不是 4 的倍数）
+BLOCK = 4       # 每个 program 处理一块
+
+a = [i for i in range(N)]        # [0,1,2,...,9]
+b = [i * 10 for i in range(N)]   # [0,10,20,...,90]
+c = [0] * N
+
+def cdiv(x, y):                  # 向上取整除法，等价于 triton.cdiv
+    return (x + y - 1) // y
+
+num_programs = cdiv(N, BLOCK)    # grid：需要多少个 program
+print(f"元素总数 N={N}, BLOCK={BLOCK} → 需要 {num_programs} 个 program\n")
+
+def program(pid):
+    # 一个 program 做的事：算一整块的下标向量，造掩码，读—加—写
+    offs = [pid * BLOCK + k for k in range(BLOCK)]   # 这一块的下标(向量)
+    mask = [o &lt; N for o in offs]                     # 边界掩码：越界的为 False
+    # 向量化 load：掩码为假的位置不真读，用默认值 0 顶替
+    va = [a[o] if m else 0 for o, m in zip(offs, mask)]
+    vb = [b[o] if m else 0 for o, m in zip(offs, mask)]
+    vc = [x + y for x, y in zip(va, vb)]             # 一整块一起加
+    print(f"program {pid}: offs={offs} mask={mask}")
+    print(f"           load a={va} b={vb} → c={vc}")
+    # 向量化 store：只写掩码为真的位置，越界的丢弃
+    for o, m, val in zip(offs, mask, vc):
+        if m:
+            c[o] = val
+
+for pid in range(num_programs):  # 想象这几个 program 在 GPU 上并行
+    program(pid)
+
+print("\n最终 c =", c)
+print("验证：c[i] 应等于 a[i]+b[i] =", [a[i] + b[i] for i in range(N)])
+print("一致吗？", c == [a[i] + b[i] for i in range(N)])</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">元素总数 N=10, BLOCK=4 → 需要 3 个 program
+
+program 0: offs=[0, 1, 2, 3] mask=[True, True, True, True]
+           load a=[0, 1, 2, 3] b=[0, 10, 20, 30] → c=[0, 11, 22, 33]
+program 1: offs=[4, 5, 6, 7] mask=[True, True, True, True]
+           load a=[4, 5, 6, 7] b=[40, 50, 60, 70] → c=[44, 55, 66, 77]
+program 2: offs=[8, 9, 10, 11] mask=[True, True, False, False]
+           load a=[8, 9, 0, 0] b=[80, 90, 0, 0] → c=[88, 99, 0, 0]
+
+最终 c = [0, 11, 22, 33, 44, 55, 66, 77, 88, 99]
+验证：c[i] 应等于 a[i]+b[i] = [0, 11, 22, 33, 44, 55, 66, 77, 88, 99]
+一致吗？ True</code></pre>
+</div><p>看第 3 个 program（<code>pid=2</code>）：它算出的下标是 <code>[8, 9, 10, 11]</code>，但数组只到下标 9。掩码 <code>[True, True, False, False]</code> 把越界的 10、11 挡在门外——load 用默认值顶替，store 直接不写。<strong>这就是 Triton kernel 里那句 <code>mask = offs &lt; n_elements</code> 的全部含义</strong>，也是块级模型处理&quot;最后一块凑不齐&quot;的标准姿势。请动手改：把 <code>N</code> 改成 12（正好 3 块整除），再运行——你会看到所有 mask 都变成 <code>True</code>，因为不再有越界。</p>
+<div class="note">
+<strong>为什么模拟器把 <code>store</code> 写成一个 <code>for</code>？</strong>
+真 Triton 里 <code>tl.store(c_ptr + offs, vc, mask=mask)</code> 是<strong>一次</strong>向量写操作，掩码直接作用在硬件层。我们用纯 Python 没有向量类型，只能用一个 <code>for</code> 循环逐个写、逐个判断掩码来<strong>模拟</strong>那次向量写的语义。请始终记住：在真 Triton 里，这一整块是<strong>一条</strong>指令，不是循环。
+</div><div class="warn">
+<strong>"program 内没有循环"是要点，不是巧合</strong>
+注意模拟器里 <code>program()</code> 函数体内对一整块数据的处理，靠的是对<strong>向量</strong>的整体操作（列表推导只是 Python 没有向量类型的替代品）。真 Triton kernel 里，一个 program 处理一整块<strong>不写逐元素循环</strong>——你写的每一步（load、加法、store）都直接作用在长度 BLOCK_SIZE 的张量上。如果你在 Triton kernel 里写了个 <code>for i in range(BLOCK_SIZE)</code> 去逐个处理元素，多半就想错了粒度。
+</div><h2>动手（二）：教科书级的 Triton 向量加法</h2>
+<p>下面是<strong>真正的</strong> Triton 向量加法——Triton 官方教程的第一课，几乎是所有 Triton 代码的模板。它需要一块 NVIDIA GPU 才能跑（<code>pip install triton torch</code>），所以标为 <code>triton</code> 只高亮、不在浏览器运行。把它和上面的模拟器对照，你会发现结构一模一样：<code>tl.program_id</code> 就是 <code>pid</code>、<code>tl.arange</code> 就是那个 <code>[0..BLOCK)</code>、<code>mask = offs &lt; n</code> 就是边界掩码。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python">import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def add_kernel(
+    a_ptr, b_ptr, c_ptr,   # 三个数组在显存里的首地址（指针）
+    n_elements,            # 元素总数（运行时值，用于掩码）
+    BLOCK_SIZE: tl.constexpr,  # 每块多少元素（编译期常量，可调旋钮）
+):
+    pid = tl.program_id(axis=0)              # 我是第几个 program（= blockIdx.x）
+    block_start = pid * BLOCK_SIZE           # 我这一块的起始下标
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)  # 一整块的下标(向量)
+    mask = offsets &lt; n_elements              # 越界的位置为 False（向量化边界检查）
+
+    a = tl.load(a_ptr + offsets, mask=mask)  # 一次读进一整块 a
+    b = tl.load(b_ptr + offsets, mask=mask)  # 一次读进一整块 b
+    c = a + b                                # 一整块向量相加
+    tl.store(c_ptr + offsets, c, mask=mask)  # 一次写回一整块 c
+
+
+def add(a: torch.Tensor, b: torch.Tensor) -&gt; torch.Tensor:
+    c = torch.empty_like(a)
+    n_elements = a.numel()
+    # grid：需要多少个 program。triton.cdiv 是向上取整除法
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    # 用 kernel[grid](...) 启动，BLOCK_SIZE 作为编译期常量传入
+    add_kernel[grid](a, b, c, n_elements, BLOCK_SIZE=1024)
+    return c
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+    size = 98432                              # 故意不是 1024 的倍数，考验掩码
+    a = torch.rand(size, device="cuda")
+    b = torch.rand(size, device="cuda")
+    c_triton = add(a, b)
+    c_torch = a + b                           # 用 PyTorch 的结果做基准
+    max_diff = (c_triton - c_torch).abs().max().item()
+    print(f"最大误差 = {max_diff}")           # 应为 0.0（同样的浮点加法）
+    print("结果正确！" if max_diff == 0.0 else "结果不一致")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pip install triton torch   # 需要 NVIDIA GPU；然后：python main.py</code></div>
+</div><p>在有 GPU 的机器上，它会打印：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">最大误差 = 0.0
+结果正确！</code></pre>
+</div><p>几个值得盯住的细节：</p>
+<ul>
+<li><strong>kernel 里全是向量操作</strong>，没有一句 <code>for</code> 遍历块内元素——<code>tl.load</code>/加法/<code>tl.store</code> 每一步都作用在整块上。这就是块级思维落到代码上的样子。</li>
+<li><strong><code>BLOCK_SIZE</code> 通过关键字参数在启动时传入</strong>（<code>BLOCK_SIZE=1024</code>），因为它是 <code>tl.constexpr</code>，编译器会把它当常量特化生成代码。</li>
+<li><strong><code>grid</code> 是一个 lambda</strong>，接收 <code>meta</code>（含 <code>BLOCK_SIZE</code>），返回一个元组 <code>(num_programs,)</code>。<code>size=98432</code> 不是 1024 的整数倍，最后一个 program 就靠 <code>mask</code> 兜底——和你在模拟器里看到的第 3 个 program 完全一个道理。</li>
+<li><strong>启动语法 <code>add_kernel[grid](...)</code></strong>：方括号里是网格，圆括号里是 kernel 参数。</li>
+</ul>
+<div class="note">
+<strong>Triton 也是可移植的，但路线不同于 SYCL</strong>
+Triton 最初瞄准 NVIDIA，如今也在扩展 AMD 等后端支持。但它的可移植性和 SYCL 不是一回事：SYCL 是"同一份 C++ 编到多家硬件"，Triton 是"用一个更高的 Python DSL 描述块级计算，由编译器针对目标硬件生成高效 kernel"。它牺牲了 CUDA 那种对硬件的极致细粒度控制，换来的是<strong>写 ML kernel 的开发速度</strong>——对绝大多数深度学习算子，这笔交易非常划算。
+</div><h2>小结与下一步</h2>
+<p>Triton 让你在<strong>块级</strong>写 kernel：用 Python + <code>@triton.jit</code>，每个 program 处理一整块 <code>BLOCK_SIZE</code> 元素，你操作向量而非线程，用&quot;指针 + <code>tl.arange</code> 偏移 + 掩码&quot;完成 <code>tl.load</code>/<code>tl.store</code>，把线程调度、合并访问、shared memory 管理交给编译器。这比逐线程写 CUDA 在 ML 场景下高效得多。</p>
+<p>但你现在看到的向量加法，还只是 Triton 的&quot;Hello World&quot;——它是个访存受限的算子，Triton 相对 CUDA 的优势还没真正体现。<strong>Triton 真正的回报在下一章</strong>：<strong>算子融合（fusion）</strong> 让你把一串操作压进一个 kernel、省掉中间结果反复进出显存；<strong>自动调优（autotuning）</strong> 让你把 <code>BLOCK_SIZE</code> 等参数交给框架自动搜出最优组合。等你写完一个融合的、自动调优的 softmax，才会真正明白为什么现代深度学习框架的底层，越来越多是 Triton 写的。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>Triton（来自 OpenAI）把抽象层从<strong>线程级</strong>抬到<strong>块级</strong>：你用 Python 写 kernel，<code>@triton.jit</code> 编译到 GPU，<strong>不写 <code>threadIdx</code></strong>。</li>
+<li>核心模型：<strong>grid = program 数量</strong>；每个 program 用 <code>pid = tl.program_id(axis=0)</code> 拿到编号，处理一整块 <code>BLOCK_SIZE</code> 元素；<code>offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)</code> 一次算出整块下标（<strong>向量</strong>）。</li>
+<li><strong>掩码</strong> <code>mask = offsets &lt; n_elements</code> 是 CUDA 边界检查 <code>if (i &lt; n)</code> 的向量化版本，专治&quot;最后一块凑不齐&quot;，配合 <code>tl.load(ptr+offs, mask=mask)</code> / <code>tl.store(...)</code> 使用。</li>
+<li>映射关系：<strong>一个 Triton program ≈ 一个 CUDA block</strong>；BLOCK_SIZE 元素 ≈ 一个 block 处理的数据；但你<strong>想向量、不想线程</strong>，块内线程/合并访问/shared memory 由编译器接管。</li>
+<li>启动用 <code>kernel[grid](...)</code>，网格大小用 <code>triton.cdiv(n, BLOCK)</code> 向上取整；<code>BLOCK_SIZE</code> 是 <code>tl.constexpr</code> 编译期常量，也是自动调优的旋钮。</li>
+<li>块级模型让写 ML 算子（softmax、attention 等）更高产，且天然适合融合——<strong>真正的回报（融合 + 自动调优）在第 14 章</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch12.html">← 第 12 章 SYCL：单一源码的跨厂商 C++</a>
+  <a class="nav-next" href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

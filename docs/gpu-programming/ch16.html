@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 16 章 性能模型：occupancy、带宽与 Roofline</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li class="active"><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 16 章 性能模型：occupancy、带宽与 Roofline</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面你学会了写 kernel，也知道 GPU"多数时候卡在带宽"。这一章给你两把量尺，把"卡在哪儿"从直觉变成<strong>可计算的数字</strong>：一把是 <strong>occupancy（占用率）</strong>——你实际挂在 SM 上的 warp 占硬件上限的比例，它决定了 GPU 有没有足够的"备胎 warp"去掩盖延迟；另一把是 <strong>Roofline 模型</strong>——把 kernel 画在一张"性能 vs 算术强度"的图上，一眼看出它是被带宽还是被算力顶住了，以及离天花板还有多远。</p>
+<p>读完你能用两个浏览器里能跑的小程序，算出任意 kernel 的 Roofline 天花板和 occupancy，并知道下一步该优化访存还是优化计算——这正是决定"值不值得动手"的判断力。</p>
+</div><h2>occupancy：你到底挂了多少个 warp</h2>
+<p>回忆第 1 章和第 3 章那句反复出现的话：GPU 靠<strong>并行掩盖延迟</strong>。当一个 warp 卡在等显存（几百个周期）时，warp 调度器立刻切到另一个就绪的 warp 接着算，访存的空档就被填满了。这个魔法能不能生效，取决于一件事——<strong>SM 上到底还有没有别的 warp 可切</strong>。</p>
+<p><strong>occupancy（占用率）</strong> 就是量这件事的指标，定义极简单：</p>
+<blockquote>
+<p>occupancy = 一个 SM 上<strong>实际驻留的活跃 warp 数</strong> ÷ 该 SM 支持的<strong>最大 warp 数</strong></p>
+</blockquote>
+<p>比如一个 SM 最多挂 64 个 warp，你实际只挂了 16 个，occupancy 就是 25%。warp 越少，调度器手里的&quot;备胎&quot;越少，一旦大家同时卡在访存上，算术单元就只能空转——延迟没被掩盖，吞吐掉下来。</p>
+<p>那什么东西限制了你能挂多少 warp？答案是<strong>每个 SM 的资源是固定的，被同时驻留的所有 block 瓜分</strong>。三种资源最常成为瓶颈：</p>
+<ul>
+<li><strong>每线程寄存器数</strong>：SM 的寄存器堆总量固定（如 65536 个）。你的 kernel 每线程用得越多，能同时驻留的线程（warp）就越少。这是最常见的 occupancy 杀手。</li>
+<li><strong>每 block 的 shared memory</strong>：SM 的 shared memory 总量固定（如 64–228 KB）。每 block 申请得越多，能并存的 block 越少。</li>
+<li><strong>block 大小与硬上限</strong>：SM 还有&quot;最多 N 个 block&quot;&quot;最多 M 个 warp&quot;的硬性天花板。block 太小（如 32 线程）会先撞到 block 数上限，挂不满 warp。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一个 SM 的固定资源，被驻留的 block 瓜分</text>
+  <!-- 高寄存器 -->
+  <text x="150" y="46" text-anchor="middle" font-size="12" fill="#e06a3b" font-weight="bold">每线程 64 寄存器</text>
+  <rect x="40" y="55" width="220" height="120" rx="6" fill="#f7fbff" stroke="#2b6cb0"/>
+  <g fill="#cfe4fb" stroke="#2b6cb0">
+    <rect x="52" y="67" width="90" height="44" rx="4"/><rect x="158" y="67" width="90" height="44" rx="4"/>
+    <rect x="52" y="119" width="90" height="44" rx="4"/><rect x="158" y="119" width="90" height="44" rx="4"/>
+  </g>
+  <text x="97" y="93" text-anchor="middle" font-size="10" fill="#2b6cb0">block</text>
+  <text x="203" y="93" text-anchor="middle" font-size="10" fill="#2b6cb0">block</text>
+  <text x="97" y="145" text-anchor="middle" font-size="10" fill="#2b6cb0">block</text>
+  <text x="203" y="145" text-anchor="middle" font-size="10" fill="#2b6cb0">block</text>
+  <text x="150" y="193" text-anchor="middle" font-size="11" fill="#6b7280">寄存器耗尽 → 只挂下 4 个 block</text>
+  <text x="150" y="210" text-anchor="middle" font-size="11" fill="#6b7280">= 32 warp / 64 → occupancy 50%</text>
+  <!-- 低寄存器 -->
+  <text x="410" y="46" text-anchor="middle" font-size="12" fill="#3f9b5c" font-weight="bold">每线程 32 寄存器</text>
+  <rect x="300" y="55" width="220" height="120" rx="6" fill="#f7fbff" stroke="#2b6cb0"/>
+  <g fill="#cfe4fb" stroke="#2b6cb0">
+    <rect x="310" y="63" width="48" height="50" rx="3"/><rect x="362" y="63" width="48" height="50" rx="3"/><rect x="414" y="63" width="48" height="50" rx="3"/><rect x="466" y="63" width="48" height="50" rx="3"/>
+    <rect x="310" y="117" width="48" height="50" rx="3"/><rect x="362" y="117" width="48" height="50" rx="3"/><rect x="414" y="117" width="48" height="50" rx="3"/><rect x="466" y="117" width="48" height="50" rx="3"/>
+  </g>
+  <text x="410" y="193" text-anchor="middle" font-size="11" fill="#6b7280">同样的寄存器堆能挂下 8 个 block</text>
+  <text x="410" y="210" text-anchor="middle" font-size="11" fill="#6b7280">= 64 warp / 64 → occupancy 100%</text>
+</svg>
+<div class="caption">图 16-1　每线程寄存器用量减半，同一块寄存器堆就能多塞一倍的 block/warp——这就是"降寄存器换 occupancy"的直接来源</div>
+</div><h3>但 100% occupancy 不是目标</h3>
+<p>这里有个新手最容易走进的误区：把 occupancy 当成越高越好的分数去刷。<strong>不是的。</strong> occupancy 的唯一作用是<strong>提供足够的备胎 warp 来掩盖延迟</strong>——一旦掩盖住了，再往上加没有任何收益。经验上，很多 kernel 在 50% 左右就已经把延迟藏得很好，再往上收益趋近于零。</p>
+<p>更微妙的是，<strong>追高 occupancy 常常要付代价</strong>：为了少用寄存器，你可能被迫把本可以放在寄存器里的数据反复从显存里读——结果 occupancy 上去了，访存反而变多，净亏。真正会调优的人做的是<strong>权衡</strong>：让每个线程多用点寄存器（把复用数据留在片上）、接受略低的 occupancy，往往比硬刷满 occupancy 更快。这也是 NVIDIA 的 Volta 架构师那句名言的意思——&quot;低占用率也能跑满带宽&quot;。</p>
+<div class="keypoint">
+<strong>occupancy 的正确用法</strong>
+occupancy 是<strong>手段</strong>不是<strong>目的</strong>。它要够高到能掩盖延迟（通常几十个 warp 就够），但没必要顶满。当你的 kernel 慢，先看它是不是 occupancy 太低（比如寄存器爆了，只剩 12% ）导致延迟没被掩盖；如果 occupancy 已经过半还是慢，问题多半在别处（访存模式、算法），继续刷 occupancy 是白费力气。
+</div><h2>Roofline：一张图看清 kernel 撞的是哪面墙</h2>
+<p>occupancy 告诉你&quot;延迟藏没藏住&quot;，但没告诉你这个 kernel 的<strong>理论上限</strong>在哪。<strong>Roofline 模型</strong>就是干这个的——它把整台机器的能力和你 kernel 的性质画在同一张图上。</p>
+<p>图的两根轴（都取对数）：</p>
+<ul>
+<li>横轴：<strong>算术强度（arithmetic intensity）</strong>，单位 FLOP/byte——第 3 章那个&quot;每从显存搬 1 字节能做几次浮点运算&quot;。这是 kernel 自身的性质。</li>
+<li>纵轴：<strong>可达到的性能</strong>，单位 FLOP/s。</li>
+</ul>
+<p>&quot;屋顶&quot;由两条线拼成，任何 kernel 能达到的性能不可能超过它：</p>
+<p>$$\text{可达性能} = \min(\text{峰值算力},\ \text{峰值带宽} \times \text{算术强度})$$</p>
+<ul>
+<li>右边一段是<strong>平屋顶</strong>：等于<strong>峰值算力</strong>（如 60 TFLOP/s），一条水平线——再高的算术强度也突破不了硅片的算力上限。</li>
+<li>左边一段是<strong>斜屋顶</strong>：等于<strong>峰值带宽 × 算术强度</strong>，在对数坐标里是一条斜率为 1 的直线——强度越低，带宽这堵墙就把你压得越低。</li>
+</ul>
+<p>两条线相交处叫<strong>脊点（ridge point）</strong>，它的横坐标正好是第 3 章的<strong>平衡点</strong> = 峰值算力 ÷ 峰值带宽（我们那块 GPU 是 60 TFLOP/s ÷ 3 TB/s = 20 FLOP/byte）。脊点把世界切成两半：</p>
+<ul>
+<li>脊点<strong>左边</strong>（强度 &lt; 20）：受斜屋顶限制，<strong>带宽受限（memory-bound）</strong>。想更快，就得优化访存（减少读写、提高强度）。</li>
+<li>脊点<strong>右边</strong>（强度 &gt; 20）：受平屋顶限制，<strong>算力受限（compute-bound）</strong>。想更快，就得优化计算（用 Tensor Core、减少指令）。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">Roofline 模型（对数-对数坐标）</text>
+  <!-- 轴 -->
+  <line x1="70" y1="290" x2="530" y2="290" stroke="#374151" stroke-width="1.5"/>
+  <line x1="70" y1="290" x2="70" y2="50" stroke="#374151" stroke-width="1.5"/>
+  <text x="300" y="322" text-anchor="middle" font-size="12" fill="#374151">算术强度 (FLOP/byte，对数)  →</text>
+  <text x="24" y="170" font-size="12" fill="#374151" transform="rotate(-90 24 170)">性能 (FLOP/s，对数)  →</text>
+  <!-- 斜屋顶（带宽）从左下到脊点 -->
+  <line x1="70" y1="270" x2="300" y2="90" stroke="#2b6cb0" stroke-width="3"/>
+  <!-- 平屋顶（算力）从脊点向右 -->
+  <line x1="300" y1="90" x2="510" y2="90" stroke="#2b6cb0" stroke-width="3"/>
+  <text x="150" y="150" font-size="11" fill="#2b6cb0" transform="rotate(-38 150 150)">斜屋顶 = 带宽 × 强度</text>
+  <text x="405" y="82" text-anchor="middle" font-size="11" fill="#2b6cb0">平屋顶 = 峰值算力 60 TFLOP/s</text>
+  <!-- 脊点 -->
+  <circle cx="300" cy="90" r="4" fill="#e06a3b"/>
+  <line x1="300" y1="90" x2="300" y2="290" stroke="#9ca3af" stroke-dasharray="4 3"/>
+  <text x="300" y="308" text-anchor="middle" font-size="11" fill="#e06a3b" font-weight="bold">脊点 20</text>
+  <!-- 分区标注 -->
+  <text x="180" y="280" text-anchor="middle" font-size="11" fill="#6b7280">← 带宽受限</text>
+  <text x="420" y="280" text-anchor="middle" font-size="11" fill="#6b7280">算力受限 →</text>
+  <!-- 向量加法：强度极低，贴斜屋顶靠左 -->
+  <circle cx="95" cy="250" r="5" fill="#e06a3b"/>
+  <text x="102" y="242" font-size="11" fill="#e06a3b">向量加法 (强度 0.08)</text>
+  <text x="102" y="256" font-size="9" fill="#6b7280">远在左侧，被带宽死死压住</text>
+  <!-- 矩阵乘：高强度，贴平屋顶 -->
+  <circle cx="450" cy="90" r="5" fill="#3f9b5c"/>
+  <text x="360" y="115" font-size="11" fill="#3f9b5c">矩阵乘 (强度 50)</text>
+  <text x="360" y="129" font-size="9" fill="#6b7280">在平屋顶下，能吃满算力</text>
+</svg>
+<div class="caption">图 16-2　Roofline：斜屋顶（带宽）与平屋顶（算力）在脊点相交。向量加法落在最左端被带宽压制，矩阵乘落在右侧能逼近峰值算力。kernel 的横坐标是它自己的性质，纵坐标上限由屋顶决定</div>
+</div><p>它的用法非常实操：<strong>测出你 kernel 的算术强度，找到它在图上的横坐标，看它头顶的屋顶有多高，再对比它实测到的性能。</strong> 如果实测点贴着屋顶，说明这台机器对这个 kernel 已经压榨到极限了，别折腾了；如果离屋顶还很远，说明有优化空间——而<strong>往哪个方向优化，由它在脊点的左边还是右边决定</strong>。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CPU 的性能直觉</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 优化 CPU 单线程/多线程：
+// - 提高 ILP（指令级并行）：
+//   让乱序引擎有活干
+// - 吃好缓存：分块、预取、
+//   减少 cache miss
+// - 分支预测友好、SIMD 向量化
+// 核心：让"少数强核"尽快跑完</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">GPU 的性能直觉</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 优化 GPU kernel：
+// - occupancy：挂够 warp 掩盖延迟
+// - 带宽：合并访存、复用 shared
+//   memory、算子融合减少读写
+// - 提高算术强度，往脊点右边挪
+// 核心：喂饱"海量弱核"的吞吐</code></pre>
+</div></div>
+</div><h2>动手（一）：算出每个 kernel 的 Roofline 天花板</h2>
+<p>下面这个程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它沿用第 3 章那块 GPU 的参数（60 TFLOP/s、3 TB/s），先算出脊点，再对一列 kernel 逐个算出它头顶的屋顶高度、能摸到峰值算力的百分之几，以及它到底带宽受限还是算力受限。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20Roofline%20%E5%A4%A9%E8%8A%B1%E6%9D%BF%E8%AE%A1%E7%AE%97%E5%99%A8%EF%BC%9A%E7%BB%99%E5%AE%9A%E5%B3%B0%E5%80%BC%E7%AE%97%E5%8A%9B%E4%B8%8E%E5%B8%A6%E5%AE%BD%EF%BC%8C%E5%88%A4%E6%96%AD%E6%AF%8F%E4%B8%AA%20kernel%20%E7%9A%84%E4%B8%8A%E9%99%90%0Apeak_flops%20%3D%2060e12%20%20%20%20%20%20%23%20%E5%B3%B0%E5%80%BC%E7%AE%97%E5%8A%9B%2060%20TFLOP%2Fs%EF%BC%88%E6%B2%BF%E7%94%A8%E7%AC%AC%203%20%E7%AB%A0%EF%BC%89%0Apeak_bw%20%20%20%20%3D%203.0e12%20%20%20%20%20%23%20%E6%98%BE%E5%AD%98%E5%B8%A6%E5%AE%BD%203%20TB%2Fs%EF%BC%88%E6%B2%BF%E7%94%A8%E7%AC%AC%203%20%E7%AB%A0%EF%BC%89%0A%0Aridge%20%3D%20peak_flops%20%2F%20peak_bw%20%20%20%23%20%E8%84%8A%E7%82%B9%20%3D%20%E5%B9%B3%E8%A1%A1%E7%82%B9%0Aprint(f%22%E8%84%8A%E7%82%B9%EF%BC%88ridge%20point%EF%BC%89%3D%20%7Bridge%3A.0f%7D%20FLOP%2Fbyte%22)%0Aprint(f%22%20%20%E5%BC%BA%E5%BA%A6%20%3C%20%7Bridge%3A.0f%7D%20%E2%86%92%20%E5%B8%A6%E5%AE%BD%E5%8F%97%E9%99%90%EF%BC%88%E5%9C%A8%E6%96%9C%E5%B1%8B%E9%A1%B6%E4%B8%8B%EF%BC%89%22)%0Aprint(f%22%20%20%E5%BC%BA%E5%BA%A6%20%3E%20%7Bridge%3A.0f%7D%20%E2%86%92%20%E7%AE%97%E5%8A%9B%E5%8F%97%E9%99%90%EF%BC%88%E5%9C%A8%E5%B9%B3%E5%B1%8B%E9%A1%B6%E4%B8%8B%EF%BC%89%5Cn%22)%0A%0A%23%20(%E5%90%8D%E5%AD%97%2C%20%E7%AE%97%E6%9C%AF%E5%BC%BA%E5%BA%A6%20FLOP%2Fbyte)%0Akernels%20%3D%20%5B%0A%20%20%20%20(%22%E5%90%91%E9%87%8F%E5%8A%A0%E6%B3%95%20c%3Da%2Bb%22%2C%20%20%201%2F12)%2C%20%20%20%23%20%E6%AF%8F%E5%85%83%E7%B4%A0%201%20%E6%AC%A1%E8%BF%90%E7%AE%97%E3%80%81%E6%90%AC%2012%20%E5%AD%97%E8%8A%82%0A%20%20%20%20(%22SAXPY%20y%3Da*x%2By%22%2C%20%20%20%202%2F12)%2C%20%20%20%23%202%20%E6%AC%A1%E8%BF%90%E7%AE%97%E3%80%81%E6%90%AC%2012%20%E5%AD%97%E8%8A%82%0A%20%20%20%20(%22stencil%205%20%E7%82%B9%22%2C%20%20%20%20%2010%2F8)%2C%20%20%20%23%20%E7%BA%A6%2010%20%E6%AC%A1%E8%BF%90%E7%AE%97%E3%80%81%E6%90%AC%208%20%E5%AD%97%E8%8A%82%0A%20%20%20%20(%22%E7%9F%A9%E9%98%B5%E4%B9%98%20(%E5%A4%A7%20N)%22%2C%20%20%20%20%2050.0)%2C%20%20%20%23%20tiling%20%E5%90%8E%E5%BC%BA%E5%BA%A6%E5%BE%88%E9%AB%98%0A%5D%0A%0Afor%20name%2C%20ai%20in%20kernels%3A%0A%20%20%20%20ceiling%20%3D%20min(peak_flops%2C%20peak_bw%20*%20ai)%20%20%20%23%20%E5%B1%8B%E9%A1%B6%EF%BC%9A%E4%B8%A4%E6%9D%A1%E7%BA%BF%E5%8F%96%E4%BD%8E%E8%80%85%0A%20%20%20%20bound%20%3D%20%22%E5%B8%A6%E5%AE%BD%E5%8F%97%E9%99%90%22%20if%20ai%20%3C%20ridge%20else%20%22%E7%AE%97%E5%8A%9B%E5%8F%97%E9%99%90%22%0A%20%20%20%20pct%20%3D%20ceiling%20%2F%20peak_flops%20*%20100%20%20%20%20%20%20%20%20%20%20%23%20%E8%83%BD%E6%91%B8%E5%88%B0%E5%B3%B0%E5%80%BC%E7%AE%97%E5%8A%9B%E7%9A%84%E7%99%BE%E5%88%86%E4%B9%8B%E5%87%A0%0A%20%20%20%20print(f%22%7Bname%7D%EF%BC%9A%E5%BC%BA%E5%BA%A6%20%7Bai%3A.3f%7D%20FLOP%2Fbyte%22)%0A%20%20%20%20print(f%22%20%20%E5%B1%8B%E9%A1%B6%20%3D%20%7Bceiling%2F1e12%3A.3f%7D%20TFLOP%2Fs%EF%BC%88%E5%B3%B0%E5%80%BC%E7%9A%84%20%7Bpct%3A.2f%7D%25%EF%BC%89%E2%86%92%20%7Bbound%7D%22)"># Roofline 天花板计算器：给定峰值算力与带宽，判断每个 kernel 的上限
+peak_flops = 60e12      # 峰值算力 60 TFLOP/s（沿用第 3 章）
+peak_bw    = 3.0e12     # 显存带宽 3 TB/s（沿用第 3 章）
+
+ridge = peak_flops / peak_bw   # 脊点 = 平衡点
+print(f"脊点（ridge point）= {ridge:.0f} FLOP/byte")
+print(f"  强度 &lt; {ridge:.0f} → 带宽受限（在斜屋顶下）")
+print(f"  强度 &gt; {ridge:.0f} → 算力受限（在平屋顶下）\n")
+
+# (名字, 算术强度 FLOP/byte)
+kernels = [
+    ("向量加法 c=a+b",   1/12),   # 每元素 1 次运算、搬 12 字节
+    ("SAXPY y=a*x+y",    2/12),   # 2 次运算、搬 12 字节
+    ("stencil 5 点",     10/8),   # 约 10 次运算、搬 8 字节
+    ("矩阵乘 (大 N)",     50.0),   # tiling 后强度很高
+]
+
+for name, ai in kernels:
+    ceiling = min(peak_flops, peak_bw * ai)   # 屋顶：两条线取低者
+    bound = "带宽受限" if ai &lt; ridge else "算力受限"
+    pct = ceiling / peak_flops * 100          # 能摸到峰值算力的百分之几
+    print(f"{name}：强度 {ai:.3f} FLOP/byte")
+    print(f"  屋顶 = {ceiling/1e12:.3f} TFLOP/s（峰值的 {pct:.2f}%）→ {bound}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">脊点（ridge point）= 20 FLOP/byte
+  强度 &lt; 20 → 带宽受限（在斜屋顶下）
+  强度 &gt; 20 → 算力受限（在平屋顶下）
+
+向量加法 c=a+b：强度 0.083 FLOP/byte
+  屋顶 = 0.250 TFLOP/s（峰值的 0.42%）→ 带宽受限
+SAXPY y=a*x+y：强度 0.167 FLOP/byte
+  屋顶 = 0.500 TFLOP/s（峰值的 0.83%）→ 带宽受限
+stencil 5 点：强度 1.250 FLOP/byte
+  屋顶 = 3.750 TFLOP/s（峰值的 6.25%）→ 带宽受限
+矩阵乘 (大 N)：强度 50.000 FLOP/byte
+  屋顶 = 60.000 TFLOP/s（峰值的 100.00%）→ 算力受限</code></pre>
+</div><p>看清了吗？向量加法头顶的屋顶只有 <strong>0.25 TFLOP/s</strong>——连这块卡峰值算力的 <strong>0.42%</strong> 都摸不到，因为它被带宽死死压在斜屋顶的最左端。哪怕你把它优化到完美，它也永远碰不到 60 TFLOP/s。而矩阵乘落在脊点右边，屋顶就是满血的 60 TFLOP/s。请动手改：把 <code>矩阵乘</code> 的强度从 50 慢慢往下调，看它调到多少（提示：正好是脊点 20）才从&quot;算力受限&quot;翻转成&quot;带宽受限&quot;、屋顶开始往下掉——那一刻你就亲手穿过了脊点。</p>
+<h2>动手（二）：occupancy 计算器，看降寄存器如何拉满 warp</h2>
+<p>第二个程序同样<strong>能在浏览器里跑</strong>。它给一个 SM 的资源上限，输入你 kernel 的每线程寄存器、每 block 的 shared memory、每 block 线程数，算出到底哪种资源先耗尽、能驻留几个 block、最终 occupancy 是多少。我们跑两次：同一个 kernel，只把每线程寄存器从 64 降到 32，看 occupancy 怎么从 50% 跳到 100%。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code1">▶ 运行</button>
+    <button class="reset-btn" data-target="code1">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code1" data-original="%23%20occupancy%20%E8%AE%A1%E7%AE%97%E5%99%A8%EF%BC%9A%E7%BB%99%E5%AE%9A%E6%AF%8F%E7%BA%BF%E7%A8%8B%2F%E6%AF%8F%20block%20%E7%9A%84%E8%B5%84%E6%BA%90%E7%94%A8%E9%87%8F%E4%B8%8E%20SM%20%E4%B8%8A%E9%99%90%EF%BC%8C%E7%AE%97%E8%83%BD%E9%A9%BB%E7%95%99%E5%A4%9A%E5%B0%91%20warp%0AWARP_SIZE%20%3D%2032%0A%0A%23%20%E4%B8%80%E4%B8%AA%20SM%20%E7%9A%84%E7%A1%AC%E4%BB%B6%E4%B8%8A%E9%99%90%EF%BC%88%E5%8F%96%E6%9F%90%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83%E7%BA%A7%20GPU%20%E7%9A%84%E5%A4%A7%E8%87%B4%E5%85%AC%E5%BC%80%E9%87%8F%E7%BA%A7%EF%BC%89%0ASM_MAX_WARPS%20%20%20%20%20%3D%2064%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%20SM%20%E6%9C%80%E5%A4%9A%E9%A9%BB%E7%95%99%E7%9A%84%20warp%20%E6%95%B0%0ASM_MAX_BLOCKS%20%20%20%20%3D%2032%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%20SM%20%E6%9C%80%E5%A4%9A%E9%A9%BB%E7%95%99%E7%9A%84%20block%20%E6%95%B0%0ASM_REGISTERS%20%20%20%20%20%3D%2065536%20%20%20%20%20%23%20%E6%AF%8F%20SM%20%E7%9A%84%E5%AF%84%E5%AD%98%E5%99%A8%E6%80%BB%E6%95%B0%0ASM_SHARED_BYTES%20%20%3D%2065536%20%20%20%20%20%23%20%E6%AF%8F%20SM%20%E7%9A%84%20shared%20memory%20%E5%AD%97%E8%8A%82%E6%95%B0%EF%BC%88%E8%BF%99%E9%87%8C%E5%8F%96%2064%20KB%EF%BC%89%0A%0Adef%20occupancy(regs_per_thread%2C%20shared_per_block%2C%20threads_per_block)%3A%0A%20%20%20%20warps_per_block%20%3D%20(threads_per_block%20%2B%20WARP_SIZE%20-%201)%20%2F%2F%20WARP_SIZE%0A%0A%20%20%20%20%23%201)%20%E5%AF%84%E5%AD%98%E5%99%A8%E9%99%90%E5%88%B6%EF%BC%9A%E4%B8%80%E4%B8%AA%20block%20%E7%94%A8%E6%8E%89%E7%9A%84%E5%AF%84%E5%AD%98%E5%99%A8%20%3D%20%E6%AF%8F%E7%BA%BF%E7%A8%8B%E5%AF%84%E5%AD%98%E5%99%A8%20%C3%97%20block%20%E7%BA%BF%E7%A8%8B%E6%95%B0%0A%20%20%20%20regs_per_block%20%3D%20regs_per_thread%20*%20threads_per_block%0A%20%20%20%20lim_reg%20%3D%20SM_REGISTERS%20%2F%2F%20regs_per_block%20if%20regs_per_block%20else%20SM_MAX_BLOCKS%0A%0A%20%20%20%20%23%202)%20shared%20memory%20%E9%99%90%E5%88%B6%0A%20%20%20%20lim_shmem%20%3D%20SM_SHARED_BYTES%20%2F%2F%20shared_per_block%20if%20shared_per_block%20else%20SM_MAX_BLOCKS%0A%0A%20%20%20%20%23%203)%20warp%20%E6%95%B0%20%2F%20block%20%E6%95%B0%E7%A1%AC%E4%B8%8A%E9%99%90%0A%20%20%20%20lim_warps%20%3D%20SM_MAX_WARPS%20%2F%2F%20warps_per_block%0A%0A%20%20%20%20%23%20%E7%9C%9F%E6%AD%A3%E8%83%BD%E9%A9%BB%E7%95%99%E7%9A%84%20block%20%E6%95%B0%20%3D%20%E5%90%84%E9%99%90%E5%88%B6%E7%9A%84%E6%9C%80%E5%B0%8F%E5%80%BC%0A%20%20%20%20blocks%20%3D%20min(lim_reg%2C%20lim_shmem%2C%20lim_warps%2C%20SM_MAX_BLOCKS)%0A%20%20%20%20active_warps%20%3D%20blocks%20*%20warps_per_block%0A%20%20%20%20occ%20%3D%20active_warps%20%2F%20SM_MAX_WARPS%0A%0A%20%20%20%20print(f%22%E6%AF%8F%E7%BA%BF%E7%A8%8B%20%7Bregs_per_thread%7D%20%E5%AF%84%E5%AD%98%E5%99%A8%E3%80%81%E6%AF%8F%20block%20%7Bshared_per_block%7D%20B%20shared%E3%80%81%22%0A%20%20%20%20%20%20%20%20%20%20f%22%7Bthreads_per_block%7D%20%E7%BA%BF%E7%A8%8B%2Fblock%EF%BC%88%3D%20%7Bwarps_per_block%7D%20warp%EF%BC%89%22)%0A%20%20%20%20print(f%22%20%20%E9%99%90%E5%88%B6%E6%9D%A5%E6%BA%90%EF%BC%9A%E5%AF%84%E5%AD%98%E5%99%A8%E5%85%81%E8%AE%B8%20%7Blim_reg%7D%20block%EF%BC%8Cshared%20%E5%85%81%E8%AE%B8%20%7Blim_shmem%7D%20block%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20f%22warp%20%E4%B8%8A%E9%99%90%E5%85%81%E8%AE%B8%20%7Blim_warps%7D%20block%22)%0A%20%20%20%20print(f%22%20%20%E2%86%92%20%E5%AE%9E%E9%99%85%E9%A9%BB%E7%95%99%20%7Bblocks%7D%20%E4%B8%AA%20block%20%3D%20%7Bactive_warps%7D%20%E4%B8%AA%20warp%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20f%22occupancy%20%3D%20%7Bocc*100%3A.0f%7D%25%5Cn%22)%0A%20%20%20%20return%20occ%0A%0Aprint(%22A%EF%BC%9A%E5%AF%84%E5%AD%98%E5%99%A8%E5%90%83%E7%B4%A7%E7%9A%84%20kernel%EF%BC%88%E6%AF%8F%E7%BA%BF%E7%A8%8B%2064%20%E5%AF%84%E5%AD%98%E5%99%A8%EF%BC%89%22)%0Aoccupancy(regs_per_thread%3D64%2C%20shared_per_block%3D0%2C%20threads_per_block%3D256)%0A%0Aprint(%22B%EF%BC%9A%E6%8A%8A%E5%AF%84%E5%AD%98%E5%99%A8%E9%99%8D%E5%88%B0%2032%EF%BC%88%E6%AF%94%E5%A6%82%E5%B0%91%E7%94%A8%E4%B8%AD%E9%97%B4%E5%8F%98%E9%87%8F%20%2F%20%E5%8A%A0%20__launch_bounds__%EF%BC%89%22)%0Aoccupancy(regs_per_thread%3D32%2C%20shared_per_block%3D0%2C%20threads_per_block%3D256)"># occupancy 计算器：给定每线程/每 block 的资源用量与 SM 上限，算能驻留多少 warp
+WARP_SIZE = 32
+
+# 一个 SM 的硬件上限（取某数据中心级 GPU 的大致公开量级）
+SM_MAX_WARPS     = 64        # 每 SM 最多驻留的 warp 数
+SM_MAX_BLOCKS    = 32        # 每 SM 最多驻留的 block 数
+SM_REGISTERS     = 65536     # 每 SM 的寄存器总数
+SM_SHARED_BYTES  = 65536     # 每 SM 的 shared memory 字节数（这里取 64 KB）
+
+def occupancy(regs_per_thread, shared_per_block, threads_per_block):
+    warps_per_block = (threads_per_block + WARP_SIZE - 1) // WARP_SIZE
+
+    # 1) 寄存器限制：一个 block 用掉的寄存器 = 每线程寄存器 × block 线程数
+    regs_per_block = regs_per_thread * threads_per_block
+    lim_reg = SM_REGISTERS // regs_per_block if regs_per_block else SM_MAX_BLOCKS
+
+    # 2) shared memory 限制
+    lim_shmem = SM_SHARED_BYTES // shared_per_block if shared_per_block else SM_MAX_BLOCKS
+
+    # 3) warp 数 / block 数硬上限
+    lim_warps = SM_MAX_WARPS // warps_per_block
+
+    # 真正能驻留的 block 数 = 各限制的最小值
+    blocks = min(lim_reg, lim_shmem, lim_warps, SM_MAX_BLOCKS)
+    active_warps = blocks * warps_per_block
+    occ = active_warps / SM_MAX_WARPS
+
+    print(f"每线程 {regs_per_thread} 寄存器、每 block {shared_per_block} B shared、"
+          f"{threads_per_block} 线程/block（= {warps_per_block} warp）")
+    print(f"  限制来源：寄存器允许 {lim_reg} block，shared 允许 {lim_shmem} block，"
+          f"warp 上限允许 {lim_warps} block")
+    print(f"  → 实际驻留 {blocks} 个 block = {active_warps} 个 warp，"
+          f"occupancy = {occ*100:.0f}%\n")
+    return occ
+
+print("A：寄存器吃紧的 kernel（每线程 64 寄存器）")
+occupancy(regs_per_thread=64, shared_per_block=0, threads_per_block=256)
+
+print("B：把寄存器降到 32（比如少用中间变量 / 加 __launch_bounds__）")
+occupancy(regs_per_thread=32, shared_per_block=0, threads_per_block=256)</code></pre>
+  <div class="output" id="code1-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">A：寄存器吃紧的 kernel（每线程 64 寄存器）
+每线程 64 寄存器、每 block 0 B shared、256 线程/block（= 8 warp）
+  限制来源：寄存器允许 4 block，shared 允许 32 block，warp 上限允许 8 block
+  → 实际驻留 4 个 block = 32 个 warp，occupancy = 50%
+
+B：把寄存器降到 32（比如少用中间变量 / 加 __launch_bounds__）
+每线程 32 寄存器、每 block 0 B shared、256 线程/block（= 8 warp）
+  限制来源：寄存器允许 8 block，shared 允许 32 block，warp 上限允许 8 block
+  → 实际驻留 8 个 block = 64 个 warp，occupancy = 100%</code></pre>
+</div><p>A 里最&quot;抠门&quot;的资源是寄存器：<code>64 × 256 = 16384</code> 个寄存器一个 block，<code>65536 / 16384 = 4</code>，只挂得下 4 个 block、32 个 warp。B 把每线程寄存器减半，寄存器允许的 block 翻倍到 8，占用率就顶满了。请动手改：给 B 加上 <code>shared_per_block=16384</code>（每 block 要 16 KB shared memory），再运行——你会看到限制来源从寄存器变成了 shared memory（<code>65536/16384 = 4</code>），occupancy 又掉回 50%。这就是&quot;三种资源，谁先耗尽谁说了算&quot;的木桶效应。</p>
+<h2>怎么知道 kernel 用了多少寄存器？</h2>
+<p>上面的计算器要你填&quot;每线程寄存器数&quot;——这个数不是你猜的，是 <code>nvcc</code> 编译时确定并能打印出来的。加上 <code>-Xptxas -v</code>（把详细信息传给 PTX 汇编器）就能看到：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc -Xptxas -v -o app app.cu
+# 输出里会有类似：
+#   ptxas info : Used 32 registers, 16384 bytes smem, ...</code></pre>
+</div><p>如果某个 kernel 寄存器用超了、压低了 occupancy，你可以用 <code>__launch_bounds__</code> 给编译器一个承诺——&quot;我这个 kernel 每 block 最多开这么多线程、我希望每个 SM 至少驻留这么多 block&quot;，编译器会据此<strong>限制寄存器用量</strong>（宁可把多余的变量溢出到本地内存，也要保证 occupancy）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// __launch_bounds__(每 block 最大线程数, 期望每 SM 最少驻留 block 数)
+// 告诉编译器：请把寄存器控制在能让 SM 挂下 4 个 256 线程 block 的水平
+__global__ void __launch_bounds__(256, 4)
+myKernel(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; n) out[i] = in[i] * 2.0f + 1.0f;
+    // 编译器会尽量把寄存器压到 65536/(256*4) = 64 个以内
+}</code></pre>
+</div><div class="warn">
+<strong>别为了 occupancy 盲目压寄存器</strong>
+<code>__launch_bounds__</code> 强制降寄存器，代价是编译器可能把变量<strong>溢出（spill）到本地内存</strong>——本地内存其实在显存里，又慢又走带宽。结果 occupancy 上去了，却多了一堆访存，净亏。正确姿势是：先用 <code>-Xptxas -v</code> 看寄存器和 occupancy，再用第 16 章这两个模型判断瓶颈到底在不在 occupancy；确认在，再动 <code>__launch_bounds__</code>，并对比前后实测速度。凭感觉刷 occupancy 是新手最常见的浪费。
+</div><h2>把两把尺子合起来用</h2>
+<p>occupancy 和 Roofline 回答的是两个不同的问题，实战里要配合着用：</p>
+<ol>
+<li><strong>先用 Roofline 定方向</strong>：测 kernel 的算术强度，看它在脊点左边还是右边。左边（多数 kernel）→ 主攻访存；右边 → 主攻计算。再看实测性能离屋顶多远，判断还有没有空间。</li>
+<li><strong>再用 occupancy 排查&quot;延迟没藏住&quot;</strong>：如果 kernel 明明带宽受限，实测带宽却远没跑满，很可能是 occupancy 太低（寄存器爆了/block 太小），备胎 warp 不够，访存延迟没被掩盖。这时提 occupancy 有效。</li>
+<li><strong>occupancy 够用就停手</strong>：过半还慢，回到 Roofline 找真瓶颈，别再刷占用率。</li>
+</ol>
+<p>这套&quot;测强度 → 定方向 → 查 occupancy → 对比屋顶&quot;的流程，就是专业 GPU 优化的骨架。附录 C 会教你用真实的 profiler（Nsight Compute）自动测出这些数字，它甚至直接给你画好 Roofline 图。</p>
+<h2>小结与下一步</h2>
+<p>你现在手里有两把定量的尺子，不用再靠&quot;感觉这里慢&quot;来优化了。Roofline 告诉你 kernel 撞的是带宽墙还是算力墙、离天花板多远；occupancy 告诉你有没有挂够 warp 去掩盖延迟。而 Roofline 反复指向同一个结论：<strong>绝大多数 kernel 落在脊点左边，被带宽压制</strong>——所以下一步最值钱的杠杆，就是把访存优化到极致。</p>
+<p>下一章我们就把它彻底讲透：一个 warp 的 32 次访存怎么合并成一次大传输、shared memory 的 bank conflict 怎么让访存悄悄慢 32 倍、以及怎么用向量化加载一次搬更多字节。这是把带宽受限 kernel 真正提速的<strong>第一实战杠杆</strong>。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>occupancy</strong> = 实际驻留的活跃 warp ÷ SM 支持的最大 warp。它的作用是提供足够的备胎 warp <strong>掩盖访存延迟</strong>。</li>
+<li>限制 occupancy 的三种资源：<strong>每线程寄存器、每 block 的 shared memory、block 大小/硬上限</strong>，谁先耗尽谁说了算（木桶效应）。降寄存器常能显著拉高 occupancy。</li>
+<li><strong>100% 不是目标</strong>：够高到能掩盖延迟即可（常常 50% 就够）；盲目刷高常以多访存/寄存器溢出为代价，得不偿失。</li>
+<li><strong>Roofline 模型</strong>：可达性能 = min(峰值算力, 峰值带宽 × 算术强度)。斜屋顶（带宽）与平屋顶（算力）在<strong>脊点</strong>相交，脊点横坐标 = 峰值算力 ÷ 峰值带宽（本书那块卡是 20 FLOP/byte）。</li>
+<li>脊点<strong>左边 = 带宽受限</strong>（优化访存），<strong>右边 = 算力受限</strong>（优化计算）。多数真实 kernel 在左边。</li>
+<li>用 <code>nvcc -Xptxas -v</code> 看寄存器用量，用 <code>__launch_bounds__</code> 约束它——但要先确认瓶颈真在 occupancy，再动手。</content>
+</invoke></li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch15.html">← 第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a>
+  <a class="nav-next" href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

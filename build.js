@@ -42,22 +42,19 @@ function loadBooks() {
 let blockId = 0;
 const renderer = new marked.Renderer();
 
-// 把整段 C++ 源码打包进一个 Compiler Explorer 分享链接。
+// 把整段源码打包进一个 Compiler Explorer 分享链接。
 // 用 godbolt 的 clientstate（base64 的 JSON）方案：点开即带上代码、编译器、参数、面板。
-function godboltUrl(code, { asm = false } = {}) {
-  const compiler = "g142"; // x86-64 gcc 14.2
-  const options = "-std=c++23 -O2 -Wall" + (asm ? "" : "");
-  // 汇编视角展开 compiler 面板；普通视角额外展开一个 execution（运行）面板
+// language：godbolt 语言 id（"c++" / "cuda"）；compiler：编译器 id；
+// exec：是否额外展开"运行"面板（CUDA 默认只看编译产物 PTX，不强求 GPU 执行器）。
+function godboltUrl(code, { language = "c++", compiler = "g142", options = "-std=c++23 -O2 -Wall", exec = false } = {}) {
   const state = {
     sessions: [
       {
         id: 1,
-        language: "c++",
+        language,
         source: code,
         compilers: [{ id: compiler, options }],
-        executors: asm
-          ? []
-          : [{ compiler: { id: compiler, options }, wrap: true }],
+        executors: exec ? [{ compiler: { id: compiler, options }, wrap: true }] : [],
       },
     ],
   };
@@ -86,7 +83,7 @@ renderer.code = function (token) {
 
   if (lang === "cpp" || lang === "cpp-asm") {
     const asm = lang === "cpp-asm";
-    const url = godboltUrl(code, { asm });
+    const url = godboltUrl(code, { exec: !asm });
     const label = asm ? "🔬 看汇编 / 编译器处理" : "🔗 在 Compiler Explorer 打开";
     // 本地编译命令：把源码存成 main.cpp 后编译运行
     const buildCmd = "g++ -std=c++23 -O2 -Wall main.cpp && ./a.out";
@@ -98,22 +95,53 @@ renderer.code = function (token) {
 </div>`;
   }
 
-  const langClass =
-    lang === "python-norun"
-      ? "language-python"
-      : lang === "cpp-norun"
-        ? "language-cpp"
-        : lang
-          ? "language-" + lang
-          : "language-none";
-  const tag =
-    lang === "python-norun"
-      ? "Python"
-      : lang === "cpp-norun"
-        ? "C++"
-        : lang === "bash"
-          ? "终端"
-          : lang || "";
+  // ===== GPU 书专用代码块 =====
+  // 约定：
+  //   ```cuda      -> CUDA C++。godbolt 用 nvcc（默认看编译产物 PTX；GPU 执行器不稳，不强求运行）
+  //   ```cuda-ptx  -> 同上，标签强调"看 PTX / SASS"（讲编译器把 kernel 编成什么时用）
+  //   ```sycl      -> SYCL / DPC++。godbolt 用 icx + -fsycl（Intel oneAPI）
+  //   ```triton    -> Triton（Python DSL）。需 GPU，只高亮 + 本地命令
+  //   ```cutedsl   -> CUTLASS CuTe DSL（Python / C++）。需 GPU，只高亮 + 本地命令
+  // GPU 家族统一：右上角给"在 Compiler Explorer 打开"（若支持在线编译）+ 底部本地命令。
+  const gpuSpec = {
+    cuda:      { tag: "CUDA C++", prism: "language-cpp", gb: { language: "cuda", compiler: "nvcc129", options: "-std=c++20 -O3 --gpu-architecture=sm_90 -ptx" }, label: "🔗 在 Compiler Explorer 打开（看 PTX）", cmd: "nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app && ./app" },
+    "cuda-ptx":{ tag: "CUDA C++", prism: "language-cpp", gb: { language: "cuda", compiler: "nvcc129", options: "-std=c++20 -O3 --gpu-architecture=sm_90 -ptx" }, label: "🔬 看 PTX / 编译器处理", cmd: "nvcc -std=c++20 -O3 -arch=sm_90 --ptx main.cu -o main.ptx   # 生成 PTX 中间码" },
+    sycl:      { tag: "SYCL / DPC++", prism: "language-cpp", gb: { language: "c++", compiler: "icx202600", options: "-fsycl -O2 -std=c++20" }, label: "🔗 在 Compiler Explorer 打开", cmd: "icpx -fsycl -O2 -std=c++20 main.cpp -o app && ./app   # 需要 Intel oneAPI" },
+    triton:    { tag: "Triton (Python)", prism: "language-python", gb: null, label: "", cmd: "pip install triton torch   # 需要 NVIDIA GPU；然后：python main.py" },
+    cutedsl:   { tag: "CuTe DSL (Python)", prism: "language-python", gb: null, label: "", cmd: "pip install nvidia-cutlass-dsl torch   # 需要 NVIDIA GPU；然后：python main.py" },
+  };
+  if (gpuSpec[lang]) {
+    const s = gpuSpec[lang];
+    const btn = s.gb
+      ? `<a class="ce-btn" href="${godboltUrl(code, s.gb)}" target="_blank" rel="noopener">${s.label}</a>`
+      : "";
+    return `<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">${s.tag}</span>
+    ${btn}</div>
+  <pre class="line-numbers"><code class="${s.prism}">${escape(code)}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>${escape(s.cmd)}</code></div>
+</div>`;
+  }
+
+  // norun 变体：只高亮、不给按钮（片段、伪代码、需 GPU 的示范）
+  const norun = {
+    "python-norun": { prism: "language-python", tag: "Python" },
+    "cpp-norun":    { prism: "language-cpp", tag: "C++" },
+    "cuda-norun":   { prism: "language-cpp", tag: "CUDA C++" },
+    "sycl-norun":   { prism: "language-cpp", tag: "SYCL / DPC++" },
+    "triton-norun": { prism: "language-python", tag: "Triton (Python)" },
+    "cutedsl-norun":{ prism: "language-python", tag: "CuTe DSL (Python)" },
+  };
+  const langClass = norun[lang]
+    ? norun[lang].prism
+    : lang
+      ? "language-" + lang
+      : "language-none";
+  const tag = norun[lang]
+    ? norun[lang].tag
+    : lang === "bash"
+      ? "终端"
+      : lang || "";
   return `<div class="code-block">
   ${tag ? `<div class="code-head"><span class="lang-tag">${tag}</span></div>` : ""}
   <pre class="line-numbers"><code class="${langClass}">${escape(code)}</code></pre>

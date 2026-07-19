@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 15 章 CuTe DSL：Layout 与 Tensor 的代数</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li class="active"><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 15 章 CuTe DSL：Layout 与 Tensor 的代数</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章的 Triton 把"块内怎么摆数据"全替你决定了。这一章往<strong>下</strong>走一层，进入 <strong>CuTe</strong>——NVIDIA CUTLASS 库的核心抽象，以及它面向 Python 的 <strong>CuTe DSL</strong>。你要带走的核心只有一个词：<strong>Layout</strong>。</p>
+<p>Layout 是一套把<strong>逻辑坐标</strong>映射到<strong>内存偏移</strong>的正式代数，写作 <strong>(Shape, Stride)</strong>。听起来抽象，其实你在上一章手写 <code>row*stride_m + col*stride_n</code> 时已经用过它了——CuTe 只是把这个散落各处的下标算术，收拢成一个能<strong>组合、能推演</strong>的对象。你会亲手实现一个小小的 Layout 类，看清 <code>(shape, stride) → offset</code> 的算术，再看真实 CuTe DSL 的 API 长什么样。这套代数，正是 CUTLASS 和 FlashAttention 能榨干 Tensor Core 的地基。</p>
+</div><h2>从一个你天天写、却从没命名的东西说起</h2>
+<p>给你一个 <code>4×4</code> 的矩阵，行主序存在一维内存里。坐标 <code>(i, j)</code> 的元素在内存的第几个位置？你闭着眼都能写：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 行主序：一行 4 个元素连续摆放
+int offset = i * 4 + j;   // 第 i 行跳过 i*4 个元素，再往后数 j 个</code></pre>
+</div><p>那个 <code>4</code> 是什么？是<strong>跨一行要跳过多少个元素</strong>。如果换成列主序（一列连续摆放），就变成 <code>offset = i + j * 4</code>——那个 <code>4</code> 变成了<strong>跨一列要跳过多少个元素</strong>。这两个&quot;跳过多少&quot;的数，就是 <strong>步长（stride）</strong>。而矩阵的形状 <code>(4, 4)</code> 就是 <strong>形状（shape）</strong>。</p>
+<p>你已经在用它了，只是从没给它起名字。CuTe 做的第一件事，就是把这对 <code>(Shape, Stride)</code> 提升成一个头等对象——<strong>Layout</strong>：</p>
+<blockquote>
+<p><strong>Layout = (Shape, Stride)</strong>，它是一个函数，把逻辑坐标 <code>(i, j, ...)</code> 映射到线性内存偏移：
+<code>offset = i·stride₀ + j·stride₁ + ...</code></p>
+</blockquote>
+<div class="keypoint">
+<strong>一句话抓住 Layout</strong>
+<strong>Shape</strong> 说"逻辑上有多大"（<code>(4,4)</code>），<strong>Stride</strong> 说"每个维度走一步，物理内存跳多远"。给定坐标，偏移就是<strong>坐标和 stride 的点积</strong>：<code>offset = Σ coordᵢ · strideᵢ</code>。同一个逻辑形状，配不同的 stride，就得到行主序、列主序、转置、分块……<strong>所有内存布局，都是同一套代数里换一组 stride 而已。</strong></div><h2>同一个逻辑网格，两种 Stride，两种内存排布</h2>
+<p>把行主序和列主序画出来。逻辑上都是同一个 <code>4×4</code> 网格，坐标 <code>(i, j)</code> 一样；变的只是 stride，于是每个坐标落到的线性偏移完全不同。</p>
+<div class="concept">
+<svg viewBox="0 0 600 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="300" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">同一个逻辑 4×4 网格，坐标 (i,j) 相同</text>
+  <text x="300" y="40" text-anchor="middle" font-size="11" fill="#6b7280">格子里写的是该坐标映射到的线性内存偏移 offset</text>  <!-- 行主序 -->
+<p>  <text x="150" y="70" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">行主序 stride=(4,1)</text>
+  <text x="150" y="86" text-anchor="middle" font-size="10" fill="#6b7280">offset = i·4 + j·1</text>
+  <g font-family="monospace" font-size="12">
+    <!-- 4x4，值 0..15 行优先 -->
+    <g fill="#eef6ff" stroke="#2b6cb0">
+      <rect x="70" y="95" width="40" height="30"/><rect x="110" y="95" width="40" height="30"/><rect x="150" y="95" width="40" height="30"/><rect x="190" y="95" width="40" height="30"/>
+      <rect x="70" y="125" width="40" height="30"/><rect x="110" y="125" width="40" height="30"/><rect x="150" y="125" width="40" height="30"/><rect x="190" y="125" width="40" height="30"/>
+      <rect x="70" y="155" width="40" height="30"/><rect x="110" y="155" width="40" height="30"/><rect x="150" y="155" width="40" height="30"/><rect x="190" y="155" width="40" height="30"/>
+      <rect x="70" y="185" width="40" height="30"/><rect x="110" y="185" width="40" height="30"/><rect x="150" y="185" width="40" height="30"/><rect x="190" y="185" width="40" height="30"/>
+    </g>
+    <g fill="#2b6cb0" text-anchor="middle">
+      <text x="90" y="115">0</text><text x="130" y="115">1</text><text x="170" y="115">2</text><text x="210" y="115">3</text>
+      <text x="90" y="145">4</text><text x="130" y="145">5</text><text x="170" y="145">6</text><text x="210" y="145">7</text>
+      <text x="90" y="175">8</text><text x="130" y="175">9</text><text x="170" y="175">10</text><text x="210" y="175">11</text>
+      <text x="90" y="205">12</text><text x="130" y="205">13</text><text x="170" y="205">14</text><text x="210" y="205">15</text>
+    </g>
+  </g>
+  <text x="150" y="235" text-anchor="middle" font-size="10" fill="#6b7280">同一行连续（横着 +1）</text></p>
+  <!-- 列主序 -->
+<p>  <text x="450" y="70" text-anchor="middle" font-size="12" font-weight="bold" fill="#e06a3b">列主序 stride=(1,4)</text>
+  <text x="450" y="86" text-anchor="middle" font-size="10" fill="#6b7280">offset = i·1 + j·4</text>
+  <g font-family="monospace" font-size="12">
+    <g fill="#fff4ec" stroke="#e06a3b">
+      <rect x="370" y="95" width="40" height="30"/><rect x="410" y="95" width="40" height="30"/><rect x="450" y="95" width="40" height="30"/><rect x="490" y="95" width="40" height="30"/>
+      <rect x="370" y="125" width="40" height="30"/><rect x="410" y="125" width="40" height="30"/><rect x="450" y="125" width="40" height="30"/><rect x="490" y="125" width="40" height="30"/>
+      <rect x="370" y="155" width="40" height="30"/><rect x="410" y="155" width="40" height="30"/><rect x="450" y="155" width="40" height="30"/><rect x="490" y="155" width="40" height="30"/>
+      <rect x="370" y="185" width="40" height="30"/><rect x="410" y="185" width="40" height="30"/><rect x="450" y="185" width="40" height="30"/><rect x="490" y="185" width="40" height="30"/>
+    </g>
+    <g fill="#a53f1c" text-anchor="middle">
+      <text x="390" y="115">0</text><text x="430" y="115">4</text><text x="470" y="115">8</text><text x="510" y="115">12</text>
+      <text x="390" y="145">1</text><text x="430" y="145">5</text><text x="470" y="145">9</text><text x="510" y="145">13</text>
+      <text x="390" y="175">2</text><text x="430" y="175">6</text><text x="470" y="175">10</text><text x="510" y="175">14</text>
+      <text x="390" y="205">3</text><text x="430" y="205">7</text><text x="470" y="205">11</text><text x="510" y="205">15</text>
+    </g>
+  </g>
+  <text x="450" y="235" text-anchor="middle" font-size="10" fill="#6b7280">同一列连续（竖着 +1）</text></p>
+  <!-- 底部：同一份内存条 -->
+<p>  <text x="300" y="265" text-anchor="middle" font-size="11" fill="#374151">坐标 (1,2) 在两种 Layout 下落到不同偏移：行主序→6，列主序→9</text>
+  <rect x="70" y="278" width="460" height="26" rx="3" fill="#f3f4f6" stroke="#9ca3af"/>
+  <line x1="70" y1="278" x2="70" y2="304" stroke="#9ca3af"/>
+  <g font-family="monospace" font-size="9" fill="#6b7280" text-anchor="middle">
+    <text x="84" y="295">0</text><text x="426" y="295">... 6 ...</text><text x="484" y="295">... 9 ...</text><text x="516" y="295">15</text>
+  </g>
+  <text x="300" y="318" text-anchor="middle" font-size="9" fill="#9ca3af">一维物理内存（16 个元素）</text>
+</svg></p>
+<div class="caption">图 15-1　同一个逻辑 4×4 网格：行主序 stride=(4,1) 让同一行连续，列主序 stride=(1,4) 让同一列连续。坐标不变，换一组 stride，内存排布就完全不同——这就是 Layout 代数</div>
+</div><h2>为什么值得抽象成一个对象</h2>
+<p>你可能想：不就是 <code>i*N+j</code> 吗，散在代码里也没什么。问题恰恰在&quot;散&quot;。真实的高性能 kernel 里，同一份数据要被<strong>同时</strong>用好几种坐标系看待：全局张量的坐标、切给某个 block 的分块坐标、块内某个线程负责的坐标、喂进 Tensor Core 前的重排坐标……每一层都是一次坐标到偏移的映射。如果全用裸下标算术手写，代码会变成一团谁也不敢碰的魔法数。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">裸下标算术：散落各处的魔法数</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 每处访问都手写一遍，换个布局要全局改
+a[i * N + j]                      // 全局
+tile[(bi*BM+ti)*N + (bj*BN+tj)]   // 分块+块内
+smem[ti * BN + tj]                // shared memory 里又一套
+// 转置？swizzle？每处都要重推下标</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">Layout 对象：把映射封装起来，可组合</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python"># 每种视角是一个 Layout，坐标 -&gt; 偏移
+A     = Layout((M, N), (N, 1))     # 全局，行主序
+tile  = Layout((BM, BN), (N, 1))   # 一个分块的视角
+# 布局怎么变，都是换 stride / 组合 Layout
+# 访问统一写成 A(coord)，不再手推下标
+off = A((i, j))</code></pre>
+</div></div>
+</div><p>右边的好处不只是&quot;干净&quot;。因为 Layout 是对象，它能<strong>组合（compose）</strong>：一个&quot;把矩阵切成分块&quot;的 Layout，可以和一个&quot;块内怎么排&quot;的 Layout 复合，得到&quot;全局第几个元素&quot;的映射；一个&quot;线程到它负责的数据&quot;的映射（CuTe 里叫 <strong>TV，thread-value 划分</strong>）也是一个 Layout。<strong>分块、转置、swizzle、线程分工——在 CuTe 里全都是 Layout 的代数运算，同一套规则。</strong> 这就是 CUTLASS 能用一套通用代码逼近硬件峰值的原因：它不为每种情况手写下标，而是用 Layout 代数推导出来。</p>
+<h2>动手：亲手实现一个 Layout 类</h2>
+<p>理解 Layout 最快的路，是自己写一个。下面这段程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它只用标准库，实现一个 <code>Layout(shape, stride)</code>：核心就是那个 <code>__call__</code>，把坐标（或一维序号）映射成偏移。我们用它构造同一个 <code>4×4</code> 的行主序和列主序，打印偏移表，再演示<strong>分块作为组合</strong>——用一个&quot;块间 Layout&quot;加一个&quot;块内 Layout&quot;复现出分块遍历的全局偏移。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%BA%B2%E6%89%8B%E5%AE%9E%E7%8E%B0%20CuTe%20%E7%9A%84%E6%A0%B8%E5%BF%83%E6%8A%BD%E8%B1%A1%EF%BC%9ALayout(shape%2C%20stride)%20%E6%8A%8A%E5%9D%90%E6%A0%87%E6%98%A0%E5%B0%84%E5%88%B0%E5%86%85%E5%AD%98%E5%81%8F%E7%A7%BB%0Aclass%20Layout%3A%0A%20%20%20%20def%20__init__(self%2C%20shape%2C%20stride)%3A%0A%20%20%20%20%20%20%20%20assert%20len(shape)%20%3D%3D%20len(stride)%0A%20%20%20%20%20%20%20%20self.shape%20%3D%20shape%0A%20%20%20%20%20%20%20%20self.stride%20%3D%20stride%0A%0A%20%20%20%20def%20size(self)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E9%80%BB%E8%BE%91%E5%85%83%E7%B4%A0%E6%80%BB%E6%95%B0%20%3D%20%E5%90%84%E7%BB%B4%E4%B9%8B%E7%A7%AF%0A%20%20%20%20%20%20%20%20n%20%3D%201%0A%20%20%20%20%20%20%20%20for%20s%20in%20self.shape%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20n%20*%3D%20s%0A%20%20%20%20%20%20%20%20return%20n%0A%0A%20%20%20%20def%20coord_of(self%2C%20idx)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%80%E7%BB%B4%E9%80%BB%E8%BE%91%E5%BA%8F%E5%8F%B7%20-%3E%20%E5%A4%9A%E7%BB%B4%E5%9D%90%E6%A0%87%EF%BC%88%E8%A1%8C%E4%B8%BB%E5%BA%8F%E8%A7%A3%E8%AF%BB%EF%BC%89%0A%20%20%20%20%20%20%20%20coord%20%3D%20%5B%5D%0A%20%20%20%20%20%20%20%20for%20s%20in%20reversed(self.shape)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20coord.append(idx%20%25%20s)%0A%20%20%20%20%20%20%20%20%20%20%20%20idx%20%2F%2F%3D%20s%0A%20%20%20%20%20%20%20%20return%20tuple(reversed(coord))%0A%0A%20%20%20%20def%20__call__(self%2C%20coord)%3A%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%A0%B8%E5%BF%83%EF%BC%9A%E5%9D%90%E6%A0%87%20-%3E%20%E7%BA%BF%E6%80%A7%E5%86%85%E5%AD%98%E5%81%8F%E7%A7%BB%0A%20%20%20%20%20%20%20%20if%20isinstance(coord%2C%20int)%3A%20%20%20%20%20%20%20%20%23%20%E5%85%81%E8%AE%B8%E4%BC%A0%E4%B8%80%E7%BB%B4%E5%BA%8F%E5%8F%B7%EF%BC%8C%E5%85%88%E8%BD%AC%E6%88%90%E5%9D%90%E6%A0%87%0A%20%20%20%20%20%20%20%20%20%20%20%20coord%20%3D%20self.coord_of(coord)%0A%20%20%20%20%20%20%20%20off%20%3D%200%0A%20%20%20%20%20%20%20%20for%20c%2C%20st%20in%20zip(coord%2C%20self.stride)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20off%20%2B%3D%20c%20*%20st%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20offset%20%3D%20%CE%A3%20coord%E1%B5%A2%20%C2%B7%20stride%E1%B5%A2%0A%20%20%20%20%20%20%20%20return%20off%0A%0Adef%20print_offsets(name%2C%20layout)%3A%0A%20%20%20%20print(f%22%7Bname%7D%20%20shape%3D%7Blayout.shape%7D%20stride%3D%7Blayout.stride%7D%22)%0A%20%20%20%20rows%2C%20cols%20%3D%20layout.shape%0A%20%20%20%20for%20i%20in%20range(rows)%3A%0A%20%20%20%20%20%20%20%20line%20%3D%20%22%20%20%22.join(f%22%7Blayout((i%2C%20j))%3A2d%7D%22%20for%20j%20in%20range(cols))%0A%20%20%20%20%20%20%20%20print(%22%20%20%20%22%20%2B%20line)%0A%20%20%20%20print()%0A%0A%23%20%E5%90%8C%E4%B8%80%E4%B8%AA%E9%80%BB%E8%BE%91%204%C3%974%EF%BC%8C%E4%B8%A4%E7%A7%8D%20stride%0Arow_major%20%3D%20Layout((4%2C%204)%2C%20(4%2C%201))%20%20%20%20%23%20%E8%A1%8C%E4%B8%BB%E5%BA%8F%EF%BC%9A%E8%B7%A8%E8%A1%8C%E8%B7%B3%204%EF%BC%8C%E8%B7%A8%E5%88%97%E8%B7%B3%201%0Acol_major%20%3D%20Layout((4%2C%204)%2C%20(1%2C%204))%20%20%20%20%23%20%E5%88%97%E4%B8%BB%E5%BA%8F%EF%BC%9A%E8%B7%A8%E8%A1%8C%E8%B7%B3%201%EF%BC%8C%E8%B7%A8%E5%88%97%E8%B7%B3%204%0A%0Aprint(%22%E5%90%8C%E4%B8%80%E4%B8%AA%E9%80%BB%E8%BE%91%204%C3%974%EF%BC%8C%E5%9D%90%E6%A0%87%20(i%2Cj)%20%E8%90%BD%E5%88%B0%E7%9A%84%E7%BA%BF%E6%80%A7%E5%81%8F%E7%A7%BB%EF%BC%9A%5Cn%22)%0Aprint_offsets(%22%E8%A1%8C%E4%B8%BB%E5%BA%8F%20row-major%22%2C%20row_major)%0Aprint_offsets(%22%E5%88%97%E4%B8%BB%E5%BA%8F%20col-major%22%2C%20col_major)%0Aprint(%22%E5%9D%90%E6%A0%87%20(1%2C2)%EF%BC%9A%22%2C%20%22%E8%A1%8C%E4%B8%BB%E5%BA%8F%20-%3E%22%2C%20row_major((1%2C%202))%2C%20%22%20%E5%88%97%E4%B8%BB%E5%BA%8F%20-%3E%22%2C%20col_major((1%2C%202)))%0A%0A%23%20%E5%88%86%E5%9D%97%E4%BD%9C%E4%B8%BA%E7%BB%84%E5%90%88%EF%BC%9A%E6%8A%8A%204%C3%974%20%E7%9C%8B%E6%88%90%202%C3%972%20%E4%B8%AA%202%C3%972%20%E7%9A%84%E5%9D%97%0A%23%20%E5%9D%97%E9%97%B4%20Layout%EF%BC%9A2%C3%972%20%E4%B8%AA%E5%9D%97%EF%BC%8C%E5%9D%97%E4%B8%8E%E5%9D%97%E4%B9%8B%E9%97%B4%E5%9C%A8%E8%A1%8C%E4%B8%BB%E5%BA%8F%E5%86%85%E5%AD%98%E9%87%8C%E7%9A%84%E5%9F%BA%E5%9D%80%E6%AD%A5%E9%95%BF%E6%98%AF%20(8%2C%202)%0A%23%20%E5%9D%97%E5%86%85%20Layout%EF%BC%9A%E6%AF%8F%E5%9D%97%202%C3%972%EF%BC%8C%E5%9C%A8%E5%90%8C%E4%B8%80%E4%BB%BD%E8%A1%8C%E4%B8%BB%E5%BA%8F%E5%86%85%E5%AD%98%E9%87%8C%E6%AD%A5%E9%95%BF%E6%98%AF%20(4%2C%201)%0Aprint(%22%5Cn%E6%8A%8A%204%C3%974%20%E6%8C%89%202%C3%972%20%E5%88%86%E5%9D%97%EF%BC%8C%E7%94%A8%E3%80%8E%E5%9D%97%E9%97%B4%20%2B%20%E5%9D%97%E5%86%85%E3%80%8F%E4%B8%A4%E4%B8%AA%20Layout%20%E7%BB%84%E5%90%88%E5%87%BA%E5%85%A8%E5%B1%80%E5%81%8F%E7%A7%BB%EF%BC%9A%22)%0Atile_between%20%3D%20Layout((2%2C%202)%2C%20(8%2C%202))%20%20%20%23%20%E5%9D%97(Ti%2CTj)%20%E7%9A%84%E5%9F%BA%E5%9D%80%0Atile_inner%20%20%20%3D%20Layout((2%2C%202)%2C%20(4%2C%201))%20%20%20%23%20%E5%9D%97%E5%86%85(i%2Cj)%20%E7%9B%B8%E5%AF%B9%E5%9F%BA%E5%9D%80%E7%9A%84%E5%81%8F%E7%A7%BB%0Afor%20Ti%20in%20range(2)%3A%0A%20%20%20%20for%20Tj%20in%20range(2)%3A%0A%20%20%20%20%20%20%20%20base%20%3D%20tile_between((Ti%2C%20Tj))%0A%20%20%20%20%20%20%20%20offs%20%3D%20%5Bbase%20%2B%20tile_inner((i%2C%20j))%20for%20i%20in%20range(2)%20for%20j%20in%20range(2)%5D%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E5%9D%97(%7BTi%7D%2C%7BTj%7D)%20%E5%9F%BA%E5%9D%80%20%7Bbase%3A2d%7D%20-%3E%20%E5%9D%97%E5%86%85%204%20%E4%B8%AA%E5%85%83%E7%B4%A0%E5%85%A8%E5%B1%80%E5%81%8F%E7%A7%BB%20%7Boffs%7D%22)"># 亲手实现 CuTe 的核心抽象：Layout(shape, stride) 把坐标映射到内存偏移
+class Layout:
+    def __init__(self, shape, stride):
+        assert len(shape) == len(stride)
+        self.shape = shape
+        self.stride = stride
+
+    def size(self):                       # 逻辑元素总数 = 各维之积
+        n = 1
+        for s in self.shape:
+            n *= s
+        return n
+
+    def coord_of(self, idx):              # 一维逻辑序号 -&gt; 多维坐标（行主序解读）
+        coord = []
+        for s in reversed(self.shape):
+            coord.append(idx % s)
+            idx //= s
+        return tuple(reversed(coord))
+
+    def __call__(self, coord):            # 核心：坐标 -&gt; 线性内存偏移
+        if isinstance(coord, int):        # 允许传一维序号，先转成坐标
+            coord = self.coord_of(coord)
+        off = 0
+        for c, st in zip(coord, self.stride):
+            off += c * st                 # offset = Σ coordᵢ · strideᵢ
+        return off
+
+def print_offsets(name, layout):
+    print(f"{name}  shape={layout.shape} stride={layout.stride}")
+    rows, cols = layout.shape
+    for i in range(rows):
+        line = "  ".join(f"{layout((i, j)):2d}" for j in range(cols))
+        print("   " + line)
+    print()
+
+# 同一个逻辑 4×4，两种 stride
+row_major = Layout((4, 4), (4, 1))    # 行主序：跨行跳 4，跨列跳 1
+col_major = Layout((4, 4), (1, 4))    # 列主序：跨行跳 1，跨列跳 4
+
+print("同一个逻辑 4×4，坐标 (i,j) 落到的线性偏移：\n")
+print_offsets("行主序 row-major", row_major)
+print_offsets("列主序 col-major", col_major)
+print("坐标 (1,2)：", "行主序 -&gt;", row_major((1, 2)), " 列主序 -&gt;", col_major((1, 2)))
+
+# 分块作为组合：把 4×4 看成 2×2 个 2×2 的块
+# 块间 Layout：2×2 个块，块与块之间在行主序内存里的基址步长是 (8, 2)
+# 块内 Layout：每块 2×2，在同一份行主序内存里步长是 (4, 1)
+print("\n把 4×4 按 2×2 分块，用『块间 + 块内』两个 Layout 组合出全局偏移：")
+tile_between = Layout((2, 2), (8, 2))   # 块(Ti,Tj) 的基址
+tile_inner   = Layout((2, 2), (4, 1))   # 块内(i,j) 相对基址的偏移
+for Ti in range(2):
+    for Tj in range(2):
+        base = tile_between((Ti, Tj))
+        offs = [base + tile_inner((i, j)) for i in range(2) for j in range(2)]
+        print(f"  块({Ti},{Tj}) 基址 {base:2d} -&gt; 块内 4 个元素全局偏移 {offs}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">同一个逻辑 4×4，坐标 (i,j) 落到的线性偏移：
+
+行主序 row-major  shape=(4, 4) stride=(4, 1)
+    0   1   2   3
+    4   5   6   7
+    8   9  10  11
+   12  13  14  15
+
+列主序 col-major  shape=(4, 4) stride=(1, 4)
+    0   4   8  12
+    1   5   9  13
+    2   6  10  14
+    3   7  11  15
+
+坐标 (1,2)： 行主序 -&gt; 6  列主序 -&gt; 9
+
+把 4×4 按 2×2 分块，用『块间 + 块内』两个 Layout 组合出全局偏移：
+  块(0,0) 基址  0 -&gt; 块内 4 个元素全局偏移 [0, 1, 4, 5]
+  块(0,1) 基址  2 -&gt; 块内 4 个元素全局偏移 [2, 3, 6, 7]
+  块(1,0) 基址  8 -&gt; 块内 4 个元素全局偏移 [8, 9, 12, 13]
+  块(1,1) 基址 10 -&gt; 块内 4 个元素全局偏移 [10, 11, 14, 15]</code></pre>
+</div><p>停下来盯着最后四行看。四个块加起来正好覆盖了 <code>0..15</code> 全部 16 个偏移，一个不重不漏——但顺序被重排了：块 <code>(0,0)</code> 拿到的是内存里的 <code>0,1,4,5</code>（原矩阵左上角那个 <code>2×2</code>）。我们<strong>没有搬动任何数据</strong>，只是用&quot;块间 Layout&quot;定基址、&quot;块内 Layout&quot;定块内偏移，两者<strong>组合</strong>出了分块视角。这就是 CuTe 里 Layout 组合的精髓：<code>tiling</code>、<code>partition</code> 都是这种复合，同一套 <code>(shape, stride)</code> 代数。请动手改：把 <code>col_major</code> 的 stride 改成 <code>(1, 4)</code> 以外的值（比如 <code>(2, 8)</code> 表示每个逻辑元素间隔 2 个物理槽位），看偏移表怎么变——你会更直观地感到&quot;stride 决定一切&quot;。</p>
+<div class="note">
+<strong>这和上一章的联系</strong>
+还记得上一章 Triton 二维 kernel 里的 <code>row[:, None] * stride_m + col[None, :] * stride_n</code> 吗？那正是一次 <code>Layout((BLOCK_M, BLOCK_N), (stride_m, stride_n))</code> 的求值。区别在于：Triton 里 stride 是你临时手写的裸算术，块内布局由编译器决定；而 CuTe 把它变成头等对象，让你能<strong>组合</strong>它、<strong>推演</strong>它，从而精确掌控从全局内存到寄存器、再到 Tensor Core 的每一层数据布局。</div><h2>cute.Tensor：指针 + Layout</h2>
+<p>有了 Layout，CuTe 的**张量（Tensor）**就顺理成章：</p>
+<blockquote>
+<p><strong>cute.Tensor = 一个数据指针（engine）+ 一个 Layout。</strong></p>
+</blockquote>
+<p>Layout 负责&quot;坐标 → 偏移&quot;，指针负责&quot;偏移 → 真实内存地址&quot;，两者一合，<code>tensor(i, j)</code> 就能取到元素。这个拆分很关键：<strong>逻辑形状/布局和物理存储解耦</strong>了。同一块显存，套不同的 Layout，就是不同的张量视图（转置、切片、分块），全程零数据搬动——只是换了个&quot;怎么解读这块内存&quot;的规则。这正是 FlashAttention 那类 kernel 反复对同一块 shared memory 换视角、喂给 Tensor Core 的底层机制。</p>
+<h2>真实的 CuTe DSL 长什么样</h2>
+<p>上面的 Python 类是为了讲清原理。真实世界里，你用 NVIDIA 官方的 <strong>CuTe DSL</strong>（<code>pip install nvidia-cutlass-dsl</code>，模块名 <code>cutlass.cute</code>）在 Python 里直接写这套代数，它会编译成在 GPU 上跑的代码。API 的味道和你刚实现的那个类几乎一一对应——<code>make_layout</code> 造 Layout、<code>make_tensor</code> 把指针和 Layout 绑成张量、<code>print_layout</code> 打印出来看：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CuTe DSL (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># 需要 GPU 与 nvidia-cutlass-dsl 安装：pip install nvidia-cutlass-dsl
+import cutlass
+import cutlass.cute as cute
+
+@cute.jit
+def show_layouts():
+    # make_layout(shape, stride=...)：和你手写的 Layout(shape, stride) 一个意思
+    # 行主序 4×4：跨行跳 4，跨列跳 1
+    row_major = cute.make_layout((4, 4), stride=(4, 1))
+    # 列主序 4×4：跨行跳 1，跨列跳 4
+    col_major = cute.make_layout((4, 4), stride=(1, 4))
+
+    cute.printf("row-major (i,j)-&gt;offset:")
+    cute.print_layout(row_major)          # 打印形状、步长与偏移表
+    cute.printf("col-major (i,j)-&gt;offset:")
+    cute.print_layout(col_major)
+
+    # 坐标求值：等价于我们的 layout((1, 2))
+    cute.printf("row_major(1,2) = {}", row_major((1, 2)))   # -&gt; 6
+    cute.printf("col_major(1,2) = {}", col_major((1, 2)))   # -&gt; 9
+
+    # 分块：用 tiler 把大 Layout 切成块视角——对应我们手写的『块间+块内』组合
+    tiled = cute.tiled_divide(row_major, (2, 2))
+    cute.print_layout(tiled)
+
+# cute.Tensor = 指针(engine) + Layout。真实代码里通常这样绑：
+#   ptr = cute.make_ptr(cutlass.Float32, gmem_address)
+#   t   = cute.make_tensor(ptr, cute.make_layout((M, N), stride=(N, 1)))
+#   x   = t[(i, j)]   # Layout 把 (i,j) 变偏移，engine 再变真实地址
+
+show_layouts()</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pip install nvidia-cutlass-dsl torch   # 需要 NVIDIA GPU；然后：python main.py</code></div>
+</div><p>API 细节（函数名、切分算子）随 CUTLASS 版本可能微调，以官方文档为准；但<strong>心智模型是稳定的</strong>：<code>Layout = (Shape, Stride)</code> 是坐标到偏移的函数，<code>Tensor = 指针 + Layout</code>，一切分块/转置/线程分工都是 Layout 的代数。你手写的那个几十行的 Python 类，已经抓住了它的灵魂。</p>
+<div class="keypoint">
+<strong>给 CuTe 定位：它在整个技术栈的哪一层</strong>
+<strong>Triton</strong>（第 13、14 章）：你操作块和张量片，块内布局由编译器决定——高层、好写、放弃精细控制。<strong>CuTe DSL</strong>（本章）：你用 Layout 代数<strong>亲手</strong>描述每一层数据布局，能精确驾驭 shared memory 排布、避免 bank conflict、把数据以 Tensor Core 要的形状喂进去、用 TMA 异步搬运（第 19 章）——低层、更难、换来极致性能。CUTLASS、FlashAttention 这些逼近硬件峰值的库，正是建在 CuTe 之上。选 Triton 还是 CuTe，就是在<strong>开发效率</strong>和<strong>控制粒度</strong>之间做权衡。</div><div class="warn">
+<strong>别一上来就用 CuTe</strong>
+CuTe 的威力全在"精确控制"，而精确控制只有当你<strong>确知瓶颈在数据布局</strong>时才值得。大多数融合、逐元素、乃至不少矩阵乘，Triton 已经够快且快得多写出来。CuTe 是给你已经用第 16 章的性能模型定位到"卡在 shared memory 布局 / Tensor Core 喂数"这类问题、且愿意为最后百分之几的峰值付出复杂度时准备的。<strong>先会读它、理解 Layout 代数，比急着手写一个 CuTe kernel 更重要。</strong></div><h2>小结与下一步</h2>
+<p>你现在握住了 CuTe 的钥匙——<strong>Layout</strong>。它把你天天在写、却从没命名的下标算术 <code>i*stride₀ + j*stride₁</code>，提升成一个能组合、能推演的正式对象 <code>(Shape, Stride)</code>。同一个逻辑形状换一组 stride 就是行主序、列主序、转置；两个 Layout 组合就是分块、线程分工。<code>Tensor = 指针 + Layout</code>，让逻辑布局和物理存储彻底解耦。这套代数，就是 CUTLASS 和 FlashAttention 逼近 Tensor Core 峰值的地基，也是 CuTe DSL 让你在 Python 里能触碰的东西。</p>
+<p>我们已经把四大技术（CUDA、SYCL、Triton、CuTe DSL）都过了一遍，你手里有了从&quot;贴着硬件&quot;到&quot;块级抽象&quot;的全套工具。但工具再多，也得知道<strong>往哪儿用力</strong>。下一章进入本书的性能部分：怎么定量判断一个 kernel 到底卡在哪、还有多少余量——<strong>occupancy、带宽与 Roofline 模型</strong>。第 3 章那句&quot;多数 kernel 卡在带宽上&quot;，到那里会变成一张能读、能算、能指导优化的图。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>Layout = (Shape, Stride)</strong>，是把逻辑坐标映射到内存偏移的函数：<code>offset = Σ coordᵢ · strideᵢ</code>。<strong>Shape</strong> 说逻辑多大，<strong>Stride</strong> 说每维走一步跳多远。</li>
+<li>同一个逻辑形状，换一组 <strong>stride</strong> 就得到行主序 <code>(N,1)</code>、列主序 <code>(1,N)</code>、转置、分块……<strong>所有内存布局都是同一套代数换 stride</strong>。</li>
+<li>Layout 的威力在于<strong>可组合</strong>：分块（tiling）、转置、swizzle、线程到数据的 <strong>TV 划分</strong>，全是 Layout 的代数运算——这让 CUTLASS 能用一套通用代码逼近硬件峰值，而不必手写每种情况的下标。</li>
+<li><strong>cute.Tensor = 指针（engine）+ Layout</strong>，让逻辑布局与物理存储解耦：同一块内存套不同 Layout 就是不同视图，零数据搬动。</li>
+<li>CuTe 比 Triton <strong>低一层</strong>：Triton 让编译器决定块内布局，CuTe 让你用 Layout 代数亲手控制到 shared memory、Tensor Core、TMA（第 19 章）——换来极致性能，代价是复杂度。</li>
+<li>真实 CuTe DSL（<code>cutlass.cute</code>）用 <code>make_layout</code>、<code>make_tensor</code>、<code>print_layout</code> 把这套代数搬进 Python；API 细节随版本变，但 <code>(Shape, Stride) → offset</code> 的心智模型稳定。</content>
+</invoke></li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch14.html">← 第 14 章 Triton 进阶：算子融合与自动调优</a>
+  <a class="nav-next" href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

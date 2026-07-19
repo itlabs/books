@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 C 读懂 GPU 报错与用好 profiler</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li class="active"><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 C 读懂 GPU 报错与用好 profiler</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>GPU 的报错有一种特有的恶意：错误常常<strong>不在出错的那一行报出来</strong>，而是拖到下一次同步时才浮现，信息还含糊。这一节先教你把最常见的几条 CUDA 报错<strong>翻译成人话</strong>，再给你一个"永远检查错误"的宏和 <strong>compute-sanitizer</strong>，最后讲清两个 profiler——<strong>Nsight Systems</strong> 看全局、<strong>Nsight Compute</strong> 看单核——各自回答什么问题。</p>
+<p>读完你会有一套可复制的排错与调优工作流：<strong>先测量，定位瓶颈，再动手优化</strong>，而不是凭感觉瞎改。</p>
+</div><h2>常见 CUDA 报错，以及它们<em>真正</em>的意思</h2>
+<p>CUDA 的错误码字面往往很泛。下面几条占了新手报错的绝大多数，逐一拆开。</p>
+<h3>&quot;an illegal memory access was encountered&quot;</h3>
+<p>这是最常见、也最让人抓狂的一条，几乎总是<strong>越界访问</strong>——线程算出的下标超出了数组范围，读/写到了不属于它的显存。典型成因：</p>
+<ul>
+<li>kernel 里漏了边界检查 <code>if (i &lt; n)</code>，最后一个 block 的部分线程算出的 <code>i ≥ n</code>；</li>
+<li>下标计算写错（把 <code>blockDim</code> 打成 <code>gridDim</code>，或行列写反）；</li>
+<li>传进 kernel 的指针没 <code>cudaMalloc</code> 或已经 <code>cudaFree</code>。</li>
+</ul>
+<div class="warn">
+<strong>异步陷阱：报错的行往往<em>不是</em>出错的行</strong>
+kernel 启动是<strong>异步</strong>的：CPU 发出 <code>kernel&lt;&lt;&lt;&gt;&gt;&gt;</code> 后立刻返回去干别的，kernel 在 GPU 上慢慢跑。所以 kernel 内部的非法访问<strong>不会</strong>在启动那一行报出来，而是拖到下一次<strong>同步点</strong>（<code>cudaDeviceSynchronize()</code>、<code>cudaMemcpy()</code> 等）才被发现并报出。结果就是：报错指向一句看起来无辜的 <code>cudaMemcpy</code>，真正的凶手却是几行之前那个 kernel。<strong>不理解这一点，你会在错误的地方找错误。</strong>
+</div><p>破解异步陷阱的办法只有一个：<strong>每一步 CUDA 调用都检查返回值</strong>，并在 kernel 后主动同步。这就是几乎所有 CUDA 代码都会有的 CHECK 宏：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 放在头文件里，所有 CUDA 调用都用它包起来
+#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+
+#define CHECK(call)                                                      \
+    do {                                                                 \
+        cudaError_t err = (call);                                        \
+        if (err != cudaSuccess) {                                        \
+            fprintf(stderr, "CUDA 错误 %s:%d: %s\n",                     \
+                    __FILE__, __LINE__, cudaGetErrorString(err));        \
+            exit(EXIT_FAILURE);                                          \
+        }                                                                \
+    } while (0)
+
+// kernel 没有返回值，单独检查启动错误 + 同步错误：
+#define CHECK_KERNEL()                                                   \
+    do {                                                                 \
+        CHECK(cudaGetLastError());        /* 捕获启动配置错误（同步报出）*/\
+        CHECK(cudaDeviceSynchronize());   /* 等 kernel 跑完，捕获运行期错误 */\
+    } while (0)
+
+// 用法：
+//   CHECK(cudaMalloc(&amp;d_a, bytes));
+//   add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(d_c, d_a, d_b, N);
+//   CHECK_KERNEL();     // 越界访问会在这里、而不是下一个 memcpy 报出</code></pre>
+</div><p><code>cudaGetLastError()</code> 抓的是<strong>启动配置</strong>类错误（下面 &quot;invalid configuration&quot;），<code>cudaDeviceSynchronize()</code> 之后再查一次，抓的是 kernel <strong>运行期</strong>错误（越界等）。两个都查，报错就落在离凶手最近的地方。</p>
+<h3>&quot;invalid configuration argument&quot;</h3>
+<p>启动配置非法，几乎都出在 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code> 的尺寸上：</p>
+<ul>
+<li><strong>每个 block 的线程数 &gt; 1024</strong>（当前架构的硬上限就是 1024，是 x×y×z 的乘积）；</li>
+<li>某一维为 0（比如 <code>(N + threads - 1) / threads</code> 里 <code>threads</code> 意外为 0）；</li>
+<li>grid/block 维度超出设备允许的最大值。</li>
+</ul>
+<p>对策：把 block 大小固定在 128/256/512 这类合理值，grid 用 <code>(N + block - 1) / block</code> 向上取整，别让任何一维为 0。</p>
+<h3>&quot;out of memory&quot;</h3>
+<p><code>cudaMalloc</code> 申请不到那么多显存。常见于：数据集比显存大、忘了 <code>cudaFree</code> 导致泄漏累积、或同一进程里别的框架（PyTorch 等）已经占满了显存。用 <code>nvidia-smi</code> 看当前占用；分批处理数据；确保每个 <code>cudaMalloc</code> 都有对应的 <code>cudaFree</code>。</p>
+<h3>&quot;too many resources requested for launch&quot;</h3>
+<p>这条很有迷惑性——它<strong>不是</strong>内存不够，而是<strong>寄存器或 shared memory 不够</strong>。每个 SM 的寄存器堆和 shared memory 是固定的，要在驻留的所有线程间分。如果你的 kernel 每线程用了很多寄存器，又开了很大的 block，<code>每线程寄存器数 × block 线程数</code> 就可能超过一个 SM 能给的额度，于是启动失败。</p>
+<p>对策（详见第 16 章 occupancy）：<strong>减小 block 大小</strong>、用 <code>nvcc --ptxas-options=-v</code> 查看每线程寄存器用量、必要时用 <code>__launch_bounds__</code> 限制寄存器、或减少 kernel 里的局部变量/循环展开。这正是第 16 章&quot;寄存器压力 vs block 大小&quot;权衡的现实表现。</p>
+<h2>compute-sanitizer：显存与竞争的照妖镜</h2>
+<p><code>compute-sanitizer</code>（旧称 <code>cuda-memcheck</code>）是 CUDA Toolkit 自带的动态检查工具，它把上面那些含糊的报错变成<strong>精确到源码行</strong>的诊断。它有几个子工具：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># memcheck（默认）：检测越界访问、非法地址、未初始化访问
+compute-sanitizer ./myapp
+# 加 --tool 明确指定：
+compute-sanitizer --tool memcheck ./myapp
+
+# racecheck：检测 shared memory 上的数据竞争（漏写 __syncthreads 的经典 bug）
+compute-sanitizer --tool racecheck ./myapp
+
+# synccheck：检测 barrier 用法错误（比如分歧的线程里调用 __syncthreads）
+compute-sanitizer --tool synccheck ./myapp
+
+# initcheck：检测读取了未初始化的全局内存
+compute-sanitizer --tool initcheck ./myapp</code></pre>
+</div><div class="keypoint">
+<strong>遇到 "illegal memory access" 的标准动作</strong>
+别盯着源码干瞪眼——直接 <code>compute-sanitizer ./myapp</code>。它会告诉你<strong>哪个 kernel、哪一行、哪个线程</strong>越了界，以及读还是写。配合上面的 CHECK 宏，越界 bug 通常几分钟就能定位。用 <code>nvcc -G -g</code> 编译带上调试信息，报告还能给出源码行号。
+</div><p><code>racecheck</code> 尤其值得一提：shared memory 上&quot;写了没同步就读&quot;的数据竞争（第 8、11 章反复警告的坑）在 CPU 上无从检测，<code>racecheck</code> 是最直接的手段——它会指出两个冲突的访问和缺失的 barrier。</p>
+<h2>两个 profiler：Nsight Systems 看全局，Nsight Compute 看单核</h2>
+<p>代码正确之后是<strong>性能</strong>。NVIDIA 的现代 profiler 分两个，回答的问题层次不同，别用错：</p>
+<div class="concept">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">两个 profiler，两个层次</text>
+  <!-- Nsight Systems: timeline -->
+  <rect x="20" y="35" width="520" height="90" rx="8" fill="#f7fbff" stroke="#2b6cb0"/>
+  <text x="35" y="54" font-size="12" font-weight="bold" fill="#2b6cb0">Nsight Systems（nsys）：整条时间线</text>
+  <!-- timeline bars -->
+  <rect x="35" y="64" width="120" height="16" rx="2" fill="#e06a3b"/><text x="95" y="76" text-anchor="middle" font-size="9" fill="#fff">H2D 拷贝</text>
+  <rect x="160" y="64" width="70" height="16" rx="2" fill="#2b6cb0"/><text x="195" y="76" text-anchor="middle" font-size="9" fill="#fff">kernel</text>
+  <rect x="235" y="64" width="110" height="16" rx="2" fill="#e06a3b"/><text x="290" y="76" text-anchor="middle" font-size="9" fill="#fff">D2H 拷贝</text>
+  <rect x="350" y="64" width="60" height="16" rx="2" fill="#2b6cb0"/><text x="380" y="76" text-anchor="middle" font-size="9" fill="#fff">kernel</text>
+  <text x="35" y="104" font-size="10" fill="#6b7280">看：是搬数据慢还是算慢？kernel 之间有空档吗？拷贝和计算重叠了吗？</text>
+  <text x="35" y="118" font-size="10" fill="#6b7280">回答"整体瓶颈在哪一段"——先用它。</text>
+  <!-- Nsight Compute: single kernel deep dive -->
+  <rect x="20" y="135" width="520" height="100" rx="8" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="35" y="154" font-size="12" font-weight="bold" fill="#2f7a45">Nsight Compute（ncu）：单个 kernel 解剖</text>
+  <text x="45" y="174" font-size="10" fill="#2f7a45">• occupancy（占用率，第 16 章）</text>
+  <text x="300" y="174" font-size="10" fill="#2f7a45">• 内存吞吐 / 是否合并访问（第 17 章）</text>
+  <text x="45" y="192" font-size="10" fill="#2f7a45">• shared memory bank conflict（第 17 章）</text>
+  <text x="300" y="192" font-size="10" fill="#2f7a45">• 计算 vs 访存 谁是瓶颈（Roofline）</text>
+  <text x="45" y="212" font-size="10" fill="#2f7a45">• warp 停顿原因分解</text>
+  <text x="35" y="228" font-size="10" fill="#6b7280">回答"这个具体 kernel 为什么慢"——定位到某 kernel 后再用它。</text>
+</svg>
+<div class="caption">图 C-1　先用 Nsight Systems 看整条时间线找到最耗时的那一段，再用 Nsight Compute 深挖那个具体 kernel 的微观指标</div>
+</div><h3>Nsight Systems（nsys）：这是传输受限还是计算受限？</h3>
+<p><code>nsys</code> 给你一条<strong>全应用的时间线</strong>：CPU 在干什么、数据拷贝（H2D/D2H）花了多久、各个 kernel 什么时候跑、它们之间有没有空档、拷贝和计算有没有重叠。它回答的是<strong>宏观</strong>问题：</p>
+<ul>
+<li>时间到底花在<strong>搬数据</strong>（PCIe 拷贝）还是<strong>算</strong>（kernel）上？如果一大半时间在拷贝，优化 kernel 内部毫无意义——该做的是减少拷贝、用 pinned memory 或让拷贝与计算重叠（第 3 章那个警告的量化版）。</li>
+<li>kernel 之间有大片空档吗？可能是 CPU 端拖后腿或同步过多。</li>
+<li>多个 stream 的 kernel 真的<strong>并行</strong>了吗？</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 采集一次运行的时间线，生成报告文件
+nsys profile -o report ./myapp
+# 命令行看摘要（也可用 Nsight Systems GUI 打开 report.nsys-rep 看可视化时间线）
+nsys stats report.nsys-rep</code></pre>
+</div><h3>Nsight Compute（ncu）：这个 kernel 为什么慢？</h3>
+<p>一旦 <code>nsys</code> 告诉你&quot;就是这个 kernel 占了 80% 时间&quot;，换 <code>ncu</code> 对<strong>单个 kernel</strong>做显微镜级剖析。它给出的正是本书第 16、17 章讲过的那些指标：</p>
+<ul>
+<li><strong>occupancy（占用率）</strong>：实际驻留的 warp 数 / 硬件上限，太低说明并行度不够掩盖延迟（第 16 章）；</li>
+<li><strong>memory throughput</strong>：实测显存带宽利用率，配合 Roofline 判断是不是 memory-bound；</li>
+<li><strong>是否合并访问（coalescing）</strong>：访存效率、每次事务搬了多少有用字节（第 17 章）；</li>
+<li><strong>shared memory bank conflict</strong>：共享内存访问是否撞 bank 而被串行化（第 17 章）；</li>
+<li><strong>warp 停顿原因</strong>：warp 大多卡在等内存、等依赖、还是等 barrier。</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 剖析全部 kernel（会显著拖慢运行，属正常）
+ncu -o report ./myapp
+# 只剖析感兴趣的 kernel，跑指定次数，收集完整指标集
+ncu --set full -k add -c 1 ./myapp
+# 直接在终端打印，不生成文件
+ncu ./myapp</code></pre>
+</div><div class="note">
+<strong>为什么 profiler 跑起来那么慢</strong>
+<code>ncu</code> 为了采集精确指标会<strong>重放</strong> kernel 很多次、串行化执行，慢几十倍是正常的，别以为程序卡死了。所以用 <code>-k</code> / <code>-c</code> 限定只剖析你关心的那个 kernel、只跑一两次，而不是整个应用全测。
+</div><h2>调优工作流：先测量，再动手</h2>
+<p>把上面的工具串成一条纪律。<strong>不要凭直觉优化</strong>——GPU 上的直觉经常是错的（第 3 章已经领教过），几乎每一次&quot;我觉得这里慢&quot;都该先被数据验证。</p>
+<ol>
+<li><strong>先让它正确</strong>：CHECK 宏 + <code>compute-sanitizer</code> 清掉越界和数据竞争。错误的快代码没有意义。</li>
+<li><strong>测量，画 Roofline</strong>：用 <code>nsys</code> 看整体——瓶颈在拷贝还是计算？再用 <code>ncu</code> 看目标 kernel 落在 Roofline 的哪个区（第 16 章）：memory-bound 还是 compute-bound？</li>
+<li><strong>对症下药</strong>：<ul>
+<li><strong>memory-bound</strong> → 优化访存：合并访问、用 shared memory 复用、向量化加载、算子融合减少读写趟数（第 7、11、14、17 章）。绝大多数真实 kernel 在这里。</li>
+<li><strong>compute-bound</strong> → 减少指令、用更快的数学、上 Tensor Core（第 19 章）。</li>
+<li><strong>occupancy 太低</strong> → 调 block 大小、降寄存器压力（第 16 章）。</li>
+<li><strong>拷贝占主导</strong> → 减少 H2D/D2H、重叠传输与计算、别为小任务上 GPU（第 3 章）。</li>
+</ul>
+</li>
+<li><strong>再测一次</strong>：改完重新剖析，用数据确认真的变快了，而不是自我感觉良好。优化是一个<strong>测量→改→再测量</strong>的闭环。</li>
+</ol>
+<h2>排错速查表（症状 → 病因 → 对策）</h2>
+<table>
+<thead>
+<tr>
+<th>症状 / 报错</th>
+<th>最可能的原因</th>
+<th>怎么办（相关章节）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>illegal memory access</td>
+<td>数组越界（漏边界检查 / 下标算错 / 野指针）</td>
+<td>CHECK 宏 + <code>compute-sanitizer memcheck</code>；补 <code>if(i&lt;n)</code>（第 9 章）</td>
+</tr>
+<tr>
+<td>报错指向无辜的 cudaMemcpy</td>
+<td>异步：真正出错的是前面的 kernel</td>
+<td>在 kernel 后 <code>CHECK_KERNEL()</code> 主动同步定位（本附录）</td>
+</tr>
+<tr>
+<td>invalid configuration argument</td>
+<td>block 线程数 &gt; 1024 或某维为 0</td>
+<td>把 block 设成 128/256，grid 向上取整（第 4 章）</td>
+</tr>
+<tr>
+<td>too many resources requested</td>
+<td>寄存器/shared 超额，非显存问题</td>
+<td>减小 block、<code>--ptxas-options=-v</code> 查寄存器、<code>__launch_bounds__</code>（第 16 章）</td>
+</tr>
+<tr>
+<td>out of memory</td>
+<td>显存不够 / 泄漏 / 别的进程占用</td>
+<td><code>nvidia-smi</code> 看占用、分批、配平 malloc/free</td>
+</tr>
+<tr>
+<td>结果偶尔错、时对时错</td>
+<td>shared memory 数据竞争（漏 barrier）</td>
+<td><code>compute-sanitizer racecheck</code>；补 <code>__syncthreads()</code>（第 8、11 章）</td>
+</tr>
+<tr>
+<td>kernel 正确但很慢</td>
+<td>未知瓶颈</td>
+<td><code>nsys</code> 找热点 → <code>ncu</code> 看 occupancy/带宽/合并（第 16、17 章）</td>
+</tr>
+<tr>
+<td>换更强的卡也不快</td>
+<td>memory-bound，卡在带宽</td>
+<td>优化访存、融合算子，别指望算力（第 3、16 章）</td>
+</tr>
+<tr>
+<td>大量时间在拷贝</td>
+<td>H2D/D2H 主导，PCIe 瓶颈</td>
+<td>减少拷贝、pinned memory、重叠传输（第 3 章）</td>
+</tr>
+<tr>
+<td>访存吞吐远低于峰值</td>
+<td>未合并访问 / bank conflict</td>
+<td><code>ncu</code> 查 coalescing 与 bank conflict（第 17 章）</td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>CUDA 报错要<strong>翻译</strong>：illegal memory access ≈ 越界；invalid configuration ≈ block &gt; 1024 或维度非法；too many resources ≈ <strong>寄存器/shared 不够</strong>（非显存）；out of memory ≈ 真的显存不够。</li>
+<li><strong>异步陷阱</strong>：kernel 错误拖到下次同步才报，会指向无辜的行——用 <strong>CHECK 宏 + kernel 后主动同步</strong>把报错拉回凶手附近。</li>
+<li><strong>compute-sanitizer</strong> 是照妖镜：<code>memcheck</code> 抓越界、<code>racecheck</code> 抓 shared memory 数据竞争、<code>synccheck</code> 抓 barrier 误用。</li>
+<li>两个 profiler 分工：<strong>Nsight Systems（nsys）</strong> 看整条时间线定位宏观瓶颈（拷贝 vs 计算）；<strong>Nsight Compute（ncu）</strong> 解剖单个 kernel 的 occupancy、带宽、合并访问、bank conflict（对应第 16、17 章）。</li>
+<li>工作流铁律：<strong>先正确，再测量画 Roofline 找瓶颈，最后对症优化，改完再测</strong>——不要凭直觉优化。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-b.html">← 附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a>
+  <a class="nav-next" href="appendix-d.html">附录 D 继续前进：文档、书目与工具链 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 CUDA：最贴近硬件的编程模型</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li class="active"><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 10 章 CUDA：最贴近硬件的编程模型</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面九章你已经把 GPU 的地基打好了：海量弱小的线程、SIMT、SM 与内存层级、Grid/Block/Thread、warp、shared memory、同步，直到第 9 章那个完整的向量加法。从这一章起进入第三部分——把这套通用模型套进<strong>四种真实技术</strong>逐一展开。第一个就是 <strong>CUDA</strong>：它是所有其它方案的<strong>参照系</strong>，也是你最该先吃透的一个。</p>
+<p>读完这一章，你能把散落在第二部分的 CUDA 概念<strong>系统化成一张图</strong>：host/device 怎么分、三个函数修饰符各管什么、<code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 里到底配置了什么；你会搞懂 <code>nvcc</code> 把一个 <code>.cu</code> 文件编译成什么（PTX 与 SASS、AOT 与 JIT）；还会用一个浏览器里能跑的模拟器，亲眼看到 <strong>stream</strong> 怎么把拷贝和计算重叠起来。</p>
+</div><h2>CUDA 是什么，先给它定位</h2>
+<p><strong>CUDA（Compute Unified Device Architecture）</strong> 是 NVIDIA 2007 年推出的 GPU 通用计算平台。它有三张牌是别人短期内比不了的：</p>
+<ul>
+<li><strong>最贴近硬件、给你最多控制</strong>：warp、shared memory、寄存器、异步拷贝、Tensor Core……NVIDIA 硬件有的能力，CUDA 几乎都开了对应的接口。你想榨干一块 NVIDIA 卡，CUDA 是天花板最高的那条路。</li>
+<li><strong>最成熟、生态最大</strong>：编译器（<code>nvcc</code>）、调试器（<code>cuda-gdb</code>）、性能分析器（Nsight）、以及一整套高度优化的库——线性代数 <strong>cuBLAS</strong>、深度学习 <strong>cuDNN</strong>、并行算法模板库 <strong>Thrust</strong>、稀疏计算 cuSPARSE……绝大多数 AI 框架的底座就是它们。</li>
+<li><strong>是事实上的基准</strong>：后面第 12–15 章讲 SYCL、Triton、CuTe DSL，绕不开的一句话都是&quot;它对标 CUDA 的哪一块、又想解决 CUDA 的什么痛点&quot;。</li>
+</ul>
+<p>那 CUDA 的短板呢？就一条，但很致命：<strong>只能跑在 NVIDIA 的 GPU 上</strong>。你的代码一旦深度用了 CUDA，就和 NVIDIA 绑定了。这正是后面几种技术存在的理由——它们拿&quot;可移植&quot;来换 CUDA 的一部分&quot;极致控制&quot;。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：贴硬件 + 最大控制</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 直接说出硬件的每一层
+__global__ void k(float* x) {
+    __shared__ float tile[256];   // 亲手管 shared memory
+    int i = blockIdx.x * blockDim.x
+          + threadIdx.x;          // 亲手算全局下标
+    // warp、寄存器、异步拷贝… 全都能碰
+}
+// 代价：只跑 NVIDIA GPU</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">可移植方案：换厂商无关（第 12–15 章）</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// SYCL / Triton / CuTe DSL 用不同抽象
+// 把"绑定 NVIDIA"这条约束拿掉：
+//   SYCL   —— 单一源码跨厂商 C++
+//   Triton —— Python 写块级 kernel
+//   CuTe   —— Layout 代数
+// 代价：让出 CUDA 的一部分极致控制</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>怎么记 CUDA 的位置</strong>
+CUDA = <strong>最贴硬件、控制最全、生态最大，但锁定 NVIDIA</strong>。它是本书后面每一种技术的对照原点。学 CUDA 学到的模型（block/warp/shared/同步）几乎能一比一迁移到别的技术上——外衣不同，身体是同一个。
+</div><h2>一张图看懂 CUDA 的编程模型</h2>
+<p>第二部分你已经零散见过这些概念，这里把它们钉在一起。CUDA 程序永远分成两半：跑在 <strong>CPU（host，主机）</strong> 上的普通 C++，和跑在 <strong>GPU（device，设备）</strong> 上的 kernel。host 负责分配显存、搬数据、发起启动、收回结果；device 负责真正的并行计算。二者用三个函数修饰符划清边界：</p>
+<table>
+<thead>
+<tr>
+<th>修饰符</th>
+<th>在哪运行</th>
+<th>谁能调用</th>
+<th>典型用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>__global__</code></td>
+<td>device</td>
+<td>host（用 <code>&lt;&lt;&lt;&gt;&gt;&gt;</code>）</td>
+<td><strong>kernel</strong> 入口，一次启动铺开一大片线程</td>
+</tr>
+<tr>
+<td><code>__device__</code></td>
+<td>device</td>
+<td>device（kernel 或别的 <code>__device__</code>）</td>
+<td>kernel 内部复用的辅助函数</td>
+</tr>
+<tr>
+<td><code>__host__</code></td>
+<td>host</td>
+<td>host</td>
+<td>普通 CPU 函数（不写也是默认）</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>小技巧：一个函数同时标 <code>__host__ __device__</code>，编译器会给 CPU 和 GPU <strong>各编一份</strong>，同一段代码两边都能用——写数学工具函数时很常见。</p>
+</blockquote>
+<p>kernel 用 <strong>执行配置（execution configuration）</strong> <code>&lt;&lt;&lt;gridDim, blockDim&gt;&gt;&gt;</code> 启动，这两个数就是第 4 章的 grid 和 block 尺寸。kernel 内部靠四个<strong>内置变量</strong>知道&quot;我是谁&quot;：<code>gridDim</code>（grid 有几个 block）、<code>blockDim</code>（block 有几个线程）、<code>blockIdx</code>（我在第几个 block）、<code>threadIdx</code>（我在 block 内第几个）。经典的全局下标公式你已经很熟了：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int i = blockIdx.x * blockDim.x + threadIdx.x;   // 一维；二维再加 .y
+if (i &lt; n) { /* 只处理我这一个元素 */ }            // 边界检查不能省</code></pre>
+</div><h2>CUDA 的编译轨迹：一个 .cu 文件会变成什么</h2>
+<p>这是 CUDA 最容易含糊、但对理解性能和调试极重要的一环。你写的 <code>.cu</code> 文件里 host 和 device 代码<strong>混在一起</strong>，<code>nvcc</code> 做的第一件事就是把它俩<strong>拆开</strong>，各走各的编译流水线，最后再缝进同一个可执行文件。</p>
+<p>device 代码这条路又分两步，是重点：</p>
+<ol>
+<li><strong><code>.cu</code> → PTX</strong>：<code>nvcc</code> 先把 device 代码编成 <strong>PTX（Parallel Thread Execution）</strong>。PTX 是一种<strong>虚拟架构</strong>的中间汇编——它不对应任何一块真卡，而是一个稳定的、面向&quot;计算能力 <code>compute_XX</code>&quot;的指令集。你在 Compiler Explorer 里看到的就是它。</li>
+<li><strong>PTX → SASS</strong>：<code>ptxas</code> 再把 PTX 编成 <strong>SASS（Streaming ASSembler）</strong>——某个<strong>真实架构 <code>sm_XX</code></strong> 的机器码，这才是 GPU 真正执行的东西。</li>
+</ol>
+<p><code>-arch</code>（或 <code>-gencode</code>）就是告诉编译器&quot;目标是哪一代硬件&quot;。这里牵出两个词：</p>
+<ul>
+<li><strong>AOT（提前编译）</strong>：编译时就把 SASS 生成好嵌进二进制。跑得快、启动无开销，但只认你指定的那几代架构。</li>
+<li><strong>JIT（运行时即时编译）</strong>：二进制里同时嵌一份 PTX。如果程序在一块<strong>比编译时更新</strong>的 GPU 上运行、找不到匹配的 SASS，驱动会在运行时把 PTX <strong>现编成</strong> SASS。这就是为什么老程序能在新卡上跑——PTX 是那道<strong>向前兼容</strong>的保险。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 620 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="310" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#374151">nvcc 的编译轨迹：一个 .cu 文件 → 两条路 → 一个二进制</text>
+  <!-- .cu 源文件 -->
+  <rect x="250" y="40" width="120" height="46" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+  <text x="310" y="60" text-anchor="middle" font-size="12" font-weight="bold" fill="#374151">hello.cu</text>
+  <text x="310" y="76" text-anchor="middle" font-size="9" fill="#6b7280">host + device 代码混写</text>
+  <!-- nvcc 分流 -->
+  <text x="310" y="103" text-anchor="middle" font-size="11" fill="#6b7280">nvcc 拆分</text>
+  <g stroke="#6b7280" stroke-width="1.5" fill="none">
+    <path d="M280 86 L150 118" marker-end="url(#aa)"/>
+    <path d="M340 86 L470 118" marker-end="url(#aa)"/>
+  </g>
+  <!-- 左：host 路径 -->
+  <text x="150" y="132" text-anchor="middle" font-size="11" fill="#6b7280" font-weight="bold">host 代码</text>
+  <rect x="70" y="142" width="160" height="34" rx="5" fill="#eef0f2" stroke="#6b7280"/>
+  <text x="150" y="163" text-anchor="middle" font-size="10" fill="#374151">host 编译器 (gcc/clang/msvc)</text>
+  <path d="M150 176 L150 202" stroke="#6b7280" stroke-width="1.5" marker-end="url(#aa)" fill="none"/>
+  <rect x="90" y="204" width="120" height="30" rx="5" fill="#eef0f2" stroke="#6b7280"/>
+  <text x="150" y="223" text-anchor="middle" font-size="11" fill="#374151">host 目标文件 .o</text>
+  <!-- 右：device 路径 -->
+  <text x="470" y="132" text-anchor="middle" font-size="11" fill="#2b6cb0" font-weight="bold">device 代码</text>
+  <rect x="400" y="142" width="150" height="30" rx="5" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="475" y="161" text-anchor="middle" font-size="10" fill="#2b6cb0">PTX（虚拟架构 compute_XX）</text>
+  <path d="M475 172 L475 196" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#ab)" fill="none"/>
+  <rect x="410" y="198" width="130" height="26" rx="5" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="475" y="215" text-anchor="middle" font-size="10" fill="#2b6cb0">ptxas</text>
+  <path d="M475 224 L475 248" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#ab)" fill="none"/>
+  <rect x="400" y="250" width="150" height="30" rx="5" fill="#cfe4fb" stroke="#2b6cb0"/>
+  <text x="475" y="269" text-anchor="middle" font-size="10" fill="#2b6cb0">SASS（真实架构 sm_XX 机器码）</text>
+  <!-- 合并 -->
+  <g stroke="#3f9b5c" stroke-width="1.5" fill="none">
+    <path d="M150 234 L300 300" marker-end="url(#ac)"/>
+    <path d="M475 280 L320 300" marker-end="url(#ac)"/>
+  </g>
+  <rect x="210" y="300" width="200" height="32" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="310" y="320" text-anchor="middle" font-size="11" fill="#2f7a45">单一可执行文件（PTX+SASS 一起嵌入）</text>
+  <!-- JIT 注解 -->
+  <text x="583" y="255" text-anchor="end" font-size="9" fill="#e06a3b">遇到更新的卡时，</text>
+  <text x="583" y="268" text-anchor="end" font-size="9" fill="#e06a3b">驱动把 PTX 现编 SASS（JIT）</text>
+  <defs>
+    <marker id="aa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="ab" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="ac" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 10-1　nvcc 把 .cu 拆成 host 与 device 两条路：host 走普通编译器出 .o；device 先编成 PTX 中间码、再由 ptxas 编成某代硬件的 SASS 机器码；两者最后缝进同一个二进制，PTX 还兼作跑在新卡上的 JIT 保险</div>
+</div><div class="note">
+<strong>这对你意味着什么</strong>
+点开本章任何 <code>cuda</code> 代码块的"🔗 在 Compiler Explorer 打开"，右侧那一大片就是 <strong>PTX</strong>。看 PTX 能回答很多"编译器到底干了什么"的问题：循环有没有展开、有没有用上向量化的 load、寄存器压力大不大。而 <strong>SASS</strong> 才是最终真机器码，本地可以用 <code>cuobjdump -sass a.out</code> 反汇编出来看——调深度性能问题时会用到。
+</div><h2>Runtime API 还是 Driver API</h2>
+<p>你写 CUDA 会遇到两套接口，别被绕晕。<strong>Runtime API</strong>（函数以 <code>cuda...</code> 开头，如 <code>cudaMalloc</code>、<code>cudaMemcpy</code>）是高层、好用、绝大多数人用的那套，<code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 语法就是它的糖。<strong>Driver API</strong>（以 <code>cu...</code> 开头，如 <code>cuMemAlloc</code>、<code>cuLaunchKernel</code>）是底层，手动管理 context 和模块加载，更啰嗦但更可控，常见于需要动态加载 PTX、或做语言绑定的场景。</p>
+<p><strong>默认用 Runtime API</strong>——本书所有 CUDA 例子都是。知道 Driver API 存在即可，等你要做类似&quot;运行时把一段 PTX 加载进来执行&quot;的高级活儿时再深入。</p>
+<h2>用 stream 把拷贝和计算重叠起来</h2>
+<p>第 9 章那个向量加法是<strong>串行三步</strong>：把数据拷进显存（H2D）→ 跑 kernel → 把结果拷回（D2H）。这三步用的是<strong>不同的硬件引擎</strong>（拷贝引擎和计算引擎彼此独立），串行做等于让引擎轮流闲着。</p>
+<p><strong>CUDA stream（流）</strong> 就是解药。一个 stream 是一串<strong>按顺序执行</strong>的操作；不同 stream 之间<strong>可以并发</strong>。把数据切成几块、每块丢进不同的 stream，硬件就能一边拷第 2 块、一边算第 1 块、一边把第 0 块的结果拷回——<strong>三个引擎同时忙起来</strong>。这就是&quot;用重叠掩盖拷贝延迟&quot;，和第 1 章&quot;用并行掩盖访存延迟&quot;是同一种思想，只是换了个层级。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 用多个 stream 把 H2D / kernel / D2H 流水线化（示意）
+cudaStream_t s[NSTREAMS];
+for (int k = 0; k &lt; NSTREAMS; ++k) cudaStreamCreate(&amp;s[k]);
+for (int c = 0; c &lt; nchunks; ++c) {
+    int st = c % NSTREAMS;                      // 轮流分配到不同 stream
+    cudaMemcpyAsync(dx+off, hx+off, sz, cudaMemcpyHostToDevice, s[st]);
+    kern&lt;&lt;&lt;blocks, threads, 0, s[st]&gt;&gt;&gt;(dx+off, /* ... */);
+    cudaMemcpyAsync(hout+off, dout+off, sz, cudaMemcpyDeviceToHost, s[st]);
+}
+// 注意：异步拷贝要求 host 内存是 pinned（cudaMallocHost 分配）才能真重叠</code></pre>
+</div><h2>动手：亲眼看 stream 省下多少时间</h2>
+<p>下面这段程序<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它不真用 GPU，而是忠实模拟一条规则：<strong>每个硬件引擎（H2D 拷贝、计算、D2H 拷贝）同一时刻只能干一件事，且同一块数据必须按 H2D→计算→D2H 顺序走</strong>。我们把数据切成几块，对比&quot;全程串行&quot;和&quot;三引擎重叠&quot;两种排法花的时间，并把重叠后的时间线画出来。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20CUDA%20stream%EF%BC%9A%E6%8A%8A%20H2D%20%E2%86%92%20%E8%AE%A1%E7%AE%97%20%E2%86%92%20D2H%20%E6%B5%81%E6%B0%B4%E7%BA%BF%E5%8C%96%EF%BC%8C%E7%9C%8B%E9%87%8D%E5%8F%A0%E8%83%BD%E7%9C%81%E5%A4%9A%E5%B0%91%E6%97%B6%E9%97%B4%0A%23%20%E4%B8%89%E4%B8%AA%E5%BC%95%E6%93%8E%E5%90%84%E8%87%AA%E7%8B%AC%E7%AB%8B%E3%80%81%E5%90%84%E8%87%AA%E6%8C%89%E5%9D%97%E9%A1%BA%E5%BA%8F%E6%8E%92%E9%98%9F%EF%BC%9B%E5%90%8C%E4%B8%80%E5%9D%97%E6%95%B0%E6%8D%AE%E4%B8%89%E4%B8%AA%E9%98%B6%E6%AE%B5%E5%BF%85%E9%A1%BB%E4%BE%9D%E6%AC%A1%E8%BF%9B%E8%A1%8C%0AH2D%2C%20COMPUTE%2C%20D2H%20%3D%202%2C%203%2C%202%20%20%20%20%23%20%E6%AF%8F%E5%9D%97%E6%95%B0%E6%8D%AE%E4%B8%89%E4%B8%AA%E9%98%B6%E6%AE%B5%E5%90%84%E8%87%AA%E7%9A%84%E8%80%97%E6%97%B6%EF%BC%88%E4%BB%BB%E6%84%8F%E6%97%B6%E9%97%B4%E5%8D%95%E4%BD%8D%EF%BC%89%0ANCHUNKS%20%3D%204%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%8A%8A%E6%95%B4%E6%89%B9%E6%95%B0%E6%8D%AE%E5%88%87%E6%88%90%E5%87%A0%E5%9D%97%0A%0Adef%20serial_time()%3A%0A%20%20%20%20%23%20%E6%B2%A1%E6%9C%89%20stream%EF%BC%9A%E4%B8%80%E5%9D%97%E8%B5%B0%E5%AE%8C%E4%B8%89%E4%B8%AA%E9%98%B6%E6%AE%B5%EF%BC%8C%E6%89%8D%E8%BD%AE%E4%B8%8B%E4%B8%80%E5%9D%97%EF%BC%8C%E5%85%A8%E7%A8%8B%E4%B8%B2%E8%A1%8C%0A%20%20%20%20return%20NCHUNKS%20*%20(H2D%20%2B%20COMPUTE%20%2B%20D2H)%0A%0Adef%20pipelined()%3A%0A%20%20%20%20f_h2d%20%20%3D%20%5B0%5D%20*%20NCHUNKS%20%20%20%20%20%20%20%23%20%E6%AF%8F%E5%9D%97%20H2D%20%E7%BB%93%E6%9D%9F%E7%9A%84%E6%97%B6%E5%88%BB%0A%20%20%20%20f_comp%20%3D%20%5B0%5D%20*%20NCHUNKS%20%20%20%20%20%20%20%23%20%E6%AF%8F%E5%9D%97%20%E8%AE%A1%E7%AE%97%20%E7%BB%93%E6%9D%9F%E7%9A%84%E6%97%B6%E5%88%BB%0A%20%20%20%20f_d2h%20%20%3D%20%5B0%5D%20*%20NCHUNKS%20%20%20%20%20%20%20%23%20%E6%AF%8F%E5%9D%97%20D2H%20%E7%BB%93%E6%9D%9F%E7%9A%84%E6%97%B6%E5%88%BB%0A%20%20%20%20for%20i%20in%20range(NCHUNKS)%3A%0A%20%20%20%20%20%20%20%20prev%20%3D%20f_h2d%5Bi-1%5D%20if%20i%20%3E%200%20else%200%20%20%20%20%20%20%20%20%23%20H2D%20%E5%BC%95%E6%93%8E%E4%B8%8A%E4%B8%80%E5%9D%97%E4%BD%95%E6%97%B6%E7%A9%BA%E5%87%BA%0A%20%20%20%20%20%20%20%20f_h2d%5Bi%5D%20%3D%20prev%20%2B%20H2D%0A%20%20%20%20%20%20%20%20prev%20%3D%20f_comp%5Bi-1%5D%20if%20i%20%3E%200%20else%200%0A%20%20%20%20%20%20%20%20start%20%3D%20max(f_h2d%5Bi%5D%2C%20prev)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%A6%81%E7%AD%89%E6%9C%AC%E5%9D%97%E6%8B%B7%E5%AE%8C%20%E4%B8%94%20%E8%AE%A1%E7%AE%97%E5%BC%95%E6%93%8E%E7%A9%BA%E9%97%B2%0A%20%20%20%20%20%20%20%20f_comp%5Bi%5D%20%3D%20start%20%2B%20COMPUTE%0A%20%20%20%20%20%20%20%20prev%20%3D%20f_d2h%5Bi-1%5D%20if%20i%20%3E%200%20else%200%0A%20%20%20%20%20%20%20%20start%20%3D%20max(f_comp%5Bi%5D%2C%20prev)%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%A6%81%E7%AD%89%E6%9C%AC%E5%9D%97%E7%AE%97%E5%AE%8C%20%E4%B8%94%20D2H%20%E5%BC%95%E6%93%8E%E7%A9%BA%E9%97%B2%0A%20%20%20%20%20%20%20%20f_d2h%5Bi%5D%20%3D%20start%20%2B%20D2H%0A%20%20%20%20return%20f_h2d%2C%20f_comp%2C%20f_d2h%0A%0Adef%20gantt(engines%2C%20makespan)%3A%0A%20%20%20%20for%20name%2C%20finishes%2C%20cost%20in%20engines%3A%0A%20%20%20%20%20%20%20%20row%20%3D%20%5B'.'%5D%20*%20makespan%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20'.'%20%E8%A1%A8%E7%A4%BA%E5%BC%95%E6%93%8E%E7%A9%BA%E9%97%B2%0A%20%20%20%20%20%20%20%20for%20i%20in%20range(NCHUNKS)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20for%20t%20in%20range(finishes%5Bi%5D%20-%20cost%2C%20finishes%5Bi%5D)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20row%5Bt%5D%20%3D%20str(i)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%95%B0%E5%AD%97%3D%E7%AC%AC%E5%87%A0%E5%9D%97%E6%95%B0%E6%8D%AE%E5%8D%A0%E7%94%A8%E8%AF%A5%E5%BC%95%E6%93%8E%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bname%7D%3A%20%7B''.join(row)%7D%22)%0A%0As%20%3D%20serial_time()%0Af_h2d%2C%20f_comp%2C%20f_d2h%20%3D%20pipelined()%0Ap%20%3D%20f_d2h%5B-1%5D%0Aprint(f%22%E6%95%B0%E6%8D%AE%E5%88%87%E6%88%90%20%7BNCHUNKS%7D%20%E5%9D%97%EF%BC%8C%E6%AF%8F%E5%9D%97%20H2D%3D%7BH2D%7D%20%E8%AE%A1%E7%AE%97%3D%7BCOMPUTE%7D%20D2H%3D%7BD2H%7D%EF%BC%88%E6%97%B6%E9%97%B4%E5%8D%95%E4%BD%8D%EF%BC%89%5Cn%22)%0Aprint(f%22%E4%B8%8D%E7%94%A8%20stream%EF%BC%88%E5%85%A8%E7%A8%8B%E4%B8%B2%E8%A1%8C%EF%BC%89%EF%BC%9A%7Bs%7D%20%E4%B8%AA%E6%97%B6%E9%97%B4%E5%8D%95%E4%BD%8D%22)%0Aprint(f%22%E7%94%A8%20stream%EF%BC%88%E4%B8%89%E5%BC%95%E6%93%8E%E9%87%8D%E5%8F%A0%EF%BC%89%EF%BC%9A%7Bp%7D%20%E4%B8%AA%E6%97%B6%E9%97%B4%E5%8D%95%E4%BD%8D%22)%0Aprint(f%22%E5%8A%A0%E9%80%9F%E6%AF%94%EF%BC%9A%7Bs%2Fp%3A.2f%7D%C3%97%5Cn%22)%0Aprint(%22%E9%87%8D%E5%8F%A0%E5%90%8E%E7%9A%84%E6%97%B6%E9%97%B4%E7%BA%BF%EF%BC%88%E6%95%B0%E5%AD%97%3D%E7%AC%AC%E5%87%A0%E5%9D%97%E6%95%B0%E6%8D%AE%EF%BC%8C'.'%3D%E5%BC%95%E6%93%8E%E7%A9%BA%E9%97%B2%EF%BC%89%EF%BC%9A%22)%0Agantt(%5B(%22H2D%20%20%20%20%22%2C%20f_h2d%2C%20H2D)%2C%0A%20%20%20%20%20%20%20(%22compute%22%2C%20f_comp%2C%20COMPUTE)%2C%0A%20%20%20%20%20%20%20(%22D2H%20%20%20%20%22%2C%20f_d2h%2C%20D2H)%5D%2C%20p)"># 模拟 CUDA stream：把 H2D → 计算 → D2H 流水线化，看重叠能省多少时间
+# 三个引擎各自独立、各自按块顺序排队；同一块数据三个阶段必须依次进行
+H2D, COMPUTE, D2H = 2, 3, 2    # 每块数据三个阶段各自的耗时（任意时间单位）
+NCHUNKS = 4                     # 把整批数据切成几块
+
+def serial_time():
+    # 没有 stream：一块走完三个阶段，才轮下一块，全程串行
+    return NCHUNKS * (H2D + COMPUTE + D2H)
+
+def pipelined():
+    f_h2d  = [0] * NCHUNKS       # 每块 H2D 结束的时刻
+    f_comp = [0] * NCHUNKS       # 每块 计算 结束的时刻
+    f_d2h  = [0] * NCHUNKS       # 每块 D2H 结束的时刻
+    for i in range(NCHUNKS):
+        prev = f_h2d[i-1] if i &gt; 0 else 0        # H2D 引擎上一块何时空出
+        f_h2d[i] = prev + H2D
+        prev = f_comp[i-1] if i &gt; 0 else 0
+        start = max(f_h2d[i], prev)              # 要等本块拷完 且 计算引擎空闲
+        f_comp[i] = start + COMPUTE
+        prev = f_d2h[i-1] if i &gt; 0 else 0
+        start = max(f_comp[i], prev)             # 要等本块算完 且 D2H 引擎空闲
+        f_d2h[i] = start + D2H
+    return f_h2d, f_comp, f_d2h
+
+def gantt(engines, makespan):
+    for name, finishes, cost in engines:
+        row = ['.'] * makespan                   # '.' 表示引擎空闲
+        for i in range(NCHUNKS):
+            for t in range(finishes[i] - cost, finishes[i]):
+                row[t] = str(i)                  # 数字=第几块数据占用该引擎
+        print(f"  {name}: {''.join(row)}")
+
+s = serial_time()
+f_h2d, f_comp, f_d2h = pipelined()
+p = f_d2h[-1]
+print(f"数据切成 {NCHUNKS} 块，每块 H2D={H2D} 计算={COMPUTE} D2H={D2H}（时间单位）\n")
+print(f"不用 stream（全程串行）：{s} 个时间单位")
+print(f"用 stream（三引擎重叠）：{p} 个时间单位")
+print(f"加速比：{s/p:.2f}×\n")
+print("重叠后的时间线（数字=第几块数据，'.'=引擎空闲）：")
+gantt([("H2D    ", f_h2d, H2D),
+       ("compute", f_comp, COMPUTE),
+       ("D2H    ", f_d2h, D2H)], p)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">数据切成 4 块，每块 H2D=2 计算=3 D2H=2（时间单位）
+
+不用 stream（全程串行）：28 个时间单位
+用 stream（三引擎重叠）：16 个时间单位
+加速比：1.75×
+
+重叠后的时间线（数字=第几块数据，'.'=引擎空闲）：
+  H2D    : 00112233........
+  compute: ..000111222333..
+  D2H    : .....00.11.22.33</code></pre>
+</div><p>盯着这三行时间线看：<code>compute</code> 引擎从第 2 步就开始干活，一直忙到第 14 步几乎不停——这正是重叠的收益，计算不再干等拷贝。串行要 28，重叠只要 16。请动手改：把 <code>NCHUNKS</code> 从 4 调到 8，再运行——你会看到加速比进一步逼近 <code>(H2D+COMPUTE+D2H)/COMPUTE</code>（因为计算是这里最慢的引擎，最终整条流水线的节奏由它决定，这就是<strong>瓶颈引擎</strong>）。</p>
+<div class="warn">
+<strong>重叠不是免费的，有两个前提</strong>
+第一，异步拷贝 <code>cudaMemcpyAsync</code> 要真和计算重叠，host 端内存必须是<strong>锁页内存（pinned memory，<code>cudaMallocHost</code> 分配）</strong>，否则驱动会退化成同步拷贝。第二，切块太细会让每块的启动开销占比变大，收益递减。stream 是"值得搬一大批数据反复算"时的优化，不是万能药。
+</div><h2>动手：一个比向量加法更丰富的完整 kernel</h2>
+<p>下面是一个<strong>完整可编译</strong>的 CUDA 程序，做 <strong>SAXPY</strong>（<code>out = a*x + y</code>，线性代数里的经典操作），并特意用一个 <code>__device__</code> 辅助函数演示 device 端的函数复用。点 <strong>🔗 在 Compiler Explorer 打开</strong> 看它的 PTX，或用下面的 <code>nvcc</code> 命令在本地编译运行。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3N0ZGxpYj5cbiNpbmNsdWRlIDxjdWRhX3J1bnRpbWUuaD5cblxuLy8gX19kZXZpY2VfXyDlh73mlbDvvJrlj6rog73ooqsgZGV2aWNlIOS4iueahOS7o%2Begge%2B8iGtlcm5lbCDmiJbliKvnmoQgX19kZXZpY2VfX%2B%2B8ieiwg%2BeUqFxuX19kZXZpY2VfXyBmbG9hdCBzYXhweV9vbmUoZmxvYXQgYSwgZmxvYXQgeCwgZmxvYXQgeSkge1xuICAgIHJldHVybiBhICogeCArIHk7ICAgICAgICAgICAgICAgICAvLyDljZXkuKrlhYPntKDnmoQgU0FYUFlcbn1cblxuLy8gX19nbG9iYWxfXyDlh73mlbDvvJprZXJuZWwg5YWl5Y%2Bj77yM5LuOIGhvc3Qg55SoIDw8PD4%2BPiDlkK%2FliqjvvIzlnKggZGV2aWNlIOS4iuW5tuihjOaJp%2BihjFxuX19nbG9iYWxfXyB2b2lkIHNheHB5KGludCBuLCBmbG9hdCBhLCBjb25zdCBmbG9hdCogeCwgY29uc3QgZmxvYXQqIHksIGZsb2F0KiBvdXQpIHtcbiAgICBpbnQgaSA9IGJsb2NrSWR4LnggKiBibG9ja0RpbS54ICsgdGhyZWFkSWR4Lng7ICAgLy8g5YWo5bGA57q%2F56iL57yW5Y%2B3ID0g5oiR6LSf6LSj56ys5Yeg5Liq5YWD57SgXG4gICAgaWYgKGkgPCBuKSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyDovrnnlYzmo4Dmn6XvvJrnur%2FnqIvmlbDluLjlpJrkuo7lhYPntKDmlbBcbiAgICAgICAgb3V0W2ldID0gc2F4cHlfb25lKGEsIHhbaV0sIHlbaV0pOyAgICAgICAgICAgIC8vIOavj%2BS4que6v%2Beoi%2BWPqueul%2BS4gOS4quWFg%2Be0oFxufVxuXG5pbnQgbWFpbigpIHtcbiAgICBjb25zdCBpbnQgICBOID0gMSA8PCAyMDsgICAgICAgICAgLy8g57qmIDEwMCDkuIfkuKrlhYPntKBcbiAgICBjb25zdCBmbG9hdCBhID0gMi4wZjtcbiAgICBzaXplX3QgYnl0ZXMgPSBOICogc2l6ZW9mKGZsb2F0KTtcblxuICAgIC8vIC0tLS0gaG9zdCDnq6%2FliIbphY3lubbloavlhYUgLS0tLVxuICAgIGZsb2F0ICpoeCA9IChmbG9hdCopbWFsbG9jKGJ5dGVzKTtcbiAgICBmbG9hdCAqaHkgPSAoZmxvYXQqKW1hbGxvYyhieXRlcyk7XG4gICAgZmxvYXQgKmhvdXQgPSAoZmxvYXQqKW1hbGxvYyhieXRlcyk7XG4gICAgZm9yIChpbnQgaSA9IDA7IGkgPCBOOyArK2kpIHsgaHhbaV0gPSAxLjBmOyBoeVtpXSA9IDIuMGY7IH1cblxuICAgIC8vIC0tLS0gZGV2aWNlIOerr%2BWIhumFjSAtLS0tXG4gICAgZmxvYXQgKmR4LCAqZHksICpkb3V0O1xuICAgIGN1ZGFNYWxsb2MoJmR4LCBieXRlcyk7XG4gICAgY3VkYU1hbGxvYygmZHksIGJ5dGVzKTtcbiAgICBjdWRhTWFsbG9jKCZkb3V0LCBieXRlcyk7XG5cbiAgICAvLyAtLS0tIGhvc3Qg4oaSIGRldmljZSDmi7fotJ3ovpPlhaUgLS0tLVxuICAgIGN1ZGFNZW1jcHkoZHgsIGh4LCBieXRlcywgY3VkYU1lbWNweUhvc3RUb0RldmljZSk7XG4gICAgY3VkYU1lbWNweShkeSwgaHksIGJ5dGVzLCBjdWRhTWVtY3B5SG9zdFRvRGV2aWNlKTtcblxuICAgIC8vIC0tLS0g5omn6KGM6YWN572u77ya5q%2BPIGJsb2NrIDI1NiDnur%2FnqIvvvIzlh5HlpJ8gTiDkuKrnur%2FnqIsgLS0tLVxuICAgIGludCB0aHJlYWRzID0gMjU2O1xuICAgIGludCBibG9ja3MgID0gKE4gKyB0aHJlYWRzIC0gMSkgLyB0aHJlYWRzO1xuICAgIHNheHB5PDw8YmxvY2tzLCB0aHJlYWRzPj4%2BKE4sIGEsIGR4LCBkeSwgZG91dCk7XG4gICAgY3VkYURldmljZVN5bmNocm9uaXplKCk7ICAgICAgICAgIC8vIOetiSBrZXJuZWwg55yf5q2j6LeR5a6MXG5cbiAgICAvLyAtLS0tIGRldmljZSDihpIgaG9zdCDmi7flm57nu5PmnpwgLS0tLVxuICAgIGN1ZGFNZW1jcHkoaG91dCwgZG91dCwgYnl0ZXMsIGN1ZGFNZW1jcHlEZXZpY2VUb0hvc3QpO1xuXG4gICAgLy8gLS0tLSDpqozor4HvvJrmr4%2FkuKrpg73lupTmmK8gYSoxICsgMiA9IDQgLS0tLVxuICAgIGJvb2wgb2sgPSB0cnVlO1xuICAgIGZvciAoaW50IGkgPSAwOyBpIDwgTjsgKytpKVxuICAgICAgICBpZiAoaG91dFtpXSAhPSA0LjBmKSB7IG9rID0gZmFsc2U7IGJyZWFrOyB9XG4gICAgcHJpbnRmKFwib3V0WzBdID0gJS4xZiwg5qCh6aqMICVzXFxuXCIsIGhvdXRbMF0sIG9rID8gXCJPS1wiIDogXCJGQUlMRURcIik7XG5cbiAgICBjdWRhRnJlZShkeCk7IGN1ZGFGcmVlKGR5KTsgY3VkYUZyZWUoZG91dCk7XG4gICAgZnJlZShoeCk7IGZyZWUoaHkpOyBmcmVlKGhvdXQpO1xuICAgIHJldHVybiAwO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJudmNjMTI5Iiwib3B0aW9ucyI6Ii1zdGQ9YysrMjAgLU8zIC0tZ3B1LWFyY2hpdGVjdHVyZT1zbV85MCAtcHR4In1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+#include &lt;cuda_runtime.h&gt;
+
+// __device__ 函数：只能被 device 上的代码（kernel 或别的 __device__）调用
+__device__ float saxpy_one(float a, float x, float y) {
+    return a * x + y;                 // 单个元素的 SAXPY
+}
+
+// __global__ 函数：kernel 入口，从 host 用 &lt;&lt;&lt;&gt;&gt;&gt; 启动，在 device 上并行执行
+__global__ void saxpy(int n, float a, const float* x, const float* y, float* out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;   // 全局线程编号 = 我负责第几个元素
+    if (i &lt; n)                                        // 边界检查：线程数常多于元素数
+        out[i] = saxpy_one(a, x[i], y[i]);            // 每个线程只算一个元素
+}
+
+int main() {
+    const int   N = 1 &lt;&lt; 20;          // 约 100 万个元素
+    const float a = 2.0f;
+    size_t bytes = N * sizeof(float);
+
+    // ---- host 端分配并填充 ----
+    float *hx = (float*)malloc(bytes);
+    float *hy = (float*)malloc(bytes);
+    float *hout = (float*)malloc(bytes);
+    for (int i = 0; i &lt; N; ++i) { hx[i] = 1.0f; hy[i] = 2.0f; }
+
+    // ---- device 端分配 ----
+    float *dx, *dy, *dout;
+    cudaMalloc(&amp;dx, bytes);
+    cudaMalloc(&amp;dy, bytes);
+    cudaMalloc(&amp;dout, bytes);
+
+    // ---- host → device 拷贝输入 ----
+    cudaMemcpy(dx, hx, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(dy, hy, bytes, cudaMemcpyHostToDevice);
+
+    // ---- 执行配置：每 block 256 线程，凑够 N 个线程 ----
+    int threads = 256;
+    int blocks  = (N + threads - 1) / threads;
+    saxpy&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(N, a, dx, dy, dout);
+    cudaDeviceSynchronize();          // 等 kernel 真正跑完
+
+    // ---- device → host 拷回结果 ----
+    cudaMemcpy(hout, dout, bytes, cudaMemcpyDeviceToHost);
+
+    // ---- 验证：每个都应是 a*1 + 2 = 4 ----
+    bool ok = true;
+    for (int i = 0; i &lt; N; ++i)
+        if (hout[i] != 4.0f) { ok = false; break; }
+    printf("out[0] = %.1f, 校验 %s\n", hout[0], ok ? "OK" : "FAILED");
+
+    cudaFree(dx); cudaFree(dy); cudaFree(dout);
+    free(hx); free(hy); free(hout);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><p>本地编译运行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc -arch=sm_80 saxpy.cu -o saxpy &amp;&amp; ./saxpy
+# 输出：out[0] = 4.0, 校验 OK</code></pre>
+</div><p>把上面 kernel 单独拎出来，就能在 Compiler Explorer 里专心看它编成的 PTX——注意找 <code>mad</code>（乘加融合）或 <code>fma</code> 指令，那就是 <code>a*x+y</code> 被编译器合成的一条乘加：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6Ii8vIOi0tOi%2FmyBDb21waWxlciBFeHBsb3Jlcu%2B8jOe8luivkeWZqOmAiSBudmNj77yM5Y%2BC5pWw5aGrIC1hcmNoPXNtXzgwXG4vLyDlj7PkvqflsLHmmK%2Fov5nmrrUga2VybmVsIOe8luaIkOeahCBQVFjvvIhHUFUg55qE6Jma5ouf5p625p6E5rGH57yW77yJXG5fX2RldmljZV9fIGZsb2F0IHNheHB5X29uZShmbG9hdCBhLCBmbG9hdCB4LCBmbG9hdCB5KSB7XG4gICAgcmV0dXJuIGEgKiB4ICsgeTtcbn1cbl9fZ2xvYmFsX18gdm9pZCBzYXhweShpbnQgbiwgZmxvYXQgYSwgY29uc3QgZmxvYXQqIHgsIGNvbnN0IGZsb2F0KiB5LCBmbG9hdCogb3V0KSB7XG4gICAgaW50IGkgPSBibG9ja0lkeC54ICogYmxvY2tEaW0ueCArIHRocmVhZElkeC54O1xuICAgIGlmIChpIDwgbikgb3V0W2ldID0gc2F4cHlfb25lKGEsIHhbaV0sIHlbaV0pO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJudmNjMTI5Iiwib3B0aW9ucyI6Ii1zdGQ9YysrMjAgLU8zIC0tZ3B1LWFyY2hpdGVjdHVyZT1zbV85MCAtcHR4In1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔬 看 PTX / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// 贴进 Compiler Explorer，编译器选 nvcc，参数填 -arch=sm_80
+// 右侧就是这段 kernel 编成的 PTX（GPU 的虚拟架构汇编）
+__device__ float saxpy_one(float a, float x, float y) {
+    return a * x + y;
+}
+__global__ void saxpy(int n, float a, const float* x, const float* y, float* out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; n) out[i] = saxpy_one(a, x[i], y[i]);
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 --ptx main.cu -o main.ptx   # 生成 PTX 中间码</code></div>
+</div><div class="note">
+<strong>看 PTX 时留意这几处</strong>
+<code>saxpy_one</code> 大概率被<strong>内联</strong>掉了（PTX 里看不到单独的函数调用）——device 端的小函数几乎总会被内联，所以放心把 kernel 拆成小 <code>__device__</code> 函数，可读性上去了，性能不打折。再看那句 <code>@%p bra</code> 之类的条件跳转，就是你写的 <code>if (i &lt; n)</code> 边界检查。
+</div><h2>小结与下一步</h2>
+<p>你现在把 CUDA 的编程模型系统化了：host/device 两半、三个修饰符、执行配置与内置变量；也搞清了 <code>.cu</code> 一路编到 PTX 再到 SASS 的轨迹、AOT 与 JIT 的分工，以及 stream 怎么用重叠换速度。这套东西是后面所有技术的参照原点。</p>
+<p>但到目前为止，我们的 kernel 都是&quot;每个线程读一次、算一下、写一次&quot;的<strong>访存受限</strong>类型（回忆第 3 章的算术强度）。CUDA 真正拉开差距的地方，是它让你<strong>亲手管理 shared memory</strong>——把数据搬进片上高速内存反复复用，把一个访存受限的问题硬生生推向算力受限。下一章我们就用 GPU 优化里最经典的案例——<strong>用 shared memory 做 tiling 矩阵乘</strong>——把这件事讲透。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>CUDA 的定位：<strong>最贴硬件、控制最全、生态最大（cuBLAS/cuDNN/Thrust）</strong>，但<strong>只跑 NVIDIA GPU</strong>；它是本书其它技术的参照原点。</li>
+<li>编程模型：<strong>host/device 分工</strong>；<code>__global__</code>（kernel 入口）、<code>__device__</code>（device 内部函数）、<code>__host__</code>（CPU 函数）三个修饰符；执行配置 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code> + 内置变量 <code>blockIdx/blockDim/threadIdx/gridDim</code>。</li>
+<li>编译轨迹：<code>nvcc</code> 把 <code>.cu</code> 拆成 host 与 device 两路；device 走 <strong>PTX（虚拟架构）→ ptxas → SASS（真实架构）</strong>；<strong>AOT</strong> 提前编好 SASS、<strong>JIT</strong> 用嵌入的 PTX 在更新的卡上现编——PTX 是向前兼容的保险。</li>
+<li><strong>Runtime API</strong>（<code>cuda*</code>）好用是默认；<strong>Driver API</strong>（<code>cu*</code>）底层可控，知道即可。</li>
+<li><strong>stream</strong> 让 H2D/计算/D2H 三个引擎重叠流水线化，用重叠掩盖拷贝延迟；前提是 pinned 内存 + 别切太碎。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch09.html">← 第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a>
+  <a class="nav-next" href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

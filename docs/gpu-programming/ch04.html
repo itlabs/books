@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 执行层级（一）：Grid、Block、Thread</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li class="active"><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 4 章 执行层级（一）：Grid、Block、Thread</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前三章你换好了心智模型：海量弱小的线程、齐步走的 SIMT、由 SM 拼成的硬件。这一章讲清你启动 kernel 时写的那行神秘符号 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code> 到底是什么：GPU 把成千上万个线程组织成 <strong>Grid → Block → Thread</strong> 三层结构，而你在 kernel 里靠 <code>threadIdx</code>、<code>blockIdx</code>、<code>blockDim</code>、<code>gridDim</code> 四个内建变量算出"我是第几个线程"。</p>
+<p>读完你能默写出那行几乎每个 CUDA 程序都有的咒语 <code>int i = blockIdx.x * blockDim.x + threadIdx.x</code>，说清它为什么长这样、为什么后面总跟一句 <code>if (i &lt; n)</code>，还会跑一个浏览器里的模拟器，亲眼看到二维网格是怎么铺满一张图像的。</p>
+</div><h2>从&quot;我要开几个线程&quot;到&quot;我要怎么组织线程&quot;</h2>
+<p>在 CPU 上启动并行很直接：你想要几个线程，就 <code>emplace_back</code> 几次，数量大约等于核心数。线程之间是<strong>平的</strong>——8 个线程就是 8 个独立的个体，没有分组、没有层级。</p>
+<p>GPU 不一样。你要一次启动几十万个线程，硬件不可能把它们当成一盘散沙来调度。所以 CUDA 强制你把线程组织成<strong>两层</strong>：</p>
+<ul>
+<li>先把线程打包成一个个 <strong>block（线程块）</strong>，每个 block 里有固定数量的线程；</li>
+<li>再把这些 block 排成一个 <strong>grid（网格）</strong>。</li>
+</ul>
+<p>于是启动一个 kernel，你不是说&quot;给我 100 万个线程&quot;，而是说&quot;给我一个由 <code>blocks</code> 个 block 组成的 grid，每个 block 里有 <code>threads</code> 个线程&quot;。这就是那行 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code> 的含义——CUDA 里叫<strong>执行配置（execution configuration）</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 启动配置：&lt;&lt;&lt;block 的数量, 每个 block 里的线程数&gt;&gt;&gt;
+add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(...);
+//     ^grid      ^block
+// 总线程数 = blocks * threads</code></pre>
+</div><div class="compare">
+<div class="known">
+<div class="compare-head">CPU：你挑线程数 ≈ 核心数</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 线程是平的、少而贵
+int T = std::thread::hardware_concurrency(); // 8
+std::vector&lt;std::thread&gt; pool;
+for (int t = 0; t &lt; T; ++t)
+    pool.emplace_back(worker, t);
+// 你决定的是"几个"，通常刚好压满核心</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">GPU：你挑 grid/block 维度，海量超订</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 线程分两层、多而贱，随手超订
+int threads = 256;                 // 每 block 线程数
+int blocks  = (n + 255) / 256;     // block 数量
+add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(...);
+// 你决定的是"怎么切成 block×thread"
+// 总数远超核心数，硬件排队轮流上</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>核心区别：CPU 你定"数量"，GPU 你定"形状"</strong>
+CPU 上线程数量约等于核心数，多了只会增加调度开销。GPU 上你几乎总是<strong>大幅超订（oversubscribe）</strong>：启动的线程数远超物理核心，硬件靠 warp 调度器让它们排队轮流上、用别人的计算掩盖等内存的空档（第 3 章）。所以在 GPU 上你要想的不是"开几个"，而是"<strong>把这堆线程切成什么形状的 block × grid</strong>"。
+</div><h2>三层结构：grid 装 block，block 装 thread</h2>
+<p>把这两层画出来，就是本章最该刻进脑子里的一张图。一个 grid 是若干 block 的数组，一个 block 是若干 thread 的数组：</p>
+<div class="concept">
+<svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">Grid → Block → Thread 三层结构</text>
+  <!-- grid 外框 -->
+  <rect x="20" y="34" width="520" height="150" rx="8" fill="#f7fbff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="34" y="52" font-size="12" fill="#2b6cb0" font-weight="bold">Grid（gridDim.x = 4 个 block）</text>
+  <!-- 4 个 block -->
+  <g>
+    <rect x="34" y="60" width="120" height="110" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="94" y="76" text-anchor="middle" font-size="11" fill="#2b6cb0">block 0</text>
+    <rect x="164" y="60" width="120" height="110" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="224" y="76" text-anchor="middle" font-size="11" fill="#2b6cb0">block 1</text>
+    <rect x="294" y="60" width="120" height="110" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="354" y="76" text-anchor="middle" font-size="11" fill="#2b6cb0">block 2</text>
+    <rect x="424" y="60" width="102" height="110" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+    <text x="475" y="76" text-anchor="middle" font-size="11" fill="#2b6cb0">block 3</text>
+  </g>
+  <!-- block 1 内的线程放大 -->
+  <g fill="#cfe4fb" stroke="#2b6cb0" font-family="monospace" font-size="9">
+    <rect x="172" y="86" width="24" height="24"/><text x="184" y="102" text-anchor="middle" fill="#1a4a7a">0</text>
+    <rect x="200" y="86" width="24" height="24"/><text x="212" y="102" text-anchor="middle" fill="#1a4a7a">1</text>
+    <rect x="228" y="86" width="24" height="24"/><text x="240" y="102" text-anchor="middle" fill="#1a4a7a">2</text>
+    <rect x="256" y="86" width="24" height="24"/><text x="268" y="102" text-anchor="middle" fill="#1a4a7a">3</text>
+  </g>
+  <text x="224" y="128" text-anchor="middle" font-size="9" fill="#2b6cb0">blockDim.x = 4 个 thread</text>
+  <text x="224" y="146" text-anchor="middle" font-size="9" fill="#6b7280">threadIdx.x = 0,1,2,3</text>
+  <text x="224" y="160" text-anchor="middle" font-size="9" fill="#6b7280">blockIdx.x = 1</text>
+  <!-- 全局索引推导 -->
+  <text x="280" y="212" text-anchor="middle" font-size="12" fill="#e06a3b" font-weight="bold">全局索引 = blockIdx.x × blockDim.x + threadIdx.x</text>
+  <!-- 拉直成一条 -->
+  <g font-family="monospace" font-size="10">
+    <rect x="34" y="232" width="123" height="24" fill="#fbe6dc" stroke="#e06a3b"/><text x="95" y="248" text-anchor="middle" fill="#a53f1c">i=0..3</text>
+    <rect x="157" y="232" width="123" height="24" fill="#fdeee6" stroke="#e06a3b"/><text x="218" y="248" text-anchor="middle" fill="#a53f1c">i=4..7</text>
+    <rect x="280" y="232" width="123" height="24" fill="#fbe6dc" stroke="#e06a3b"/><text x="341" y="248" text-anchor="middle" fill="#a53f1c">i=8..11</text>
+    <rect x="403" y="232" width="123" height="24" fill="#fdeee6" stroke="#e06a3b"/><text x="464" y="248" text-anchor="middle" fill="#a53f1c">i=12..15</text>
+  </g>
+  <text x="280" y="278" text-anchor="middle" font-size="10" fill="#6b7280">block 1 的 threadIdx.x=1 → i = 1×4+1 = 5，对应上面第 5 格</text>
+  <path d="M212 110 L218 232" stroke="#e06a3b" stroke-width="1" stroke-dasharray="3 2" fill="none" marker-end="url(#a4)"/>
+  <defs>
+    <marker id="a4" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 4-1　Grid 是 block 的数组，block 是 thread 的数组。每个线程用 blockIdx.x × blockDim.x + threadIdx.x 把"我在第几个 block 的第几个"换算成一条拉直的全局下标</div>
+</div><h2>四个内建变量：kernel 里&quot;我是谁&quot;</h2>
+<p>kernel 是<strong>同一份代码</strong>被几十万个线程各跑一遍。那每个线程怎么知道自己该处理哪个数据？靠 CUDA 在 kernel 内部自动提供的四个内建变量。它们不用你声明，进 kernel 就能读：</p>
+<table>
+<thead>
+<tr>
+<th>变量</th>
+<th>含义</th>
+<th>类比</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>threadIdx</code></td>
+<td>我在自己 block 里排第几（从 0 起）</td>
+<td>我在班里的学号</td>
+</tr>
+<tr>
+<td><code>blockIdx</code></td>
+<td>我这个 block 在 grid 里排第几</td>
+<td>我们班在年级里的班号</td>
+</tr>
+<tr>
+<td><code>blockDim</code></td>
+<td>一个 block 有多少线程</td>
+<td>每班多少人</td>
+</tr>
+<tr>
+<td><code>gridDim</code></td>
+<td>grid 里有多少 block</td>
+<td>年级有多少班</td>
+</tr>
+</tbody></table>
+<p>每个变量都有 <code>.x</code>、<code>.y</code>、<code>.z</code> 三个分量（下一节讲多维）。一维情况下只用 <code>.x</code>。要把&quot;第 <code>blockIdx.x</code> 班的第 <code>threadIdx.x</code> 号&quot;换算成&quot;全年级第几号&quot;，公式就是<strong>班号 × 每班人数 + 学号</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 几乎每个 CUDA kernel 开头都有这一行
+int i = blockIdx.x * blockDim.x + threadIdx.x;
+//      \_____第几个 block_____/   \__block 内序号__/</code></pre>
+</div><p>这条式子就是把二层结构&quot;拉直&quot;成一维全局下标的标准套路。block 0 的线程占 <code>i = 0 .. blockDim-1</code>，block 1 接着占 <code>blockDim .. 2*blockDim-1</code>，无缝拼接，正好铺满 <code>gridDim * blockDim</code> 个连续下标。</p>
+<h2>为什么非要分两层？block 是硬件的分界线</h2>
+<p>你可能会想：既然最后都要拉直成一维 <code>i</code>，那 CUDA 干脆让我写&quot;我要 100 万个线程&quot;不就行了，为什么逼我拆成 block × thread 两层？</p>
+<p>答案在第 3 章那张硬件图里：<strong>一个 block 会被整体调度到一个 SM 上执行，绝不跨 SM</strong>。这个约束带来两个后果，正是分层的全部意义：</p>
+<ul>
+<li><strong>block 内的线程能廉价协作</strong>：它们同在一个 SM 上，可以共享那块片上 <strong>shared memory</strong>，还能用 <code>__syncthreads()</code> 在 block 内设 barrier 互相等待（第 7、8 章）。这是 GPU 上线程协作的主要方式。</li>
+<li><strong>不同 block 之间几乎无法协作</strong>：它们可能被分到不同 SM、甚至不同时间执行，硬件不保证谁先谁后。block 之间没有 barrier、不能安全地互相等待。</li>
+</ul>
+<div class="note">
+<strong>为什么这个设计是必要的，而非碍事</strong>
+正因为 block 之间互不依赖、可以任意顺序执行，GPU 才能<strong>自由伸缩</strong>：同一个 kernel，在有 20 个 SM 的入门卡上就少并行几个 block、在有 130 个 SM 的旗舰卡上就多并行几个，代码一字不改。block 是"一份能独立完成、可被任意 SM 领走的工作包"。你把协作限制在 block 内，换来的是<strong>跨硬件的可扩展性</strong>——这正是 GPU 编程模型最聪明的取舍之一。
+</div><div class="warn">
+<strong>陷阱：别指望用全局内存在 block 之间"手动同步"</strong>
+新手常想：我在全局内存里放个标志位，block A 写、block B 轮询等待，不就同步了？<strong>不行</strong>——如果 block B 先被调度、把 SM 占满，而 block A 还在排队根本没开始，B 就会永远等下去，直接死锁。跨 block 的同步只有一个可靠办法：<strong>把 kernel 拆成两次启动</strong>，两次启动之间天然是全局同步点。
+</div><h2>一维不够用：dim3 与二维网格</h2>
+<p>到目前为止我们只用 <code>.x</code>。但很多数据天生是二维的——图像、矩阵。硬要用一维下标去访问 <code>image[y * width + x]</code> 也能写，但 CUDA 允许你直接用二维的 grid 和 block，让线程坐标和像素坐标自然对应。</p>
+<p>执行配置里的两个参数其实是 <code>dim3</code> 类型——一个含 <code>.x/.y/.z</code> 的三元组。写 <code>&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;</code> 时如果传的是整数，等价于只设了 <code>.x</code>（<code>.y=.z=1</code>）。要开二维，就显式构造 <code>dim3</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 处理一张 width × height 的图像：让线程排成二维
+dim3 block(16, 16);                    // 每个 block 是 16×16 = 256 个线程
+dim3 grid((width  + 15) / 16,          // x 方向需要多少个 block（向上取整）
+          (height + 15) / 16);         // y 方向需要多少个 block
+process&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img, width, height);</code></pre>
+</div><p>kernel 里就同时用 <code>.x</code> 和 <code>.y</code> 各算一维，得到像素的 <code>(x, y)</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">__global__ void process(unsigned char* img, int width, int height) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;   // 全局列
+    int y = blockIdx.y * blockDim.y + threadIdx.y;   // 全局行
+    if (x &lt; width &amp;&amp; y &lt; height) {                   // 二维也要边界检查
+        int idx = y * width + x;                     // 二维坐标转一维偏移
+        img[idx] = 255 - img[idx];                   // 例：反色
+    }
+}</code></pre>
+</div><div class="note">
+<strong>二维只是"方便"，不是"更快"</strong>
+二维 grid/block 不会凭空提速，它只是让代码更贴合数据的形状：线程的 <code>(x, y)</code> 直接就是像素坐标，索引算术更清晰、越界判断更自然。底层硬件依然把 block 内的线程按一维顺序切成 warp（先按 x、再 y、再 z），所以第 6、7 章讲访存时，你仍要关心"哪些线程落在同一个 warp"。三维（<code>.z</code>）同理，常用于体数据/三维网格。
+</div><h2>边界检查：<code>if (i &lt; n)</code> 不是可选项</h2>
+<p>注意上面每个 kernel 都有一句 <code>if (i &lt; n)</code>（或二维的 <code>if (x &lt; width &amp;&amp; y &lt; height)</code>）。这不是防御性编程的洁癖，而是<strong>几乎必然发生的情况</strong>：</p>
+<p>block 里的线程数通常固定（比如 256），而你的数据量 <code>n</code> 很少正好是 256 的整数倍。于是 <code>blocks = (n + 255) / 256</code> 向上取整后，启动的线程总数 <code>blocks * 256</code> 会<strong>略多于</strong> <code>n</code>。多出来的那些线程算出的 <code>i</code> 会 ≥ <code>n</code>，如果不拦住，它们就会去写 <code>data[i]</code> 这个<strong>越界地址</strong>——轻则结果错乱，重则非法访存崩溃。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">__global__ void add(float* c, const float* a, const float* b, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; n)                 // 挡住超出数据范围的"多余线程"
+        c[i] = a[i] + b[i];
+}</code></pre>
+</div><p>这就引出下一个问题：block 大小该选多少？</p>
+<h2>block 大小为什么常取 32 的倍数</h2>
+<p>你会发现示例里 block 大小总是 128、256、512 这类数——都是 <strong>32 的倍数</strong>。原因埋在第 2 章：硬件把 block 内的线程按 32 个一组切成 <strong>warp（线程束）</strong>，warp 才是真正的调度和执行单位。</p>
+<p>如果你把 block 设成比如 100 个线程，硬件仍会切成 4 个 warp（<code>ceil(100/32)=4</code>，共 128 个 warp 槽位），最后一个 warp 里只有 4 个线程干活、28 个&quot;空转&quot;,白白浪费了近一个 warp 的执行资源。取 32 的倍数就没有这种零头浪费。</p>
+<div class="keypoint">
+<strong>先记结论，第 6 章讲透</strong>
+<strong>block 大小取 32 的倍数</strong>（常用 128 / 256），因为硬件以 32 线程的 warp 为单位调度，非整数倍会在最后一个 warp 里浪费槽位。至于该在 128、256、512 里选哪个，取决于寄存器用量、shared memory 用量和 occupancy——那是第 16 章性能模型的内容。现在你只需养成"block 大小填 32 的倍数"这个肌肉记忆。
+</div><h2>动手：亲手算全局索引，看二维网格铺满图像</h2>
+<p>下面这个模拟器<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它不碰 GPU，而是用纯 Python 忠实复刻 CUDA 的索引算术：先展示一维下 <code>blockIdx / threadIdx</code> 怎么拼成全局 <code>i</code>，再展示二维下 2×2 个 block 怎么各自认领一张 6×4 图像的一块，最后演示&quot;多余线程被 <code>if (i &lt; n)</code> 拦下&quot;。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20CUDA%20%E7%9A%84%E5%85%A8%E5%B1%80%E7%B4%A2%E5%BC%95%EF%BC%9Ai%20%3D%20blockIdx.x%20*%20blockDim.x%20%2B%20threadIdx.x%0Adef%20global_index(block_idx%2C%20block_dim%2C%20thread_idx)%3A%0A%20%20%20%20return%20block_idx%20*%20block_dim%20%2B%20thread_idx%0A%0AblockDim%20%3D%204%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20block%20%E6%9C%89%204%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%0AgridDim%20%20%3D%202%20%20%20%23%20grid%20%E9%87%8C%E6%9C%89%202%20%E4%B8%AA%20block%0A%0Aprint(%22%3D%3D%3D%20%E4%B8%80%E7%BB%B4%EF%BC%9Agrid%20%E6%9C%89%202%20%E4%B8%AA%20block%EF%BC%8C%E6%AF%8F%E4%B8%AA%20block%204%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%20%3D%3D%3D%22)%0Afor%20b%20in%20range(gridDim)%3A%0A%20%20%20%20for%20t%20in%20range(blockDim)%3A%0A%20%20%20%20%20%20%20%20i%20%3D%20global_index(b%2C%20blockDim%2C%20t)%0A%20%20%20%20%20%20%20%20print(f%22%20%20blockIdx.x%3D%7Bb%7D%20threadIdx.x%3D%7Bt%7D%20-%3E%20i%20%3D%20%7Bb%7D*%7BblockDim%7D%2B%7Bt%7D%20%3D%20%7Bi%7D%22)%0A%0Aprint(%22%5Cn%3D%3D%3D%20%E4%BA%8C%E7%BB%B4%EF%BC%9A%E7%94%A8%202x2%20%E4%B8%AA%20block%20%E8%A6%86%E7%9B%96%E4%B8%80%E5%BC%A0%206x4%20%E7%9A%84%E5%9B%BE%E5%83%8F%20%3D%3D%3D%22)%0AW%2C%20H%20%3D%206%2C%204%0Abdx%2C%20bdy%20%3D%203%2C%202%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20block%20%E6%98%AF%203x2%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%EF%BC%88blockDim.x%3D3%2C%20blockDim.y%3D2%EF%BC%89%0Agdx%2C%20gdy%20%3D%202%2C%202%20%20%20%20%23%20grid%20%E6%98%AF%202x2%20%E4%B8%AA%20block%EF%BC%88gridDim.x%3D2%2C%20gridDim.y%3D2%EF%BC%89%0Aowner%20%3D%20%5B%5BNone%5D%20*%20W%20for%20_%20in%20range(H)%5D%0Afor%20by%20in%20range(gdy)%3A%0A%20%20%20%20for%20bx%20in%20range(gdx)%3A%0A%20%20%20%20%20%20%20%20for%20ty%20in%20range(bdy)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20for%20tx%20in%20range(bdx)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20x%20%3D%20bx%20*%20bdx%20%2B%20tx%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%A8%E5%B1%80%E5%88%97%20%3D%20blockIdx.x*blockDim.x%20%2B%20threadIdx.x%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20y%20%3D%20by%20*%20bdy%20%2B%20ty%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%A8%E5%B1%80%E8%A1%8C%20%3D%20blockIdx.y*blockDim.y%20%2B%20threadIdx.y%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20owner%5By%5D%5Bx%5D%20%3D%20f%22b(%7Bbx%7D%2C%7Bby%7D)%22%0Aprint(%22%E6%AF%8F%E4%B8%AA%E5%83%8F%E7%B4%A0%E7%94%B1%E5%93%AA%E4%B8%AA%20block%20%E8%B4%9F%E8%B4%A3%EF%BC%88block%20%E5%9D%90%E6%A0%87%20bx%2Cby%EF%BC%89%EF%BC%9A%22)%0Afor%20y%20in%20range(H)%3A%0A%20%20%20%20print(%22%20%20%22%20%2B%20%22%20%20%22.join(owner%5By%5D%5Bx%5D%20for%20x%20in%20range(W)))%0A%0Aprint(%22%5Cn%3D%3D%3D%20%E8%BE%B9%E7%95%8C%E6%A3%80%E6%9F%A5%EF%BC%9An%3D10%EF%BC%8C%E4%BD%86%203%20%E4%B8%AA%20block%20x%204%20%E7%BA%BF%E7%A8%8B%20%3D%2012%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%20%3D%3D%3D%22)%0An%20%3D%2010%0Abd%20%3D%204%0Agd%20%3D%20(n%20%2B%20bd%20-%201)%20%2F%2F%20bd%20%20%20%20%20%20%20%20%20%20%23%20%3D%203%0Afor%20b%20in%20range(gd)%3A%0A%20%20%20%20for%20t%20in%20range(bd)%3A%0A%20%20%20%20%20%20%20%20i%20%3D%20b%20*%20bd%20%2B%20t%0A%20%20%20%20%20%20%20%20if%20i%20%3C%20n%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20i%3D%7Bi%3A2d%7D%20-%3E%20%E5%A4%84%E7%90%86%20data%5B%7Bi%7D%5D%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20i%3D%7Bi%3A2d%7D%20-%3E%20if(i%3Cn)%20%E6%8B%A6%E4%B8%8B%EF%BC%8C%E4%BB%80%E4%B9%88%E9%83%BD%E4%B8%8D%E5%81%9A%22)"># 模拟 CUDA 的全局索引：i = blockIdx.x * blockDim.x + threadIdx.x
+def global_index(block_idx, block_dim, thread_idx):
+    return block_idx * block_dim + thread_idx
+
+blockDim = 4   # 每个 block 有 4 个线程
+gridDim  = 2   # grid 里有 2 个 block
+
+print("=== 一维：grid 有 2 个 block，每个 block 4 个线程 ===")
+for b in range(gridDim):
+    for t in range(blockDim):
+        i = global_index(b, blockDim, t)
+        print(f"  blockIdx.x={b} threadIdx.x={t} -&gt; i = {b}*{blockDim}+{t} = {i}")
+
+print("\n=== 二维：用 2x2 个 block 覆盖一张 6x4 的图像 ===")
+W, H = 6, 4
+bdx, bdy = 3, 2    # 每个 block 是 3x2 个线程（blockDim.x=3, blockDim.y=2）
+gdx, gdy = 2, 2    # grid 是 2x2 个 block（gridDim.x=2, gridDim.y=2）
+owner = [[None] * W for _ in range(H)]
+for by in range(gdy):
+    for bx in range(gdx):
+        for ty in range(bdy):
+            for tx in range(bdx):
+                x = bx * bdx + tx          # 全局列 = blockIdx.x*blockDim.x + threadIdx.x
+                y = by * bdy + ty          # 全局行 = blockIdx.y*blockDim.y + threadIdx.y
+                owner[y][x] = f"b({bx},{by})"
+print("每个像素由哪个 block 负责（block 坐标 bx,by）：")
+for y in range(H):
+    print("  " + "  ".join(owner[y][x] for x in range(W)))
+
+print("\n=== 边界检查：n=10，但 3 个 block x 4 线程 = 12 个线程 ===")
+n = 10
+bd = 4
+gd = (n + bd - 1) // bd          # = 3
+for b in range(gd):
+    for t in range(bd):
+        i = b * bd + t
+        if i &lt; n:
+            print(f"  i={i:2d} -&gt; 处理 data[{i}]")
+        else:
+            print(f"  i={i:2d} -&gt; if(i&lt;n) 拦下，什么都不做")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 一维：grid 有 2 个 block，每个 block 4 个线程 ===
+  blockIdx.x=0 threadIdx.x=0 -&gt; i = 0*4+0 = 0
+  blockIdx.x=0 threadIdx.x=1 -&gt; i = 0*4+1 = 1
+  blockIdx.x=0 threadIdx.x=2 -&gt; i = 0*4+2 = 2
+  blockIdx.x=0 threadIdx.x=3 -&gt; i = 0*4+3 = 3
+  blockIdx.x=1 threadIdx.x=0 -&gt; i = 1*4+0 = 4
+  blockIdx.x=1 threadIdx.x=1 -&gt; i = 1*4+1 = 5
+  blockIdx.x=1 threadIdx.x=2 -&gt; i = 1*4+2 = 6
+  blockIdx.x=1 threadIdx.x=3 -&gt; i = 1*4+3 = 7
+
+=== 二维：用 2x2 个 block 覆盖一张 6x4 的图像 ===
+每个像素由哪个 block 负责（block 坐标 bx,by）：
+  b(0,0)  b(0,0)  b(0,0)  b(1,0)  b(1,0)  b(1,0)
+  b(0,0)  b(0,0)  b(0,0)  b(1,0)  b(1,0)  b(1,0)
+  b(0,1)  b(0,1)  b(0,1)  b(1,1)  b(1,1)  b(1,1)
+  b(0,1)  b(0,1)  b(0,1)  b(1,1)  b(1,1)  b(1,1)
+
+=== 边界检查：n=10，但 3 个 block x 4 线程 = 12 个线程 ===
+  i= 0 -&gt; 处理 data[0]
+  i= 1 -&gt; 处理 data[1]
+  i= 2 -&gt; 处理 data[2]
+  i= 3 -&gt; 处理 data[3]
+  i= 4 -&gt; 处理 data[4]
+  i= 5 -&gt; 处理 data[5]
+  i= 6 -&gt; 处理 data[6]
+  i= 7 -&gt; 处理 data[7]
+  i= 8 -&gt; 处理 data[8]
+  i= 9 -&gt; 处理 data[9]
+  i=10 -&gt; if(i&lt;n) 拦下，什么都不做
+  i=11 -&gt; if(i&lt;n) 拦下，什么都不做</code></pre>
+</div><p>看二维那张表：每个 block 认领一个 3×2 的矩形区域，四个 block 拼起来正好盖满 6×4 的图像——这就是 GPU 处理图像的标准分工。请动手改：把 <code>blockDim</code> 从 4 改成 3，再看一维那段输出，你会发现 <code>i</code> 依然是 0,1,2,…7 连续无缝——<strong>改 block 大小不改变全局下标的连续性</strong>，这正是那条索引公式的威力。再把 <code>n</code> 从 10 改成 12，看边界检查那段，多余线程就消失了。</p>
+<h2>动手：一个完整可编译的 CUDA 程序</h2>
+<p>下面是一个<strong>完整、可编译</strong>的 <code>.cu</code> 程序：kernel 把每个线程自己的全局索引 <code>i</code> 写进数组，host 端做完整的 <code>cudaMalloc → 启动 → cudaMemcpy 拷回 → cudaFree</code>，最后打印头尾几个元素验证。点代码块上的 <strong>🔗 在 Compiler Explorer 打开</strong> 可以看 <code>nvcc</code> 生成的 PTX；本地有 GPU 的话按下面命令编译运行。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6IiNpbmNsdWRlIDxjc3RkaW8%2BXG4jaW5jbHVkZSA8Y3VkYV9ydW50aW1lLmg%2BXG5cbi8vIOavj%2BS4que6v%2Beoi%2BaKiuiHquW3seeahOWFqOWxgOe0ouW8leWGmei%2FmyBvdXRbaV1cbl9fZ2xvYmFsX18gdm9pZCB3cml0ZV9pbmRleChpbnQqIG91dCwgaW50IG4pIHtcbiAgICBpbnQgaSA9IGJsb2NrSWR4LnggKiBibG9ja0RpbS54ICsgdGhyZWFkSWR4Lng7ICAvLyDmiJHmmK%2FlhajlsYDnrKzlh6DkuKrnur%2FnqItcbiAgICBpZiAoaSA8IG4pICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8g5oyh5L2P5aSa5L2Z57q%2F56iLXG4gICAgICAgIG91dFtpXSA9IGk7XG59XG5cbmludCBtYWluKCkge1xuICAgIGNvbnN0IGludCBuID0gMTAwMDsgICAgICAgICAgICAgICAgIC8vIOaVheaEj%2BS4jeaYryAyNTYg55qE5pW05pWw5YCNXG4gICAgY29uc3QgaW50IGJ5dGVzID0gbiAqIHNpemVvZihpbnQpO1xuXG4gICAgaW50KiBoX291dCA9IChpbnQqKW1hbGxvYyhieXRlcyk7ICAgLy8gaG9zdCDnq6%2FnvJPlhrJcblxuICAgIGludCogZF9vdXQgPSBudWxscHRyOyAgICAgICAgICAgICAgIC8vIGRldmljZSDnq6%2FnvJPlhrJcbiAgICBjdWRhTWFsbG9jKCZkX291dCwgYnl0ZXMpO1xuXG4gICAgaW50IHRocmVhZHMgPSAyNTY7ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8gYmxvY2sg5aSn5bCP5Y%2BWIDMyIOeahOWAjeaVsFxuICAgIGludCBibG9ja3MgID0gKG4gKyB0aHJlYWRzIC0gMSkgLyB0aHJlYWRzOyAgICAgIC8vIOWQkeS4iuWPluaVtCA9IDRcbiAgICBwcmludGYoXCLlkK%2FliqjphY3nva7vvJolZCDkuKogYmxvY2sgw5cgJWQg57q%2F56iLID0gJWQg5Liq57q%2F56iL77yM6KaG55uWIG49JWRcXG5cIixcbiAgICAgICAgICAgYmxvY2tzLCB0aHJlYWRzLCBibG9ja3MgKiB0aHJlYWRzLCBuKTtcblxuICAgIHdyaXRlX2luZGV4PDw8YmxvY2tzLCB0aHJlYWRzPj4%2BKGRfb3V0LCBuKTsgICAgIC8vIDw8PGdyaWQsIGJsb2NrPj4%2BXG4gICAgY3VkYURldmljZVN5bmNocm9uaXplKCk7ICAgICAgICAgICAgICAgICAgICAgICAgLy8g562JIGtlcm5lbCDot5HlroxcblxuICAgIGN1ZGFNZW1jcHkoaF9vdXQsIGRfb3V0LCBieXRlcywgY3VkYU1lbWNweURldmljZVRvSG9zdCk7ICAvLyDmi7flm55cblxuICAgIHByaW50ZihcIuWJjSA1IOS4qu%2B8miAlZCAlZCAlZCAlZCAlZFxcblwiLFxuICAgICAgICAgICBoX291dFswXSwgaF9vdXRbMV0sIGhfb3V0WzJdLCBoX291dFszXSwgaF9vdXRbNF0pO1xuICAgIHByaW50ZihcIuWQjiAzIOS4qu%2B8miAlZCAlZCAlZFxcblwiLFxuICAgICAgICAgICBoX291dFtuIC0gM10sIGhfb3V0W24gLSAyXSwgaF9vdXRbbiAtIDFdKTtcblxuICAgIGN1ZGFGcmVlKGRfb3V0KTsgICAgICAgICAgICAgICAgICAgIC8vIOmHiuaUvuaYvuWtmFxuICAgIGZyZWUoaF9vdXQpOyAgICAgICAgICAgICAgICAgICAgICAgIC8vIOmHiuaUvuS4u%2BWtmFxuICAgIHJldHVybiAwO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJudmNjMTI5Iiwib3B0aW9ucyI6Ii1zdGQ9YysrMjAgLU8zIC0tZ3B1LWFyY2hpdGVjdHVyZT1zbV85MCAtcHR4In1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（看 PTX）</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;cstdio&gt;
+#include &lt;cuda_runtime.h&gt;
+
+// 每个线程把自己的全局索引写进 out[i]
+__global__ void write_index(int* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;  // 我是全局第几个线程
+    if (i &lt; n)                                       // 挡住多余线程
+        out[i] = i;
+}
+
+int main() {
+    const int n = 1000;                 // 故意不是 256 的整数倍
+    const int bytes = n * sizeof(int);
+
+    int* h_out = (int*)malloc(bytes);   // host 端缓冲
+
+    int* d_out = nullptr;               // device 端缓冲
+    cudaMalloc(&amp;d_out, bytes);
+
+    int threads = 256;                              // block 大小取 32 的倍数
+    int blocks  = (n + threads - 1) / threads;      // 向上取整 = 4
+    printf("启动配置：%d 个 block × %d 线程 = %d 个线程，覆盖 n=%d\n",
+           blocks, threads, blocks * threads, n);
+
+    write_index&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(d_out, n);     // &lt;&lt;&lt;grid, block&gt;&gt;&gt;
+    cudaDeviceSynchronize();                        // 等 kernel 跑完
+
+    cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost);  // 拷回
+
+    printf("前 5 个： %d %d %d %d %d\n",
+           h_out[0], h_out[1], h_out[2], h_out[3], h_out[4]);
+    printf("后 3 个： %d %d %d\n",
+           h_out[n - 3], h_out[n - 2], h_out[n - 1]);
+
+    cudaFree(d_out);                    // 释放显存
+    free(h_out);                        // 释放主存
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 main.cu -o app &amp;&amp; ./app</code></div>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvcc ch04_write_index.cu -o ch04_write_index &amp;&amp; ./ch04_write_index</code></pre>
+</div><p>跑起来 <code>h_out[i]</code> 应当正好等于 <code>i</code>（前 5 个是 <code>0 1 2 3 4</code>，后 3 个是 <code>997 998 999</code>）。这验证了一件事：那 <code>4 × 256 = 1024</code> 个线程里，前 1000 个各自写对了自己的格子，多出来的 24 个被 <code>if (i &lt; n)</code> 干净地挡在了外面。试着把 <code>write_index</code> 里的 <code>out[i] = i</code> 改成 <code>out[i] = blockIdx.x</code>，重新编译运行——你会看到输出变成一段段相同的班号（前 256 个是 0，接着 256 个是 1……），直观地看出&quot;谁属于哪个 block&quot;。</p>
+<h2>小结与下一步</h2>
+<p>你现在掌握了 CUDA 的软件执行层级：怎么用 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code> 组织海量线程，怎么用四个内建变量在 kernel 里定位自己，以及为什么要分成 block、为什么 block 大小取 32 的倍数、为什么每个 kernel 都得带边界检查。</p>
+<p>这套 Grid/Block/Thread 词汇是 NVIDIA CUDA 的说法。下一章我们看<strong>同一套概念在 SYCL/OpenCL 里的另一套名字</strong>——NDRange、work-group、work-item——它们和本章的概念几乎一一对应，但在&quot;你到底指定什么数字&quot;这件事上有一个极易踩坑的差别。理解了本章，你会发现下一章大半是&quot;换个词汇表&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>启动 kernel 用 <code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code>（<strong>执行配置</strong>）：GPU 强制你把线程组织成 <strong>grid → block → thread</strong> 两层结构，总线程数 = block 数 × 每 block 线程数，且几乎总是<strong>大幅超订</strong>。</li>
+<li>kernel 里靠四个内建变量定位自己：<code>threadIdx</code>（block 内序号）、<code>blockIdx</code>（block 号）、<code>blockDim</code>（每 block 线程数）、<code>gridDim</code>（block 数）。</li>
+<li>把二层拉直成一维全局下标的标准公式：<strong><code>int i = blockIdx.x * blockDim.x + threadIdx.x</code></strong>。</li>
+<li>分两层是因为<strong>一个 block 整体落在一个 SM 上</strong>：block 内线程能用 shared memory 和 <code>__syncthreads()</code> 廉价协作，block 之间几乎无法协作——换来的是跨硬件的<strong>自由伸缩</strong>。</li>
+<li>用 <code>dim3</code> 可开二维/三维 grid/block，让线程坐标直接对应像素/矩阵坐标；这是&quot;方便&quot;而非&quot;更快&quot;。</li>
+<li>边界检查 <strong><code>if (i &lt; n)</code></strong> 不可省：向上取整导致的多余线程会越界写。</li>
+<li><strong>block 大小取 32 的倍数</strong>（硬件按 32 线程的 warp 调度，第 6 章）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch03.html">← 第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a>
+  <a class="nav-next" href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 章 你会并行编程了——那 GPU 到底不一样在哪</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li class="active"><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 1 章 你会并行编程了——那 GPU 到底不一样在哪</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你会写多线程代码，懂锁、懂缓存、也许还调过 SIMD。这一章不教你任何 GPU 语法，而是先讲清一件事：<strong>当你从 CPU 走进 GPU，真正改变的不是 API，而是"一个线程值多少钱"这个最底层的假设。</strong></p>
+<p>读完这一章，你会明白后面每一章为什么这么安排，也会用一个能在浏览器里直接跑的小实验，亲眼看到"几个线程"和"成千上万个线程"的世界观差别。</p>
+</div><h2>先说结论：线程变便宜了，但也变笨了</h2>
+<p>在 CPU 上，你对&quot;线程&quot;有一套根深蒂固的直觉。你知道线程很<strong>贵</strong>：创建一个要向操作系统申请，调度有开销，所以你会用线程池复用它们；你的机器上能真正并行的线程数，大约等于核心数，8 核、16 核、顶天 128 核。你写并行代码时，脑子里想的是&quot;<strong>几个</strong>强壮的工人，各自干一大块活&quot;。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiLy8gQ1BVIOeahOW%2Fg%2BaZuuaooeWei%2B%2B8muWHoOS4quW8uuWjrueahOe6v%2Beoi%2B%2B8jOavj%2BS4quWkhOeQhuS4gOWkp%2BauteaVsOaNrlxuI2luY2x1ZGUgPHRocmVhZD5cbiNpbmNsdWRlIDx2ZWN0b3I%2BXG5cbnZvaWQgYWRkX3JhbmdlKGZsb2F0KiBjLCBjb25zdCBmbG9hdCogYSwgY29uc3QgZmxvYXQqIGIsIGludCBsbywgaW50IGhpKSB7XG4gICAgZm9yIChpbnQgaSA9IGxvOyBpIDwgaGk7ICsraSkgY1tpXSA9IGFbaV0gKyBiW2ldOyAgLy8g5LiA5Liq57q%2F56iL5bmy5LiA5pW05q61XG59XG5cbmludCBtYWluKCkge1xuICAgIGNvbnN0IGludCBOID0gMScwMDAnMDAwO1xuICAgIHN0ZDo6dmVjdG9yPGZsb2F0PiBhKE4sIDEuMGYpLCBiKE4sIDIuMGYpLCBjKE4pO1xuICAgIGNvbnN0IGludCBUID0gODsgICAgICAgICAgICAgICAgICAgICAgIC8vIDgg5Liq57q%2F56iL77yM57qm562J5LqO5qC45b%2BD5pWwXG4gICAgc3RkOjp2ZWN0b3I8c3RkOjp0aHJlYWQ%2BIHBvb2w7XG4gICAgZm9yIChpbnQgdCA9IDA7IHQgPCBUOyArK3QpXG4gICAgICAgIHBvb2wuZW1wbGFjZV9iYWNrKGFkZF9yYW5nZSwgYy5kYXRhKCksIGEuZGF0YSgpLCBiLmRhdGEoKSxcbiAgICAgICAgICAgICAgICAgICAgICAgICAgdCAqIE4gLyBULCAodCArIDEpICogTiAvIFQpOyAgIC8vIOavj%2BS6uuWIhiAxLzhcbiAgICBmb3IgKGF1dG8mIHRoIDogcG9vbCkgdGguam9pbigpO1xufSIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// CPU 的心智模型：几个强壮的线程，每个处理一大段数据
+#include &lt;thread&gt;
+#include &lt;vector&gt;
+
+void add_range(float* c, const float* a, const float* b, int lo, int hi) {
+    for (int i = lo; i &lt; hi; ++i) c[i] = a[i] + b[i];  // 一个线程干一整段
+}
+
+int main() {
+    const int N = 1'000'000;
+    std::vector&lt;float&gt; a(N, 1.0f), b(N, 2.0f), c(N);
+    const int T = 8;                       // 8 个线程，约等于核心数
+    std::vector&lt;std::thread&gt; pool;
+    for (int t = 0; t &lt; T; ++t)
+        pool.emplace_back(add_range, c.data(), a.data(), b.data(),
+                          t * N / T, (t + 1) * N / T);   // 每人分 1/8
+    for (auto&amp; th : pool) th.join();
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>八个线程，每个循环处理十二万五千个元素。这是 CPU 世界的标准姿势：<strong>线程少而强，每个线程内部还要靠循环、靠缓存、靠乱序执行榨干性能</strong>。</p>
+<p>现在看 GPU 的做法。同样是向量加法，你不再写&quot;每个线程处理一段&quot;，而是写<strong>一个线程只处理一个元素</strong>，然后一次性启动一百万个线程：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiY3VkYSIsInNvdXJjZSI6Ii8vIEdQVSDnmoTlv4PmmbrmqKHlnovvvJrkuIDnmb7kuIfkuKrnur%2FnqIvvvIzmr4%2FkuKrlj6rlpITnkIbkuIDkuKrlhYPntKBcbi8vIF9fZ2xvYmFsX18g6KGo56S66L%2BZ5piv5LiA5LiqXCJrZXJuZWxcIuKAlOKAlOS8muWcqCBHUFUg5LiK44CB6KKr5oiQ5Y2D5LiK5LiH5Liq57q%2F56iL5ZCE6LeR5LiA6YGN55qE5Ye95pWwXG5fX2dsb2JhbF9fIHZvaWQgYWRkKGZsb2F0KiBjLCBjb25zdCBmbG9hdCogYSwgY29uc3QgZmxvYXQqIGIsIGludCBuKSB7XG4gICAgaW50IGkgPSBibG9ja0lkeC54ICogYmxvY2tEaW0ueCArIHRocmVhZElkeC54OyAgLy8g5oiR5piv56ys5Yeg5Liq57q%2F56iL77yf77yI5YWo5bGA57yW5Y%2B377yJXG4gICAgaWYgKGkgPCBuKSBjW2ldID0gYVtpXSArIGJbaV07ICAgICAgICAgICAgICAgICAgLy8g5bCx5Y%2Bq566X6L%2BZ5LiA5Liq5YWD57SgXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im52Y2MxMjkiLCJvcHRpb25zIjoiLXN0ZD1jKysyMCAtTzMgLS1ncHUtYXJjaGl0ZWN0dXJlPXNtXzkwIC1wdHgifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔬 看 PTX / 编译器处理</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// GPU 的心智模型：一百万个线程，每个只处理一个元素
+// __global__ 表示这是一个"kernel"——会在 GPU 上、被成千上万个线程各跑一遍的函数
+__global__ void add(float* c, const float* a, const float* b, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;  // 我是第几个线程？（全局编号）
+    if (i &lt; n) c[i] = a[i] + b[i];                  // 就只算这一个元素
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>nvcc -std=c++20 -O3 -arch=sm_90 --ptx main.cu -o main.ptx   # 生成 PTX 中间码</code></div>
+</div><p>而在 CPU（host）那边，你只要写一行就能把它一次性铺开成上百万个线程——具体怎么分配显存、怎么启动，留到<strong>第 9 章</strong>完整走一遍，这里先看形状：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">const int N = 1'000'000;
+int threads = 256;                          // 每个 block 256 个线程
+int blocks  = (N + threads - 1) / threads;  // 凑够约 100 万个线程（向上取整）
+add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(c, a, b, N);       // &lt;&lt;&lt;...&gt;&gt;&gt; 是 CUDA 的启动语法，一次全部启动</code></pre>
+</div><p>点开上面 CUDA 代码块的 <strong>🔬 看 PTX / 编译器处理</strong>，你能看到 <code>nvcc</code> 把这个 kernel 编译成的 PTX（GPU 的&quot;汇编&quot;）——现在不用读懂它，先记住这个入口，后面讲编译器处理时会反复用到。</p>
+<p>差别不在&quot;用不用并行&quot;（两边都并行），而在<strong>并行的粒度和心态</strong>：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CPU：几个强壮的线程</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 8 个线程
+// 每个线程用循环处理 12.5 万个元素
+// 线程贵，所以要复用、要分块
+// 单线程很快，内部还有缓存和乱序执行</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">GPU：海量弱小的线程</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 100 万个线程
+// 每个线程只处理 1 个元素
+// 线程极便宜，随手就开几百万个
+// 单线程很慢，靠"人多"和内存带宽取胜</code></pre>
+</div></div>
+</div><div class="keypoint">
+<strong>本书第一个、也是最重要的一个观念</strong>
+在 CPU 上，线程<strong>又贵又强</strong>，你让少数几个线程各自处理一大块数据；在 GPU 上，线程<strong>又便宜又弱</strong>，你启动成千上万个，每个只处理一小片。写 GPU 代码的第一步，是把"我要怎么分块给几个线程"换成"如果每个数据元素都有一个自己的线程，它该做什么"。这叫<strong>数据并行（data parallelism）</strong>的思维。
+</div><div class="concept">
+<svg viewBox="0 0 560 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- 左：CPU -->
+  <text x="140" y="22" text-anchor="middle" font-size="14" fill="#6b7280" font-weight="bold">CPU：几个强壮的线程</text>
+  <!-- 4 个粗线程，各覆盖一大段 -->
+  <rect x="30" y="45" width="220" height="26" rx="4" fill="#e5e7eb" stroke="#6b7280"/>
+  <rect x="30" y="45" width="55" height="26" rx="4" fill="#c7d2d8" stroke="#6b7280"/>
+  <rect x="85" y="45" width="55" height="26" rx="4" fill="#aebfc7" stroke="#6b7280"/>
+  <rect x="140" y="45" width="55" height="26" rx="4" fill="#c7d2d8" stroke="#6b7280"/>
+  <rect x="195" y="45" width="55" height="26" rx="4" fill="#aebfc7" stroke="#6b7280"/>
+  <text x="140" y="90" text-anchor="middle" font-size="11" fill="#6b7280">4 个线程，各自循环处理一整段数据</text>
+  <circle cx="57" cy="120" r="15" fill="#6b7280"/><text x="57" y="124" text-anchor="middle" font-size="11" fill="#fff">T0</text>
+  <circle cx="112" cy="120" r="15" fill="#6b7280"/><text x="112" y="124" text-anchor="middle" font-size="11" fill="#fff">T1</text>
+  <circle cx="167" cy="120" r="15" fill="#6b7280"/><text x="167" y="124" text-anchor="middle" font-size="11" fill="#fff">T2</text>
+  <circle cx="222" cy="120" r="15" fill="#6b7280"/><text x="222" y="124" text-anchor="middle" font-size="11" fill="#fff">T3</text>
+  <text x="140" y="160" text-anchor="middle" font-size="11" fill="#6b7280">少而强</text>
+  <!-- 右：GPU -->
+  <text x="420" y="22" text-anchor="middle" font-size="14" fill="#2b6cb0" font-weight="bold">GPU：海量弱小的线程</text>
+  <!-- 一大格网格，每格一个线程 -->
+  <g fill="#eef6ff" stroke="#2b6cb0">
+    <!-- 生成 8x4 小格 -->
+    <rect x="310" y="45" width="26" height="26"/><rect x="338" y="45" width="26" height="26"/><rect x="366" y="45" width="26" height="26"/><rect x="394" y="45" width="26" height="26"/><rect x="422" y="45" width="26" height="26"/><rect x="450" y="45" width="26" height="26"/><rect x="478" y="45" width="26" height="26"/><rect x="506" y="45" width="26" height="26"/>
+    <rect x="310" y="73" width="26" height="26"/><rect x="338" y="73" width="26" height="26"/><rect x="366" y="73" width="26" height="26"/><rect x="394" y="73" width="26" height="26"/><rect x="422" y="73" width="26" height="26"/><rect x="450" y="73" width="26" height="26"/><rect x="478" y="73" width="26" height="26"/><rect x="506" y="73" width="26" height="26"/>
+    <rect x="310" y="101" width="26" height="26"/><rect x="338" y="101" width="26" height="26"/><rect x="366" y="101" width="26" height="26"/><rect x="394" y="101" width="26" height="26"/><rect x="422" y="101" width="26" height="26"/><rect x="450" y="101" width="26" height="26"/><rect x="478" y="101" width="26" height="26"/><rect x="506" y="101" width="26" height="26"/>
+    <rect x="310" y="129" width="26" height="26"/><rect x="338" y="129" width="26" height="26"/><rect x="366" y="129" width="26" height="26"/><rect x="394" y="129" width="26" height="26"/><rect x="422" y="129" width="26" height="26"/><rect x="450" y="129" width="26" height="26"/><rect x="478" y="129" width="26" height="26"/><rect x="506" y="129" width="26" height="26"/>
+  </g>
+  <text x="420" y="175" text-anchor="middle" font-size="11" fill="#2b6cb0">每个小格是一个线程，各处理一个元素</text>
+  <text x="420" y="195" text-anchor="middle" font-size="11" fill="#2b6cb0">多而弱（图里 32 个，真实是几十万个）</text>
+</svg>
+<div class="caption">图 1-1　同一个向量加法，两种世界观：CPU 用几个线程各扫一段；GPU 给每个元素配一个线程，一次全启动</div>
+</div><p>这一个差别，会像多米诺骨牌一样推倒你对很多事情的默认预期：分支（<code>if</code>）在 GPU 上为什么可能变慢？为什么访问内存的<strong>顺序</strong>比访问的<strong>次数</strong>还重要？为什么 GPU 上几乎不用锁，却大量用一种叫 barrier 的东西？——在 GPU 上，答案常常和你的 CPU 直觉相反。</p>
+<h2>为什么 GPU 要这么设计？一句话：赌带宽，不赌延迟</h2>
+<p>CPU 是一台<strong>延迟优化</strong>的机器。它假设你的程序里下一步依赖上一步，所以拼命缩短单条指令链的时间：巨大的缓存、分支预测、乱序执行、深流水线——全都是为了让<strong>单个线程尽快跑完</strong>。</p>
+<p>GPU 是一台<strong>吞吐优化</strong>的机器。它假设你有海量互不依赖的活儿要干，所以干脆不追求单个线程快，而是追求<strong>单位时间内完成的总量最大</strong>。它的秘密武器是&quot;用并行掩盖延迟&quot;：当一批线程卡在等内存时，硬件瞬间切换到另一批就绪的线程接着算，访存的等待就被算力填满了，几乎不浪费。</p>
+<div class="note">
+<strong>类比：餐厅的两种开法</strong>
+CPU 像一家<strong>精致小馆</strong>：几个顶级大厨，每人一条龙做完一道复杂菜，追求每道菜出餐尽量快（低延迟）。GPU 像一座<strong>巨型食堂</strong>：几百个只会做一个动作的帮厨，站成流水线，追求每小时出餐总量最大（高吞吐）。你不会让食堂做分子料理，也不会让小馆一小时供应上万份——<strong>用错场景，两边都难看</strong>。这就是为什么不是所有代码都适合 GPU。
+</div><p>因为赌的是吞吐，GPU 必须<strong>同时挂着</strong>远超核心数的线程（NVIDIA 的旗舰卡能同时驻留几万个线程）。线程一多，硬件就没本钱给每个线程都配独立的取指、译码、调度——于是它做了一个关键的取舍：<strong>让一大群线程共享同一套控制逻辑，齐步走同一条指令</strong>。这就是下一章的主角 <strong>SIMT</strong>，也是&quot;线程变笨了&quot;的根源：单个 GPU 线程没有自己的大脑，它只是一大队士兵里喊着同一个口令迈步的一个。</p>
+<h2>你的 CPU 经验，哪些能用、哪些要改</h2>
+<p>好消息是，你不是从零开始。很多硬件常识在 GPU 上更重要，不是没用了：</p>
+<table>
+<thead>
+<tr>
+<th>你已经懂的</th>
+<th>在 GPU 上</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>缓存局部性、访存比计算贵</td>
+<td><strong>更极端</strong>：GPU 算力过剩，绝大多数 kernel 卡在访存上，优化访存是主线</td>
+</tr>
+<tr>
+<td>SIMD（一条指令处理多个数据）</td>
+<td>演化成 <strong>SIMT</strong>（第 2 章）：写起来像标量，跑起来像向量</td>
+</tr>
+<tr>
+<td>线程、同步、数据竞争</td>
+<td>概念还在，但同步主要靠 <strong>barrier</strong>（第 8 章），锁几乎不用</td>
+</tr>
+<tr>
+<td>内存层级（寄存器 / L1 / L2 / RAM）</td>
+<td>层级更多也更<strong>显式</strong>：shared memory 要你亲手管（第 7 章）</td>
+</tr>
+<tr>
+<td>分支预测让 <code>if</code> 几乎免费</td>
+<td>反过来：一群线程走进不同分支会<strong>串行执行</strong>，即 warp 分歧（第 6 章）</td>
+</tr>
+</tbody></table>
+<p>需要<strong>换掉</strong>的直觉主要是三条，正好是本书前三部分要反复敲打的：</p>
+<ol>
+<li><strong>一个线程只干一点点活</strong>，而不是一大块（本章）。</li>
+<li><strong>一群线程齐步走同一条指令</strong>（SIMT，第 2 章），所以分支和访存模式的代价和 CPU 完全不同。</li>
+<li><strong>内存层级要你显式管理</strong>，数据放哪儿、怎么访问，往往比算法本身更影响速度（第 7 章起）。</li>
+</ol>
+<h2>动手：亲眼看看&quot;少而强&quot;对&quot;多而弱&quot;</h2>
+<p>光看不够。GPU 我们还没法在浏览器里跑，但&quot;数据并行&quot;的<strong>思维方式</strong>可以先用 Python 模拟出来。下面这段程序<strong>能在浏览器里直接运行</strong>——点右上角 <strong>▶ 运行</strong>。它不真的用 GPU，而是把两种世界观并排写出来，让你看到：不管是&quot;几个线程各扫一段&quot;还是&quot;每个元素一个线程&quot;，算出来的结果完全一样，变的只是<strong>你怎么描述这件事</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%94%A8%E7%BA%AF%20Python%20%E6%A8%A1%E6%8B%9F%E4%B8%A4%E7%A7%8D%E5%B9%B6%E8%A1%8C%E4%B8%96%E7%95%8C%E8%A7%82%EF%BC%9A%E7%BB%93%E6%9E%9C%E7%9B%B8%E5%90%8C%EF%BC%8C%E6%80%9D%E7%BB%B4%E4%B8%8D%E5%90%8C%0AN%20%3D%2016%0Aa%20%3D%20%5Bi%20for%20i%20in%20range(N)%5D%20%20%20%20%20%20%20%20%20%20%23%20%5B0%2C%201%2C%202%2C%20...%2C%2015%5D%0Ab%20%3D%20%5Bi%20*%2010%20for%20i%20in%20range(N)%5D%20%20%20%20%20%23%20%5B0%2C%2010%2C%2020%2C%20...%2C%20150%5D%0A%0A%23%20----------%20CPU%20%E4%B8%96%E7%95%8C%E8%A7%82%EF%BC%9A4%20%E4%B8%AA%22%E7%BA%BF%E7%A8%8B%22%EF%BC%8C%E6%AF%8F%E4%B8%AA%E5%A4%84%E7%90%86%E4%B8%80%E6%95%B4%E6%AE%B5%20----------%0Adef%20cpu_style(a%2C%20b%2C%20num_threads%3D4)%3A%0A%20%20%20%20c%20%3D%20%5B0%5D%20*%20len(a)%0A%20%20%20%20chunk%20%3D%20len(a)%20%2F%2F%20num_threads%0A%20%20%20%20for%20t%20in%20range(num_threads)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%83%B3%E8%B1%A1%E8%BF%99%204%20%E6%AC%A1%E6%98%AF%204%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%22%E5%90%8C%E6%97%B6%22%E8%B7%91%0A%20%20%20%20%20%20%20%20lo%2C%20hi%20%3D%20t%20*%20chunk%2C%20(t%20%2B%201)%20*%20chunk%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E7%BA%BF%E7%A8%8B%20%7Bt%7D%EF%BC%9A%E8%B4%9F%E8%B4%A3%E4%B8%8B%E6%A0%87%20%7Blo%7D..%7Bhi-1%7D%20%E8%BF%99%E4%B8%80%E6%95%B4%E6%AE%B5%22)%0A%20%20%20%20%20%20%20%20for%20i%20in%20range(lo%2C%20hi)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%86%85%E9%83%A8%E8%BF%98%E8%A6%81%E5%BE%AA%E7%8E%AF%0A%20%20%20%20%20%20%20%20%20%20%20%20c%5Bi%5D%20%3D%20a%5Bi%5D%20%2B%20b%5Bi%5D%0A%20%20%20%20return%20c%0A%0A%23%20----------%20GPU%20%E4%B8%96%E7%95%8C%E8%A7%82%EF%BC%9A%E6%AF%8F%E4%B8%AA%E5%85%83%E7%B4%A0%E9%85%8D%E4%B8%80%E4%B8%AA%22%E7%BA%BF%E7%A8%8B%22%EF%BC%8C%E5%90%84%E7%AE%97%E4%B8%80%E4%B8%AA%20----------%0Adef%20gpu_style(a%2C%20b)%3A%0A%20%20%20%20c%20%3D%20%5B0%5D%20*%20len(a)%0A%20%20%20%20def%20kernel(tid)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%80%E4%B8%AA%20GPU%20%E7%BA%BF%E7%A8%8B%E5%81%9A%E7%9A%84%E5%85%A8%E9%83%A8%E4%BA%8B%E6%83%85%0A%20%20%20%20%20%20%20%20c%5Btid%5D%20%3D%20a%5Btid%5D%20%2B%20b%5Btid%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%B2%A1%E6%9C%89%E5%BE%AA%E7%8E%AF%EF%BC%81%E5%8F%AA%E5%A4%84%E7%90%86%22%E6%88%91%E8%BF%99%E4%B8%80%E4%B8%AA%22%0A%20%20%20%20for%20tid%20in%20range(len(a))%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%83%B3%E8%B1%A1%E8%BF%99%2016%20%E6%AC%A1%E6%98%AF%2016%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%22%E5%90%8C%E6%97%B6%22%E8%B7%91%0A%20%20%20%20%20%20%20%20kernel(tid)%0A%20%20%20%20return%20c%0A%0Aprint(%22CPU%20%E4%B8%96%E7%95%8C%E8%A7%82%EF%BC%884%20%E4%B8%AA%E5%BC%BA%E5%A3%AE%E7%BA%BF%E7%A8%8B%EF%BC%89%EF%BC%9A%22)%0Ar1%20%3D%20cpu_style(a%2C%20b)%0Aprint(%22GPU%20%E4%B8%96%E7%95%8C%E8%A7%82%EF%BC%8816%20%E4%B8%AA%E5%BC%B1%E5%B0%8F%E7%BA%BF%E7%A8%8B%EF%BC%89%EF%BC%9A%E6%AF%8F%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%8F%AA%E5%81%9A%20c%5Btid%5D%20%3D%20a%5Btid%5D%20%2B%20b%5Btid%5D%22)%0Ar2%20%3D%20gpu_style(a%2C%20b)%0A%0Aprint(%22%5Cn%E7%BB%93%E6%9E%9C%E4%B8%80%E6%A0%B7%E5%90%97%EF%BC%9F%22%2C%20r1%20%3D%3D%20r2)%0Aprint(%22%E7%BB%93%E6%9E%9C%EF%BC%9A%22%2C%20r2)"># 用纯 Python 模拟两种并行世界观：结果相同，思维不同
+N = 16
+a = [i for i in range(N)]          # [0, 1, 2, ..., 15]
+b = [i * 10 for i in range(N)]     # [0, 10, 20, ..., 150]
+
+# ---------- CPU 世界观：4 个"线程"，每个处理一整段 ----------
+def cpu_style(a, b, num_threads=4):
+    c = [0] * len(a)
+    chunk = len(a) // num_threads
+    for t in range(num_threads):                 # 想象这 4 次是 4 个线程"同时"跑
+        lo, hi = t * chunk, (t + 1) * chunk
+        print(f"  线程 {t}：负责下标 {lo}..{hi-1} 这一整段")
+        for i in range(lo, hi):                  # 每个线程内部还要循环
+            c[i] = a[i] + b[i]
+    return c
+
+# ---------- GPU 世界观：每个元素配一个"线程"，各算一个 ----------
+def gpu_style(a, b):
+    c = [0] * len(a)
+    def kernel(tid):                             # 这就是一个 GPU 线程做的全部事情
+        c[tid] = a[tid] + b[tid]                 # 没有循环！只处理"我这一个"
+    for tid in range(len(a)):                    # 想象这 16 次是 16 个线程"同时"跑
+        kernel(tid)
+    return c
+
+print("CPU 世界观（4 个强壮线程）：")
+r1 = cpu_style(a, b)
+print("GPU 世界观（16 个弱小线程）：每个线程只做 c[tid] = a[tid] + b[tid]")
+r2 = gpu_style(a, b)
+
+print("\n结果一样吗？", r1 == r2)
+print("结果：", r2)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">CPU 世界观（4 个强壮线程）：
+  线程 0：负责下标 0..3 这一整段
+  线程 1：负责下标 4..7 这一整段
+  线程 2：负责下标 8..11 这一整段
+  线程 3：负责下标 12..15 这一整段
+GPU 世界观（16 个弱小线程）：每个线程只做 c[tid] = a[tid] + b[tid]
+结果一样吗？ True
+结果： [0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 110, 121, 132, 143, 154, 165]</code></pre>
+</div><p>注意两个 <code>kernel</code> 函数体的差别：CPU 版内部有个 <code>for i in range(lo, hi)</code> 的循环，GPU 版<strong>一行、没有循环</strong>——它只关心&quot;我是 <code>tid</code> 号线程，我算 <code>c[tid]</code>&quot;。这个&quot;<strong>从循环体里抽出一次迭代，让它成为一个线程</strong>&quot;的动作，就是把 CPU 代码搬上 GPU 的核心套路。请改一下代码：把 <code>gpu_style</code> 里的 <code>kernel</code> 改成计算 <code>c[tid] = a[tid] * b[tid] + 1</code>，再运行看看——你会发现，你已经在用 GPU 的思维写&quot;kernel&quot;了。</p>
+<div class="warn">
+<strong>别急着把一切都塞进 GPU</strong>
+数据并行的前提是<strong>大量互不依赖的活儿</strong>。如果任务只有几百个元素、或每一步都强依赖上一步的结果（比如递归下降的解析器），GPU 那几万个线程会大部分闲着，搬数据进出显存的开销还可能比省下的计算更多。<strong>GPU 快，是在"又多又独立"的活儿上快。</strong>判断一个任务适不适合 GPU，是比会写 kernel 更值钱的能力，第 16 章会给你一套定量的方法。
+</div><h2>这本书怎么帮你完成切换</h2>
+<p>你不缺编程能力，缺的是并行的新心智模型。所以本书的策略始终是<strong>对照</strong>：先用一段你熟悉的 CPU 代码建立锚点，再看 GPU 怎么做、为什么这么做，并尽量把抽象机制画出来、跑出来。</p>
+<p>全书的路线：</p>
+<ol>
+<li><strong>换心智模型</strong>（第 1–3 章）：从&quot;几个线程&quot;切到&quot;成千上万个线程&quot;，看清 SIMT 和 GPU 硬件长什么样。</li>
+<li><strong>核心编程模型</strong>（第 4–9 章，<strong>地基</strong>）：执行层级（Grid/Block/Thread 与 NDRange/Work-group/Work-item）、真正的调度单位 warp/sub-group、内存层级、同步，最后写出第一个完整的真 kernel。这一部分立住了，GPU 就不再神秘。</li>
+<li><strong>四大技术逐一展开</strong>（第 10–15 章）：CUDA、SYCL、Triton、CuTe DSL——你会发现它们是同一个模型的不同外衣。</li>
+<li><strong>性能与优化</strong>（第 16–19 章）：occupancy、Roofline、访存优化、归约扫描、Tensor Core。</li>
+<li><strong>融会贯通</strong>（第 20–21 章）：同一个 softmax 用四种技术写一遍，最后从零实现一个 fused attention 前向，把所有知识串起来。</li>
+</ol>
+<div class="note">
+<strong>没有 GPU 也能开始</strong>
+本书前半部分的概念、图示、Python 模拟和 CUDA 的 PTX 查看，<strong>都不需要显卡</strong>。等进入 Triton / CuTe DSL 的完整实战（第 13 章起），你再准备一块 NVIDIA GPU 或一个云 GPU 实例即可——附录 A 会手把手教你搭环境，包括不花钱的选项。
+</div><p>搞清楚了&quot;线程变便宜也变笨了&quot;这一点，我们就可以进入下一章，去看那个让线程&quot;变笨&quot;的核心机制：一条指令怎么同时驱动一大群线程——<strong>SIMT</strong>。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>CPU 线程<strong>又贵又强</strong>，让少数线程各干一大块；GPU 线程<strong>又便宜又弱</strong>，启动成千上万个，每个只干一点点。这是<strong>数据并行</strong>思维。</li>
+<li>把 CPU 代码搬上 GPU 的核心套路：<strong>从循环体里抽出一次迭代，让它成为一个线程</strong>。</li>
+<li>GPU 是<strong>吞吐优化</strong>的机器，赌的是带宽而非延迟，用海量并行掩盖访存等待——所以它必须同时挂着远超核心数的线程。</li>
+<li>你的硬件直觉大多<strong>更重要</strong>了（访存比计算贵），但有三条要改：一个线程只干一点、一群线程齐步走（SIMT）、内存层级要显式管理。</li>
+<li>GPU 只在&quot;<strong>又多又独立</strong>&quot;的活儿上快；判断任务适不适合 GPU，比会写 kernel 更值钱。</li>
+<li>本书用<strong>对照 + 可视化 + 可运行</strong>的方式，帮你把 CPU 的心智模型平滑切换到 GPU。</li>
+</ul>
+
+<div class="chapter-nav">
+  <span></span>
+  <a class="nav-next" href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 12 章 SYCL：单一源码的跨厂商 C++</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 你会并行编程了——那 GPU 到底不一样在哪</a></li>
+<li><a href="ch02.html">第 2 章 SIMT 与 SIMD：一条指令，一大群线程</a></li>
+<li><a href="ch03.html">第 3 章 GPU 硬件的心智模型：SM、核心、内存与带宽</a></li>
+<li><a href="ch04.html">第 4 章 执行层级（一）：Grid、Block、Thread</a></li>
+<li><a href="ch05.html">第 5 章 执行层级（二）：NDRange、Work-group、Work-item</a></li>
+<li><a href="ch06.html">第 6 章 真正的调度单位：Warp 与 Sub-group</a></li>
+<li><a href="ch07.html">第 7 章 内存层级：global、shared、register 与合并访问</a></li>
+<li><a href="ch08.html">第 8 章 协作与同步：barrier、shuffle 与原子操作</a></li>
+<li><a href="ch09.html">第 9 章 你的第一个真 kernel：向量加法的完整生命周期</a></li>
+<li><a href="ch10.html">第 10 章 CUDA：最贴近硬件的编程模型</a></li>
+<li><a href="ch11.html">第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a></li>
+<li class="active"><a href="ch12.html">第 12 章 SYCL：单一源码的跨厂商 C++</a></li>
+<li><a href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel</a></li>
+<li><a href="ch14.html">第 14 章 Triton 进阶：算子融合与自动调优</a></li>
+<li><a href="ch15.html">第 15 章 CuTe DSL：Layout 与 Tensor 的代数</a></li>
+<li><a href="ch16.html">第 16 章 性能模型：occupancy、带宽与 Roofline</a></li>
+<li><a href="ch17.html">第 17 章 访存优化：合并、bank conflict 与向量化</a></li>
+<li><a href="ch18.html">第 18 章 并行原语：归约与扫描的经典模式</a></li>
+<li><a href="ch19.html">第 19 章 现代硬件：Tensor Core、异步拷贝与流水线</a></li>
+<li><a href="ch20.html">第 20 章 同一个 softmax，四种技术怎么写</a></li>
+<li><a href="ch21.html">第 21 章 综合项目：从零实现 fused attention 前向</a></li>
+<li><a href="appendix-a.html">附录 A 搭好环境：CUDA Toolkit、oneAPI、Triton 与在线工具</a></li>
+<li><a href="appendix-b.html">附录 B 术语对照表：CUDA ↔ SYCL ↔ OpenCL ↔ Triton</a></li>
+<li><a href="appendix-c.html">附录 C 读懂 GPU 报错与用好 profiler</a></li>
+<li><a href="appendix-d.html">附录 D 继续前进：文档、书目与工具链</a></li></ul></nav>
+<main>
+<article>
+<h1>第 12 章 SYCL：单一源码的跨厂商 C++</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前两章你用 CUDA 把手伸进了 NVIDIA 的硬件——但 CUDA 只跑在 NVIDIA 卡上。这一章讲另一条路线：<strong>SYCL</strong>，一个由 Khronos 制定的开放标准。它的野心是"<strong>一份源码，到处编译</strong>"：用标准 C++ 编译器、在一个 <code>.cpp</code> 里同时写主机端和设备端代码，然后编译到 NVIDIA、AMD、Intel 的 GPU，乃至 CPU。</p>
+<p>读完你会知道 SYCL 的 <code>queue</code>、两套内存模型（buffer/accessor 与 USM）、以及 <code>nd_range</code> + <code>local_accessor</code>（也就是 SYCL 版的 <code>__shared__</code>）怎么把第 11 章的 tiling 思路原样搬过来；你还会用一个浏览器里能跑的模拟器，看清"一份源码分发到多个后端、结果一致"到底是什么意思。最后你会掂量出这条路线的真实权衡：可移植性 vs 峰值性能。</p>
+</div><h2>为什么会有 SYCL：CUDA 好用，但它只认一家硬件</h2>
+<p>CUDA 是目前最成熟、生态最全的 GPU 编程模型——但它有一个前提：<strong>你的代码只能跑在 NVIDIA 的卡上</strong>。一旦你的部署环境里出现 AMD 的 MI 系列、Intel 的 Data Center GPU，或者你想让同一份代码在没有独显的机器上退化到 CPU 跑，CUDA 就不管用了。你要么维护多份代码，要么被一家硬件锁死（vendor lock-in）。</p>
+<p><strong>SYCL（读作&quot;sickle&quot;）</strong> 是 Khronos Group（就是定义 OpenGL、Vulkan、OpenCL 的那个组织）推出的开放标准，专门解决这个问题。它的设计目标可以浓缩成三句话：</p>
+<ul>
+<li><strong>单一源码（single-source）</strong>：主机端逻辑和设备端 kernel 写在<strong>同一个 <code>.cpp</code> 文件</strong>里，不像 OpenCL 那样把 kernel 塞进一个字符串或单独的文件。</li>
+<li><strong>就是现代 C++</strong>：没有新的 kernel 语言、没有 <code>__global__</code> 这类扩展关键字。设备端代码是一个普通的 C++ lambda，用<strong>标准 C++17/20 编译器</strong>（配合 SYCL 实现）就能编。</li>
+<li><strong>跨厂商</strong>：同一份源码，通过不同后端编译到 NVIDIA（走 PTX）、AMD、Intel（走 SPIR-V）的 GPU，以及 CPU。</li>
+</ul>
+<p>主流的 SYCL 实现有两个，附录 A 会教你装：</p>
+<ul>
+<li><strong>Intel oneAPI DPC++</strong>：编译器命令是 <code>icpx -fsycl</code>。DPC++ 是 Data Parallel C++ 的缩写，本质是带 SYCL 扩展的 Clang。</li>
+<li><strong>AdaptiveCpp</strong>（原名 hipSYCL / Open SYCL）：一个开源实现，能把 SYCL 直接编到 CUDA、HIP（AMD）和 OpenMP（CPU）后端。</li>
+</ul>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一份 SYCL 源码，编到多个后端</text>
+  <!-- 源码 -->
+  <rect x="200" y="38" width="160" height="42" rx="6" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="280" y="58" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">main.cpp</text>
+  <text x="280" y="73" text-anchor="middle" font-size="10" fill="#6b7280">主机端 + 设备端 lambda（单一源码）</text>
+  <!-- 编译器 -->
+  <path d="M280 80 L280 100" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a12)"/>
+  <rect x="180" y="100" width="200" height="30" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="280" y="120" text-anchor="middle" font-size="11" fill="#a53f1c">SYCL 编译器（icpx -fsycl / AdaptiveCpp）</text>
+  <!-- 中间表示：分叉到 SPIR-V / PTX -->
+  <path d="M240 130 L150 160" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a12)"/>
+  <path d="M320 130 L410 160" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a12)"/>
+  <rect x="80" y="160" width="150" height="28" rx="5" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="155" y="178" text-anchor="middle" font-size="11" fill="#2f7a45">SPIR-V（中间表示）</text>
+  <rect x="335" y="160" width="150" height="28" rx="5" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="410" y="178" text-anchor="middle" font-size="11" fill="#2f7a45">PTX（NVIDIA 中间表示）</text>
+  <!-- 后端硬件 -->
+  <g font-size="11">
+    <path d="M120 188 L90 222" stroke="#6b7280" stroke-width="1.2" marker-end="url(#a12)"/>
+    <path d="M190 188 L230 222" stroke="#6b7280" stroke-width="1.2" marker-end="url(#a12)"/>
+    <path d="M410 188 L410 222" stroke="#6b7280" stroke-width="1.2" marker-end="url(#a12)"/>
+    <rect x="35" y="224" width="110" height="30" rx="5" fill="#e5edf5" stroke="#2b6cb0"/>
+    <text x="90" y="243" text-anchor="middle" fill="#2b6cb0">Intel GPU</text>
+    <rect x="175" y="224" width="110" height="30" rx="5" fill="#e5edf5" stroke="#2b6cb0"/>
+    <text x="230" y="243" text-anchor="middle" fill="#2b6cb0">AMD GPU</text>
+    <rect x="355" y="224" width="110" height="30" rx="5" fill="#e5edf5" stroke="#2b6cb0"/>
+    <text x="410" y="243" text-anchor="middle" fill="#2b6cb0">NVIDIA GPU</text>
+  </g>
+  <!-- CPU 退化 -->
+  <path d="M280 130 L280 270" stroke="#9ca3af" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a12)"/>
+  <rect x="220" y="272" width="120" height="24" rx="5" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="280" y="288" text-anchor="middle" font-size="10" fill="#6b7280">CPU（无独显时退化到此）</text>
+  <defs>
+    <marker id="a12" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 12-1　SYCL 的核心卖点：同一份 <code>main.cpp</code> 经 SYCL 编译器降级成后端无关的中间表示（Intel/AMD 走 SPIR-V，NVIDIA 走 PTX），再由各后端翻译成原生指令，跑到不同厂商的硬件甚至 CPU 上</div>
+</div><h2>和 CUDA 的第一眼对比：不再有独立的 kernel 语言</h2>
+<p>回忆第 10 章那个 CUDA kernel：它是一个带 <code>__global__</code> 关键字的特殊函数，必须用 <code>nvcc</code> 这个专用编译器处理，且只出 NVIDIA 代码。SYCL 把这套东西全换成了标准 C++：设备端代码就是你<strong>提交给队列的一个 lambda</strong>，普通编译器就能编。</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CUDA：专用关键字 + 专用编译器</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 设备端是带 __global__ 的特殊函数
+__global__ void add(float* c, const float* a,
+                    const float* b, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; n) c[i] = a[i] + b[i];
+}
+
+// 用 &lt;&lt;&lt;&gt;&gt;&gt; 启动，必须 nvcc 编译，只出 NVIDIA
+add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(c, a, b, n);
+// $ nvcc add.cu       ← 专用编译器</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">SYCL：普通 lambda + 标准编译器</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 设备端就是一个提交给 queue 的 lambda
+q.parallel_for(sycl::range&lt;1&gt;(n), [=](sycl::id&lt;1&gt; i) {
+    c[i] = a[i] + b[i];   // 就是普通 C++
+});
+
+// 同一份 .cpp，标准 C++ 编译器（+SYCL）即可
+// $ icpx -fsycl add.cpp   ← 也能编到 NVIDIA/AMD/Intel</code></pre>
+</div></div>
+</div><p>差别一目了然：CUDA 把设备代码标成&quot;另一种东西&quot;（特殊关键字、特殊语法、特殊编译器），SYCL 则坚持&quot;<strong>设备代码也只是 C++</strong>&quot;，把差异藏进库和编译器后端。这就是&quot;单一源码&quot;的字面含义。</p>
+<h2>核心概念：queue、device 与两套内存模型</h2>
+<p>SYCL 的运行时模型可以先记住三个词。</p>
+<p><strong>queue（队列）</strong>：你和一台设备之间的通道。你把工作（kernel）**提交（submit）**到 queue，运行时负责把它派到设备上跑。创建 queue 时你可以指定&quot;选哪台设备&quot;：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 让运行时自动挑一台"最合适"的设备（通常是最强的 GPU）
+sycl::queue q{sycl::default_selector_v};
+
+// 或者明确要 GPU / CPU
+sycl::queue q_gpu{sycl::gpu_selector_v};
+sycl::queue q_cpu{sycl::cpu_selector_v};
+
+// 问问它到底选中了谁
+std::cout &lt;&lt; q.get_device().get_info&lt;sycl::info::device::name&gt;() &lt;&lt; "\n";</code></pre>
+</div><p><strong>内存管理，SYCL 给了你两条路</strong>，理解它们的取舍是这一章的重点：</p>
+<ol>
+<li><strong>buffer + accessor（缓冲区 + 访问器）</strong>：你把数据包进一个 <code>sycl::buffer</code>，kernel 里通过 <code>accessor</code> 访问。你<strong>声明</strong>每个 kernel 对每块 buffer 是读还是写，运行时据此<strong>自动构建依赖图</strong>、自动排好执行顺序、自动在主机和设备间搬数据。你不写一句 <code>memcpy</code>。</li>
+<li><strong>USM（Unified Shared Memory，统一共享内存）</strong>：更像 CUDA。你用 <code>malloc_device</code> / <code>malloc_shared</code> / <code>malloc_host</code> 拿到<strong>裸指针</strong>，像操作普通指针一样在 kernel 里解引用；同步和数据搬运<strong>由你显式负责</strong>（<code>q.memcpy</code>、<code>q.wait</code>、事件依赖）。</li>
+</ol>
+<div class="note">
+<strong>怎么选？一句话</strong>
+<strong>buffer/accessor</strong> 让运行时替你管依赖和数据搬运，代码更声明式、更不容易出错，适合刚上手或数据流复杂的场景。<strong>USM</strong> 是指针语义，控制更细、心智模型和 CUDA 几乎一一对应，从 CUDA 迁移过来最顺手，但同步要你自己盯。两者可以在一个程序里混用。本章的完整示例用 USM（贴近你刚学的 CUDA），而下面的模拟器帮你直观感受 buffer 的"自动依赖图"是怎么回事。
+</div><h2>parallel_for：从 range 到 nd_range</h2>
+<p>提交 kernel 的主力是 <code>parallel_for</code>。它有两种粒度：</p>
+<ul>
+<li><strong><code>range</code>（基础版）</strong>：你只说&quot;一共多少个 work-item&quot;，每个 work-item 拿到一个全局 id。没有 work-group 的概念，也就用不了 local memory。对应 CUDA 里&quot;只关心全局线程号&quot;的简单 kernel。</li>
+<li><strong><code>nd_range</code>（进阶版）</strong>：你同时指定<strong>全局大小</strong>和<strong>work-group 大小</strong>（<code>nd_range&lt;1&gt;{global, local}</code>），kernel 收到的是 <code>nd_item</code>，能问出全局 id、组内 local id、以及第几组。<strong>只有 nd_range 才能用 <code>local_accessor</code></strong>——那就是 SYCL 版的 shared memory，也才能用组内 barrier。</li>
+</ul>
+<p>这里就要把第 11 章的词汇表接上了。SYCL 换了一套名字，但<strong>概念和 CUDA 一一对应</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>CUDA（第 4–11 章）</th>
+<th>SYCL</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>grid</td>
+<td><code>nd_range</code> 的全局范围</td>
+<td>所有线程/work-item 的总数</td>
+</tr>
+<tr>
+<td>block</td>
+<td><strong>work-group</strong></td>
+<td>一组能协作、共享局部内存的线程；调度到一个 SM</td>
+</tr>
+<tr>
+<td>thread</td>
+<td><strong>work-item</strong></td>
+<td>最小执行单位</td>
+</tr>
+<tr>
+<td>warp（32 线程）</td>
+<td><strong>sub-group</strong></td>
+<td>硬件真正齐步调度的一小队</td>
+</tr>
+<tr>
+<td><code>blockIdx</code></td>
+<td><code>it.get_group(0)</code></td>
+<td>我是第几组</td>
+</tr>
+<tr>
+<td><code>threadIdx</code></td>
+<td><code>it.get_local_id(0)</code></td>
+<td>我在组内的编号</td>
+</tr>
+<tr>
+<td>全局线程号</td>
+<td><code>it.get_global_id(0)</code></td>
+<td>我的全局编号</td>
+</tr>
+<tr>
+<td><code>__shared__</code></td>
+<td><strong><code>local_accessor</code></strong></td>
+<td>组内共享的片上高速内存</td>
+</tr>
+<tr>
+<td><code>__syncthreads()</code></td>
+<td><code>it.barrier()</code></td>
+<td>组内同步栅栏</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>换了外衣，没换身体</strong>
+把第 11 章 tiling 矩阵乘的每一个 CUDA 概念，逐行替换成右列的 SYCL 名字，你就得到一个能跑在 Intel/AMD/NVIDIA 上的版本——算法、tiling 思路、barrier 的位置全都不变。<strong>你学的不是四种技术，是同一个执行模型的四种方言。</strong>附录 B 有更全的对照表。
+</div><h2>错误处理：同步异常与异步异常</h2>
+<p>SYCL 用 C++ 异常报错，但有个坑要提前说清：设备上的错误是<strong>异步</strong>发生的（kernel 在后台跑，出错时你的主机代码早跑到别处了）。所以 SYCL 把错误分两类：</p>
+<ul>
+<li><strong>同步异常</strong>：<code>q.submit</code> 之类的调用当场抛出，用普通 <code>try/catch</code> 就能接。</li>
+<li><strong>异步异常</strong>：kernel 执行期间发生，被攒起来，直到你调用 <code>q.wait_and_throw()</code> 或队列析构时，交给你在建 queue 时注册的 <strong><code>async_handler</code></strong> 统一处理。</li>
+</ul>
+<p>所以健壮的 SYCL 程序，建 queue 时通常都带一个 handler。下面的完整示例就演示了它。</p>
+<h2>动手（一）：模拟&quot;一份源码，多个后端&quot;</h2>
+<p>先在浏览器里跑一个模拟器，把 SYCL 最核心的那句&quot;一份源码分发到多个后端、结果一致&quot;变成你能看见的东西。它不真用 GPU：我们写<strong>一个&quot;设备端 kernel&quot;</strong>（一个函数，描述&quot;一个 work-item 做什么&quot;），把它降级成一份<strong>后端无关的中间表示</strong>，再交给三个&quot;假装的后端&quot;各自去&quot;编译并执行&quot;——你会看到三家硬件跑出<strong>完全一样</strong>的结果。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20SYCL%20%E7%9A%84%E6%A0%B8%E5%BF%83%E7%90%86%E5%BF%B5%EF%BC%9A%E4%B8%80%E4%BB%BD%E6%BA%90%E7%A0%81%20%E2%86%92%20%E4%B8%80%E4%BB%BD%E4%B8%AD%E9%97%B4%E8%A1%A8%E7%A4%BA%20%E2%86%92%20%E5%A4%9A%E4%B8%AA%E5%90%8E%E7%AB%AF%20%E2%86%92%20%E7%BB%93%E6%9E%9C%E4%B8%80%E8%87%B4%0A%23%20%E4%BD%A0%E5%8F%AA%E5%86%99%22%E4%B8%80%E4%B8%AA%20work-item%20%E5%81%9A%E4%BB%80%E4%B9%88%22%EF%BC%8C%E5%90%8E%E7%AB%AF%E8%B4%9F%E8%B4%A3%E7%BF%BB%E8%AF%91%E6%88%90%E5%90%84%E8%87%AA%E7%9A%84%E5%8E%9F%E7%94%9F%E6%8C%87%E4%BB%A4%0A%0Adef%20kernel(i%2C%20a%2C%20b)%3A%0A%20%20%20%20%23%20%E8%BF%99%E5%B0%B1%E6%98%AF%E8%AE%BE%E5%A4%87%E7%AB%AF%E4%BB%A3%E7%A0%81%EF%BC%9A%E4%B8%80%E4%B8%AA%20work-item%20%E5%8F%AA%E7%AE%97%E4%B8%80%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%88%E5%92%8C%20CUDA%20%E4%B8%80%E4%B8%AA%E7%BA%BF%E7%A8%8B%E4%B8%80%E4%B8%AA%E5%85%83%E7%B4%A0%E5%90%8C%E7%90%86%EF%BC%89%0A%20%20%20%20return%20a%5Bi%5D%20%2B%20b%5Bi%5D%0A%0Adef%20backend(name%2C%20ir%2C%20kernel_fn%2C%20a%2C%20b%2C%20n)%3A%0A%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%E5%90%8E%E7%AB%AF%E6%8B%BF%E5%88%B0%E5%90%8C%E4%B8%80%E4%BB%BD%E4%B8%AD%E9%97%B4%E8%A1%A8%E7%A4%BA(IR)%EF%BC%8C%E7%BF%BB%E8%AF%91%E6%88%90%E8%87%AA%E5%B7%B1%E7%9A%84%E6%8C%87%E4%BB%A4%EF%BC%8C%E5%86%8D%E5%AF%B9%E6%AF%8F%E4%B8%AA%20work-item%20%E6%89%A7%E8%A1%8C%0A%20%20%20%20print(f%22%5B%7Bname%7D%5D%20%E6%94%B6%E5%88%B0%E4%B8%AD%E9%97%B4%E8%A1%A8%E7%A4%BA%20%7Bir%7D%EF%BC%8C%E7%BF%BB%E8%AF%91%E6%88%90%E6%9C%AC%E5%90%8E%E7%AB%AF%E5%8E%9F%E7%94%9F%E6%8C%87%E4%BB%A4%E5%B9%B6%E6%89%A7%E8%A1%8C%22)%0A%20%20%20%20out%20%3D%20%5B0%5D%20*%20n%0A%20%20%20%20for%20i%20in%20range(n)%3A%20%20%20%20%20%20%20%20%20%20%23%20%E6%83%B3%E8%B1%A1%E8%BF%99%20n%20%E6%AC%A1%E6%98%AF%20n%20%E4%B8%AA%20work-item%20%E5%B9%B6%E8%A1%8C%0A%20%20%20%20%20%20%20%20out%5Bi%5D%20%3D%20kernel_fn(i%2C%20a%2C%20b)%0A%20%20%20%20return%20out%0A%0AN%20%3D%208%0Aa%20%3D%20%5Bi%20for%20i%20in%20range(N)%5D%20%20%20%20%20%20%20%20%20%23%20%5B0%2C1%2C...%2C7%5D%0Ab%20%3D%20%5Bi%20*%2010%20for%20i%20in%20range(N)%5D%20%20%20%20%23%20%5B0%2C10%2C...%2C70%5D%0A%0A%23%20%E7%BC%96%E8%AF%91%E5%99%A8%E5%89%8D%E7%AB%AF%E6%8A%8A%E5%90%8C%E4%B8%80%E4%BB%BD%20kernel%20%E9%99%8D%E7%BA%A7%E6%88%90%E5%90%8E%E7%AB%AF%E6%97%A0%E5%85%B3%E7%9A%84%E4%B8%AD%E9%97%B4%E8%A1%A8%E7%A4%BA%0Air%20%3D%20%22SPIR-V%3Aadd(v0%2Cv1)%22%0A%0Ar_intel%20%20%3D%20backend(%22Intel%20%20GPU%22%2C%20ir%2C%20kernel%2C%20a%2C%20b%2C%20N)%0Ar_nvidia%20%3D%20backend(%22NVIDIA%20GPU%22%2C%20ir%2C%20kernel%2C%20a%2C%20b%2C%20N)%0Ar_amd%20%20%20%20%3D%20backend(%22AMD%20%20%20%20GPU%22%2C%20ir%2C%20kernel%2C%20a%2C%20b%2C%20N)%0A%0Aprint(%22%5Cn%E4%B8%89%E4%B8%AA%E5%90%8E%E7%AB%AF%E7%BB%93%E6%9E%9C%E4%B8%80%E8%87%B4%E5%90%97%EF%BC%9F%22%2C%20r_intel%20%3D%3D%20r_nvidia%20%3D%3D%20r_amd)%0Aprint(%22%E7%BB%93%E6%9E%9C%EF%BC%9A%22%2C%20r_intel)"># 模拟 SYCL 的核心理念：一份源码 → 一份中间表示 → 多个后端 → 结果一致
+# 你只写"一个 work-item 做什么"，后端负责翻译成各自的原生指令
+
+def kernel(i, a, b):
+    # 这就是设备端代码：一个 work-item 只算一个元素（和 CUDA 一个线程一个元素同理）
+    return a[i] + b[i]
+
+def backend(name, ir, kernel_fn, a, b, n):
+    # 每个后端拿到同一份中间表示(IR)，翻译成自己的指令，再对每个 work-item 执行
+    print(f"[{name}] 收到中间表示 {ir}，翻译成本后端原生指令并执行")
+    out = [0] * n
+    for i in range(n):          # 想象这 n 次是 n 个 work-item 并行
+        out[i] = kernel_fn(i, a, b)
+    return out
+
+N = 8
+a = [i for i in range(N)]         # [0,1,...,7]
+b = [i * 10 for i in range(N)]    # [0,10,...,70]
+
+# 编译器前端把同一份 kernel 降级成后端无关的中间表示
+ir = "SPIR-V:add(v0,v1)"
+
+r_intel  = backend("Intel  GPU", ir, kernel, a, b, N)
+r_nvidia = backend("NVIDIA GPU", ir, kernel, a, b, N)
+r_amd    = backend("AMD    GPU", ir, kernel, a, b, N)
+
+print("\n三个后端结果一致吗？", r_intel == r_nvidia == r_amd)
+print("结果：", r_intel)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[Intel  GPU] 收到中间表示 SPIR-V:add(v0,v1)，翻译成本后端原生指令并执行
+[NVIDIA GPU] 收到中间表示 SPIR-V:add(v0,v1)，翻译成本后端原生指令并执行
+[AMD    GPU] 收到中间表示 SPIR-V:add(v0,v1)，翻译成本后端原生指令并执行
+
+三个后端结果一致吗？ True
+结果： [0, 11, 22, 33, 44, 55, 66, 77]</code></pre>
+</div><p>这就是 SYCL 承诺的&quot;一次编写、到处运行&quot;的骨架：你只描述算法（那个 <code>kernel</code> 函数），后端无关的中间表示负责把它<strong>和具体硬件解耦</strong>，三家 GPU 各自翻译、各自执行，结果却一致。请动手改：把 <code>kernel</code> 改成 <code>return a[i] * b[i] + 1</code>，你会发现<strong>三个后端仍然自动保持一致</strong>——因为它们编译的是同一份源码，这正是可移植性的来源。</p>
+<h2>动手（二）：完整可编译的 SYCL 归约</h2>
+<p>下面是一个<strong>完整可编译</strong>的 SYCL 程序：对一个长度 1024 的数组求和。它用 <code>nd_range</code> 划分 work-group，用 <strong><code>local_accessor</code>（= shared memory）</strong> 在组内做树形归约，再由每组的 0 号 work-item 写出本组的部分和——这正是第 11 章 tiling 那套&quot;先搬进片上内存、组内协作、barrier 同步&quot;的思路，只是换成了 SYCL 的名字。点代码块上的 <strong>🔗 在 Compiler Explorer 打开</strong>，或用本地 <code>icpx -fsycl</code> 命令编译。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiI2luY2x1ZGUgPHN5Y2wvc3ljbC5ocHA%2BXG4jaW5jbHVkZSA8Y3N0ZGlvPlxuI2luY2x1ZGUgPGV4Y2VwdGlvbj5cblxuaW50IG1haW4oKSB7XG4gICAgY29uc3RleHByIHNpemVfdCBOICAgICAgPSAxMDI0OyAgIC8vIOWFg%2Be0oOaAu%2BaVsFxuICAgIGNvbnN0ZXhwciBzaXplX3QgTE9DQUwgID0gMjU2OyAgICAvLyB3b3JrLWdyb3VwIOWkp%2BWwj%2B%2B8iD0gQ1VEQSDnmoQgYmxvY2tEaW3vvIlcbiAgICBjb25zdGV4cHIgc2l6ZV90IEdST1VQUyA9IE4gLyBMT0NBTDsgIC8vIDQg5LiqIHdvcmstZ3JvdXBcblxuICAgIC8vIOW7uiBxdWV1ZSDml7bms6jlhowgYXN5bmNfaGFuZGxlcu%2B8mue7n%2BS4gOaOpeS9jyBrZXJuZWwg5omn6KGM5pyf55qE5byC5q2l5byC5bi4XG4gICAgc3ljbDo6cXVldWUgcXtzeWNsOjpkZWZhdWx0X3NlbGVjdG9yX3YsIFtdKHN5Y2w6OmV4Y2VwdGlvbl9saXN0IGVsKSB7XG4gICAgICAgIGZvciAoY29uc3Qgc3RkOjpleGNlcHRpb25fcHRyJiBlIDogZWwpIHtcbiAgICAgICAgICAgIHRyeSB7IHN0ZDo6cmV0aHJvd19leGNlcHRpb24oZSk7IH1cbiAgICAgICAgICAgIGNhdGNoIChjb25zdCBzeWNsOjpleGNlcHRpb24mIGV4KSB7XG4gICAgICAgICAgICAgICAgc3RkOjpmcHJpbnRmKHN0ZGVyciwgXCLlvILmraXlvILluLg6ICVzXFxuXCIsIGV4LndoYXQoKSk7XG4gICAgICAgICAgICB9XG4gICAgICAgIH1cbiAgICB9fTtcbiAgICBzdGQ6OnByaW50ZihcIui%2FkOihjOiuvuWkhzogJXNcXG5cIixcbiAgICAgICAgcS5nZXRfZGV2aWNlKCkuZ2V0X2luZm88c3ljbDo6aW5mbzo6ZGV2aWNlOjpuYW1lPigpLmNfc3RyKCkpO1xuXG4gICAgLy8g55SoIFVTTe%2B8iOaMh%2BmSiOivreS5ie%2B8jOi0tOi%2FkSBDVURB77yJ77yabWFsbG9jX3NoYXJlZCDkuLvmnLrlkozorr7lpIfpg73og73nm7TmjqXorr%2Fpl65cbiAgICBmbG9hdCogaW4gICAgICA9IHN5Y2w6Om1hbGxvY19zaGFyZWQ8ZmxvYXQ%2BKE4sIHEpO1xuICAgIGZsb2F0KiBwYXJ0aWFsID0gc3ljbDo6bWFsbG9jX3NoYXJlZDxmbG9hdD4oR1JPVVBTLCBxKTtcbiAgICBmb3IgKHNpemVfdCBpID0gMDsgaSA8IE47ICsraSkgaW5baV0gPSAxLjBmOyAgIC8vIOWFqCAx77yM5oC75ZKM5bqU5Li6IE5cblxuICAgIHEuc3VibWl0KFsmXShzeWNsOjpoYW5kbGVyJiBoKSB7XG4gICAgICAgIC8vIGxvY2FsX2FjY2Vzc29yIOWwseaYryBTWUNMIOeJiOeahCBfX3NoYXJlZF9f77ya5LiA5Z2XIHdvcmstZ3JvdXAg5YaF5YWx5Lqr55qE54mH5LiK5YaF5a2YXG4gICAgICAgIHN5Y2w6OmxvY2FsX2FjY2Vzc29yPGZsb2F0LCAxPiBzY3JhdGNoKHN5Y2w6OnJhbmdlPDE%2BKExPQ0FMKSwgaCk7XG5cbiAgICAgICAgaC5wYXJhbGxlbF9mb3IoXG4gICAgICAgICAgICBzeWNsOjpuZF9yYW5nZTwxPihzeWNsOjpyYW5nZTwxPihOKSwgc3ljbDo6cmFuZ2U8MT4oTE9DQUwpKSxcbiAgICAgICAgICAgIFs9XShzeWNsOjpuZF9pdGVtPDE%2BIGl0KSB7XG4gICAgICAgICAgICAgICAgc2l6ZV90IGdpZCA9IGl0LmdldF9nbG9iYWxfaWQoMCk7ICAgLy8g5YWo5bGA57yW5Y%2B3ID0gQ1VEQSDlhajlsYDnur%2FnqIvlj7dcbiAgICAgICAgICAgICAgICBzaXplX3QgbGlkID0gaXQuZ2V0X2xvY2FsX2lkKDApOyAgICAvLyDnu4TlhoXnvJblj7cgPSB0aHJlYWRJZHgueFxuXG4gICAgICAgICAgICAgICAgc2NyYXRjaFtsaWRdID0gaW5bZ2lkXTsgICAgICAgICAgICAgLy8g5q%2BP5LiqIHdvcmstaXRlbSDmkKzkuIDkuKrliLDniYfkuIrlhoXlrZhcbiAgICAgICAgICAgICAgICBpdC5iYXJyaWVyKHN5Y2w6OmFjY2Vzczo6ZmVuY2Vfc3BhY2U6OmxvY2FsX3NwYWNlKTsgIC8vID0gX19zeW5jdGhyZWFkcygpXG5cbiAgICAgICAgICAgICAgICAvLyDnu4TlhoXmoJHlvaLlvZLnuqbvvJrmr4%2FkuIDova7mtLvot4PnmoQgd29yay1pdGVtIOWHj%2BWNilxuICAgICAgICAgICAgICAgIGZvciAoc2l6ZV90IHMgPSBMT0NBTCAvIDI7IHMgPiAwOyBzID4%2BPSAxKSB7XG4gICAgICAgICAgICAgICAgICAgIGlmIChsaWQgPCBzKSBzY3JhdGNoW2xpZF0gKz0gc2NyYXRjaFtsaWQgKyBzXTtcbiAgICAgICAgICAgICAgICAgICAgaXQuYmFycmllcihzeWNsOjphY2Nlc3M6OmZlbmNlX3NwYWNlOjpsb2NhbF9zcGFjZSk7XG4gICAgICAgICAgICAgICAgfVxuICAgICAgICAgICAgICAgIGlmIChsaWQgPT0gMCkgICAgICAgICAgICAgICAgICAgICAgICAvLyDmr4%2Fnu4QgMCDlj7flhpnlh7rmnKznu4Tpg6jliIblkoxcbiAgICAgICAgICAgICAgICAgICAgcGFydGlhbFtpdC5nZXRfZ3JvdXAoMCldID0gc2NyYXRjaFswXTtcbiAgICAgICAgICAgIH0pO1xuICAgIH0pLndhaXQoKTsgICAvLyDnrYkga2VybmVsIOi3keWujO%2B8iFVTTSDpnIDopoHmmL7lvI%2FlkIzmraXvvIlcblxuICAgIGZsb2F0IHRvdGFsID0gMC4wZjsgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyDkuLvmnLrnq6%2FmiorlkITnu4Tpg6jliIblkozliqDotbfmnaVcbiAgICBmb3IgKHNpemVfdCBnID0gMDsgZyA8IEdST1VQUzsgKytnKSB0b3RhbCArPSBwYXJ0aWFsW2ddO1xuICAgIHN0ZDo6cHJpbnRmKFwi5rGC5ZKM57uT5p6cID0gJS4xZu%2B8iOacn%2BacmyAlLjFm77yJXFxuXCIsIHRvdGFsLCAoZG91YmxlKU4pO1xuXG4gICAgc3ljbDo6ZnJlZShpbiwgcSk7XG4gICAgc3ljbDo6ZnJlZShwYXJ0aWFsLCBxKTtcbiAgICByZXR1cm4gMDtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiaWN4MjAyNjAwIiwib3B0aW9ucyI6Ii1mc3ljbCAtTzIgLXN0ZD1jKysyMCJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;sycl/sycl.hpp&gt;
+#include &lt;cstdio&gt;
+#include &lt;exception&gt;
+
+int main() {
+    constexpr size_t N      = 1024;   // 元素总数
+    constexpr size_t LOCAL  = 256;    // work-group 大小（= CUDA 的 blockDim）
+    constexpr size_t GROUPS = N / LOCAL;  // 4 个 work-group
+
+    // 建 queue 时注册 async_handler：统一接住 kernel 执行期的异步异常
+    sycl::queue q{sycl::default_selector_v, [](sycl::exception_list el) {
+        for (const std::exception_ptr&amp; e : el) {
+            try { std::rethrow_exception(e); }
+            catch (const sycl::exception&amp; ex) {
+                std::fprintf(stderr, "异步异常: %s\n", ex.what());
+            }
+        }
+    }};
+    std::printf("运行设备: %s\n",
+        q.get_device().get_info&lt;sycl::info::device::name&gt;().c_str());
+
+    // 用 USM（指针语义，贴近 CUDA）：malloc_shared 主机和设备都能直接访问
+    float* in      = sycl::malloc_shared&lt;float&gt;(N, q);
+    float* partial = sycl::malloc_shared&lt;float&gt;(GROUPS, q);
+    for (size_t i = 0; i &lt; N; ++i) in[i] = 1.0f;   // 全 1，总和应为 N
+
+    q.submit([&amp;](sycl::handler&amp; h) {
+        // local_accessor 就是 SYCL 版的 __shared__：一块 work-group 内共享的片上内存
+        sycl::local_accessor&lt;float, 1&gt; scratch(sycl::range&lt;1&gt;(LOCAL), h);
+
+        h.parallel_for(
+            sycl::nd_range&lt;1&gt;(sycl::range&lt;1&gt;(N), sycl::range&lt;1&gt;(LOCAL)),
+            [=](sycl::nd_item&lt;1&gt; it) {
+                size_t gid = it.get_global_id(0);   // 全局编号 = CUDA 全局线程号
+                size_t lid = it.get_local_id(0);    // 组内编号 = threadIdx.x
+
+                scratch[lid] = in[gid];             // 每个 work-item 搬一个到片上内存
+                it.barrier(sycl::access::fence_space::local_space);  // = __syncthreads()
+
+                // 组内树形归约：每一轮活跃的 work-item 减半
+                for (size_t s = LOCAL / 2; s &gt; 0; s &gt;&gt;= 1) {
+                    if (lid &lt; s) scratch[lid] += scratch[lid + s];
+                    it.barrier(sycl::access::fence_space::local_space);
+                }
+                if (lid == 0)                        // 每组 0 号写出本组部分和
+                    partial[it.get_group(0)] = scratch[0];
+            });
+    }).wait();   // 等 kernel 跑完（USM 需要显式同步）
+
+    float total = 0.0f;                              // 主机端把各组部分和加起来
+    for (size_t g = 0; g &lt; GROUPS; ++g) total += partial[g];
+    std::printf("求和结果 = %.1f（期望 %.1f）\n", total, (double)N);
+
+    sycl::free(in, q);
+    sycl::free(partial, q);
+    return 0;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>icpx -fsycl -O2 -std=c++20 main.cpp -o app &amp;&amp; ./app   # 需要 Intel oneAPI</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">运行设备: &lt;你的 GPU 或 CPU 名字&gt;
+求和结果 = 1024.0（期望 1024.0）</code></pre>
+</div><p>把它和第 11 章的 CUDA 版本并排看：<code>local_accessor</code> 对 <code>__shared__</code>、<code>it.barrier(...)</code> 对 <code>__syncthreads()</code>、<code>get_local_id</code> 对 <code>threadIdx</code>、<code>get_group</code> 对 <code>blockIdx</code>——归约的算法一模一样。请动手改一行：把 <code>in[i] = 1.0f</code> 改成 <code>in[i] = (float)i</code>，那么总和应变成 <code>0+1+...+1023 = 523776</code>，把 <code>%.1f</code> 的期望值也相应改掉，编译运行验证一下——你会发现片上归约的逻辑完全不用动。</p>
+<div class="warn">
+<strong>可移植性不是免费的午餐</strong>
+SYCL 的承诺是"到处能跑"，但不是"到处都最快"。同一份代码在 NVIDIA 上，往往<strong>比手写 CUDA 慢一点</strong>，因为多了一层抽象；某些厂商最新硬件的特性（比如 NVIDIA 最新的异步拷贝、特定的 Tensor Core 指令）可能在 SYCL 里暂时没有对等接口，或要靠后端扩展才能摸到。所以工程上的常见权衡是：<strong>用 SYCL 拿到"一份代码覆盖多家硬件"的可移植性，在真正的性能热点上，再针对具体后端做特化调优。</strong>可移植性和榨干峰值，本就是一对需要你按场景取舍的目标。
+</div><h2>小结与下一步</h2>
+<p>你现在见过了第二种 GPU 编程方言。它和 CUDA 的执行模型同构，卖点是<strong>开放标准 + 单一源码 + 跨厂商</strong>：一个 <code>.cpp</code>、标准 C++ 编译器、<code>queue</code> 提交工作、<code>nd_range</code> + <code>local_accessor</code> 把 tiling 原样搬过来，代价是要接受抽象层带来的性能与新特性上的取舍。</p>
+<p>CUDA 和 SYCL 都还在<strong>线程/work-item 级</strong>思考——你得亲手算全局下标、亲手管 local memory、亲手写 barrier。下一章我们换一个<strong>更高的抽象层</strong>：OpenAI 的 <strong>Triton</strong>。它让你用 Python 写 kernel，而且不再写&quot;一个线程做什么&quot;，而是写&quot;<strong>一个 program 处理一整块（block）数据</strong>&quot;——线程、合并访问、大部分 shared memory 管理，都交给编译器。抽象层往上跳一级，写 ML kernel 的效率会截然不同。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>SYCL</strong> 是 Khronos 的开放标准：<strong>单一源码</strong>（主机+设备同在一个 <code>.cpp</code>）、<strong>就是标准现代 C++</strong>（无专用 kernel 语言）、<strong>跨厂商</strong>（NVIDIA/AMD/Intel GPU 及 CPU）。实现有 Intel oneAPI <strong>DPC++</strong>（<code>icpx -fsycl</code>）和 <strong>AdaptiveCpp</strong>。</li>
+<li>运行模型核心是 <strong><code>queue</code></strong>：向它提交工作，并借 device selector 选设备。</li>
+<li>两套内存模型：<strong>buffer + accessor</strong>（声明读写，运行时自动建依赖图、自动搬数据）与 <strong>USM</strong>（<code>malloc_device/shared</code>，裸指针语义、显式同步，最贴近 CUDA）。</li>
+<li><strong><code>parallel_for</code></strong> 有 <code>range</code>（基础）和 <code>nd_range</code>（带 work-group，才能用 <strong><code>local_accessor</code></strong> = shared memory 和 <code>it.barrier()</code>）两种粒度。</li>
+<li>概念与 CUDA 一一对应：block=work-group、thread=work-item、warp=sub-group、<code>__shared__</code>=<code>local_accessor</code>、<code>__syncthreads()</code>=<code>it.barrier()</code>。</li>
+<li>错误处理分<strong>同步异常</strong>和<strong>异步异常</strong>（后者交给建 queue 时注册的 <strong><code>async_handler</code></strong>）。</li>
+<li>权衡：拿到<strong>可移植性</strong>，代价是相对手写 CUDA 可能损失峰值性能、够不到某些最新硬件特性——按场景取舍。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch11.html">← 第 11 章 CUDA 进阶：用 shared memory 做 tiling 矩阵乘</a>
+  <a class="nav-next" href="ch13.html">第 13 章 Triton：用 Python 写块级 kernel →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

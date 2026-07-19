@@ -79,5 +79,21 @@ node pack.js python-teens    # 生成 python-teens-offline.zip
 
 > godbolt 链接用 `clientstate`（base64 编码的会话 JSON）生成，携带源码、编译器 `g142`(gcc 14.2)、`-std=c++23 -O2 -Wall` 参数和运行面板。点开即联网编译；离线时代码块与本地编译命令仍完整可读。默认编译器/参数可在 `build.js` 的 `godboltUrl()` 里改。
 
+**GPU 书（gpu-programming）：**
+- ` ```cuda ` —— CUDA C++，"🔗 在 Compiler Explorer 打开（看 PTX）" + `nvcc` 本地命令。**应是完整可编译的 .cu 程序。**
+- ` ```cuda-ptx ` —— 同上，按钮为"🔬 看 PTX / 编译器处理"。用于只展示 kernel（无需 host/main，编到 PTX 即可）。
+- ` ```sycl ` —— SYCL/DPC++，Compiler Explorer（`icx -fsycl`）+ `icpx` 本地命令。完整可编译程序。
+- ` ```triton ` / ` ```cutedsl ` —— Triton / CuTe DSL（Python），只高亮 + `pip` 本地命令（需 NVIDIA GPU）。
+- ` ```cuda-norun ` / ` ```sycl-norun ` / ` ```triton-norun ` / ` ```cutedsl-norun ` —— 只高亮、不给按钮。用于片段、伪代码。
+- ` ```python ` —— 会在浏览器里真运行（Pyodide），本书用来做**概念模拟器**（SIMT 调度、warp 分歧、访存、归约树等）。必须完整、可独立运行、仅标准库。
+
+> **GPU 代码校验（随书入库，`books/gpu-programming/verify/`）**：GPU 代码需真实工具链/硬件、无法在浏览器里跑，故校验脚本按技术分开，各自只依赖自己那套（nvcc / oneAPI / Triton 常在不同机器上）：
+> ```bash
+> books/gpu-programming/verify/verify-cuda.sh    # 需 nvcc；有 GPU 则编译+运行，NORUN=1 只编译
+> books/gpu-programming/verify/verify-sycl.sh    # 需 icpx（或 CXX=acpp）；默认可在 CPU 设备上跑
+> books/gpu-programming/verify/verify-triton.sh  # 需 triton+torch+GPU；无 GPU 自动降级为语法检查（SYNTAX=1）
+> ```
+> 三者共用 `verify/extract-blocks.js` 从章节抽取完整代码块。工具链缺失时脚本干净退出（127）并给出安装提示（见附录 A）。不带参数校验全书，也可只传章名如 `verify-cuda.sh ch09 ch11`。详见 `verify/README.md`。这些脚本随书入库、便于在任何装好工具链的机器上验证，但不参与 `node build.js` 网页构建。
+
 **通用：**
 - ` ```bash ` —— 终端命令，只高亮。
