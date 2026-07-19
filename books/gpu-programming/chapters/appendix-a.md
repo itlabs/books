@@ -207,9 +207,17 @@ icpx -fsycl -fsycl-targets=nvptx64-nvidia-cuda vadd.sycl.cpp -o vadd
 acpp -O2 --acpp-targets='cuda:sm_80' vadd.sycl.cpp -o vadd
 ```
 
+- 从源码自己构建 **intel/llvm**（DPC++ 的开源上游）——这就是 `icpx` 背后的同一套编译器，只是你自己 build，产出的驱动叫 `clang++`。想跟最新特性、或需要非打包的后端组合时用它。build 完把 `<build>/bin` 加进 `PATH`（或用全路径），标志和 `icpx` 完全一致：
+
+```bash
+# intel/llvm 源码构建出的 clang++（开源 DPC++），-fsycl 用法与 icpx 相同
+# 通常还需显式指定目标：CPU/OpenCL 用 spir64，NVIDIA 用 nvptx64-nvidia-cuda
+clang++ -fsycl -fsycl-targets=spir64 vadd.sycl.cpp -o vadd
+```
+
 <div class="note">
-<strong>选 oneAPI 还是 AdaptiveCpp</strong>
-手头是 Intel GPU 或想要最完整的官方工具链（含 profiler、oneMKL），用 <strong>oneAPI/DPC++</strong>。想在 NVIDIA/AMD 上跑 SYCL、或想要一个轻量开源实现，用 <strong>AdaptiveCpp</strong>。两者编译的是同一份 SYCL 源码——这正是 SYCL "单一源码跨厂商"的卖点。
+<strong>选哪个 SYCL 编译器</strong>
+手头是 Intel GPU 或想要最完整的官方工具链（含 profiler、oneMKL），用 <strong>oneAPI/DPC++（icpx）</strong>；想跟 DPC++ 最新上游、自己掌控构建，用<strong>源码构建的 intel/llvm clang++</strong>（与 icpx 同源、<code>-fsycl</code> 用法一致）；想在 NVIDIA/AMD 上跑 SYCL 或要一个轻量开源实现，用 <strong>AdaptiveCpp</strong>。三者编译的是同一份 SYCL 源码——这正是 SYCL "单一源码跨厂商"的卖点。本书随附的 <code>verify/verify-sycl.sh</code> 三者都支持（<code>CXX=</code> 切换，<code>SYCL_TARGETS=</code> 指定目标）。
 </div>
 
 ## Triton：用 Python 写 kernel

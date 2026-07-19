@@ -17,10 +17,15 @@ books/gpu-programming/verify/verify-cuda.sh ch09 ch11      # 只校验指定章
 NORUN=1 books/gpu-programming/verify/verify-cuda.sh        # 只编译不运行（无 GPU）
 ARCH=sm_75 books/gpu-programming/verify/verify-cuda.sh     # 指定 GPU 架构（默认 sm_70）
 
-# 需要 Intel oneAPI DPC++（icpx）。先 source 环境：source /opt/intel/oneapi/setvars.sh
+# SYCL 编译器三选一（都走 -fsycl，acpp 除外）：
+#   · Intel oneAPI 的 icpx（默认）——先 source 环境：source /opt/intel/oneapi/setvars.sh
+#   · intel/llvm 源码构建的 clang++（开源 DPC++）——用 CXX 指到它的全路径
+#   · AdaptiveCpp 的 acpp
 books/gpu-programming/verify/verify-sycl.sh
-CXX=acpp books/gpu-programming/verify/verify-sycl.sh       # 改用 AdaptiveCpp
-SYCL_DEVICE_FILTER=cpu books/gpu-programming/verify/verify-sycl.sh   # 强制 CPU 设备（无 GPU）
+CXX=$HOME/sycl_workspace/llvm/build/bin/clang++ books/gpu-programming/verify/verify-sycl.sh   # intel/llvm clang++
+SYCL_TARGETS=spir64 books/gpu-programming/verify/verify-sycl.sh      # 显式指定 -fsycl-targets（intel/llvm 常需）
+ONEAPI_DEVICE_SELECTOR=opencl:cpu books/gpu-programming/verify/verify-sycl.sh   # 强制 CPU 设备（无 GPU）
+CXX=acpp books/gpu-programming/verify/verify-sycl.sh                 # 改用 AdaptiveCpp
 
 # 需要 pip install triton torch + NVIDIA GPU。无 GPU 时自动降级为语法检查。
 books/gpu-programming/verify/verify-triton.sh
