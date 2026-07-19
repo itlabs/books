@@ -127,6 +127,100 @@
 </div><div class="keypoint">
 <strong>软件概念 → 硬件位置（本书会反复用到的对应）</strong>
 你后面写的一个 <strong>block</strong>（CUDA）/ <strong>work-group</strong>（SYCL）会被整个调度到<strong>一个 SM</strong> 上执行；block 里的线程被切成一个个 <strong>warp</strong>（32 线程）交给 warp 调度器；block 能用的 <strong>shared memory</strong> 就是那块片上高速内存；成千上万个 block 组成的 <strong>grid</strong> 被分发到全片所有 SM 上。第 4 章起我们就正式讲这套软件层级——现在你已经知道它们各自落在硅片的哪里了。
+</div><p>把这层对应关系完整列出来，就是下面这张表——它是全书的<strong>核心纽带</strong>，后面每一章都在往它上面贴东西。左边两列是你写代码时用的软件抽象（CUDA 和 SYCL 两套词），右边是它落到的硬件，最后一列是映射规则：</p>
+<table>
+<thead>
+<tr>
+<th>软件抽象（CUDA）</th>
+<th>软件抽象（SYCL）</th>
+<th>硬件物理层</th>
+<th>映射规则</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Grid（网格）</strong></td>
+<td>NDRange</td>
+<td><strong>整个 GPU</strong>（全片 SM）</td>
+<td>整个任务交给整块芯片；grid 里的 block 被分发到所有 SM 上</td>
+</tr>
+<tr>
+<td><strong>Block（线程块）</strong></td>
+<td>Work-group</td>
+<td><strong>一个 SM（流多处理器）</strong></td>
+<td>一个 block 只落在<strong>一个</strong> SM 上；但一个 SM 可<strong>同时驻留多个</strong> block 轮流跑</td>
+</tr>
+<tr>
+<td><strong>Warp（32 线程）</strong></td>
+<td>Sub-group</td>
+<td><strong>Warp 调度器</strong></td>
+<td>硬件调度的基本单位；32 个线程<strong>步调一致</strong>执行同一条指令（SIMT）</td>
+</tr>
+<tr>
+<td><strong>Thread（线程）</strong></td>
+<td>Work-item</td>
+<td><strong>CUDA Core</strong>（算术单元）</td>
+<td>最终干活的微型计算单元，一个线程在一条 lane 上执行</td>
+</tr>
+<tr>
+<td><strong>Shared memory</strong></td>
+<td>Local memory</td>
+<td><strong>SM 片上高速内存 / L1</strong></td>
+<td>一个 block 独享一块，比显存快两个数量级（第 7 章）</td>
+</tr>
+<tr>
+<td><strong>Register（寄存器）</strong></td>
+<td>Private memory</td>
+<td><strong>SM 寄存器堆</strong></td>
+<td>每个线程私有，最快；用太多会限制 SM 上能挂的线程数（第 16 章 occupancy）</td>
+</tr>
+<tr>
+<td><strong>Global memory</strong></td>
+<td>Global memory</td>
+<td><strong>片外显存（DRAM）</strong></td>
+<td>GB 级、大而慢；多数 kernel 的瓶颈在这儿的<strong>带宽</strong>上</td>
+</tr>
+</tbody></table>
+<div class="concept">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="150" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#2b6cb0">软件抽象</text>
+  <text x="410" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#6b7280">硬件物理层</text>
+  <!-- Grid -->
+  <rect x="30" y="35" width="240" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="150" y="52" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">Grid（网格）</text>
+  <text x="150" y="68" text-anchor="middle" font-size="10" fill="#6b7280">= SYCL NDRange</text>
+  <rect x="320" y="35" width="220" height="40" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+  <text x="430" y="59" text-anchor="middle" font-size="12" fill="#374151">整个 GPU（全片 SM）</text>
+  <path d="M270 55 L318 55" stroke="#e06a3b" stroke-width="2" marker-end="url(#m)"/>
+  <!-- Block -->
+  <rect x="30" y="90" width="240" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="150" y="107" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">Block（线程块）</text>
+  <text x="150" y="123" text-anchor="middle" font-size="10" fill="#6b7280">= SYCL Work-group</text>
+  <rect x="320" y="90" width="220" height="40" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+  <text x="430" y="108" text-anchor="middle" font-size="12" fill="#374151">一个 SM（流多处理器）</text>
+  <text x="430" y="123" text-anchor="middle" font-size="9" fill="#9ca3af">一 block 只占一 SM；一 SM 可容多 block</text>
+  <path d="M270 110 L318 110" stroke="#e06a3b" stroke-width="2" marker-end="url(#m)"/>
+  <!-- Warp -->
+  <rect x="30" y="145" width="240" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="150" y="162" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">Warp（32 线程）</text>
+  <text x="150" y="178" text-anchor="middle" font-size="10" fill="#6b7280">= SYCL Sub-group</text>
+  <rect x="320" y="145" width="220" height="40" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+  <text x="430" y="163" text-anchor="middle" font-size="12" fill="#374151">Warp 调度器</text>
+  <text x="430" y="178" text-anchor="middle" font-size="9" fill="#9ca3af">32 线程步调一致（SIMT）</text>
+  <path d="M270 165 L318 165" stroke="#e06a3b" stroke-width="2" marker-end="url(#m)"/>
+  <!-- Thread -->
+  <rect x="30" y="200" width="240" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="150" y="217" text-anchor="middle" font-size="12" fill="#2b6cb0" font-weight="bold">Thread（线程）</text>
+  <text x="150" y="233" text-anchor="middle" font-size="10" fill="#6b7280">= SYCL Work-item</text>
+  <rect x="320" y="200" width="220" height="40" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+  <text x="430" y="224" text-anchor="middle" font-size="12" fill="#374151">CUDA Core（算术单元）</text>
+  <path d="M270 220 L318 220" stroke="#e06a3b" stroke-width="2" marker-end="url(#m)"/>
+  <text x="285" y="270" text-anchor="middle" font-size="11" fill="#6b7280">软件层级（你写代码时用）　→　硬件层级（芯片上真实存在的东西）</text>
+  <text x="285" y="288" text-anchor="middle" font-size="10" fill="#9ca3af">同一套结构，CUDA 和 SYCL 只是取了不同的名字</text>
+  <defs>
+    <marker id="m" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 3-3　软件抽象 → 硬件物理层的映射：这是全书的核心纽带，后面每一章讲的概念都能在这张图上找到位置</div>
 </div><h2>两种内存，两个数量级的速度差</h2>
 <p>GPU 上最影响性能的硬件事实，是<strong>内存的层级</strong>。粗分两大类：</p>
 <ul>
