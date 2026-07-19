@@ -17,11 +17,11 @@ books/gpu-programming/verify/verify-cuda.sh ch09 ch11      # 只校验指定章
 NORUN=1 books/gpu-programming/verify/verify-cuda.sh        # 只编译不运行（无 GPU）
 ARCH=sm_75 books/gpu-programming/verify/verify-cuda.sh     # 指定 GPU 架构（默认 sm_70）
 
-# SYCL 编译器三选一（都走 -fsycl，acpp 除外）：
-#   · Intel oneAPI 的 icpx（默认）——先 source 环境：source /opt/intel/oneapi/setvars.sh
-#   · intel/llvm 源码构建的 clang++（开源 DPC++）——用 CXX 指到它的全路径
+# 不指定 CXX 时自动探测编译器：icpx → clang++ → acpp，取第一个支持 -fsycl 的。
+#   · Intel oneAPI 的 icpx——先 source 环境：source /opt/intel/oneapi/setvars.sh
+#   · intel/llvm 源码构建的 clang++（开源 DPC++）——把 <build>/bin 加进 PATH，或用 CXX 指全路径
 #   · AdaptiveCpp 的 acpp
-books/gpu-programming/verify/verify-sycl.sh
+books/gpu-programming/verify/verify-sycl.sh                          # 自动探测
 CXX=$HOME/sycl_workspace/llvm/build/bin/clang++ books/gpu-programming/verify/verify-sycl.sh   # intel/llvm clang++
 SYCL_TARGETS=spir64 books/gpu-programming/verify/verify-sycl.sh      # 显式指定 -fsycl-targets（intel/llvm 常需）
 ONEAPI_DEVICE_SELECTOR=opencl:cpu books/gpu-programming/verify/verify-sycl.sh   # 强制 CPU 设备（无 GPU）
