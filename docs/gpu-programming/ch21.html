@@ -393,6 +393,9 @@ if __name__ == "__main__":
 </div><div class="keypoint">
 <strong>把这个 kernel 和模拟器对着看</strong>
 Triton kernel 里的 <code>m_i / l_i / acc</code>，就是模拟器里的 <code>m / l / acc</code>；<code>corr = tl.exp(m_i - m_new)</code> 就是那句 <code>corr = exp(m_old - m_new)</code>；<code>acc * corr + tl.dot(p, v)</code> 就是"先追平旧的、再加入新的"。区别只有一个：模拟器一次处理一个 query 一个标量分数，Triton 一次处理 <strong>BLOCK_M 行 query × BLOCK_N 列 key 的一整块</strong>——<code>tl.dot</code> 走 Tensor Core（第 19 章），<code>tl.max/tl.sum</code> 走块级归约（第 18 章、第 20 章）。<strong>同一个算法，从标量循环长成了块级张量流水线。</strong>
+</div><div class="note">
+<strong>为什么这里和参考的误差是 1e-3，而不是 1e-9？</strong>
+在真实 NVIDIA GPU 上跑这段，你会看到"最大误差"约 <code>1e-3</code>（causal 版略大），比本书别处动辄 <code>1e-9</code> 大好几个数量级——这<strong>不是 bug</strong>。<code>tl.dot</code> 默认用 <strong>TF32</strong>（TensorFloat-32，尾数仅 10 位）在 Tensor Core 上做矩阵乘，而 PyTorch 参考走的是全 FP32；两者天然有 <code>~1e-3</code> 级的相对偏差。这恰好印证了第 19 章的说法——Tensor Core 用<strong>低精度输入 + FP32 累加</strong>换吞吐。想收紧到 FP32 精度，可在 kernel 里传 <code>tl.dot(..., input_precision="ieee")</code>（会变慢）；训练/推理里这点误差通常无关紧要。相比之下，下面的 CUDA 对照件用 FP32 计算、对 double 参考，误差回到 <code>1e-10</code> 量级。
 </div><h2>CUDA tiled 注意力：一份可编译校验的对照件</h2>
 <p>Triton 版最贴近生产级 flash，但为了给你一个<strong>能在浏览器点开、能本地编译验证</strong>的 C++ artifact，下面给一份<strong>作用域清晰的 tiled 注意力</strong> CUDA 程序：<strong>一个 block 负责一个 query 行</strong>，把整行分数放进 shared memory（因此要求 <code>seq_len</code> 不太大，这里取 256），做标准的两趟归约 softmax（第 20 章的 CUDA 版），再加权求和 V。它<strong>不是</strong> flash（会在 shared memory 里存下一整行分数），但把注意力的骨架完整跑通，并对着 CPU 参考校验、打印 OK——用它确认你对四步流程的理解，Triton 版负责展示 flash 的精髓。</p>
 <div class="code-block cpp">
