@@ -273,7 +273,45 @@ show_layouts()</code></pre>
 <strong>别一上来就用 CuTe</strong>
 CuTe 的威力全在"精确控制"，而精确控制只有当你<strong>确知瓶颈在数据布局</strong>时才值得。大多数融合、逐元素、乃至不少矩阵乘，Triton 已经够快且快得多写出来。CuTe 是给你已经用第 16 章的性能模型定位到"卡在 shared memory 布局 / Tensor Core 喂数"这类问题、且愿意为最后百分之几的峰值付出复杂度时准备的。<strong>先会读它、理解 Layout 代数，比急着手写一个 CuTe kernel 更重要。</strong></div><h2>小结与下一步</h2>
 <p>你现在握住了 CuTe 的钥匙——<strong>Layout</strong>。它把你天天在写、却从没命名的下标算术 <code>i*stride₀ + j*stride₁</code>，提升成一个能组合、能推演的正式对象 <code>(Shape, Stride)</code>。同一个逻辑形状换一组 stride 就是行主序、列主序、转置；两个 Layout 组合就是分块、线程分工。<code>Tensor = 指针 + Layout</code>，让逻辑布局和物理存储彻底解耦。这套代数，就是 CUTLASS 和 FlashAttention 逼近 Tensor Core 峰值的地基，也是 CuTe DSL 让你在 Python 里能触碰的东西。</p>
-<p>我们已经把四大技术（CUDA、SYCL、Triton、CuTe DSL）都过了一遍，你手里有了从&quot;贴着硬件&quot;到&quot;块级抽象&quot;的全套工具。但工具再多，也得知道<strong>往哪儿用力</strong>。下一章进入本书的性能部分：怎么定量判断一个 kernel 到底卡在哪、还有多少余量——<strong>occupancy、带宽与 Roofline 模型</strong>。第 3 章那句&quot;多数 kernel 卡在带宽上&quot;，到那里会变成一张能读、能算、能指导优化的图。</p>
+<p>我们已经把四大技术（CUDA、SYCL、Triton、CuTe DSL）都过了一遍。它们不是四个互相竞争的&quot;谁最好&quot;，而是站在<strong>抽象层级的不同位置</strong>，各自解决不同的问题。把它们并成一张速查表，你以后选型时先看这张：</p>
+<table>
+<thead>
+<tr>
+<th>技术</th>
+<th>抽象层级</th>
+<th>主要解决什么</th>
+<th>什么时候选它</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>CUDA</strong></td>
+<td>线程级，贴硬件</td>
+<td><strong>控制力</strong>：对线程、内存、同步的完全掌控 + 最成熟的生态（cuBLAS/cuDNN/…）</td>
+<td>要极致性能、要用现成高性能库、只跑 NVIDIA</td>
+</tr>
+<tr>
+<td><strong>SYCL</strong></td>
+<td>线程级，标准 C++</td>
+<td><strong>可移植</strong>：一份源码跨 NVIDIA/AMD/Intel/CPU</td>
+<td>不想被单一厂商锁定、要跨硬件</td>
+</tr>
+<tr>
+<td><strong>Triton</strong></td>
+<td><strong>块级</strong>，Python</td>
+<td><strong>易用性 × 性能</strong>：用接近 Python 的成本写出高效 kernel，尤其擅长<strong>算子融合</strong>省掉访存受限算子的冗余显存往返</td>
+<td>写 ML 算子、要融合、想快速迭代（这是现代深度学习框架底层越来越多用它的原因）</td>
+</tr>
+<tr>
+<td><strong>CuTe DSL</strong></td>
+<td>数据布局级</td>
+<td><strong>极致控制</strong>：用 Layout 代数精确驾驭 shared memory 排布、Tensor Core 喂数、TMA</td>
+<td>已定位到瓶颈在数据布局、要榨最后百分之几峰值（CUTLASS/FlashAttention 的地基）</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>一句话记住四者的分工</strong>
+它们大致沿"<strong>控制力 ←→ 易用性</strong>"这根轴排开：<strong>CuTe</strong> 和 <strong>CUDA</strong> 在"控制"这头（贴硬件、榨峰值，代价是复杂），<strong>Triton</strong> 在"易用"这头（块级、Python、融合友好，代价是放弃精细控制），<strong>SYCL</strong> 则多了一条正交的"<strong>跨厂商可移植</strong>"轴。没有谁取代谁——真实项目里常常混用：大部分算子用 Triton 快速写，少数性能关键路径下沉到 CuTe/CUDA，需要跨硬件时用 SYCL。
+</div><p>但工具再多，也得知道<strong>往哪儿用力</strong>。下一章进入本书的性能部分：怎么定量判断一个 kernel 到底卡在哪、还有多少余量——<strong>occupancy、带宽与 Roofline 模型</strong>。第 3 章那句&quot;多数 kernel 卡在带宽上&quot;，到那里会变成一张能读、能算、能指导优化的图。</p>
 <hr>
 <p><strong>这一章的要点</strong></p>
 <ul>
