@@ -268,7 +268,36 @@ B：把寄存器降到 32（比如少用中间变量 / 加 __launch_bounds__）
   限制来源：寄存器允许 8 block，shared 允许 32 block，warp 上限允许 8 block
   → 实际驻留 8 个 block = 64 个 warp，occupancy = 100%</code></pre>
 </div><p>A 里最&quot;抠门&quot;的资源是寄存器：<code>64 × 256 = 16384</code> 个寄存器一个 block，<code>65536 / 16384 = 4</code>，只挂得下 4 个 block、32 个 warp。B 把每线程寄存器减半，寄存器允许的 block 翻倍到 8，占用率就顶满了。请动手改：给 B 加上 <code>shared_per_block=16384</code>（每 block 要 16 KB shared memory），再运行——你会看到限制来源从寄存器变成了 shared memory（<code>65536/16384 = 4</code>），occupancy 又掉回 50%。这就是&quot;三种资源，谁先耗尽谁说了算&quot;的木桶效应。</p>
-<h2>怎么知道 kernel 用了多少寄存器？</h2>
+<h2>那么 block 大小到底填几？</h2>
+<p>第 4 章留了个尾巴：block 大小要取 32 的倍数，但 128、256、512 里到底选哪个，说&quot;看 occupancy&quot;。现在你有了 occupancy 的模型，可以把它变成一套能落地的规则。先给结论——<strong>绝大多数情况：先填 256，再用 profiler 微调。</strong> 展开成一个决策清单：</p>
+<ol>
+<li><strong>必须是 32 的倍数。</strong> 硬件按 32 线程的 warp 调度，非整数倍会在最后一个 warp 浪费 lane（第 4、6 章）。SYCL 的 work-group 同理。</li>
+<li><strong>默认从 128 或 256 起步。</strong> 这是甜点区：一个 block 有 4–8 个 warp，调度器有足够备胎掩盖延迟，也够做 block 内归约/协作（第 18 章）；同时又没大到让单个 block 吃光寄存器/shared memory。</li>
+<li><strong>别太小（32 / 64）。</strong> 会先撞到&quot;每个 SM 最多 N 个 block&quot;的硬上限——block 数封顶了，warp 却没挂满，occupancy 上不去（正是上面计算器里&quot;warp 上限允许的 block 数&quot;那一行在起作用）。</li>
+<li><strong>别盲目太大（1024 是硬顶）。</strong> block 越大，每 block 吃的寄存器/shared memory 越多，一个 SM 可能只挂得下 1–2 个 block，调度不灵活；<code>__syncthreads()</code> 要等的线程也更多，同步更贵。</li>
+<li><strong>让它服从真正的瓶颈资源：</strong> kernel 寄存器用得凶 → block 调小，好让 SM 多挂几个 block；需要大块 shared memory 的 tiling kernel（第 11 章）→ block 大小直接由 tile 尺寸定死（如 16×16 = 256）；重度依赖 block 内协作 → 要够大才划算。</li>
+<li><strong>最后一步永远是实测。</strong> 理论只负责给一个起点，终点由 profiler 定。</li>
+</ol>
+<div class="keypoint">
+<strong>别手算最优 block 大小——CUDA 有 API 替你算</strong>
+你不必凭经验猜。<code>cudaOccupancyMaxPotentialBlockSize</code> 会读取你 kernel 的真实寄存器/shared memory 用量，直接返回一个能把 occupancy 最大化的 block 大小；<code>cudaOccupancyMaxActiveBlocksPerMultiprocessor</code> 则告诉你某个 block 大小下每个 SM 能挂几个 block。把它当默认起点，再用 Nsight Compute 扫 128/256/512 挑最快的即可。
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 让运行时按 kernel 的实际资源用量，算出能最大化 occupancy 的 block 大小
+int minGridSize;   // 填满 GPU 所需的最小 grid（这里用不到）
+int blockSize;     // API 建议的 block 大小 ← 我们要的
+cudaOccupancyMaxPotentialBlockSize(&amp;minGridSize, &amp;blockSize, myKernel, 0, 0);
+
+// 用建议值算出覆盖 n 个元素需要的 block 数（老规矩：向上取整）
+int gridSize = (n + blockSize - 1) / blockSize;
+myKernel&lt;&lt;&lt;gridSize, blockSize&gt;&gt;&gt;(/* ... */);
+// 想知道这个 blockSize 下每个 SM 能并存几个 block：
+int blocksPerSM;
+cudaOccupancyMaxActiveBlocksPerMultiprocessor(&amp;blocksPerSM, myKernel, blockSize, 0);</code></pre>
+</div><div class="note">
+<strong>SYCL 里更省心的做法</strong>
+如果你不想操心 work-group 大小，SYCL 允许你给 <code>parallel_for</code> 传一个只指定<strong>总量</strong>的 <code>range</code>（而非 <code>nd_range</code>），由运行时替你挑一个合理的 work-group 大小——牺牲一点控制换省心（第 5、12 章）。需要 block 内协作（用 local memory / barrier）时才必须用 <code>nd_range</code> 显式指定。
+</div><h2>怎么知道 kernel 用了多少寄存器？</h2>
 <p>上面的计算器要你填&quot;每线程寄存器数&quot;——这个数不是你猜的，是 <code>nvcc</code> 编译时确定并能打印出来的。加上 <code>-Xptxas -v</code>（把详细信息传给 PTX 汇编器）就能看到：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">终端</span></div>

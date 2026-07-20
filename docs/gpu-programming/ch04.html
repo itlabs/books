@@ -218,7 +218,7 @@ process&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img, width, height);</code></pre>
 <p>如果你把 block 设成比如 100 个线程，硬件仍会切成 4 个 warp（<code>ceil(100/32)=4</code>，共 128 个 warp 槽位），最后一个 warp 里只有 4 个线程干活、28 个&quot;空转&quot;,白白浪费了近一个 warp 的执行资源。取 32 的倍数就没有这种零头浪费。</p>
 <div class="keypoint">
 <strong>先记结论，第 6 章讲透</strong>
-<strong>block 大小取 32 的倍数</strong>（常用 128 / 256），因为硬件以 32 线程的 warp 为单位调度，非整数倍会在最后一个 warp 里浪费槽位。至于该在 128、256、512 里选哪个，取决于寄存器用量、shared memory 用量和 occupancy——那是第 16 章性能模型的内容。现在你只需养成"block 大小填 32 的倍数"这个肌肉记忆。
+<strong>block 大小取 32 的倍数</strong>（默认填 <strong>256</strong> 准没错），因为硬件以 32 线程的 warp 为单位调度，非整数倍会在最后一个 warp 里浪费槽位。至于该在 128、256、512 里选哪个、以及怎么让 CUDA 直接替你算最优值，取决于寄存器用量、shared memory 用量和 occupancy——第 16 章有一节《那么 block 大小到底填几？》专门给你一套决策清单。现在你只需养成"拿不准就填 256"这个肌肉记忆。
 </div><h2>动手：亲手算全局索引，看二维网格铺满图像</h2>
 <p>下面这个模拟器<strong>能在浏览器里直接跑</strong>——点 <strong>▶ 运行</strong>。它不碰 GPU，而是用纯 Python 忠实复刻 CUDA 的索引算术：先展示一维下 <code>blockIdx / threadIdx</code> 怎么拼成全局 <code>i</code>，再展示二维下 2×2 个 block 怎么各自认领一张 6×4 图像的一块，最后演示&quot;多余线程被 <code>if (i &lt; n)</code> 拦下&quot;。</p>
 <div class="code-block runnable">
