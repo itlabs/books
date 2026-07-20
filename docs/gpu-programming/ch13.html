@@ -128,6 +128,9 @@ def add(a_ptr, b_ptr, c_ptr, n, BLOCK: tl.constexpr):
 </div><div class="keypoint">
 <strong>一句话记住 Triton 的映射关系</strong>
 一个 <strong>Triton program ≈ 一个 CUDA block</strong>；一个 program 处理的 <strong>BLOCK_SIZE 个元素 ≈ 一个 CUDA block 负责的那片数据</strong>。但关键区别在于：写 CUDA 你在 block 内部还要继续想"每个线程"；写 Triton 你<strong>停在块这一层，操作整块向量</strong>，块内的线程、合并访问、shared memory 交给编译器。你从"想线程"升级成了"想向量"。
+</div><div class="note">
+<strong>为什么是 ≈，不是 =？</strong>
+因为它们只是<strong>角色</strong>对应，粒度并不相同。最容易踩的一点：<code>BLOCK_SIZE</code> 是一个 program 处理的<strong>元素个数</strong>，<strong>不是</strong>线程数——这和 CUDA 的 <code>blockDim</code>（那<strong>就是</strong>线程数）不一样。一个 <code>BLOCK_SIZE=1024</code> 的 program 在硬件上用多少线程，由编译器和 <code>num_warps</code> 决定，常常远少于 1024、每个线程循环处理多个元素。再加上：CUDA block 是"你要亲手管理其内部线程的容器"，Triton program 是"你只在块级写向量、内部交给编译器的抽象单元"。<strong>角色相同（网格里一个处理一片数据、彼此不能直接同步的独立单元），但粒度和归属不同——所以是 ≈ 而非 =。</strong>
 </div><h2>为什么这对 ML kernel 更高效</h2>
 <p>块级抽象不是为了偷懒，是为了<strong>生产力和性能兼得</strong>，这在写机器学习算子时尤其明显：</p>
 <ul>
