@@ -77,6 +77,9 @@ article {
   border-radius: 14px;
   box-shadow: 0 2px 24px rgba(60, 50, 30, 0.06);
 }
+/* 含"双栏对照"的页面加宽正文，给并排的两段代码更多空间，减少横向滚动。
+   :has() 让纯文字页仍保持 820px 的舒适阅读行宽，只有真正需要的页面才变宽。 */
+article:has(.compare) { max-width: 1040px; }
 
 /* ===== 文字排版 ===== */
 h1 {
@@ -183,7 +186,10 @@ pre[class*="language-"] { padding: 16px 14px; font-size: 15px; }
 
 /* ===== 双栏对照（左：你熟悉的 Java/Python；右：C++） ===== */
 .compare {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0;
+  display: grid; gap: 16px; margin: 22px 0;
+  /* 每栏至少 ~380px 才并排；容器塞不下两栏时，自动回落成上下单栏，
+     避免硬挤出横向滚动条。auto-fit + minmax 让它随可用宽度自适应。 */
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
 }
 .compare > div { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .compare .compare-head {
