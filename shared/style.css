@@ -79,7 +79,7 @@ article {
 }
 /* 含"双栏对照"的页面加宽正文，给并排的两段代码更多空间，减少横向滚动。
    :has() 让纯文字页仍保持 820px 的舒适阅读行宽，只有真正需要的页面才变宽。 */
-article:has(.compare) { max-width: 1040px; }
+article:has(.compare) { max-width: 1240px; }
 
 /* ===== 文字排版 ===== */
 h1 {
