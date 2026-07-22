@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>深入 LLVM 与 SYCL</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>深入 LLVM 与 SYCL</h1>
+<blockquote>
+<p><strong>Inside LLVM and SYCL</strong> ·  写给编译器工程师的源码之旅：LLVM、DPC++/SYCL 实现与扩展。
+你已经会写 C++、读得懂编译原理教材上的「前端—优化—后端」了——这本书要带你打开 <code>intel/llvm</code> 这个真实的大型代码库，看清 LLVM 与 SYCL 到底是<strong>怎么实现</strong>的。</p>
+</blockquote>
+<h2>这本书写给谁</h2>
+<p>你是一名有经验的 C++ / 系统工程师，理解编译、链接、指针、虚函数、模板这些概念，也大致知道「编译器分前端、中端、后端」。你<strong>不需要</strong>别人再教你什么是抽象语法树、什么是寄存器。</p>
+<p>你缺的不是编程经验，而是一张<strong>通往真实编译器源码的地图</strong>：</p>
+<ul>
+<li>教科书讲的是「概念上的编译器」；这本书讲的是<strong>你能 <code>cd</code> 进去、能 <code>grep</code>、能改一行重编</strong>的那个编译器——<code>intel/llvm</code>（DPC++ 的上游）。</li>
+<li>每一个抽象概念（Pass、IR、SPIR-V、offload、SYCL kernel、扩展），我们都会给出<strong>具体的源码路径、真实的类名和函数签名</strong>，你可以边读边翻。</li>
+</ul>
+<h2>这本书的特别之处</h2>
+<ul>
+<li><strong>源码为锚</strong>：每个机制都对应到 <code>intel/llvm</code> 里的<strong>真实文件路径与类名</strong>（如 <code>llvm/include/llvm/IR/PassManager.h</code> 的 <code>PassManager&lt;IRUnitT&gt;</code>、<code>sycl/source/detail/scheduler/</code>）。不是伪代码，是你机器上就有的代码。</li>
+<li><strong>看得见的内部结构</strong>：IR 的 def-use 图、Pass 之间的依赖与分析缓存、命令组的依赖图、两趟编译的数据流、SPIR-V 与 PTX 的分叉——全部配<strong>图示</strong>，而不是只有文字。</li>
+<li><strong>从 LLVM 到 SYCL 再到扩展，一条线</strong>：先立起 LLVM 的「IR 中心」心智模型，再看 SYCL 如何把一份 <code>.cpp</code> 拆成主机端与设备端两趟编译、如何在运行时建依赖图上设备，最后手把手实现一个扩展。</li>
+<li><strong>可运行 + 可验证</strong>：C++/SYCL 代码块带 <strong>🔗 在 Compiler Explorer 打开</strong>，附本地编译命令（<code>clang</code> / <code>icpx -fsycl</code> / <code>opt</code> / <code>llvm-spirv</code>）；抽象机制（Pass 管线、依赖图、SSA、调度）用<strong>浏览器里能跑的 Python 小模拟器</strong>画出来——不需要搭好整套工具链也能理解。</li>
+</ul>
+<h2>目录</h2>
+<h3>第一部分 · LLVM：IR 中心的编译器基础设施</h3>
+<ul>
+<li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+</ul>
+<h3>第二部分 · 异构：SPIR-V、offload 工具链与运行时</h3>
+<ul>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+</ul>
+<h3>第三部分 · SYCL（DPC++）的真实实现</h3>
+<ul>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li>[第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR](ch15.html)</li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+</ul>
+<h3>第四部分 · 实现一个 SYCL 扩展</h3>
+<ul>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+</ul>
+<h3>附录</h3>
+<ul>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li>
+</ul>
+<h2>怎么用这本书</h2>
+<ol>
+<li><strong>按顺序读第一部分。</strong> 第 1–7 章是全书地基：LLVM 的「IR 中心」哲学、IR 数据结构、Pass 框架与后端。这套模型立住了，后面 SYCL 的设备端编译、SPIR-V、offload 都只是它的具体应用。</li>
+<li><strong>边读边翻源码。</strong> 每个机制我们都给出 <code>intel/llvm</code> 里的真实路径。建议在另一个窗口打开代码库，读到类名就去 <code>grep</code> 一下，亲眼确认。</li>
+<li><strong>点开代码块动手。</strong> C++/SYCL 段落点 <strong>🔗 在 Compiler Explorer 打开</strong>；机制段落点 <strong>▶ 运行</strong> 跑浏览器里的 Python 模拟器，亲眼看 Pass 管线、依赖图、SSA 是怎么动的。</li>
+<li><strong>想改编译器就照着扩展章走。</strong> 第四部分从「扩展是什么」一路到「写一个 free function kernels 扩展并加测试」，是把前三部分的知识用起来的实战。</li>
+</ol>
+<p>准备好从「概念上的编译器」走进<strong>真实的编译器源码</strong>了吗？从<a href="ch01.html">第 1 章</a>开始。</p>
+
+<div class="chapter-nav">
+  <span></span>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

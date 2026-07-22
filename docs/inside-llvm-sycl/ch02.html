@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li class="active"><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章你已经知道 IR 是 LLVM 的中心，也扫过一眼 <code>define i32 @add</code> 长什么样。这一章把镜头推到最近，正式解剖 IR 的<strong>数据结构</strong>：一个 <code>Module</code> 里装着若干 <code>Function</code>，一个 <code>Function</code> 里装着若干 <code>BasicBlock</code>，一个 <code>BasicBlock</code> 里装着一串 <code>Instruction</code>。这是「容器」的一面。</p>
+<p>但 IR 真正的精髓在另一面：所有指令又通过 <strong><code>Value</code> / <code>User</code> / <code>Use</code></strong> 三个类织成一张 <strong>def-use 图</strong>——「谁产生了这个值、谁又用了它」。再叠加 <strong>SSA</strong>（每个值只被赋值一次）这条铁律，你就理解了为什么 LLVM 的优化能写得又快又准。读完你能对着 <code>llvm/include/llvm/IR/</code> 下那几个头文件（<code>Module.h</code>、<code>Function.h</code>、<code>BasicBlock.h</code>、<code>Instruction.h</code>、<code>Value.h</code>）把 IR 的骨架讲清楚，也为第 4 章「写一个改 IR 的 Pass」打好地基。</p>
+</div><h2>两条正交的结构：容器树 vs def-use 图</h2>
+<p>初读 LLVM IR 最容易只看到「一层套一层」的容器关系，而漏掉更重要的那张图。其实 IR 上同时存在<strong>两套正交的结构</strong>：</p>
+<ul>
+<li><strong>容器树（嵌套/包含关系）</strong>：Module ⊃ Function ⊃ BasicBlock ⊃ Instruction。回答的是「这条指令在物理上位于哪里、按什么顺序排列」。</li>
+<li><strong>def-use 图（数据依赖关系）</strong>：一条指令算出一个值，别的指令把这个值当操作数用。回答的是「这个值是谁算的、又被谁用了」。它跨越基本块、跨越容器层级。</li>
+</ul>
+<p>同一条 <code>add</code> 指令，既是它所在基本块指令链表里的一个节点（容器树的一环），又是 def-use 图里的一个节点（它 def 出 <code>%sum</code>，同时 use 了 <code>%a</code>、<code>%b</code>）。<strong>把这两套结构分开看，是读懂 IR 的关键</strong>。</p>
+<div class="concept">
+<svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">IR 上两套正交的结构</text>
+  <!-- 左：容器树 -->
+  <text x="160" y="48" text-anchor="middle" font-size="12" font-weight="bold" fill="#a53f1c">容器树（包含关系）</text>
+  <rect x="60" y="58" width="200" height="30" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="160" y="78" text-anchor="middle" font-size="11" fill="#a53f1c">Module</text>
+  <rect x="80" y="98" width="160" height="28" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="160" y="117" text-anchor="middle" font-size="11" fill="#a53f1c">Function</text>
+  <rect x="100" y="136" width="120" height="28" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="160" y="155" text-anchor="middle" font-size="11" fill="#a53f1c">BasicBlock</text>
+  <rect x="118" y="174" width="84" height="28" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="160" y="193" text-anchor="middle" font-size="11" fill="#a53f1c">Instruction</text>
+  <path d="M160 88 L160 98" stroke="#e06a3b" stroke-width="1.2"/>
+  <path d="M160 126 L160 136" stroke="#e06a3b" stroke-width="1.2"/>
+  <path d="M160 164 L160 174" stroke="#e06a3b" stroke-width="1.2"/>
+  <text x="160" y="224" text-anchor="middle" font-size="10" fill="#6b7280">「谁装着谁、按什么顺序排」</text>
+  <!-- 右：def-use 图 -->
+  <text x="480" y="48" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f7a45">def-use 图（数据依赖）</text>
+  <rect x="400" y="60" width="70" height="26" rx="5" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="435" y="78" text-anchor="middle" font-size="10" fill="#2f7a45">%a</text>
+  <rect x="500" y="60" width="70" height="26" rx="5" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="535" y="78" text-anchor="middle" font-size="10" fill="#2f7a45">%b</text>
+  <rect x="450" y="126" width="90" height="26" rx="5" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="495" y="144" text-anchor="middle" font-size="10" fill="#2b6cb0">%sum = add</text>
+  <rect x="450" y="192" width="90" height="26" rx="5" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="495" y="210" text-anchor="middle" font-size="10" fill="#2f7a45">ret %sum</text>
+  <path d="M440 86 L485 126" stroke="#2b6cb0" stroke-width="1.3" marker-end="url(#c2)"/>
+  <path d="M530 86 L505 126" stroke="#2b6cb0" stroke-width="1.3" marker-end="url(#c2)"/>
+  <path d="M495 152 L495 192" stroke="#2b6cb0" stroke-width="1.3" marker-end="url(#c2)"/>
+  <text x="410" y="110" font-size="9" fill="#6b7280">use</text>
+  <text x="505" y="178" font-size="9" fill="#6b7280">use</text>
+  <text x="480" y="244" text-anchor="middle" font-size="10" fill="#6b7280">「这个值谁算的、被谁用」</text>
+  <text x="320" y="278" text-anchor="middle" font-size="11" fill="#2d2a26">同一条 <tspan font-weight="bold">add</tspan> 指令同时是左边链表里的一个节点、又是右边图里的一个节点</text>
+  <defs>
+    <marker id="c2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 2-1　IR 上并存的两套结构：左边的容器树管「物理位置与顺序」，右边的 def-use 图管「数据依赖」。优化 Pass 大多在右边这张图上工作——顺着 use 找到所有用到某值的地方，是改 IR 最常见的动作</div>
+</div><h2>容器树：从 Module 到 Instruction</h2>
+<p>先看容器这一面。四层各对应 <code>llvm/include/llvm/IR/</code> 下一个头文件里的一个类。</p>
+<p><strong><code>Module</code>（<code>Module.h</code>）</strong> 是一次编译的顶层容器，对应一个翻译单元（大致一个 <code>.ll</code> / <code>.bc</code> 文件）。它装着这个模块里所有的函数（<code>Function</code>）、全局变量（<code>GlobalVariable</code>）、以及目标数据布局（<code>DataLayout</code>）、目标三元组（target triple）等元信息。你可以把它想成「一个 IR 文件的根」。</p>
+<p><strong><code>Function</code>（<code>Function.h</code>）</strong> 是一个函数。它有返回类型、参数列表（<code>Argument</code>），函数体则是一串按顺序排列的基本块。空函数体（只有声明、没有定义）就是一个 <code>declare</code>。</p>
+<p><strong><code>BasicBlock</code>（<code>BasicBlock.h</code>）</strong> 是一段<strong>顺序执行、中途不分叉也不汇入</strong>的指令序列。它有两条硬性规定：</p>
+<ul>
+<li><strong>只能从第一条指令进入</strong>（不能跳到基本块中间）。</li>
+<li><strong>必须以且仅以一条「终结指令（terminator）」结尾</strong>——<code>ret</code>、<code>br</code>（分支）、<code>switch</code> 等。控制流只在基本块的末尾发生转移。</li>
+</ul>
+<p>正因为这两条，基本块成了控制流图（CFG）的天然节点：块与块之间靠终结指令连边。</p>
+<p><strong><code>Instruction</code>（<code>Instruction.h</code> / <code>Instructions.h</code>）</strong> 是最小的操作单位：一次加法（<code>add</code>）、一次内存读（<code>load</code>）、一次调用（<code>call</code>）。绝大多数指令会「算出一个值」，这个值可以被后面的指令当操作数用——这就接到了下一节的 def-use 图。</p>
+<div class="note">
+<strong>用侵入式链表串起来，不是 <code>std::vector</code></strong>
+<code>Function</code> 里的 <code>BasicBlock</code>、<code>BasicBlock</code> 里的 <code>Instruction</code>，都用 LLVM 自己的侵入式链表 <code>ilist</code> 串接（节点自带前后指针）。好处是：在基本块中间<strong>插入 / 删除一条指令是 O(1)</strong> 的，且插删时已有的指针、迭代器不失效。优化 Pass 天天在做「删掉这条、在那条前面插一条」，链表比数组合适得多。你在源码里会看到 <code>BB.getInstList()</code>、<code>I.eraseFromParent()</code> 这类 API，背后就是这个链表。
+</div><h2>def-use 图：Value、User、Use 三个类</h2>
+<p>这是 LLVM IR 设计里最漂亮的一块，也是新手最容易忽略的。核心是三个类（都在 <code>llvm/include/llvm/IR/</code> 下）：</p>
+<ul>
+<li><strong><code>Value</code>（<code>Value.h</code>）</strong> —— 「一个可以被使用的值」。凡是能被别的指令当操作数引用的东西，都是 <code>Value</code>：指令的结果、函数参数、常量、甚至函数本身和基本块（<code>br</code> 要引用目标块）。<strong>几乎 IR 里的一切都是 <code>Value</code> 的子类</strong>。</li>
+<li><strong><code>User</code>（<code>User.h</code>）</strong> —— 「一个会使用别的值的东西」。指令是典型的 <code>User</code>：<code>add</code> 这个 User 使用了 <code>%a</code>、<code>%b</code> 两个 Value。<code>User</code> 是 <code>Value</code> 的子类（因为一条指令既用别人、自己也是个能被用的值）。</li>
+<li><strong><code>Use</code>（<code>Use.h</code>）</strong> —— 连接两者的<strong>一条边</strong>：它记录「哪个 User 的哪个操作数位，指向哪个 Value」。</li>
+</ul>
+<p>关系是这样：每个 <code>Value</code> 内部挂着一条 <strong>use 链表</strong>，串起所有「使用了我」的 <code>Use</code>（这叫它的 <em>users</em>）；每个 <code>User</code> 则持有一组 <code>Use</code>，指向它「用到的」那些 <code>Value</code>（这叫它的 <em>operands</em>）。于是这张图能<strong>双向遍历</strong>：</p>
+<ul>
+<li>从一条指令出发问「我用了哪些值」→ 遍历它的 operands（<code>I.operands()</code> / <code>I.getOperand(i)</code>）。</li>
+<li>从一个值出发问「谁用了我」→ 遍历它的 users（<code>V.users()</code> / <code>V.use_begin()</code>）。</li>
+</ul>
+<p>第二个方向是优化的命根子。比如做常量传播：算出某个 <code>%x</code> 恒等于常量 <code>42</code>，我就顺着 <code>%x</code> 的 users 找到所有用到它的指令，把操作数换成 <code>42</code>。做死代码消除：一个指令的结果<strong>没有任何 user</strong>（use 链表为空）且无副作用，它就是死的，可以删。这些都是 O(该值被用到的次数)，不用扫全函数——因为 def-use 图把「谁用了我」直接存好了。</p>
+<div class="keypoint">
+<strong>def-use 图是「可导航的数据依赖」</strong>
+别的编译器常常要「扫一遍代码才知道某个变量在哪被用到」。LLVM 把这层关系<strong>物化</strong>成 <code>Use</code> 边、挂在每个 <code>Value</code> 上，让「谁定义了它 / 谁使用了它」变成一次链表遍历。<strong>你写的几乎每个优化 Pass，本质都是在这张图上走：找到某个 Value，顺着它的 users 改写或删除。</strong>记住 <code>V.users()</code> 和 <code>I.getOperand(i)</code> 这两个方向，就抓住了操作 IR 的手柄。
+</div><h2>SSA：每个值只被赋值一次，与 PHINode</h2>
+<p>def-use 图之所以如此干净好用，靠的是 IR 遵守 <strong>SSA（Static Single Assignment，静态单赋值）</strong> 形式：</p>
+<blockquote>
+<p>每个值（<code>Value</code>）在程序文本里<strong>只被定义一次</strong>。</p>
+</blockquote>
+<p>这就是为什么 IR 里到处是 <code>%1</code>、<code>%2</code>、<code>%sum</code> 这种<strong>编号只增不改</strong>的临时值，而不是像 C 里那样反复给同一个 <code>x</code> 赋值。一个值定义出来后就不再变，于是「这个值是什么」有唯一答案——def-use 图里每个 <code>Value</code> 只有一个「定义点」，分析可以直接顺着边推理，不必担心「它在别处又被改了」。</p>
+<p>但真实程序有分支和循环，同一个变量在不同路径上会有不同的值。比如：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 源码里的 x 在两条路径上取不同值
+int x;
+if (cond) x = 10;
+else      x = 20;
+return x;          // 这里的 x 到底是哪个？</code></pre>
+</div><p>SSA 怎么表达「这里的 x 取决于走了哪条路径」？答案是 <strong><code>PHINode</code>（φ 节点）</strong>——一种特殊指令（<code>PHINode</code>，定义在 <code>llvm/include/llvm/IR/Instructions.h</code>），放在多条控制流汇合处的基本块开头，形式是「若来自前驱块 A 则取值 v1，来自前驱块 B 则取值 v2」：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">; if/else 汇合处，用 phi 选出正确的 x
+if.then:
+  br label %if.end
+if.else:
+  br label %if.end
+if.end:
+  %x = phi i32 [ 10, %if.then ], [ 20, %if.else ]  ; 来自 then 取 10，来自 else 取 20
+  ret i32 %x</code></pre>
+</div><p><code>phi</code> 让「合流处的值」依然只被定义一次（就是这条 <code>phi</code> 指令），从而在有分支的情况下也维持了 SSA。你在读循环相关的 IR 时会大量看到 <code>phi</code>——循环归纳变量（<code>i = i + 1</code>）就是靠一个 phi 在「循环入口的初值」和「上一轮迭代的值」之间选择的。</p>
+<div class="warn">
+<strong>SSA 不等于「变量只能赋值一次」</strong>
+SSA 约束的是 <strong>IR 里的值</strong>，不是源码里的变量。源码里 <code>x = x + 1</code> 反复给 <code>x</code> 赋值完全合法——前端会把它拆成一串各自单次定义的 SSA 值（<code>%x1</code>、<code>%x2</code>…），或者先用内存（<code>alloca</code> + <code>load</code>/<code>store</code>）绕过，再由 <code>mem2reg</code> Pass 提升成寄存器 SSA 值并插入必要的 <code>phi</code>。所以别被 <code>alloca</code> 满天飞的 <code>-O0</code> IR 迷惑——那是「还没转成漂亮 SSA」的形态，开了优化后 phi 才会现身。
+</div><h2>亲手看一眼：带分支的 IR</h2>
+<p>把上面 if/else 那段编出来（<code>clang -O1 -S -emit-llvm</code>），核心 IR 大致是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">define i32 @pick(i1 %cond) {
+entry:
+  br i1 %cond, label %if.then, label %if.else   ; 终结指令：按 cond 分支
+if.then:
+  br label %if.end                              ; 终结指令：无条件跳
+if.else:
+  br label %if.end
+if.end:                                         ; 两条路径在此汇合
+  %x = phi i32 [ 10, %if.then ], [ 20, %if.else ]
+  ret i32 %x
+}</code></pre>
+</div><p>对着它把这一章的东西全认一遍：<code>@pick</code> 是 <strong>Function</strong>；<code>entry</code>/<code>if.then</code>/<code>if.else</code>/<code>if.end</code> 是四个 <strong>BasicBlock</strong>，每个都以一条终结指令（<code>br</code> 或 <code>ret</code>）结尾；<code>%cond</code>、<code>10</code>、<code>20</code>、<code>%x</code> 都是 <strong>Value</strong>；那条 <code>phi</code> 是个 <strong>User</strong>，它的 operands 里既有值（<code>10</code>、<code>20</code>）也有来源块（<code>%if.then</code>、<code>%if.else</code>）；而 <code>ret</code> 这个 User 使用了 <code>%x</code>——顺着 <code>%x</code> 的 users 你只会找到这一条 <code>ret</code>。这一小段就是容器树、def-use 图、SSA、phi 四件事的合影。</p>
+<h2>动手：用 def-use 图做死代码消除</h2>
+<p>把 def-use 图和 SSA 浓缩成一个能在浏览器里跑的小模型：几条 SSA 指令，每条 def 出一个值、use 若干个值。我们建出「谁用了谁」的 use 链，然后反复删除「没有任何 user 且无副作用」的指令——这正是 DCE（第 4 章 DCEPass）的内核。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%94%A8%20def-use%20%E5%9B%BE%E5%81%9A%E6%AD%BB%E4%BB%A3%E7%A0%81%E6%B6%88%E9%99%A4%EF%BC%88DCE%EF%BC%89%E7%9A%84%E6%9E%81%E7%AE%80%E6%A8%A1%E5%9E%8B%0A%0A%23%20%E6%AF%8F%E6%9D%A1%E6%8C%87%E4%BB%A4%EF%BC%9A%E5%90%8D%E5%AD%97%EF%BC%88%E5%AE%83%20def%20%E5%87%BA%E7%9A%84%20SSA%20%E5%80%BC%EF%BC%89%E3%80%81%E7%94%A8%E5%88%B0%E7%9A%84%E6%93%8D%E4%BD%9C%E6%95%B0%E3%80%81%E6%98%AF%E5%90%A6%E6%9C%89%E5%89%AF%E4%BD%9C%E7%94%A8%0Ainstrs%20%3D%20%5B%0A%20%20%20%20%7B%22def%22%3A%20%22%25a%22%2C%20%20%20%22uses%22%3A%20%5B%5D%2C%20%20%20%20%20%20%20%20%20%20%20%20%22side_effect%22%3A%20False%7D%2C%20%20%23%20%25a%20%3D%20load%20...%0A%20%20%20%20%7B%22def%22%3A%20%22%25b%22%2C%20%20%20%22uses%22%3A%20%5B%5D%2C%20%20%20%20%20%20%20%20%20%20%20%20%22side_effect%22%3A%20False%7D%2C%0A%20%20%20%20%7B%22def%22%3A%20%22%25sum%22%2C%20%22uses%22%3A%20%5B%22%25a%22%2C%20%22%25b%22%5D%2C%20%20%22side_effect%22%3A%20False%7D%2C%20%20%23%20%25sum%20%3D%20add%20%25a%2C%20%25b%0A%20%20%20%20%7B%22def%22%3A%20%22%25dead%22%2C%22uses%22%3A%20%5B%22%25a%22%5D%2C%20%20%20%20%20%20%20%20%22side_effect%22%3A%20False%7D%2C%20%20%23%20%E6%B2%A1%E4%BA%BA%E7%94%A8%20%E2%86%92%20%E6%AD%BB%E4%BB%A3%E7%A0%81%0A%20%20%20%20%7B%22def%22%3A%20None%2C%20%20%20%22uses%22%3A%20%5B%22%25sum%22%5D%2C%20%20%20%20%20%20%22side_effect%22%3A%20True%7D%2C%20%20%20%23%20store%20%25sum%EF%BC%88%E6%9C%89%E5%89%AF%E4%BD%9C%E7%94%A8%EF%BC%8C%E6%98%AF%22%E6%A0%B9%22%EF%BC%89%0A%5D%0A%0Adef%20build_users(instrs)%3A%0A%20%20%20%20%23%20%E5%8F%8D%E5%90%91%E7%B4%A2%E5%BC%95%EF%BC%9A%E5%80%BC%20-%3E%20%E7%94%A8%E5%88%B0%E5%AE%83%E7%9A%84%E6%8C%87%E4%BB%A4%E4%B8%8B%E6%A0%87%E9%9B%86%E5%90%88%EF%BC%88%E8%BF%99%E5%B0%B1%E6%98%AF%20def-use%20%E5%9B%BE%E7%9A%84%20use%20%E9%93%BE%EF%BC%89%0A%20%20%20%20users%20%3D%20%7Bi%5B%22def%22%5D%3A%20set()%20for%20i%20in%20instrs%20if%20i%5B%22def%22%5D%7D%0A%20%20%20%20for%20idx%2C%20ins%20in%20enumerate(instrs)%3A%0A%20%20%20%20%20%20%20%20for%20v%20in%20ins%5B%22uses%22%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20v%20in%20users%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20users%5Bv%5D.add(idx)%0A%20%20%20%20return%20users%0A%0Aalive%20%3D%20%5BTrue%5D%20*%20len(instrs)%0Aremoved%20%3D%20True%0Around_no%20%3D%200%0Awhile%20removed%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8F%8D%E5%A4%8D%E6%89%AB%EF%BC%8C%E7%9B%B4%E5%88%B0%E6%B2%A1%E6%9C%89%E5%8F%AF%E5%88%A0%E7%9A%84%EF%BC%88%E5%88%A0%E4%B8%80%E6%9D%A1%E5%8F%AF%E8%83%BD%E8%AE%A9%E5%88%AB%E7%9A%84%E4%B9%9F%E5%8F%98%E6%AD%BB%EF%BC%89%0A%20%20%20%20removed%20%3D%20False%0A%20%20%20%20round_no%20%2B%3D%201%0A%20%20%20%20users%20%3D%20build_users(%5Bins%20for%20i%2C%20ins%20in%20enumerate(instrs)%5D)%0A%20%20%20%20%23%20%E9%87%8D%E6%96%B0%E7%BB%9F%E8%AE%A1%E6%AF%8F%E4%B8%AA%E5%80%BC%E5%BD%93%E5%89%8D%E8%BF%98%E6%9C%89%E5%87%A0%E4%B8%AA%22%E6%B4%BB%E7%9D%80%E7%9A%84%22%20user%0A%20%20%20%20live_user_count%20%3D%20%7Bi%5B%22def%22%5D%3A%200%20for%20i%20in%20instrs%20if%20i%5B%22def%22%5D%7D%0A%20%20%20%20for%20idx%2C%20ins%20in%20enumerate(instrs)%3A%0A%20%20%20%20%20%20%20%20if%20not%20alive%5Bidx%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20for%20v%20in%20ins%5B%22uses%22%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20v%20in%20live_user_count%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20live_user_count%5Bv%5D%20%2B%3D%201%0A%20%20%20%20for%20idx%2C%20ins%20in%20enumerate(instrs)%3A%0A%20%20%20%20%20%20%20%20if%20not%20alive%5Bidx%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%23%20%E6%9C%89%E5%89%AF%E4%BD%9C%E7%94%A8%E7%9A%84%E6%8C%87%E4%BB%A4%E6%98%AF%22%E6%A0%B9%22%EF%BC%8C%E6%B0%B8%E8%BF%9C%E4%B8%8D%E5%88%A0%EF%BC%9B%E6%B2%A1%E6%9C%89%20def%20%E7%9A%84%EF%BC%88%E5%A6%82%20store%EF%BC%89%E4%B9%9F%E5%BD%93%E6%9C%89%E5%89%AF%E4%BD%9C%E7%94%A8%0A%20%20%20%20%20%20%20%20if%20ins%5B%22side_effect%22%5D%20or%20ins%5B%22def%22%5D%20is%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20if%20live_user_count.get(ins%5B%22def%22%5D%2C%200)%20%3D%3D%200%3A%20%20%20%23%20%E6%B2%A1%E6%9C%89%E4%BB%BB%E4%BD%95%E6%B4%BB%E7%9D%80%E7%9A%84%20user%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%5B%E7%AC%AC%20%7Bround_no%7D%20%E8%BD%AE%5D%20%E5%88%A0%E9%99%A4%E6%AD%BB%E6%8C%87%E4%BB%A4%20%7Bins%5B'def'%5D%7D%EF%BC%88%E6%97%A0%20user%E3%80%81%E6%97%A0%E5%89%AF%E4%BD%9C%E7%94%A8%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20alive%5Bidx%5D%20%3D%20False%0A%20%20%20%20%20%20%20%20%20%20%20%20removed%20%3D%20True%0A%0Aprint(%22%5Cn%E5%AD%98%E6%B4%BB%E7%9A%84%E6%8C%87%E4%BB%A4%EF%BC%9A%22)%0Afor%20idx%2C%20ins%20in%20enumerate(instrs)%3A%0A%20%20%20%20if%20alive%5Bidx%5D%3A%0A%20%20%20%20%20%20%20%20tag%20%3D%20ins%5B%22def%22%5D%20if%20ins%5B%22def%22%5D%20else%20%22store%EF%BC%88%E5%89%AF%E4%BD%9C%E7%94%A8%E6%A0%B9%EF%BC%89%22%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Btag%7D%22)"># 用 def-use 图做死代码消除（DCE）的极简模型
+
+# 每条指令：名字（它 def 出的 SSA 值）、用到的操作数、是否有副作用
+instrs = [
+    {"def": "%a",   "uses": [],            "side_effect": False},  # %a = load ...
+    {"def": "%b",   "uses": [],            "side_effect": False},
+    {"def": "%sum", "uses": ["%a", "%b"],  "side_effect": False},  # %sum = add %a, %b
+    {"def": "%dead","uses": ["%a"],        "side_effect": False},  # 没人用 → 死代码
+    {"def": None,   "uses": ["%sum"],      "side_effect": True},   # store %sum（有副作用，是"根"）
+]
+
+def build_users(instrs):
+    # 反向索引：值 -&gt; 用到它的指令下标集合（这就是 def-use 图的 use 链）
+    users = {i["def"]: set() for i in instrs if i["def"]}
+    for idx, ins in enumerate(instrs):
+        for v in ins["uses"]:
+            if v in users:
+                users[v].add(idx)
+    return users
+
+alive = [True] * len(instrs)
+removed = True
+round_no = 0
+while removed:                     # 反复扫，直到没有可删的（删一条可能让别的也变死）
+    removed = False
+    round_no += 1
+    users = build_users([ins for i, ins in enumerate(instrs)])
+    # 重新统计每个值当前还有几个"活着的" user
+    live_user_count = {i["def"]: 0 for i in instrs if i["def"]}
+    for idx, ins in enumerate(instrs):
+        if not alive[idx]:
+            continue
+        for v in ins["uses"]:
+            if v in live_user_count:
+                live_user_count[v] += 1
+    for idx, ins in enumerate(instrs):
+        if not alive[idx]:
+            continue
+        # 有副作用的指令是"根"，永远不删；没有 def 的（如 store）也当有副作用
+        if ins["side_effect"] or ins["def"] is None:
+            continue
+        if live_user_count.get(ins["def"], 0) == 0:   # 没有任何活着的 user
+            print(f"[第 {round_no} 轮] 删除死指令 {ins['def']}（无 user、无副作用）")
+            alive[idx] = False
+            removed = True
+
+print("\n存活的指令：")
+for idx, ins in enumerate(instrs):
+    if alive[idx]:
+        tag = ins["def"] if ins["def"] else "store（副作用根）"
+        print(f"  {tag}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[第 1 轮] 删除死指令 %dead（无 user、无副作用）
+
+存活的指令：
+  %a
+  %b
+  %sum
+  store（副作用根）</code></pre>
+</div><p>看清这个过程：<code>%dead</code> 虽然算了个值，但<strong>没有任何 user</strong> 且无副作用，第一轮就被删。<code>%a</code> 虽然也被 <code>%dead</code> 用过，但它还被 <code>%sum</code> 用着，所以活下来。真实的 DCE 就是这样从「有副作用的根」（store、ret、call）出发，把不可达到根的值全部回收——而它能一眼看出「谁用了谁」，全靠 def-use 图这张预先织好的网。请动手改：把最后那条 <code>store %sum</code> 删掉（模拟没人用 <code>%sum</code>），再运行——你会看到 <code>%sum</code>、<code>%a</code>、<code>%b</code> 像多米诺骨牌一样被连锁删除，因为失去根之后它们全成了死代码。</p>
+<h2>小结与下一步</h2>
+<p>你现在真正「读得懂」一段 IR 了：</p>
+<ul>
+<li>IR 上有<strong>两套正交结构</strong>：<strong>容器树</strong>（Module ⊃ Function ⊃ BasicBlock ⊃ Instruction，用侵入式链表串接，插删 O(1)）与 <strong>def-use 图</strong>（数据依赖）。</li>
+<li>def-use 图由三个类织成：<strong><code>Value</code></strong>（能被用的值，IR 里几乎一切都是它）、<strong><code>User</code></strong>（会用别的值的东西，如指令）、<strong><code>Use</code></strong>（连接两者的一条边）。它能双向走：<code>I.getOperand(i)</code> 找操作数、<code>V.users()</code> 找使用者。</li>
+<li>后一个方向（顺着 users 改写/删除）是几乎所有优化 Pass 的核心动作。</li>
+<li>IR 遵守 <strong>SSA</strong>：每个值只定义一次；分支汇合处用 <strong><code>PHINode</code></strong> 选值以维持 SSA。<code>-O0</code> 的 <code>alloca</code> 形态经 <code>mem2reg</code> 才提升成漂亮的寄存器 SSA。</li>
+<li><strong><code>BasicBlock</code> 必以一条终结指令结尾</strong>，这让它成为 CFG 的天然节点。</li>
+</ul>
+<p>下一章我们看 IR 的<strong>三种形态</strong>：这一章讲的都是内存里的 C++ 对象（<code>Module</code>/<code>Function</code>/…），但同一段 IR 还能落成人可读的文本 <code>.ll</code>、和紧凑的二进制 <code>.bc</code>。看清三者如何无损互转、各自用什么工具读写，你就理解了第 1 章说的「IR 能落盘」到底是怎么实现的。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>IR 有两套正交结构：<strong>容器树</strong>（<code>Module</code>/<code>Function</code>/<code>BasicBlock</code>/<code>Instruction</code>，头文件在 <code>llvm/include/llvm/IR/</code>，用 <code>ilist</code> 侵入式链表串接）与 <strong>def-use 图</strong>。</li>
+<li>def-use 图 = <strong><code>Value</code></strong>（<code>Value.h</code>，能被引用的值）+ <strong><code>User</code></strong>（<code>User.h</code>，<code>Value</code> 的子类，持有 operands）+ <strong><code>Use</code></strong>（<code>Use.h</code>，一条边）；每个 <code>Value</code> 挂着 use 链表记录「谁用了我」。</li>
+<li>两个遍历方向：<code>I.getOperand(i)</code>/<code>I.operands()</code>（我用了谁）与 <code>V.users()</code>（谁用了我）；后者是优化 Pass 改写/删除的核心手柄。</li>
+<li>IR 是 <strong>SSA</strong>：每个值只定义一次；控制流汇合处用 <strong><code>PHINode</code></strong>（<code>Instructions.h</code>）选值。<code>-O0</code> 的 <code>alloca</code>+<code>load</code>/<code>store</code> 经 <code>mem2reg</code> 提升为寄存器 SSA。</li>
+<li><strong><code>BasicBlock</code></strong> 只能从头进入、必以一条<strong>终结指令</strong>（<code>ret</code>/<code>br</code>/<code>switch</code>…）结尾，因而是 CFG 的天然节点。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch01.html">← 第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a>
+  <a class="nav-next" href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

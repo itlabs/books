@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li class="active"><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前 11 章你已经手握 LLVM 的全套地基：IR、Pass、SPIR-V、offload 工具链、PTX。现在把它们用起来。SYCL 是一个由 Khronos 定义的<strong>规范</strong>，它承诺「用标准 C++、写一份 <code>.cpp</code>、同时含主机端和设备端代码，编译到多家 GPU」。这一章要回答一个编译器工程师真正关心的问题：<strong>这个「魔法」在 intel/llvm 里到底是怎么实现的？</strong></p>
+<p>核心答案是<strong>两趟编译（two-pass compilation）</strong>：同一份源码被 clang 编译两次——一趟当「设备编译器」抽出 kernel 编成设备镜像，一趟当「主机编译器」编出普通 CPU 程序，两趟之间靠一个<strong>集成头文件（integration header）</strong>对接。读完你会有一张贯穿全书第三部分的地图：知道「规范 vs 实现」的分工，知道设备端那趟走的正是第 8、11 章那条 IR → SPIR-V/PTX 的链路，也知道后面第 13–19 章各自钉在这张图的哪个位置。</p>
+</div><h2>先分清两件事：规范 vs 实现</h2>
+<p>初学 SYCL 最容易犯的错，是把「SYCL」当成一个东西。其实有两层：</p>
+<ul>
+<li><strong>SYCL 规范</strong>：Khronos 发布的一份文档（如 SYCL 2020），规定了 <code>sycl::queue</code>、<code>sycl::buffer</code>、<code>parallel_for</code> 这些类和函数<strong>应该有什么行为</strong>。它只说「是什么」，不说「怎么实现」。任何人都可以照着它写一个实现。</li>
+<li><strong>SYCL 实现</strong>：真正把规范变成能用的编译器 + 运行时库的代码。<strong>DPC++（Data Parallel C++）就是 Intel 的实现，源码就在你面前这个 <code>intel/llvm</code> 仓库里</strong>。另一个知名实现是 AdaptiveCpp。</li>
+</ul>
+<p>这本书讲的是<strong>实现</strong>——<code>intel/llvm</code> 里那套真实的头文件、编译器改动、运行时库。规范说「<code>queue::submit</code> 提交一个命令组」，我们要看的是 <code>sycl/source/detail/queue_impl.cpp</code> 里它<strong>具体干了什么</strong>。</p>
+<div class="note">
+<strong>DPC++ ≈ Clang + SYCL 支持</strong>
+DPC++ 不是从头写的新编译器。它就是把 <strong>SYCL 的语义支持加进了 Clang/LLVM</strong>：前端多认识几个属性（如 <code>sycl_kernel</code>）、多一趟设备编译逻辑（<code>clang/lib/Sema/SemaSYCL.cpp</code>），加上一整套运行时库（<code>sycl/</code>）。所以你前 11 章学的 LLVM 知识，在这里全部用得上——SYCL 不是另起炉灶，是<strong>盖在 LLVM 地基上的一层楼</strong>。
+</div><h2>单一源码的难题：主机和设备代码混在一个文件里</h2>
+<p>SYCL 的卖点是「单一源码」：主机逻辑和设备 kernel 写在同一个 <code>.cpp</code> 里。看一个最小例子：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;sycl/sycl.hpp&gt;
+int main() {
+    sycl::queue q;                       // ← 主机端代码
+    int data[1] = {41};
+    {
+        sycl::buffer&lt;int, 1&gt; buf(data, sycl::range&lt;1&gt;(1));
+        q.submit([&amp;](sycl::handler&amp; h) {
+            sycl::accessor a(buf, h, sycl::read_write);
+            h.single_task([=]() {        // ← 这个 lambda 是设备端代码！
+                a[0] += 1;               //    要编译成 GPU kernel
+            });
+        });
+    }                                    // ← buffer 析构，结果同步回 data
+    // 这里 data[0] == 42
+}</code></pre>
+</div><p>对编译器来说，这一个文件里藏着两种命运截然不同的代码：</p>
+<ul>
+<li><code>main</code>、<code>queue</code>、<code>buffer</code> 的构造——这些是<strong>主机代码</strong>，要编成普通的 x86 程序，跑在 CPU 上。</li>
+<li><code>single_task</code> 里那个 lambda <code>[=]() { a[0] += 1; }</code>——这是<strong>设备代码</strong>，要抽出来、编译成 GPU kernel（走第 8 章的 SPIR-V 或第 11 章的 PTX），最后由 GPU 执行。</li>
+</ul>
+<p>一个标准 C++ 编译器只会把它当普通程序编。SYCL 实现的核心工作，就是<strong>把这两种代码分开、各编各的，再让运行时在启动 kernel 时把它们重新对上</strong>。这就引出了两趟编译。</p>
+<h2>两趟编译：同一份源码，编译器跑两遍</h2>
+<p>DPC++ 的做法是：驱动（driver）让 clang 把同一份 <code>.cpp</code> 编译<strong>两趟</strong>，各带不同的使命。</p>
+<p><strong>设备编译趟（device compilation）</strong>：定义了宏 <code>__SYCL_DEVICE_ONLY__</code>。这一趟的任务是：</p>
+<ol>
+<li><strong>设备代码外提（outlining）</strong>：从 kernel（那个 lambda）出发，找出所有它会用到的代码，把无关的主机代码全部丢掉。</li>
+<li><strong>把 lambda 变成 kernel 函数</strong>：SYCL 用一个带 <code>sycl_kernel</code> 属性（定义在 <code>clang/include/clang/Basic/Attr.td</code>）的模板函数做「入口」，前端在 Sema（<code>clang/lib/Sema/SemaSYCL.cpp</code>）里据此生成一个 OpenCL 风格的 kernel 入口——它声明捕获的 accessor、对每个 accessor 调 <code>__init(...)</code>、再调用 lambda 体。</li>
+<li><strong>设备端诊断</strong>：设备代码里不能用异常、虚函数等 GPU 上做不到的东西，这一趟负责报错。</li>
+<li><strong>生成集成头文件</strong>（下一节详述）。</li>
+<li>产出：设备端的 <strong>LLVM IR</strong>，随后走第 1、8、11 章那条链——<code>llvm-link</code> 合并、<code>llvm-spirv</code> 翻成 SPIR-V（Intel/AMD）或经 NVPTX 后端出 PTX（NVIDIA），最终嵌进胖二进制。</li>
+</ol>
+<p><strong>主机编译趟（host compilation）</strong>：不定义那个宏。这一趟就是把文件当普通 C++ 程序编，产出跑在 CPU 上的主机对象。但它需要知道每个 kernel 的名字、参数个数和类型顺序——好在运行时正确地把主机端 <code>parallel_for&lt;Name&gt;(...)</code> 的调用和设备镜像里的那个 kernel 对上。这些信息，就来自设备趟生成的集成头文件。</p>
+<div class="concept">
+<svg viewBox="0 0 640 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">两趟编译：一份 .cpp 编两遍，靠集成头文件对接</text>
+  <!-- source -->
+  <rect x="252" y="36" width="136" height="40" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="320" y="56" text-anchor="middle" font-size="12" font-weight="bold" fill="#374151">main.cpp</text>
+  <text x="320" y="70" text-anchor="middle" font-size="9" fill="#6b7280">主机代码 + 设备 lambda</text>
+  <!-- split arrows -->
+  <path d="M280 76 L170 104" stroke="#e06a3b" stroke-width="1.5" marker-end="url(#c12o)"/>
+  <path d="M360 76 L470 104" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#c12b)"/>
+  <!-- device pass -->
+  <rect x="40" y="106" width="256" height="150" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="168" y="126" text-anchor="middle" font-size="12" font-weight="bold" fill="#a53f1c">设备编译趟</text>
+  <text x="168" y="142" text-anchor="middle" font-size="9" fill="#6b7280">__SYCL_DEVICE_ONLY__</text>
+  <g font-size="10" fill="#a53f1c">
+    <text x="55" y="162">① 外提 kernel，丢掉主机代码</text>
+    <text x="55" y="180">② lambda → kernel 入口函数</text>
+    <text x="55" y="198">③ 设备端诊断</text>
+    <text x="55" y="216">④ 生成集成头文件 ↓</text>
+    <text x="55" y="240" fill="#6b7280">→ LLVM IR → SPIR-V / PTX</text>
+  </g>
+  <!-- host pass -->
+  <rect x="344" y="106" width="256" height="150" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="472" y="126" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">主机编译趟</text>
+  <text x="472" y="142" text-anchor="middle" font-size="9" fill="#6b7280">普通 C++ 编译</text>
+  <g font-size="10" fill="#2b6cb0">
+    <text x="360" y="168">把文件当普通程序编</text>
+    <text x="360" y="188">产出 CPU 主机对象</text>
+    <text x="360" y="214" fill="#6b7280">需要 kernel 名/参数信息 →</text>
+    <text x="360" y="234" fill="#6b7280">从集成头文件读入 ↓</text>
+  </g>
+  <!-- integration header bridge -->
+  <path d="M168 256 L168 286 L320 286" stroke="#3f9b5c" stroke-width="1.5" marker-end="url(#c12g)"/>
+  <path d="M472 256 L472 286 L322 286" stroke="#3f9b5c" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#c12g)"/>
+  <rect x="228" y="272" width="184" height="30" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="320" y="291" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">集成头文件（桥梁）</text>
+  <text x="320" y="324" text-anchor="middle" font-size="11" fill="#2d2a26">设备趟<tspan font-weight="bold">生成</tspan>它，主机趟<tspan font-weight="bold">读取</tspan>它——kernel 名、参数个数与类型顺序</text>
+  <defs>
+    <marker id="c12o" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+    <marker id="c12b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="c12g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 12-1　DPC++ 的两趟编译。同一份 <code>main.cpp</code> 被编两遍：设备趟外提 kernel、编成 SPIR-V/PTX 并<strong>生成</strong>集成头文件；主机趟当普通程序编、并<strong>读取</strong>集成头文件以获知每个 kernel 的名字和参数布局。集成头文件是两趟之间的桥</div>
+</div><h2>集成头文件：两趟之间的合同</h2>
+<p>集成头文件（integration header）是理解 DPC++ 的关键。它是设备编译趟<strong>自动生成</strong>的一个 <code>.h</code>，里面用代码描述了「每个 kernel 叫什么名字、有几个参数、每个参数是什么类型、在内存里怎么排布」。主机编译趟通过驱动注入的 <code>-fsycl-int-header=</code> 选项（在 <code>clang/lib/Driver/ToolChains/Clang.cpp</code> 里设置）把它 <code>#include</code> 进来。</p>
+<p>它承载的核心契约在 <code>sycl/include/sycl/detail/kernel_desc.hpp</code> 里：</p>
+<ul>
+<li><code>enum class kernel_param_kind_t</code> —— 参数种类（accessor？标量？指针？）。</li>
+<li><code>struct kernel_param_desc_t</code> —— 单个参数的描述（种类、大小、偏移）。</li>
+<li><code>template &lt;class KernelNameType&gt; struct KernelInfo</code> —— 每个 kernel 一份，提供 <code>getName()</code>、<code>getNumParams()</code>、<code>getParamDesc(int)</code>、<code>isESIMD()</code>。</li>
+</ul>
+<p>其中 <code>getName()</code> 返回的是 kernel 名字类型的 <strong>Itanium 修饰名</strong>（形如 <code>_ZTS14example_kernel</code>，<code>_ZTS</code> 是 typeinfo-name 的修饰前缀）。这正是主机端和设备端能「对上号」的机制：主机端你写 <code>parallel_for&lt;class MyKernel&gt;(...)</code>，运行时把 <code>MyKernel</code> 修饰成同一个字符串，拿它去设备镜像里查找同名的 kernel 入口。</p>
+<div class="warn">
+<strong>为什么非得先有集成头文件、主机趟才能编？</strong>
+标准 C++ 编译器<strong>看不懂</strong> SYCL 的 kernel lambda 该抽出哪些参数、按什么顺序传。但主机端要生成「启动这个 kernel」的调用代码，就必须知道这些。设计上的选择是：让<strong>更懂 SYCL 的设备趟</strong>把这些信息算出来、写成一个普通 C++ 头文件，这样<strong>任何</strong>标准编译器都能在主机趟消费它。这就是集成头文件必须在主机趟之前产出的原因——它是「让普通编译器也能处理 SYCL 主机代码」的粘合层。第 14 章会拆开它的真实内容。
+</div><h2>一份源码，两条设备后端路径</h2>
+<p>设备趟产出 LLVM IR 之后的下游，正是你在第 8、11 章见过的分叉——这里把它和 SYCL 接起来：</p>
+<ul>
+<li><strong>Intel / AMD GPU</strong>：LLVM IR →（<code>llvm-spirv</code>）→ <strong>SPIR-V</strong> → 厂商驱动 → 原生指令。</li>
+<li><strong>NVIDIA GPU</strong>：LLVM IR →（NVPTX 后端）→ <strong>PTX</strong> → CUDA 驱动 → SASS。</li>
+</ul>
+<p>也就是说，第 8 章那句「Intel/AMD 走 SPIR-V、NVIDIA 走 PTX」，在 SYCL 里就是<strong>同一份 <code>.cpp</code> 的设备趟可以产出多个目标镜像</strong>，全部嵌进最终的胖二进制（第 9 章的打包工具链）。运行时启动 kernel 时，根据实际选中的设备挑对应的镜像交给对应的驱动。这就是「单一源码、跨厂商」在实现层面的真相。</p>
+<h2>全景图：第三部分各章钉在哪里</h2>
+<p>把这一章当作第三部分（第 12–19 章）的导览。下面这张表告诉你，SYCL 实现的每一块对应哪一章、在源码的哪个位置：</p>
+<table>
+<thead>
+<tr>
+<th>主题</th>
+<th>对应章</th>
+<th>源码位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>头文件全景：<code>sycl.hpp</code> 里有什么</td>
+<td>第 13 章</td>
+<td><code>sycl/include/sycl/</code></td>
+</tr>
+<tr>
+<td>集成头文件 / footer、kernel 命名</td>
+<td>第 14 章</td>
+<td><code>SemaSYCL.cpp</code>、<code>kernel_desc.hpp</code></td>
+</tr>
+<tr>
+<td>属性 <code>[[sycl::…]]</code> 如何落到 IR</td>
+<td>第 15 章</td>
+<td><code>clang/.../Attr.td</code>、<code>SemaSYCL*</code></td>
+</tr>
+<tr>
+<td>运行时对象：queue/context/device/handler</td>
+<td>第 16 章</td>
+<td><code>sycl/source/detail/*_impl.*</code></td>
+</tr>
+<tr>
+<td>命令组、调度器、依赖图</td>
+<td>第 17 章</td>
+<td><code>sycl/source/detail/scheduler/</code></td>
+</tr>
+<tr>
+<td>Unified Runtime：对接各后端</td>
+<td>第 18 章</td>
+<td><code>sycl/source/detail/ur.*</code>、<code>unified-runtime/</code></td>
+</tr>
+<tr>
+<td>设备库 libdevice、SPIR-V 内建</td>
+<td>第 19 章</td>
+<td><code>libdevice/</code>、<code>libclc/</code></td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>一句话记住 SYCL 实现</strong>
+<strong>SYCL 实现 = 编译器把一份源码编两趟（设备趟外提 kernel 编成 SPIR-V/PTX 并生成集成头文件，主机趟当普通程序编并读取它）+ 一套运行时库在执行时把主机调用和设备镜像对上、建依赖图、经 Unified Runtime 派到具体后端。</strong>前一半是编译期（第 12–15 章），后一半是运行期（第 16–18 章）。
+</div><h2>动手：模拟两趟编译如何「对上号」</h2>
+<p>两趟编译能配合的关键，是<strong>同一个 kernel 名字类型，在两趟里被修饰成同一个字符串</strong>——主机趟拿它当「查找键」，设备趟拿它当「镜像里 kernel 的名字」。下面这个浏览器里能跑的小模型演示这个对接：设备趟把每个 kernel 编成镜像并记下修饰名；主机趟拿修饰名去查、启动。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20DPC%2B%2B%20%E4%B8%A4%E8%B6%9F%E7%BC%96%E8%AF%91%EF%BC%9A%E8%AE%BE%E5%A4%87%E8%B6%9F%E5%BB%BA%22%E9%95%9C%E5%83%8F%20%2B%20%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%22%EF%BC%8C%E4%B8%BB%E6%9C%BA%E8%B6%9F%E6%8D%AE%E6%AD%A4%E6%9F%A5%E6%89%BE%E5%B9%B6%E5%90%AF%E5%8A%A8%20kernel%0A%0Adef%20mangle(kernel_name_type)%3A%0A%20%20%20%20%23%20%E6%9E%81%E7%AE%80%E7%89%88%22Itanium%20%E4%BF%AE%E9%A5%B0%22%EF%BC%9A_ZTS%20%2B%20%E9%95%BF%E5%BA%A6%20%2B%20%E5%90%8D%E5%AD%97%EF%BC%88%E7%9C%9F%E5%AE%9E%E8%A7%84%E5%88%99%E5%A4%8D%E6%9D%82%E5%BE%97%E5%A4%9A%EF%BC%8C%E8%BF%99%E9%87%8C%E5%8F%AA%E7%A4%BA%E6%84%8F%EF%BC%89%0A%20%20%20%20return%20f%22_ZTS%7Blen(kernel_name_type)%7D%7Bkernel_name_type%7D%22%0A%0A%23%20----%20%E8%AE%BE%E5%A4%87%E7%BC%96%E8%AF%91%E8%B6%9F%20----%0A%23%20%E4%BB%8E%E6%BA%90%E7%A0%81%E9%87%8C%E5%A4%96%E6%8F%90%E5%87%BA%E4%B8%A4%E4%B8%AA%20kernel%EF%BC%88%E5%90%8D%E5%AD%97%E7%B1%BB%E5%9E%8B%20-%3E%20%E5%8F%82%E6%95%B0%E5%88%97%E8%A1%A8%EF%BC%89%0Akernels_in_source%20%3D%20%7B%0A%20%20%20%20%22VecAdd%22%3A%20%20%20%5B%22accessor%20a%22%2C%20%22accessor%20b%22%2C%20%22accessor%20c%22%5D%2C%0A%20%20%20%20%22AddOne%22%3A%20%20%20%5B%22accessor%20data%22%5D%2C%0A%7D%0A%0Adevice_image%20%3D%20%7B%7D%20%20%20%20%20%20%20%23%20%E8%AE%BE%E5%A4%87%E9%95%9C%E5%83%8F%EF%BC%9A%E4%BF%AE%E9%A5%B0%E5%90%8D%20-%3E%20%E5%B7%B2%E7%BC%96%E8%AF%91%20kernel%0Aintegration_header%20%3D%20%7B%7D%20%23%20%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%EF%BC%9A%E4%BF%AE%E9%A5%B0%E5%90%8D%20-%3E%20%E5%8F%82%E6%95%B0%E4%BF%A1%E6%81%AF%0Afor%20name_type%2C%20params%20in%20kernels_in_source.items()%3A%0A%20%20%20%20m%20%3D%20mangle(name_type)%0A%20%20%20%20device_image%5Bm%5D%20%3D%20f%22%3C%7Bname_type%7D%20%E7%9A%84%20SPIR-V%20%E4%BA%8C%E8%BF%9B%E5%88%B6%3E%22%0A%20%20%20%20integration_header%5Bm%5D%20%3D%20params%0A%20%20%20%20print(f%22%5B%E8%AE%BE%E5%A4%87%E8%B6%9F%5D%20%E5%A4%96%E6%8F%90%20kernel%E3%80%8A%7Bname_type%7D%E3%80%8B%E2%86%92%20%E4%BF%AE%E9%A5%B0%E5%90%8D%20%7Bm%7D%EF%BC%8C%E7%BC%96%E6%88%90%20SPIR-V%EF%BC%8C%E5%86%99%E5%85%A5%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%22)%0A%0Aprint()%0A%0A%23%20----%20%E4%B8%BB%E6%9C%BA%E7%BC%96%E8%AF%91%E8%B6%9F%20%2B%20%E8%BF%90%E8%A1%8C%E6%97%B6%20----%0A%23%20%E4%B8%BB%E6%9C%BA%E4%BB%A3%E7%A0%81%E9%87%8C%E8%BF%99%E6%A0%B7%E5%90%AF%E5%8A%A8%EF%BC%9Aq.parallel_for%3CVecAdd%3E(...)%20%E2%80%94%E2%80%94%20%E8%BF%90%E8%A1%8C%E6%97%B6%E7%94%A8%E5%90%8C%E6%A0%B7%E7%9A%84%E4%BF%AE%E9%A5%B0%E8%A7%84%E5%88%99%E6%9F%A5%E6%89%BE%0Adef%20launch(kernel_name_type)%3A%0A%20%20%20%20m%20%3D%20mangle(kernel_name_type)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%BB%E6%9C%BA%E7%AB%AF%E7%94%A8%E5%90%8C%E4%B8%80%E5%A5%97%E4%BF%AE%E9%A5%B0%E8%A7%84%E5%88%99%0A%20%20%20%20if%20m%20not%20in%20integration_header%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E4%B8%BB%E6%9C%BA%2F%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20%E5%90%AF%E5%8A%A8%E3%80%8A%7Bkernel_name_type%7D%E3%80%8B%E5%A4%B1%E8%B4%A5%EF%BC%9A%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%E9%87%8C%E6%B2%A1%E6%9C%89%20%7Bm%7D%22)%0A%20%20%20%20%20%20%20%20return%0A%20%20%20%20params%20%3D%20integration_header%5Bm%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%BB%8E%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%E7%9F%A5%E9%81%93%E8%A6%81%E4%BC%A0%E5%87%A0%E4%B8%AA%E5%8F%82%E6%95%B0%0A%20%20%20%20print(f%22%5B%E4%B8%BB%E6%9C%BA%2F%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20%E5%90%AF%E5%8A%A8%E3%80%8A%7Bkernel_name_type%7D%E3%80%8B%EF%BC%9A%E4%BF%AE%E9%A5%B0%E5%90%8D%20%7Bm%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%20%20%20%20%20%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%E8%AF%B4%E5%AE%83%E9%9C%80%E8%A6%81%20%7Blen(params)%7D%20%E4%B8%AA%E5%8F%82%E6%95%B0%EF%BC%9A%7Bparams%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%20%20%20%20%20%E2%86%92%20%E5%9C%A8%E8%AE%BE%E5%A4%87%E9%95%9C%E5%83%8F%E9%87%8C%E6%89%BE%E5%88%B0%E5%B9%B6%E6%89%A7%E8%A1%8C%EF%BC%9A%7Bdevice_image%5Bm%5D%7D%22)%0A%0Alaunch(%22VecAdd%22)%0Alaunch(%22AddOne%22)"># 模拟 DPC++ 两趟编译：设备趟建"镜像 + 集成头文件"，主机趟据此查找并启动 kernel
+
+def mangle(kernel_name_type):
+    # 极简版"Itanium 修饰"：_ZTS + 长度 + 名字（真实规则复杂得多，这里只示意）
+    return f"_ZTS{len(kernel_name_type)}{kernel_name_type}"
+
+# ---- 设备编译趟 ----
+# 从源码里外提出两个 kernel（名字类型 -&gt; 参数列表）
+kernels_in_source = {
+    "VecAdd":   ["accessor a", "accessor b", "accessor c"],
+    "AddOne":   ["accessor data"],
+}
+
+device_image = {}       # 设备镜像：修饰名 -&gt; 已编译 kernel
+integration_header = {} # 集成头文件：修饰名 -&gt; 参数信息
+for name_type, params in kernels_in_source.items():
+    m = mangle(name_type)
+    device_image[m] = f"&lt;{name_type} 的 SPIR-V 二进制&gt;"
+    integration_header[m] = params
+    print(f"[设备趟] 外提 kernel《{name_type}》→ 修饰名 {m}，编成 SPIR-V，写入集成头文件")
+
+print()
+
+# ---- 主机编译趟 + 运行时 ----
+# 主机代码里这样启动：q.parallel_for&lt;VecAdd&gt;(...) —— 运行时用同样的修饰规则查找
+def launch(kernel_name_type):
+    m = mangle(kernel_name_type)                    # 主机端用同一套修饰规则
+    if m not in integration_header:
+        print(f"[主机/运行时] 启动《{kernel_name_type}》失败：集成头文件里没有 {m}")
+        return
+    params = integration_header[m]                  # 从集成头文件知道要传几个参数
+    print(f"[主机/运行时] 启动《{kernel_name_type}》：修饰名 {m}")
+    print(f"              集成头文件说它需要 {len(params)} 个参数：{params}")
+    print(f"              → 在设备镜像里找到并执行：{device_image[m]}")
+
+launch("VecAdd")
+launch("AddOne")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[设备趟] 外提 kernel《VecAdd》→ 修饰名 _ZTS6VecAdd，编成 SPIR-V，写入集成头文件
+[设备趟] 外提 kernel《AddOne》→ 修饰名 _ZTS6AddOne，编成 SPIR-V，写入集成头文件
+
+[主机/运行时] 启动《VecAdd》：修饰名 _ZTS6VecAdd
+              集成头文件说它需要 3 个参数：['accessor a', 'accessor b', 'accessor c']
+              → 在设备镜像里找到并执行：&lt;VecAdd 的 SPIR-V 二进制&gt;
+[主机/运行时] 启动《AddOne》：修饰名 _ZTS6AddOne
+              集成头文件说它需要 1 个参数：['accessor data']
+              → 在设备镜像里找到并执行：&lt;AddOne 的 SPIR-V 二进制&gt;</code></pre>
+</div><p>看清这个对接：两趟编译<strong>从不直接通信</strong>，它们只共享一样东西——<strong>同一套名字修饰规则</strong>。设备趟按规则把 kernel 名编成字符串写进集成头文件和设备镜像；主机趟/运行时按同一规则把 <code>parallel_for&lt;Name&gt;</code> 里的 <code>Name</code> 编成字符串去查。名字一致，就对上了。请动手改：把 <code>launch(&quot;VecAdd&quot;)</code> 改成 <code>launch(&quot;VecMul&quot;)</code>（一个源码里不存在的 kernel），你会看到运行时报「集成头文件里没有」——这正是当主机端和设备端 kernel 名字对不上时，真实 DPC++ 会遇到的链接/查找错误。</p>
+<h2>小结与下一步</h2>
+<p>你现在有了第三部分的总地图：</p>
+<ul>
+<li><strong>规范 vs 实现</strong>：SYCL 是 Khronos 的规范；<strong>DPC++ 是 Intel 的实现</strong>，源码在 <code>intel/llvm</code>，本质是「Clang/LLVM + SYCL 支持 + 运行时库」。</li>
+<li>单一源码的难题是<strong>一个文件里混着主机代码和设备 kernel</strong>。DPC++ 用<strong>两趟编译</strong>破解：<strong>设备趟</strong>（<code>__SYCL_DEVICE_ONLY__</code>）外提 kernel、编成 SPIR-V/PTX、生成集成头文件；<strong>主机趟</strong>当普通 C++ 编、读取集成头文件。</li>
+<li><strong>集成头文件</strong>是两趟之间的合同（<code>kernel_desc.hpp</code> 里的 <code>KernelInfo</code>），靠<strong>一致的名字修饰</strong>（<code>_ZTS...</code>）让主机调用和设备镜像对上号。</li>
+<li>设备趟下游是第 8、11 章那条链的分叉：<strong>Intel/AMD → SPIR-V，NVIDIA → PTX</strong>，多个镜像一起进胖二进制。</li>
+<li>编译期在第 12–15 章，运行期在第 16–18 章。</li>
+</ul>
+<p>下一章我们从「宏观流程」钻进「头文件」：打开 <code>sycl/include/sycl/sycl.hpp</code>，看它到底 <code>#include</code> 了什么、<code>queue</code>/<code>buffer</code>/<code>accessor</code>/<code>handler</code> 这些类各自声明在哪个头里、<code>detail/</code> 目录藏着哪些不对用户暴露的实现细节。摸清头文件地图，你才能在读运行时源码时知道每个类型从哪来。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>SYCL = 规范</strong>（Khronos），<strong>DPC++ = 实现</strong>（Intel，即 <code>intel/llvm</code>）；DPC++ 是盖在 LLVM 地基上的一层，不是新编译器。</li>
+<li>单一源码里主机代码与设备 kernel 混在一起，靠<strong>两趟编译</strong>分开：<strong>设备趟</strong>外提 kernel + 编成 SPIR-V/PTX + 生成集成头文件（定义宏 <code>__SYCL_DEVICE_ONLY__</code>）；<strong>主机趟</strong>编普通程序 + 读集成头文件。</li>
+<li>kernel 的抽取靠前端 <code>sycl_kernel</code> 属性（<code>clang/.../Attr.td</code>）与 <code>clang/lib/Sema/SemaSYCL.cpp</code>；集成头文件契约在 <code>sycl/include/sycl/detail/kernel_desc.hpp</code>（<code>KernelInfo</code>、<code>kernel_param_desc_t</code>）。</li>
+<li>主机与设备靠<strong>一致的名字修饰</strong>（Itanium <code>_ZTS...</code>）对上号；这也是集成头文件必须先于主机趟生成的原因。</li>
+<li>设备后端两条路：<strong>SPIR-V（Intel/AMD）</strong> 与 <strong>PTX（NVIDIA）</strong>，多镜像同入胖二进制，运行时按选中设备挑镜像。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch11.html">← 第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a>
+  <a class="nav-next" href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li class="active"><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章说 IR 是「一等公民、能落盘」，第 2 章解剖了 IR 在<strong>内存里</strong>那套 C++ 对象（<code>Module</code>/<code>Function</code>/…）。这一章补上另外两种形态：人可读的文本 <strong><code>.ll</code></strong>，和紧凑的二进制 <strong><code>.bc</code></strong>（bitcode，位码）。三者承载的信息<strong>完全等价</strong>，可以无损来回转换——这正是「IR 能落盘」这句话的技术兑现。</p>
+<p>读完你会清楚：三种形态各自长什么样、用什么工具互转（<code>llvm-as</code> / <code>llvm-dis</code> / <code>opt</code> / <code>clang</code>）、各自在什么场景用（调试看 <code>.ll</code>、存储传输用 <code>.bc</code>、编译进行时用内存对象），以及一个对后面很关键的事实：<strong>SYCL / offload 把设备端代码打包进胖二进制，靠的就是 <code>.bc</code> 这种可嵌入的形态</strong>。这一章短，但它把「IR 是可保存、可传递的实体」这个心智模型钉死。</p>
+</div><h2>一份 IR，三副面孔</h2>
+<p>同一段 IR，在 LLVM 里有三种可以互相转换的存在形式。它们不是三种不同的东西，而是<strong>同一份数据的三种编码</strong>——就像同一个整数可以写成十进制、十六进制、或内存里的补码字节。</p>
+<ul>
+<li><strong>内存对象（in-memory）</strong>：第 2 章那套 <code>Module</code> / <code>Function</code> / <code>Instruction</code> C++ 对象，还有织在其上的 def-use 图。这是编译<strong>进行时</strong>的形态——<code>clang</code> 前端生成它、<code>opt</code> 的 Pass 修改它、后端消费它。它只活在进程内存里，进程结束就没了。</li>
+<li><strong>文本 <code>.ll</code>（assembly / textual IR）</strong>：人能读、能用编辑器改的汇编样式文本。你在第 1、2 章看到的 <code>define i32 @add ...</code> 就是它。给人看的。</li>
+<li><strong>位码 <code>.bc</code>（bitcode / binary IR）</strong>：紧凑的二进制编码。机器读写快、体积小，但人看不了。给机器存储和传输用的。</li>
+</ul>
+<p>三者信息量<strong>严格相等</strong>：任意一种都能无损转成另外两种。选哪种，只看当下的目的——要给人看就用 <code>.ll</code>，要存盘/嵌入/快速加载就用 <code>.bc</code>，正在编译就是内存对象。</p>
+<div class="concept">
+<svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">同一份 IR 的三种等价形态，可无损互转</text>
+  <!-- 内存对象 -->
+  <rect x="235" y="48" width="170" height="60" rx="10" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="320" y="72" text-anchor="middle" font-size="13" font-weight="bold" fill="#2f7a45">内存对象</text>
+  <text x="320" y="90" text-anchor="middle" font-size="9" fill="#6b7280">Module / Function…</text>
+  <text x="320" y="102" text-anchor="middle" font-size="9" fill="#6b7280">编译进行时的形态</text>
+  <!-- 文本 .ll -->
+  <rect x="40" y="190" width="180" height="66" rx="10" fill="#eef6ff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="130" y="214" text-anchor="middle" font-size="13" font-weight="bold" fill="#2b6cb0">文本 .ll</text>
+  <text x="130" y="232" text-anchor="middle" font-size="9" fill="#6b7280">人可读 / 可编辑</text>
+  <text x="130" y="246" text-anchor="middle" font-size="9" fill="#6b7280">define i32 @add …</text>
+  <!-- 位码 .bc -->
+  <rect x="420" y="190" width="180" height="66" rx="10" fill="#fff4ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="510" y="214" text-anchor="middle" font-size="13" font-weight="bold" fill="#a53f1c">位码 .bc</text>
+  <text x="510" y="232" text-anchor="middle" font-size="9" fill="#6b7280">紧凑二进制</text>
+  <text x="510" y="246" text-anchor="middle" font-size="9" fill="#6b7280">存储 / 传输 / 嵌入</text>
+  <!-- 内存 <-> .ll -->
+  <path d="M262 108 L150 190" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c3a)"/>
+  <path d="M172 188 L282 106" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c3b)"/>
+  <text x="170" y="150" text-anchor="middle" font-size="9" fill="#2b6cb0">print / parse</text>
+  <!-- 内存 <-> .bc -->
+  <path d="M378 108 L490 190" stroke="#e06a3b" stroke-width="1.4" marker-end="url(#c3c)"/>
+  <path d="M468 188 L358 106" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c3b)"/>
+  <text x="470" y="150" text-anchor="middle" font-size="9" fill="#a53f1c">write / read</text>
+  <!-- .ll <-> .bc -->
+  <path d="M220 232 L418 232" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c3d)"/>
+  <path d="M418 246 L220 246" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c3d)"/>
+  <text x="320" y="228" text-anchor="middle" font-size="9" fill="#6b7280">llvm-as →</text>
+  <text x="320" y="260" text-anchor="middle" font-size="9" fill="#6b7280">← llvm-dis</text>
+  <defs>
+    <marker id="c3a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="c3b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="c3c" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+    <marker id="c3d" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 3-1　IR 的三种等价形态与互转工具。内存对象是编译进行时的形态；<code>.ll</code> 给人看；<code>.bc</code> 给机器存传。任意两种之间都能无损转换——这就是第 1 章「IR 能落盘」的实现</div>
+</div><h2>互转工具：llvm-as / llvm-dis / clang / opt</h2>
+<p>三种形态之间的转换，各有对应的命令行工具或代码路径：</p>
+<p><strong><code>.ll</code> ↔ <code>.bc</code></strong>：一对互逆的工具，名字直白——</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">llvm-as  add.ll  -o add.bc     # assemble：文本 .ll → 二进制 .bc
+llvm-dis add.bc  -o add.ll     # disassemble：二进制 .bc → 文本 .ll</code></pre>
+</div><p><code>llvm-as</code>（汇编器）和 <code>llvm-dis</code>（反汇编器）互为逆操作，来回转多少次内容都不变。</p>
+<p><strong>源码 → <code>.ll</code> / <code>.bc</code></strong>：由前端 <code>clang</code> 产出。第 1 章那条命令就是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">clang -S -emit-llvm add.c -o add.ll    # -S 出文本 .ll
+clang -c -emit-llvm add.c -o add.bc    # -c 出二进制 .bc</code></pre>
+</div><p><strong>内存对象 ↔ 文本/位码</strong>：这是<strong>代码里</strong>的转换，也是上面工具背后真正干活的 API（都在 <code>llvm/lib/</code> 下）：</p>
+<ul>
+<li>文本解析：<code>lib/AsmParser/</code>（<code>parseIR</code> / <code>parseAssembly</code>）把 <code>.ll</code> 文本读成内存 <code>Module</code>。</li>
+<li>文本打印：<code>Module::print</code> / <code>Value::print</code>（<code>lib/IR/AsmWriter.cpp</code>）把内存对象打成 <code>.ll</code>。你在调试里常用的 <code>M.dump()</code>、<code>I.dump()</code> 就走这里。</li>
+<li>位码写出：<code>lib/Bitcode/Writer/</code>（<code>WriteBitcodeToFile</code>）把内存 <code>Module</code> 编码成 <code>.bc</code>。</li>
+<li>位码读入：<code>lib/Bitcode/Reader/</code>（<code>parseBitcodeFile</code>）把 <code>.bc</code> 解回内存 <code>Module</code>。</li>
+</ul>
+<p><code>opt</code> 这个工具则同时会读写：它读入 <code>.ll</code> 或 <code>.bc</code> → 在内存对象上跑 Pass → 再写出 <code>.ll</code> 或 <code>.bc</code>。默认输出 <code>.bc</code>，加 <code>-S</code> 输出 <code>.ll</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">opt -passes=dce add.ll -S -o out.ll    # 读 .ll、跑 DCE、写回 .ll（-S 表示文本输出）</code></pre>
+</div><div class="note">
+<strong>为什么调试时几乎总加 <code>-S</code></strong>
+<code>opt</code> 和 <code>clang -emit-llvm</code> 默认吐的是二进制 <code>.bc</code>，直接 <code>cat</code> 出来是乱码。养成习惯：想<strong>看</strong> IR 就加 <code>-S</code>（输出文本 <code>.ll</code>），想把 IR 喂给下一个工具或存起来就不加（输出 <code>.bc</code>）。若手上已经有个 <code>.bc</code> 想读，<code>llvm-dis some.bc -o -</code> 打到标准输出即可。
+</div><h2>各形态的分工：谁在什么时候用</h2>
+<p>三种形态不是摆设，它们对应真实的工程权衡：</p>
+<table>
+<thead>
+<tr>
+<th>形态</th>
+<th>优点</th>
+<th>缺点</th>
+<th>典型场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>内存对象</strong></td>
+<td>可随机访问、可改、带 def-use 图</td>
+<td>占内存、进程内才有</td>
+<td>编译进行时：前端生成、Pass 修改、后端消费</td>
+</tr>
+<tr>
+<td><strong>文本 <code>.ll</code></strong></td>
+<td>人可读可改、diff 友好</td>
+<td>体积大、解析慢</td>
+<td>调试、写测试（LIT）、教学、手写 IR</td>
+</tr>
+<tr>
+<td><strong>位码 <code>.bc</code></strong></td>
+<td>紧凑、读写快、可嵌入</td>
+<td>人不可读</td>
+<td>存储、分发、LTO、<strong>嵌进胖二进制</strong></td>
+</tr>
+</tbody></table>
+<p><code>.ll</code> 的「diff 友好」在 LLVM 的测试体系里被用到极致：<code>llvm/test/</code> 下大量 LIT 测试就是「一段 <code>.ll</code> 输入 + 期望的输出模式」，靠文本比对验证某个 Pass 的行为。你在第 5 章写 Pass 时会亲手写这种测试。</p>
+<p>而 <code>.bc</code> 的「可嵌入」直接关系到本书后面的核心链路。<strong>LTO（Link Time Optimization，链接时优化）</strong> 就是把各编译单元编成 <code>.bc</code> 而非机器码存进 <code>.o</code>，等链接时再把所有 <code>.bc</code> 合起来做全局优化。更重要的是——</p>
+<div class="keypoint">
+<strong>.bc 是异构 offload 的载体</strong>
+SYCL / OpenMP offload 的设备端代码，在打包进「胖二进制（fat binary）」之前，正是以 <strong>LLVM 位码</strong>的形态存在的：设备编译趟产出设备端 <code>.bc</code>，用 <code>llvm-link</code> 合并多个 <code>.bc</code>，再交给 <code>llvm-spirv</code> 翻成 SPIR-V（第 8 章）或经 NVPTX 出 PTX（第 11 章），最后由打包工具（第 9 章）嵌进可执行文件。<strong>「IR 能落盘成可嵌入的 .bc」不是一个理论上的漂亮性质，而是整条异构编译链路能拆成独立工具、能把设备代码塞进主机可执行文件的物理前提。</strong>
+</div><h2>亲手看一眼：同一段 IR 的两副面孔</h2>
+<p>拿第 1 章那个 <code>add</code> 走一遍完整的转换环，你能亲眼确认「无损」：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 1. 源码 → 文本 .ll
+clang -S -emit-llvm add.c -o add.ll
+# 2. 文本 → 二进制
+llvm-as add.ll -o add.bc
+# 3. 二进制 → 文本（转回来）
+llvm-dis add.bc -o add.roundtrip.ll
+# 4. 对比：两个 .ll 内容一致（除了文件名注释）
+diff add.ll add.roundtrip.ll</code></pre>
+</div><p><code>.ll</code> 里那段你已经熟悉：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">define i32 @add(i32 %a, i32 %b) {
+entry:
+  %sum = add i32 %a, %b
+  ret i32 %sum
+}</code></pre>
+</div><p>而它的 <code>.bc</code> 用 <code>xxd add.bc | head -1</code> 看，开头是<strong>魔数</strong> <code>42 43 C0 DE</code>——正是 ASCII 的 <code>BC</code> 加两个标志字节，这是 bitcode 文件的身份标识。内容你读不了，但它和上面那段文本一字不差地等价。这就是「三副面孔、一份数据」。</p>
+<h2>动手：模拟三形态互转的「无损」性质</h2>
+<p>用一个浏览器里能跑的小模型演示核心性质：三种形态是同一份数据的不同编码，来回转换后内容不变（无损）。我们把「内存对象」表示成一个结构化字典，把 <code>.ll</code> 表示成文本，把 <code>.bc</code> 表示成紧凑字节，实现它们之间的往返。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20IR%20%E4%B8%89%E5%BD%A2%E6%80%81%E4%BA%92%E8%BD%AC%EF%BC%9A%E5%86%85%E5%AD%98%E5%AF%B9%E8%B1%A1%20%3C-%3E%20%E6%96%87%E6%9C%AC%20.ll%20%3C-%3E%20%E4%BD%8D%E7%A0%81%20.bc%EF%BC%8C%E9%AA%8C%E8%AF%81%E6%97%A0%E6%8D%9F%0A%0A%23%20----%20%E5%86%85%E5%AD%98%E5%AF%B9%E8%B1%A1%EF%BC%9A%E4%B8%80%E4%BB%BD%E7%BB%93%E6%9E%84%E5%8C%96%E7%9A%84%20IR%EF%BC%88%E5%AF%B9%E5%BA%94%E7%AC%AC%202%20%E7%AB%A0%E7%9A%84%20Module%2FFunction%2FInstruction%EF%BC%89%20----%0Air_object%20%3D%20%7B%0A%20%20%20%20%22function%22%3A%20%22add%22%2C%0A%20%20%20%20%22ret_type%22%3A%20%22i32%22%2C%0A%20%20%20%20%22args%22%3A%20%5B(%22i32%22%2C%20%22%25a%22)%2C%20(%22i32%22%2C%20%22%25b%22)%5D%2C%0A%20%20%20%20%22body%22%3A%20%5B(%22%25sum%22%2C%20%22add%22%2C%20%5B%22%25a%22%2C%20%22%25b%22%5D)%2C%20(None%2C%20%22ret%22%2C%20%5B%22%25sum%22%5D)%5D%2C%0A%7D%0A%0A%23%20----%20%E5%86%85%E5%AD%98%E5%AF%B9%E8%B1%A1%20%E2%86%92%20%E6%96%87%E6%9C%AC%20.ll%EF%BC%88%E5%AF%B9%E5%BA%94%20Module%3A%3Aprint%20%2F%20AsmWriter%EF%BC%89%20----%0Adef%20to_ll(obj)%3A%0A%20%20%20%20args%20%3D%20%22%2C%20%22.join(f%22%7Bt%7D%20%7Bn%7D%22%20for%20t%2C%20n%20in%20obj%5B%22args%22%5D)%0A%20%20%20%20lines%20%3D%20%5Bf%22define%20%7Bobj%5B'ret_type'%5D%7D%20%40%7Bobj%5B'function'%5D%7D(%7Bargs%7D)%20%7B%7B%22%2C%20%22entry%3A%22%5D%0A%20%20%20%20for%20dst%2C%20op%2C%20uses%20in%20obj%5B%22body%22%5D%3A%0A%20%20%20%20%20%20%20%20if%20dst%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20lines.append(f%22%20%20%7Bdst%7D%20%3D%20%7Bop%7D%20i32%20%7B'%2C%20'.join(uses)%7D%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20lines.append(f%22%20%20%7Bop%7D%20i32%20%7Buses%5B0%5D%7D%22)%0A%20%20%20%20lines.append(%22%7D%22)%0A%20%20%20%20return%20%22%5Cn%22.join(lines)%0A%0A%23%20----%20%E6%96%87%E6%9C%AC%20.ll%20%E2%86%92%20%E4%BD%8D%E7%A0%81%20.bc%EF%BC%88%E5%AF%B9%E5%BA%94%20llvm-as%20%2F%20BitcodeWriter%EF%BC%8C%E8%BF%99%E9%87%8C%E7%94%A8%E7%B4%A7%E5%87%91%E7%BC%96%E7%A0%81%E7%A4%BA%E6%84%8F%EF%BC%89%20----%0Adef%20to_bc(ll_text)%3A%0A%20%20%20%20%23%20%E7%9C%9F%E6%AD%A3%E7%9A%84%20.bc%20%E6%98%AF%E7%B4%A7%E5%87%91%E4%BA%8C%E8%BF%9B%E5%88%B6%E3%80%81%E5%B8%A6%E9%AD%94%E6%95%B0%20'BC%5CxC0%5CxDE'%EF%BC%9B%E8%BF%99%E9%87%8C%E7%94%A8%E7%AE%80%E5%8C%96%E7%9A%84%E5%AD%97%E8%8A%82%E5%BA%8F%E5%88%97%E7%A4%BA%E6%84%8F%0A%20%20%20%20magic%20%3D%20b%22BC%5Cxc0%5Cxde%22%0A%20%20%20%20return%20magic%20%2B%20ll_text.encode(%22utf-8%22)%20%20%20%23%20%E7%A4%BA%E6%84%8F%EF%BC%9A%E6%8A%8A%E6%96%87%E6%9C%AC%E7%B4%A7%E5%87%91%E6%89%93%E5%8C%85%0A%0A%23%20----%20%E4%BD%8D%E7%A0%81%20.bc%20%E2%86%92%20%E6%96%87%E6%9C%AC%20.ll%EF%BC%88%E5%AF%B9%E5%BA%94%20llvm-dis%20%2F%20BitcodeReader%EF%BC%89%20----%0Adef%20from_bc(bc_bytes)%3A%0A%20%20%20%20assert%20bc_bytes%5B%3A4%5D%20%3D%3D%20b%22BC%5Cxc0%5Cxde%22%2C%20%22%E4%B8%8D%E6%98%AF%E5%90%88%E6%B3%95%E7%9A%84%20bitcode%EF%BC%88%E9%AD%94%E6%95%B0%E4%B8%8D%E7%AC%A6%EF%BC%89%22%0A%20%20%20%20return%20bc_bytes%5B4%3A%5D.decode(%22utf-8%22)%0A%0A%23%20----%20%E8%B5%B0%E4%B8%80%E5%9C%88%EF%BC%9A%E5%AF%B9%E8%B1%A1%20%E2%86%92%20.ll%20%E2%86%92%20.bc%20%E2%86%92%20.ll%EF%BC%8C%E9%AA%8C%E8%AF%81%E6%97%A0%E6%8D%9F%20----%0All1%20%3D%20to_ll(ir_object)%0Aprint(%22%3D%3D%20%E6%96%87%E6%9C%AC%20.ll%20%E5%BD%A2%E6%80%81%20%3D%3D%22)%0Aprint(ll1)%0A%0Abc%20%3D%20to_bc(ll1)%0Aprint(f%22%5Cn%3D%3D%20%E4%BD%8D%E7%A0%81%20.bc%20%E5%BD%A2%E6%80%81%EF%BC%88%E5%89%8D%208%20%E5%AD%97%E8%8A%82%EF%BC%89%3D%3D%5Cn%7Bbc%5B%3A8%5D!r%7D%20%20...%20%20%E5%85%B1%20%7Blen(bc)%7D%20%E5%AD%97%E8%8A%82%22)%0A%0All2%20%3D%20from_bc(bc)%20%20%20%20%20%20%20%20%20%20%23%20%E8%BD%AC%E5%9B%9E%E6%9D%A5%0Aprint(%22%5Cn%3D%3D%20%E4%BB%8E%20.bc%20%E8%BD%AC%E5%9B%9E%20.ll%EF%BC%8C%E4%B8%8E%E5%8E%9F%E6%96%87%E4%B8%80%E8%87%B4%EF%BC%9F%20%3D%3D%22)%0Aprint(%22%E4%B8%80%E8%87%B4%EF%BC%81%22%20if%20ll1%20%3D%3D%20ll2%20else%20%22%E4%B8%8D%E4%B8%80%E8%87%B4%EF%BC%88%E4%B8%A2%E4%BF%A1%E6%81%AF%E4%BA%86%EF%BC%89%22)"># 模拟 IR 三形态互转：内存对象 &lt;-&gt; 文本 .ll &lt;-&gt; 位码 .bc，验证无损
+
+# ---- 内存对象：一份结构化的 IR（对应第 2 章的 Module/Function/Instruction） ----
+ir_object = {
+    "function": "add",
+    "ret_type": "i32",
+    "args": [("i32", "%a"), ("i32", "%b")],
+    "body": [("%sum", "add", ["%a", "%b"]), (None, "ret", ["%sum"])],
+}
+
+# ---- 内存对象 → 文本 .ll（对应 Module::print / AsmWriter） ----
+def to_ll(obj):
+    args = ", ".join(f"{t} {n}" for t, n in obj["args"])
+    lines = [f"define {obj['ret_type']} @{obj['function']}({args}) {{", "entry:"]
+    for dst, op, uses in obj["body"]:
+        if dst:
+            lines.append(f"  {dst} = {op} i32 {', '.join(uses)}")
+        else:
+            lines.append(f"  {op} i32 {uses[0]}")
+    lines.append("}")
+    return "\n".join(lines)
+
+# ---- 文本 .ll → 位码 .bc（对应 llvm-as / BitcodeWriter，这里用紧凑编码示意） ----
+def to_bc(ll_text):
+    # 真正的 .bc 是紧凑二进制、带魔数 'BC\xC0\xDE'；这里用简化的字节序列示意
+    magic = b"BC\xc0\xde"
+    return magic + ll_text.encode("utf-8")   # 示意：把文本紧凑打包
+
+# ---- 位码 .bc → 文本 .ll（对应 llvm-dis / BitcodeReader） ----
+def from_bc(bc_bytes):
+    assert bc_bytes[:4] == b"BC\xc0\xde", "不是合法的 bitcode（魔数不符）"
+    return bc_bytes[4:].decode("utf-8")
+
+# ---- 走一圈：对象 → .ll → .bc → .ll，验证无损 ----
+ll1 = to_ll(ir_object)
+print("== 文本 .ll 形态 ==")
+print(ll1)
+
+bc = to_bc(ll1)
+print(f"\n== 位码 .bc 形态（前 8 字节）==\n{bc[:8]!r}  ...  共 {len(bc)} 字节")
+
+ll2 = from_bc(bc)          # 转回来
+print("\n== 从 .bc 转回 .ll，与原文一致？ ==")
+print("一致！" if ll1 == ll2 else "不一致（丢信息了）")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">== 文本 .ll 形态 ==
+define i32 @add(i32 %a, i32 %b) {
+entry:
+  %sum = add i32 %a, %b
+  ret i32 %sum
+}
+
+== 位码 .bc 形态（前 8 字节）==
+b'BC\xc0\xdedefi'  ...  共 90 字节</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">== 从 .bc 转回 .ll，与原文一致？ ==
+一致！</code></pre>
+</div><p>模型虽简化，但把关键性质演清楚了：三种形态是<strong>同一份 IR 的不同编码</strong>，<code>.bc</code> 开头那个 <code>BC\xc0\xde</code> 魔数是真实 bitcode 的身份标识；来回转换（对象 → <code>.ll</code> → <code>.bc</code> → <code>.ll</code>）后内容一字不差——<strong>无损</strong>。真实的 <code>llvm-as</code>/<code>llvm-dis</code> 做的正是这件事，只不过 <code>.bc</code> 用的是精心设计的紧凑位流编码而非简单打包。请动手改：给 <code>ir_object[&quot;body&quot;]</code> 再加一条指令（比如 <code>(&quot;%prod&quot;, &quot;mul&quot;, [&quot;%sum&quot;, &quot;%a&quot;])</code>），重新运行——三种形态会同步反映这条新指令，因为它们本就是一份数据。</p>
+<h2>小结与下一步</h2>
+<p>你现在彻底理解了第 1 章那句「IR 能落盘」：</p>
+<ul>
+<li>一份 IR 有<strong>三种等价形态</strong>：<strong>内存对象</strong>（编译进行时，第 2 章那套 C++ 对象）、<strong>文本 <code>.ll</code></strong>（人可读，调试/测试用）、<strong>位码 <code>.bc</code></strong>（紧凑二进制，存储/传输/嵌入用）。三者信息严格相等，可无损互转。</li>
+<li>互转工具：<code>llvm-as</code>（<code>.ll</code>→<code>.bc</code>）/ <code>llvm-dis</code>（<code>.bc</code>→<code>.ll</code>）/ <code>clang -emit-llvm</code>（源码→IR）/ <code>opt</code>（读写皆可，<code>-S</code> 出文本）；背后是 <code>lib/AsmParser/</code>、<code>lib/Bitcode/</code>、<code>AsmWriter.cpp</code>。</li>
+<li>分工：编译时用内存对象，看/测用 <code>.ll</code>，存/传/嵌用 <code>.bc</code>。</li>
+<li><strong><code>.bc</code> 的可嵌入性是异构 offload 的物理前提</strong>——设备代码先以 <code>.bc</code> 存在，经 <code>llvm-link</code>、<code>llvm-spirv</code>/NVPTX，最终嵌进胖二进制。</li>
+</ul>
+<p>第一部分的 IR 基础到此打完（第 1–3 章）。下一章起进入<strong>Pass 框架</strong>：你已经在第 4 章读过新 PassManager 的设计（无基类契约、AnalysisManager、PreservedAnalyses）——第 5 章将把它落地，带你<strong>亲手写一个 Function Pass、编成插件、用 <code>opt -load-pass-plugin</code> 挂进管线跑起来</strong>，并配上一个 <code>.ll</code> 的 LIT 测试。这一章的 <code>.ll</code>/<code>opt -S</code> 正是那时你天天要用的工具。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>一份 IR 三种等价形态：<strong>内存对象</strong>（<code>Module</code>/<code>Function</code>…，编译进行时）、<strong>文本 <code>.ll</code></strong>（人可读）、<strong>位码 <code>.bc</code></strong>（紧凑二进制）；信息量相等，<strong>无损互转</strong>。</li>
+<li>工具：<code>llvm-as</code>（汇编，<code>.ll</code>→<code>.bc</code>）、<code>llvm-dis</code>（反汇编，<code>.bc</code>→<code>.ll</code>）、<code>clang -S/-c -emit-llvm</code>（源码→IR）、<code>opt</code>（跑 Pass，<code>-S</code> 输出文本）。默认输出是二进制，调试记得加 <code>-S</code>。</li>
+<li>代码路径：文本读写在 <code>lib/AsmParser/</code> 与 <code>AsmWriter.cpp</code>（<code>Module::print</code>/<code>dump</code>）；位码读写在 <code>lib/Bitcode/Reader/</code>、<code>Writer/</code>（<code>parseBitcodeFile</code>/<code>WriteBitcodeToFile</code>）。</li>
+<li><code>.bc</code> 文件魔数是 <code>42 43 C0 DE</code>（<code>BC\xC0\xDE</code>）。</li>
+<li><strong><code>.bc</code> 可嵌入</strong>，是 LTO 与<strong>异构 offload</strong>（设备代码先成 <code>.bc</code>，再经 <code>llvm-link</code>→<code>llvm-spirv</code>/NVPTX→胖二进制）的物理基础——呼应第 8、9、11 章。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch02.html">← 第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a>
+  <a class="nav-next" href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

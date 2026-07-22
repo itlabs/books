@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 14 章 设备端编译：integration header/footer 与 kernel 命名</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li class="active"><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 14 章 设备端编译：integration header/footer 与 kernel 命名</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 12 章讲过 SYCL "两趟编译"里那座关键的桥——<strong>集成头文件（integration header）</strong>：设备趟编译时前端顺手生成一个 <code>.h</code>，主机趟再把它 <code>#include</code> 进来，于是主机端代码就"认识"了设备端 kernel 的名字、参数个数与顺序。这一章把这座桥拆开看：这个 <code>.h</code> 里到底写了什么、它的孪生兄弟<strong>集成 footer</strong> 又管什么、以及那个贯穿始终的谜题——<strong>kernel 的名字（那串 <code>_ZTS…</code>）究竟是怎么算出来的</strong>。</p>
+<p>读完你会知道：主机端 <code>q.submit([](handler&amp; h){ h.parallel_for&lt;MyKernel&gt;(...); })</code> 里的 <code>MyKernel</code> 类型，如何在编译期被 <strong>Itanium C++ 名字修饰（name mangling）</strong>变成一个字符串常量，写进集成头的 <code>KernelInfo</code> 特化，从而让主机端"喊出"和设备端镜像里完全一致的名字。这是 SYCL "单一源码"魔法的技术核心——理解它，你就理解了主机与设备两趟编译如何"对暗号"。</p>
+</div><h2>回顾：为什么需要这座桥</h2>
+<p>先把第 12 章的困境重述清楚。SYCL 是&quot;单一源码&quot;：主机代码和设备 kernel 写在同一个 <code>.cpp</code> 里。但它们<strong>分两趟编译</strong>——设备趟只编 kernel、产出设备镜像（SPIR-V/PTX）；主机趟编 CPU 代码、产出可执行文件里驱动运行时的那部分。</p>
+<p>问题来了：主机趟要发起&quot;启动名为 X 的 kernel&quot;，它必须知道<strong>这个 kernel 叫什么名字、有几个参数、每个参数多大、是什么类型</strong>——可这些信息是设备趟才算出来的。两趟编译各跑各的，怎么共享？</p>
+<p>SYCL 的答案是<strong>让设备趟把这些信息写成一个 C++ 头文件</strong>，主机趟包含它。这就是<strong>集成头文件</strong>。它是一份由编译器自动生成的、连接两趟编译的&quot;契约&quot;。</p>
+<h2>打开集成头：里面写了什么</h2>
+<p>集成头由前端在设备趟生成，核心逻辑在 <code>clang/lib/Sema/SemaSYCL.cpp</code> 里的 <code>SYCLIntegrationHeader</code> 类（声明在 <code>clang/include/clang/Sema/SemaSYCL.h:53</code>）。它发射（emit）出的内容大致是这几块：</p>
+<ul>
+<li><strong><code>kernel_names[]</code></strong> —— 每个 kernel 的修饰名字符串（就是那串 <code>_ZTS…</code>）。</li>
+<li><strong><code>kernel_args_sizes[]</code></strong> —— 每个 kernel 的参数总数 / 各参数信息条数。</li>
+<li><strong><code>kernel_signatures[]</code></strong> —— 一个 <code>kernel_param_desc_t</code> 数组，逐个描述每个参数：<strong>种类</strong>（是普通标量？accessor？还是别的）、<strong>大小</strong>、<strong>在参数列表里的偏移</strong>。</li>
+<li><strong><code>KernelInfo&lt;T&gt;</code> / <code>KernelInfoData&lt;char...&gt;</code> 特化</strong> —— 把上面这些信息绑定到具体的 kernel 类型 <code>T</code> 上，让主机端能用 <code>T</code> 反查到它的名字和参数布局。</li>
+</ul>
+<p>这些类型的定义不在生成的头里，而在一个<strong>随 SYCL 头发布</strong>的固定头文件 <code>sycl/include/sycl/detail/kernel_desc.hpp</code>（还记得第 13 章那个&quot;随头发布的 <code>detail/</code>&quot;吗？就是它）。关键定义：</p>
+<ul>
+<li><code>enum class kernel_param_kind_t</code>（<code>kernel_desc.hpp:54-66</code>）—— 参数种类：<code>kind_accessor</code>、<code>kind_std_layout</code>（普通标量/结构体）、<code>kind_pointer</code>、<code>kind_specialization_constants_buffer</code> 等。</li>
+<li><code>struct kernel_param_desc_t</code>（<code>kernel_desc.hpp:69-80</code>）—— 一个参数的描述：<code>kind</code> + <code>info</code>（大小或类型信息）+ <code>offset</code>。</li>
+<li><code>template &lt;class KernelNameType&gt; struct KernelInfo</code>（<code>kernel_desc.hpp:98-113</code>）—— 按 kernel 类型索引的元信息：<code>getName()</code>、<code>getNumParams()</code>、<code>getParamDesc(i)</code> 等。</li>
+</ul>
+<div class="note">
+<strong>集成头是编译产物，不是你写的代码</strong>
+你在源码树里<strong>找不到</strong>某个 kernel 的集成头——它是设备趟编译时临时生成的。想亲眼看它，加编译选项让 clang 把它落盘：<code>-fsycl-int-header=out.h</code>（见后文），编出来的 <code>out.h</code> 就是这份契约的真容。里面全是 <code>KernelInfo</code> 特化、一个个 <code>kernel_param_desc_t</code> 的字面量数组，以及一串串 <code>_ZTS…</code> 名字。它长得不像"人写的代码"，因为它本就是给编译器和运行时对暗号用的。
+</div><h2>kernel 的名字从哪来：_ZTS 与名字修饰</h2>
+<p>SYCL 里你这样命名一个 kernel：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">q.submit([&amp;](sycl::handler &amp;h) {
+  sycl::accessor a{buf, h};
+  h.parallel_for&lt;class VecAdd&gt;(range&lt;1&gt;{N}, [=](sycl::id&lt;1&gt; i) {
+    a[i] = a[i] + 1;
+  });
+});</code></pre>
+</div><p>那个 <code>class VecAdd</code> 是一个<strong>类型</strong>，被当作 <code>parallel_for</code> 的模板参数（&quot;kernel name&quot;）。SYCL 规范要求 kernel name 全局唯一，用它来把主机端的启动请求和设备端的 kernel 对应起来。那么这个类型怎么变成设备镜像里和集成头里那串字符串的？</p>
+<p>答案是 <strong>Itanium C++ ABI 的名字修饰（name mangling）</strong>，具体走的是 RTTI 名字那条路。前端计算 kernel 名的入口是 <code>SemaSYCL.cpp:1282</code> 的 <code>constructKernelName</code>，它最终调用到 <code>clang/lib/AST/ItaniumMangle.cpp:7610</code> 的 <code>mangleCXXRTTIName</code>——也就是给类型生成 <code>typeid</code> 名字的那套逻辑。产物就带着标志性的 <strong><code>_ZTS</code> 前缀</strong>（<code>_Z</code> 是 Itanium 修饰的起手式，<code>TS</code> 表示 &quot;type name string&quot;，即 RTTI 的类型名）。所以 <code>class VecAdd</code> 会变成形如 <code>_ZTS6VecAdd</code> 的字符串（<code>6</code> 是名字长度）。</p>
+<p>这解释了一个你可能踩过的坑：<strong>为什么 kernel name 类型必须在全局可见、不能是局部 lambda 的匿名类型</strong>——因为要能被稳定地修饰成一个跨两趟编译一致的名字。</p>
+<div class="keypoint">
+<strong>kernel 名 = 用 RTTI 名字修饰把 kernel-name 类型变成字符串</strong>
+<strong>你给 <code>parallel_for&lt;T&gt;</code> 的类型参数 <code>T</code>，被前端 <code>constructKernelName</code>（<code>SemaSYCL.cpp:1282</code>）经 <code>mangleCXXRTTIName</code>（<code>ItaniumMangle.cpp:7610</code>）修饰成一个带 <code>_ZTS</code> 前缀的字符串。</strong>这个字符串同时写进①设备镜像里 kernel 函数的符号名、②集成头里的 <code>KernelInfo&lt;T&gt;::getName()</code>。两趟编译各自独立地对同一个类型跑同一套修饰算法，得到<strong>逐字节相同</strong>的名字——这就是主机端和设备端"对上暗号"的根基。
+</div><h2>SYCL 前端如何&quot;看见&quot;一个 kernel</h2>
+<p>集成头里的信息不是凭空来的——前端要先在设备趟<strong>识别出哪些是 kernel、逐个参数分析它们</strong>。这套机制值得一看，因为它是第 22 章&quot;需要编译器配合的扩展&quot;的基础。</p>
+<p>一切从一个内部属性开始：<code>sycl_kernel</code>（定义在 <code>clang/include/clang/Basic/Attr.td:1738</code>）。SYCL 头里的 <code>parallel_for</code>/<code>single_task</code> 最终会调用一个被 <code>__attribute__((sycl_kernel))</code> 标注的模板函数，前端看到这个属性，就知道&quot;这里要生成一个 OpenCL/SPIR-V kernel 入口&quot;。核心动作在 <code>SemaSYCL.cpp:5372</code> 的 <code>ConstructOpenCLKernel</code>：它为用户的 kernel lambda 生成一个真正的 kernel 函数（<code>spir_kernel</code> 调用约定，见第 15 章）。</p>
+<p>生成过程用了一个优雅的<strong>访问者（visitor）框架</strong>——前端遍历 kernel lambda 的每个捕获参数，三个协作的 visitor 各干一摊：</p>
+<ul>
+<li><strong><code>SyclKernelDeclCreator</code></strong> —— 构造 kernel 函数的形参列表（accessor 会被拆成指针+范围等多个实参）。</li>
+<li><strong><code>SyclKernelBodyCreator</code></strong> —— 生成 kernel 函数体：把传进来的实参重新组装回 lambda 的捕获、再调用原 lambda。</li>
+<li><strong><code>SyclKernelIntHeaderCreator</code></strong> —— <strong>一边遍历一边往集成头里写</strong> <code>kernel_param_desc_t</code>：每遇到一个 accessor 参数就记 <code>kind_accessor</code>、每个标量记 <code>kind_std_layout</code>。</li>
+</ul>
+<div class="note">
+<strong>accessor 是怎么"拆开"过设备边界的</strong>
+一个 <code>accessor</code> 在主机端是个复杂对象（带指针、范围、偏移）。它不能整个塞进 kernel 参数——设备端 kernel 收到的是一个裸指针加几个整数。这套拆解由 kernel 对象里约定的特殊成员方法完成：<code>__init</code>（把传入的指针/范围<strong>装配</strong>成设备端的 accessor）和 <code>__finalize</code>（收尾，如 stream 的刷新）。visitor 遇到有 <code>__init</code> 的类型，就按它的形参列表把参数摊平。这就是为什么集成头里一个 accessor 会对应<strong>多条</strong> <code>kernel_param_desc_t</code>——你在生成的头里能直接数出来。
+</div><h2>集成 footer：头的孪生兄弟</h2>
+<p>设备趟其实生成<strong>两个</strong>文件：集成头（integration header）和<strong>集成 footer（integration footer）</strong>。footer 的类是 <code>SYCLIntegrationFooter</code>（<code>SemaSYCL.h:228</code>），发射逻辑在 <code>SemaSYCL.cpp:7821</code>（头在 <code>:7206</code>）。</p>
+<p>两者的差别在<strong>怎么被包含进主机趟</strong>，这也揭示了它们各自的职责：</p>
+<ul>
+<li><strong>集成头</strong>：主机趟编译时，driver 用 <code>-include-internal-header</code> 把它<strong>强制包含在源文件最前面</strong>（driver 逻辑在 <code>clang/lib/Driver/ToolChains/Clang.cpp:5814</code>）。因为它要提供的是 kernel 元信息，得在用户代码之前就位。</li>
+<li><strong>集成 footer</strong>：用 <code>-include-internal-footer</code> 强制包含在源文件<strong>最后</strong>（<code>Clang.cpp:5829</code>）。因为它要注册的东西——<strong>spec constant（特化常量）、<code>device_global</code>、host pipe</strong>——必须在用户已经定义完这些全局对象<strong>之后</strong>才能引用它们、生成注册用的 shim 函数。</li>
+</ul>
+<p>换句话说：<strong>头在前，负责&quot;声明 kernel 长什么样&quot;；footer 在后，负责&quot;把用户定义的设备端全局对象登记到运行时&quot;</strong>。footer 里那些 shim 函数把 <code>device_global</code> 变量、spec constant 之类和它们的字符串标识符绑定，运行时据此在设备镜像里找到对应的符号。</p>
+<p>控制这两个文件的编译选项（定义在 <code>clang/include/clang/Options/Options.td</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>选项</th>
+<th>作用</th>
+<th>位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>-fsycl-int-header=&lt;file&gt;</code></td>
+<td>指定集成头输出路径</td>
+<td><code>Options.td:9454</code></td>
+</tr>
+<tr>
+<td><code>-fsycl-int-footer=&lt;file&gt;</code></td>
+<td>指定集成 footer 输出路径</td>
+<td><code>Options.td:9459</code></td>
+</tr>
+<tr>
+<td><code>-include-internal-header</code></td>
+<td>主机趟：头强制包含在<strong>最前</strong></td>
+<td><code>Clang.cpp:5814</code></td>
+</tr>
+<tr>
+<td><code>-include-internal-footer</code></td>
+<td>主机趟：footer 强制包含在<strong>最后</strong></td>
+<td><code>Clang.cpp:5829</code></td>
+</tr>
+</tbody></table>
+<p>这套 emit 由 <code>clang/lib/Sema/Sema.cpp:1297</code>（头）/<code>:1294</code>（footer）在编译结束时触发。</p>
+<div class="concept">
+<svg viewBox="0 0 660 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">两趟编译如何用集成头/footer 对暗号</text>
+  <!-- source -->
+  <rect x="255" y="36" width="150" height="34" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="330" y="52" text-anchor="middle" font-size="10" fill="#374151">app.cpp（单一源码）</text>
+  <text x="330" y="64" text-anchor="middle" font-size="8" fill="#6b7280">parallel_for&lt;VecAdd&gt;(…)</text>
+  <!-- device pass -->
+  <path d="M270 70 L180 96" stroke="#6b7280" stroke-width="1.2" marker-end="url(#c14)"/>
+  <path d="M390 70 L480 96" stroke="#6b7280" stroke-width="1.2" marker-end="url(#c14)"/>
+  <rect x="70" y="98" width="220" height="94" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="180" y="116" text-anchor="middle" font-size="11" font-weight="bold" fill="#a53f1c">设备趟（device pass）</text>
+  <text x="180" y="133" text-anchor="middle" font-size="8" fill="#6b7280">SemaSYCL 识别 sycl_kernel</text>
+  <text x="180" y="146" text-anchor="middle" font-size="8" fill="#6b7280">ConstructOpenCLKernel + visitor</text>
+  <text x="180" y="159" text-anchor="middle" font-size="8" fill="#6b7280">mangleCXXRTTIName → _ZTS6VecAdd</text>
+  <text x="180" y="176" text-anchor="middle" font-size="8" fill="#a53f1c">产出：设备镜像 + 集成头/footer</text>
+  <!-- host pass -->
+  <rect x="380" y="98" width="220" height="94" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="490" y="116" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">主机趟（host pass）</text>
+  <text x="490" y="133" text-anchor="middle" font-size="8" fill="#6b7280">-include-internal-header（最前）</text>
+  <text x="490" y="146" text-anchor="middle" font-size="8" fill="#6b7280">-include-internal-footer（最后）</text>
+  <text x="490" y="159" text-anchor="middle" font-size="8" fill="#6b7280">读 KernelInfo&lt;VecAdd&gt; 拿名字/参数</text>
+  <text x="490" y="176" text-anchor="middle" font-size="8" fill="#2b6cb0">产出：可执行文件（驱动运行时）</text>
+  <!-- bridge -->
+  <path d="M290 150 L380 150" stroke="#3f9b5c" stroke-width="2" marker-end="url(#c14b)"/>
+  <rect x="250" y="214" width="160" height="60" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="330" y="232" text-anchor="middle" font-size="10" font-weight="bold" fill="#2f7a45">集成头（int header）</text>
+  <text x="330" y="247" text-anchor="middle" font-size="8" fill="#6b7280">KernelInfo&lt;VecAdd&gt;::getName()</text>
+  <text x="330" y="259" text-anchor="middle" font-size="8" fill="#6b7280">= "_ZTS6VecAdd"</text>
+  <text x="330" y="270" text-anchor="middle" font-size="8" fill="#6b7280">kernel_param_desc_t[] 参数布局</text>
+  <path d="M180 192 L300 214" stroke="#3f9b5c" stroke-width="1.3" marker-end="url(#c14b)"/>
+  <path d="M360 214 L470 192" stroke="#3f9b5c" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#c14b)"/>
+  <text x="330" y="298" text-anchor="middle" font-size="10" fill="#2d2a26">设备趟<tspan font-weight="bold">写</tspan>集成头 → 主机趟<tspan font-weight="bold">读</tspan>它 → 两边喊同一个 _ZTS 名字</text>
+  <text x="330" y="320" text-anchor="middle" font-size="9" fill="#6b7280">名字一致的根基：两趟对同一类型跑同一套 RTTI 名字修饰，逐字节相同</text>
+  <defs>
+    <marker id="c14" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c14b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 14-1　集成头/footer 作为两趟编译的桥。设备趟识别 kernel、用 RTTI 名字修饰算出 <code>_ZTS…</code> 名、把 kernel 元信息写进集成头（footer 写全局对象注册）；主机趟强制包含它们（头在最前、footer 在最后），从 <code>KernelInfo&lt;T&gt;</code> 读出与设备镜像逐字节相同的名字与参数布局</div>
+</div><h2>亲手把集成头逼出来看</h2>
+<p>这套机制平时藏在 driver 背后，但你可以让 clang 把集成头落盘、亲眼读它：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 只跑设备趟，把集成头写到 vecadd-int.h
+clang++ -fsycl -fsycl-device-only \
+    -fsycl-int-header=vecadd-int.h vecadd.cpp -c -o /dev/null
+
+# 看它生成了什么——找 kernel 名字和参数描述
+grep -n '_ZTS\|kernel_param_desc_t\|KernelInfo' vecadd-int.h</code></pre>
+</div><p>你会看到一串 <code>KernelInfo&lt;...&gt;</code> 特化、<code>getName()</code> 返回的 <code>_ZTS…</code> 字符串、以及描述每个参数的 <code>kernel_param_desc_t</code> 字面量数组。把它和设备镜像里的符号对照（<code>llvm-spirv</code> 反汇编或 <code>nm</code> 看 PTX），会发现 kernel 名<strong>逐字节相同</strong>——这就是&quot;对暗号&quot;成功的直接证据。这也是调试&quot;kernel 找不到 / 参数对不上&quot;这类问题的第一现场：十有八九是集成头里的名字或参数布局和设备镜像不一致。</p>
+<h2>动手：模拟设备趟如何生成集成头、主机趟如何读它</h2>
+<p>把这一章的核心——「设备趟对 kernel-name 类型做名字修饰、把参数摊平写进集成头；主机趟读它拿到同一个名字去启动」——用一个浏览器里能跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%E9%9B%86%E6%88%90%E5%A4%B4%EF%BC%9A%E8%AE%BE%E5%A4%87%E8%B6%9F%22%E5%86%99%22%E3%80%81%E4%B8%BB%E6%9C%BA%E8%B6%9F%22%E8%AF%BB%22%EF%BC%8C%E4%B8%A4%E8%BE%B9%E9%9D%A0%E5%90%8D%E5%AD%97%E4%BF%AE%E9%A5%B0%E5%AF%B9%E4%B8%8A%E6%9A%97%E5%8F%B7%0A%0A%23%20----%20%E5%90%8D%E5%AD%97%E4%BF%AE%E9%A5%B0%EF%BC%9A%E6%A8%A1%E6%8B%9F%20mangleCXXRTTIName%20%E7%9A%84%20_ZTS%20%E5%89%8D%E7%BC%80%EF%BC%88_ZTS%20%2B%20%E9%95%BF%E5%BA%A6%20%2B%20%E5%90%8D%E5%AD%97%EF%BC%89----%0Adef%20mangle_rtti_name(type_name)%3A%0A%20%20%20%20return%20f%22_ZTS%7Blen(type_name)%7D%7Btype_name%7D%22%0A%0A%23%20----%20%E8%AE%BE%E5%A4%87%E8%B6%9F%EF%BC%9A%E8%AF%86%E5%88%AB%20kernel%EF%BC%8C%E6%8A%8A%E5%8F%82%E6%95%B0%22%E6%91%8A%E5%B9%B3%22%EF%BC%8C%E7%94%9F%E6%88%90%E9%9B%86%E6%88%90%E5%A4%B4%EF%BC%88%E4%B8%80%E4%B8%AA%20dict%20%E6%A8%A1%E6%8B%9F%20KernelInfo%20%E8%A1%A8%EF%BC%89----%0Adef%20device_pass(kernel_name_type%2C%20captures)%3A%0A%20%20%20%20%23%20captures%3A%20%5B(%E5%90%8D%E5%AD%97%2C%20%E7%A7%8D%E7%B1%BB)%5D%EF%BC%8Caccessor%20%E4%BC%9A%E6%91%8A%E6%88%90%20%E6%8C%87%E9%92%88%2B%E8%8C%83%E5%9B%B4%20%E5%A4%9A%E4%B8%AA%E5%8F%82%E6%95%B0%0A%20%20%20%20param_descs%20%3D%20%5B%5D%0A%20%20%20%20for%20cap_name%2C%20cap_kind%20in%20captures%3A%0A%20%20%20%20%20%20%20%20if%20cap_kind%20%3D%3D%20%22accessor%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%23%20__init%20%E6%8A%8A%20accessor%20%E6%8B%86%E6%88%90%20%E6%8C%87%E9%92%88%20%2B%20%E8%AE%BF%E9%97%AE%E8%8C%83%E5%9B%B4%EF%BC%88%E7%A4%BA%E6%84%8F%EF%BC%9A2%20%E6%9D%A1%EF%BC%89%0A%20%20%20%20%20%20%20%20%20%20%20%20param_descs.append(%7B%22kind%22%3A%20%22kind_accessor%22%2C%20%22of%22%3A%20cap_name%2C%20%22info%22%3A%20%22ptr%22%7D)%0A%20%20%20%20%20%20%20%20%20%20%20%20param_descs.append(%7B%22kind%22%3A%20%22kind_std_layout%22%2C%20%22of%22%3A%20cap_name%2C%20%22info%22%3A%20%22range%22%7D)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20param_descs.append(%7B%22kind%22%3A%20%22kind_std_layout%22%2C%20%22of%22%3A%20cap_name%2C%20%22info%22%3A%20cap_kind%7D)%0A%20%20%20%20return%20%7B%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E5%B0%B1%E6%98%AF%E9%9B%86%E6%88%90%E5%A4%B4%E9%87%8C%E7%9A%84%20KernelInfo%3CT%3E%20%E7%89%B9%E5%8C%96%0A%20%20%20%20%20%20%20%20mangle_rtti_name(kernel_name_type)%3A%20%7B%0A%20%20%20%20%20%20%20%20%20%20%20%20%22name%22%3A%20mangle_rtti_name(kernel_name_type)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%22num_params%22%3A%20len(param_descs)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%22params%22%3A%20param_descs%2C%0A%20%20%20%20%20%20%20%20%7D%0A%20%20%20%20%7D%0A%0A%23%20----%20%E4%B8%BB%E6%9C%BA%E8%B6%9F%EF%BC%9A%E6%8B%BF%E5%88%B0%E5%90%8C%E4%B8%80%E4%B8%AA%20kernel-name%20%E7%B1%BB%E5%9E%8B%EF%BC%8C%E7%8B%AC%E7%AB%8B%E7%AE%97%E5%87%BA%E5%90%8C%E4%B8%80%E4%B8%AA%E4%BF%AE%E9%A5%B0%E5%90%8D%EF%BC%8C%E5%8E%BB%E9%9B%86%E6%88%90%E5%A4%B4%E9%87%8C%E6%9F%A5%20----%0Adef%20host_pass_launch(kernel_name_type%2C%20integration_header)%3A%0A%20%20%20%20key%20%3D%20mangle_rtti_name(kernel_name_type)%20%20%20%20%20%23%20%E4%B8%BB%E6%9C%BA%E8%B6%9F%E7%8B%AC%E7%AB%8B%E8%B7%91%E5%90%8C%E4%B8%80%E5%A5%97%E4%BF%AE%E9%A5%B0%0A%20%20%20%20info%20%3D%20integration_header.get(key)%0A%20%20%20%20if%20not%20info%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E4%B8%BB%E6%9C%BA%E8%B6%9F%5D%20%E6%89%BE%E4%B8%8D%E5%88%B0%20kernel%20%7Bkey%7D%20%E2%80%94%E2%80%94%20%E6%9A%97%E5%8F%B7%E6%B2%A1%E5%AF%B9%E4%B8%8A%EF%BC%81%22)%3B%20return%0A%20%20%20%20print(f%22%5B%E4%B8%BB%E6%9C%BA%E8%B6%9F%5D%20%E8%A6%81%E5%90%AF%E5%8A%A8%20kernel-name%20%E7%B1%BB%E5%9E%8B%20%3D%20%7Bkernel_name_type%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%E7%8B%AC%E7%AB%8B%E7%AE%97%E5%87%BA%E4%BF%AE%E9%A5%B0%E5%90%8D%20%3D%20%7Bkey%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%E5%9C%A8%E9%9B%86%E6%88%90%E5%A4%B4%E9%87%8C%E6%9F%A5%E5%88%B0%EF%BC%9A%7Binfo%5B'num_params'%5D%7D%20%E4%B8%AA%E5%8F%82%E6%95%B0%22)%0A%20%20%20%20for%20i%2C%20p%20in%20enumerate(info%5B%22params%22%5D)%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%20%20arg%5B%7Bi%7D%5D%20%7Bp%5B'kind'%5D%3A%3C16%7D%20(%E6%9D%A5%E8%87%AA%20%7Bp%5B'of'%5D%7D%2C%20%7Bp%5B'info'%5D%7D)%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%E2%86%92%20%E5%8F%91%E8%B5%B7%20urEnqueueKernelLaunch(%5C%22%7Binfo%5B'name'%5D%7D%5C%22%2C%20...)%22)%0A%0A%23%20%E8%AE%BE%E5%A4%87%E8%B6%9F%E7%BC%96%E8%AF%91%E8%BF%99%E4%B8%AA%20kernel%EF%BC%9AVecAdd%EF%BC%8C%E6%8D%95%E8%8E%B7%E4%B8%80%E4%B8%AA%20accessor%20a%20%E5%92%8C%E4%B8%80%E4%B8%AA%E6%A0%87%E9%87%8F%20n%0Aint_header%20%3D%20device_pass(%22VecAdd%22%2C%20captures%3D%5B(%22a%22%2C%20%22accessor%22)%2C%20(%22n%22%2C%20%22int%22)%5D)%0Aprint(%22%E8%AE%BE%E5%A4%87%E8%B6%9F%E7%94%9F%E6%88%90%E7%9A%84%E9%9B%86%E6%88%90%E5%A4%B4%EF%BC%88KernelInfo%20%E8%A1%A8%EF%BC%89%EF%BC%9A%22)%0Afor%20k%2C%20v%20in%20int_header.items()%3A%0A%20%20%20%20print(f%22%20%20%7Bk%7D%20%E2%86%92%20%7Bv%5B'num_params'%5D%7D%20params%22)%0Aprint()%0A%23%20%E4%B8%BB%E6%9C%BA%E8%B6%9F%EF%BC%9A%E7%94%A8%E5%90%8C%E4%B8%80%E4%B8%AA%E7%B1%BB%E5%9E%8B%E5%90%8D%E5%8E%BB%E5%90%AF%E5%8A%A8%0Ahost_pass_launch(%22VecAdd%22%2C%20int_header)"># 模拟集成头：设备趟"写"、主机趟"读"，两边靠名字修饰对上暗号
+
+# ---- 名字修饰：模拟 mangleCXXRTTIName 的 _ZTS 前缀（_ZTS + 长度 + 名字）----
+def mangle_rtti_name(type_name):
+    return f"_ZTS{len(type_name)}{type_name}"
+
+# ---- 设备趟：识别 kernel，把参数"摊平"，生成集成头（一个 dict 模拟 KernelInfo 表）----
+def device_pass(kernel_name_type, captures):
+    # captures: [(名字, 种类)]，accessor 会摊成 指针+范围 多个参数
+    param_descs = []
+    for cap_name, cap_kind in captures:
+        if cap_kind == "accessor":
+            # __init 把 accessor 拆成 指针 + 访问范围（示意：2 条）
+            param_descs.append({"kind": "kind_accessor", "of": cap_name, "info": "ptr"})
+            param_descs.append({"kind": "kind_std_layout", "of": cap_name, "info": "range"})
+        else:
+            param_descs.append({"kind": "kind_std_layout", "of": cap_name, "info": cap_kind})
+    return {                        # 这就是集成头里的 KernelInfo&lt;T&gt; 特化
+        mangle_rtti_name(kernel_name_type): {
+            "name": mangle_rtti_name(kernel_name_type),
+            "num_params": len(param_descs),
+            "params": param_descs,
+        }
+    }
+
+# ---- 主机趟：拿到同一个 kernel-name 类型，独立算出同一个修饰名，去集成头里查 ----
+def host_pass_launch(kernel_name_type, integration_header):
+    key = mangle_rtti_name(kernel_name_type)     # 主机趟独立跑同一套修饰
+    info = integration_header.get(key)
+    if not info:
+        print(f"[主机趟] 找不到 kernel {key} —— 暗号没对上！"); return
+    print(f"[主机趟] 要启动 kernel-name 类型 = {kernel_name_type}")
+    print(f"         独立算出修饰名 = {key}")
+    print(f"         在集成头里查到：{info['num_params']} 个参数")
+    for i, p in enumerate(info["params"]):
+        print(f"           arg[{i}] {p['kind']:&lt;16} (来自 {p['of']}, {p['info']})")
+    print(f"         → 发起 urEnqueueKernelLaunch(\"{info['name']}\", ...)")
+
+# 设备趟编译这个 kernel：VecAdd，捕获一个 accessor a 和一个标量 n
+int_header = device_pass("VecAdd", captures=[("a", "accessor"), ("n", "int")])
+print("设备趟生成的集成头（KernelInfo 表）：")
+for k, v in int_header.items():
+    print(f"  {k} → {v['num_params']} params")
+print()
+# 主机趟：用同一个类型名去启动
+host_pass_launch("VecAdd", int_header)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">设备趟生成的集成头（KernelInfo 表）：
+  _ZTS6VecAdd → 3 params
+
+[主机趟] 要启动 kernel-name 类型 = VecAdd
+         独立算出修饰名 = _ZTS6VecAdd
+         在集成头里查到：3 个参数
+           arg[0] kind_accessor    (来自 a, ptr)
+           arg[1] kind_std_layout  (来自 a, range)
+           arg[2] kind_std_layout  (来自 n, int)
+         → 发起 urEnqueueKernelLaunch("_ZTS6VecAdd", ...)</code></pre>
+</div><p>看清这条对称：设备趟和主机趟<strong>各自独立</strong>对 <code>&quot;VecAdd&quot;</code> 跑同一套 <code>mangle_rtti_name</code>，都得到 <code>_ZTS6VecAdd</code>——名字一致纯粹因为算法确定、输入相同，<strong>不需要两趟之间直接通信</strong>，中间只隔着一个集成头文件。还要注意那个 accessor <code>a</code> 在集成头里变成了<strong>两条</strong>参数描述（指针 + 范围），正是 <code>__init</code> 摊平的效果。请动手改：把 <code>captures</code> 里再加一个 <code>(&quot;b&quot;, &quot;accessor&quot;)</code>，重新运行——你会看到参数条数从 3 涨到 5，主机趟也照样能读出来。这正是真实 SYCL 里加一个 accessor 参数时集成头的变化。</p>
+<h2>小结与下一步</h2>
+<p>这一章拆开了 SYCL &quot;单一源码&quot;魔法的技术核心：</p>
+<ul>
+<li><strong>集成头（integration header）</strong> 是设备趟生成、主机趟包含的&quot;契约&quot;：它用 <code>KernelInfo&lt;T&gt;</code> 特化记录每个 kernel 的<strong>名字</strong>、<strong>参数个数</strong>、<strong>每个参数的种类/大小/偏移</strong>（<code>kernel_param_desc_t</code>，定义在 <code>sycl/include/sycl/detail/kernel_desc.hpp</code>）。</li>
+<li><strong>kernel 名靠 RTTI 名字修饰算出</strong>：<code>parallel_for&lt;T&gt;</code> 的类型 <code>T</code> 经 <code>constructKernelName</code>（<code>SemaSYCL.cpp:1282</code>）→ <code>mangleCXXRTTIName</code>（<code>ItaniumMangle.cpp:7610</code>）变成带 <code>_ZTS</code> 前缀的字符串。两趟编译独立跑同一套修饰得到逐字节相同的名字——这是&quot;对暗号&quot;的根基。</li>
+<li>前端靠内部属性 <strong><code>sycl_kernel</code></strong>（<code>Attr.td:1738</code>）识别 kernel，<code>ConstructOpenCLKernel</code>（<code>SemaSYCL.cpp:5372</code>）用三个 <strong>visitor</strong>（Decl/Body/IntHeader Creator）生成 kernel 函数并同步写集成头；accessor 经 <code>__init</code>/<code>__finalize</code> <strong>摊平</strong>成多个参数。</li>
+<li><strong>集成 footer</strong> 是孪生兄弟：用 <code>-include-internal-footer</code> 包含在主机源<strong>最后</strong>，负责注册用户定义的 <strong>spec constant / <code>device_global</code> / host pipe</strong>（头在前&quot;声明 kernel&quot;，footer 在后&quot;登记全局对象&quot;）。</li>
+<li>编译选项：<code>-fsycl-int-header=</code>/<code>-fsycl-int-footer=</code> 指定输出，driver 用 <code>-include-internal-header</code>/<code>-include-internal-footer</code> 强制包含。</li>
+</ul>
+<p>下一章继续沿设备趟往下走：<code>[[sycl::reqd_work_group_size(…)]]</code> 这类 **SYCL 属性（attributes）**是怎么从源码里的标注，一路经 <code>Attr.td</code> 定义、<code>SemaSYCLDeclAttr.cpp</code> 处理、最后在 CodeGen 里落成 kernel 函数上的 <strong>LLVM metadata</strong>（<code>!reqd_work_group_size</code> 等）的——把&quot;设备端编译&quot;这一章的另一半补齐。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>集成头</strong>是设备趟生成、主机趟强制包含的两趟编译&quot;契约&quot;：<code>KernelInfo&lt;T&gt;</code> 特化 + <code>kernel_param_desc_t[]</code> 记录每个 kernel 的名字、参数个数与各参数的种类/大小/偏移（类型定义在 <code>sycl/include/sycl/detail/kernel_desc.hpp</code>）。</li>
+<li><strong>kernel 名 = RTTI 名字修饰</strong>：<code>constructKernelName</code>（<code>SemaSYCL.cpp:1282</code>）→ <code>mangleCXXRTTIName</code>（<code>ItaniumMangle.cpp:7610</code>），产出 <code>_ZTS…</code>；两趟独立修饰得逐字节相同的名字，故主机端能喊出与设备镜像一致的名字。</li>
+<li>前端识别 kernel 靠 <code>sycl_kernel</code> 属性（<code>Attr.td:1738</code>）；<code>ConstructOpenCLKernel</code>（<code>SemaSYCL.cpp:5372</code>）+ 三个 visitor 生成 kernel 函数并写集成头；accessor 经 <code>__init</code>/<code>__finalize</code> 摊平为多条参数描述。</li>
+<li><strong>集成 footer</strong>（<code>SYCLIntegrationFooter</code>，<code>SemaSYCL.cpp:7821</code>）包含在主机源<strong>最后</strong>（<code>-include-internal-footer</code>），注册 spec constant / <code>device_global</code> / host pipe——头在前声明 kernel、footer 在后登记全局对象。</li>
+<li>选项：<code>-fsycl-int-header=</code>（<code>Options.td:9454</code>）/ <code>-fsycl-int-footer=</code>（<code>:9459</code>）；driver 的 <code>-include-internal-header</code>（<code>Clang.cpp:5814</code>）/ <code>-include-internal-footer</code>（<code>:5829</code>）。可用 <code>-fsycl-device-only -fsycl-int-header=out.h</code> 把集成头逼出来亲眼看。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch13.html">← 第 13 章 头文件地图：sycl.hpp 里到底有什么</a>
+  <a class="nav-next" href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

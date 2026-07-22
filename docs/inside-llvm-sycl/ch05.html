@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li class="active"><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 4 章你把新 PassManager 的设计读通了：无基类的 <code>run</code> 契约、<code>AnalysisManager</code> 的按需缓存、<code>PreservedAnalyses</code> 收据。这一章把它全部落地——<strong>亲手写一个 Function Pass，编成一个动态库插件，用 <code>opt -load-pass-plugin</code> 挂进管线跑起来</strong>，最后配一个 <code>.ll</code> 的 LIT 测试验证它。</p>
+<p>你会走完一个真实 LLVM 开发者天天走的闭环：写 <code>PreservedAnalyses run(...)</code> → 写插件入口 <code>llvmGetPassPluginInfo</code> 用 <code>registerPipelineParsingCallback</code> 把 <code>"my-pass"</code> 这个名字接进 <code>PassBuilder</code> → <code>opt -load-pass-plugin=./MyPass.so -passes=my-pass in.ll -S</code>。读完你不仅"知道" Pass 框架，而且"会用"它——这是第 6 章看懂 <code>PassBuilder</code> 如何拼出 O2 管线、乃至以后给 SYCL 加自定义 Pass 的动手基础。</p>
+</div><h2>一个能跑的最小 Pass</h2>
+<p>先把第 4 章的抽象契约变成一段能编译的代码。目标：写一个 Function Pass，遍历函数里的每条指令，数出有多少条，打印出来（不改 IR，纯观察——最简单的起步）。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// CountInst.cpp —— 一个数指令条数的 Function Pass
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Plugins/PassPlugin.h"
+#include "llvm/Support/raw_ostream.h"
+using namespace llvm;
+
+namespace {
+// 第 4 章的契约：一个有 run(Function&amp;, FunctionAnalysisManager&amp;) 的类就是 Function Pass
+// 用 PassInfoMixin CRTP 混入拿到 name() 等样板，不是基类
+struct CountInstPass : PassInfoMixin&lt;CountInstPass&gt; {
+  PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;AM) {
+    unsigned Count = 0;
+    for (BasicBlock &amp;BB : F)          // 遍历容器树：函数 → 基本块 → 指令
+      for (Instruction &amp;I : BB)
+        ++Count;
+    errs() &lt;&lt; "函数 " &lt;&lt; F.getName() &lt;&lt; " 有 " &lt;&lt; Count &lt;&lt; " 条指令\n";
+    return PreservedAnalyses::all();  // 没改 IR → 所有分析都保留（第 4 章的收据）
+  }
+};
+} // namespace</code></pre>
+</div><p>对着第 4 章逐条印证：<code>CountInstPass</code> <strong>没有继承任何 <code>Pass</code> 基类</strong>，只是有一个签名固定的 <code>run</code>；<code>PassInfoMixin&lt;CountInstPass&gt;</code> 用 CRTP 提供 <code>name()</code>；因为它只读不改，<code>run</code> 诚实地返回 <code>PreservedAnalyses::all()</code>。这就是一个合法的 Function Pass 的全部——剩下的问题是：<strong>怎么让 <code>opt</code> 认识它？</strong></p>
+<h2>插件入口：把 Pass 名字接进 PassBuilder</h2>
+<p><code>opt</code> 不会凭空知道你的 <code>.so</code> 里有个叫什么名字的 Pass。你得提供一个<strong>约定好的导出函数</strong> <code>llvmGetPassPluginInfo</code>，<code>opt</code> 加载动态库时会调它，你在里面把「文本名字 → 构造 Pass」这条规则注册进 <code>PassBuilder</code>。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 接上文，同一个 CountInst.cpp
+
+// 注册回调：告诉 PassBuilder，当 -passes 里出现 "count-inst" 时，构造一个 CountInstPass
+static void registerCB(PassBuilder &amp;PB) {
+  PB.registerPipelineParsingCallback(
+      [](StringRef Name, FunctionPassManager &amp;FPM,
+         ArrayRef&lt;PassBuilder::PipelineElement&gt;) {
+        if (Name == "count-inst") {          // 用户在 -passes= 里写的名字
+          FPM.addPass(CountInstPass());       // 命中就把我们的 Pass 加进 Function 管线
+          return true;                        // 返回 true 表示"这个名字我认领了"
+        }
+        return false;                         // 不是我的名字，交给别的回调
+      });
+}
+
+// opt 加载 .so 时调用的约定入口。名字、签名都是固定的
+extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "CountInst", LLVM_VERSION_STRING, registerCB};
+}</code></pre>
+</div><p>三个要点：</p>
+<ul>
+<li><strong><code>llvmGetPassPluginInfo</code> 是硬约定</strong>：名字、<code>extern &quot;C&quot;</code>、返回 <code>PassPluginLibraryInfo</code> 都不能改——<code>opt</code> 就是按这个符号名去 <code>.so</code> 里找的。返回值里 <code>LLVM_PLUGIN_API_VERSION</code> 让 <code>opt</code> 校验 ABI 版本是否匹配（第 4 章研究里提到当前是 <code>2</code>）。</li>
+<li><strong><code>registerPipelineParsingCallback</code></strong> 是把「文本名字」翻译成「往管线里加哪个 Pass」的地方。<code>-passes=count-inst</code> 里的 <code>count-inst</code> 就是在这里被匹配的。返回 <code>true</code> = 认领这个名字。</li>
+<li>注册进的是 <strong><code>FunctionPassManager</code></strong>，因为我们写的是 Function Pass。如果写的是 Module Pass，就该用另一个重载往 <code>ModulePassManager</code> 里加。</li>
+</ul>
+<div class="note">
+<strong>两种「挂 Pass」的方式，这里用插件</strong>
+把 Pass 接进 <code>opt</code> 有两条路：① <strong>编进 LLVM 树内</strong>——在 <code>llvm/lib/Passes/PassRegistry.def</code> 里登记、重编 <code>opt</code>，LLVM 自带的 Pass 都这么做；② <strong>做成外部插件</strong>——就是本章这样，编成独立 <code>.so</code>，用 <code>-load-pass-plugin</code> 动态加载，不用重编 LLVM。开发和实验用②快得多；真要进上游才用①。<code>opt</code> 里处理 <code>-load-pass-plugin</code> 的代码在 <code>llvm/tools/opt/</code>（<code>optdriver.cpp</code> / <code>NewPMDriver.cpp</code>）。
+</div><h2>编译、加载、运行</h2>
+<p>把上面两段合成一个 <code>CountInst.cpp</code>，编成动态库（需要装了 LLVM 的开发头文件，用 <code>llvm-config</code> 拿编译参数）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 编成插件动态库（Linux 下 .so；macOS 下 .dylib）
+clang++ -shared -fPIC CountInst.cpp -o CountInst.so \
+    $(llvm-config --cxxflags)</code></pre>
+</div><p>然后用 <code>opt</code> 加载并跑在一段 IR 上。还用第 2 章那个带分支的 <code>pick</code> 函数当输入 <code>in.ll</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">opt -load-pass-plugin=./CountInst.so \
+    -passes=count-inst \
+    in.ll -disable-output</code></pre>
+</div><p><code>-passes=count-inst</code> 里的名字，正是你在 <code>registerPipelineParsingCallback</code> 里匹配的那个字符串。<code>-disable-output</code> 表示我们只关心 Pass 打印的副作用、不需要输出 IR。运行会打印：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">函数 pick 有 5 条指令</code></pre>
+</div><p>管线还能<strong>组合</strong>——<code>-passes</code> 接受一串用逗号分隔的 Pass，从左到右依次跑。比如先做一遍死代码消除再数指令：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">opt -load-pass-plugin=./CountInst.so \
+    -passes='dce,count-inst' in.ll -S</code></pre>
+</div><p>这时你会看到：<code>dce</code> 先删掉死指令、返回它的 <code>PreservedAnalyses</code> 收据，<code>count-inst</code> 再在<strong>已经变短</strong>的函数上计数。第 4 章那个「一串 Pass 顺序跑、逐个 invalidate」的循环，你现在是在命令行上亲手驱动它。</p>
+<h2>让它真正改一次 IR</h2>
+<p>只读的 Pass 讲清了机制，但真正的变换 Pass 要动 IR。把 <code>CountInstPass</code> 升级一步：删除函数里<strong>没有任何 user 且无副作用</strong>的指令——这正是第 2 章动手环节和 DCE 的内核。关键在于改了 IR 后，收据必须写对：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;AM) {
+  SmallVector&lt;Instruction *, 8&gt; Dead;
+  for (BasicBlock &amp;BB : F)
+    for (Instruction &amp;I : BB)
+      // 没人用它的结果（use 链为空）、且删掉它是安全的（无副作用）
+      if (I.use_empty() &amp;&amp; isInstructionTriviallyDead(&amp;I))
+        Dead.push_back(&amp;I);
+
+  if (Dead.empty())
+    return PreservedAnalyses::all();     // 什么都没删 → 一切照旧
+
+  for (Instruction *I : Dead)
+    I-&gt;eraseFromParent();                // 从基本块链表里摘除并释放（第 2 章的 ilist O(1) 删除）
+
+  PreservedAnalyses PA;
+  PA.preserveSet&lt;CFGAnalyses&gt;();         // 只删了指令、没动控制流 → CFG 类分析仍有效
+  return PA;
+}</code></pre>
+</div><p>这段把第 4 章的收据规则用活了：删指令<strong>不改变基本块之间的跳转</strong>，所以可以诚实地 <code>preserveSet&lt;CFGAnalyses&gt;()</code>，让支配树等基于 CFG 的分析免于重算。<code>use_empty()</code> 就是第 2 章讲的「查 def-use 图的 use 链是否为空」，<code>eraseFromParent()</code> 就是那条侵入式链表的 O(1) 删除。</p>
+<div class="warn">
+<strong>边遍历边删会踩迭代器失效</strong>
+注意上面<strong>先收集到 <code>Dead</code>、再统一删</strong>，而不是在 <code>for (Instruction &I : BB)</code> 循环体里直接 <code>I.eraseFromParent()</code>。因为删除会让当前迭代器失效，边遍历边删是经典的 use-after-free 崩溃来源。真实 LLVM Pass 里到处是这种「两段式」写法：遍历阶段只<strong>标记 / 收集</strong>，改动阶段再统一执行。删除顺序也有讲究——若指令间还有 use 依赖，要按「用者先删、被用者后删」的顺序，否则删被用者时它还有 user。
+</div><h2>用 .ll 写一个 LIT 测试</h2>
+<p>写完 Pass 得验证它真的干了活，而且以后别人改代码不会把它搞坏。LLVM 的做法是 <strong>LIT 测试</strong>：一个 <code>.ll</code> 文件，头部用注释写 <code>RUN:</code> 命令跑 <code>opt</code>，再用 <code>CHECK:</code> 断言输出里该出现/不该出现什么。第 3 章讲的「<code>.ll</code> diff 友好」在这里兑现。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">; dce-test.ll —— 验证我们的 DCE 版 Pass 删掉了死指令
+; RUN: opt -load-pass-plugin=%pluginpath -passes=count-inst %s -S | FileCheck %s
+
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %dead = add i32 %a, %b        ; 没人用 %dead → 应被删除
+  %r = mul i32 %a, %a
+  ret i32 %r
+}
+
+; CHECK-LABEL: @f(
+; CHECK-NOT:   %dead = add       ; 断言：输出里不再有这条死指令
+; CHECK:       %r = mul
+; CHECK:       ret i32 %r</code></pre>
+</div><p><code>FileCheck</code>（LLVM 自带工具）把 <code>opt</code> 的输出和 <code>CHECK</code> 行逐条比对：<code>CHECK-NOT: %dead</code> 断言那条死加法被删了，<code>CHECK: %r = mul</code> 断言有用的指令还在。LLVM 自己的 <code>llvm/test/</code> 下成千上万个测试都是这个套路。你把这个文件放进测试目录、跑 <code>llvm-lit dce-test.ll</code>，绿了就说明 Pass 行为符合预期——这是给编译器改动&quot;上保险&quot;的标准手段。</p>
+<h2>动手：模拟 opt 的插件加载与管线解析</h2>
+<p>把这一章的机制——「插件注册名字 → <code>opt</code> 解析 <code>-passes</code> 字符串 → 依次构造并运行 Pass」——浓缩成一个浏览器里能跑的小模型。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20opt%20%E7%9A%84%E6%8F%92%E4%BB%B6%E6%9C%BA%E5%88%B6%EF%BC%9A%E6%B3%A8%E5%86%8C%E5%9B%9E%E8%B0%83%E8%AE%A4%E9%A2%86%E5%90%8D%E5%AD%97%20%E2%86%92%20%E8%A7%A3%E6%9E%90%20-passes%20%E2%86%92%20%E4%BE%9D%E6%AC%A1%E8%B7%91%20Pass%0A%0A%23%20----%20%E6%8F%92%E4%BB%B6%E4%BE%A7%EF%BC%9AregisterPipelineParsingCallback%20%E6%B3%A8%E5%86%8C%E7%9A%84%E5%9B%9E%E8%B0%83%20----%0A%23%20%E6%AF%8F%E4%B8%AA%E5%9B%9E%E8%B0%83%EF%BC%9A%E7%BB%99%E5%AE%83%E4%B8%80%E4%B8%AA%E5%90%8D%E5%AD%97%EF%BC%8C%E5%AE%83%E8%A6%81%E4%B9%88%22%E8%AE%A4%E9%A2%86%22%E5%B9%B6%E8%BF%94%E5%9B%9E%E4%B8%80%E4%B8%AA%20Pass%20%E5%87%BD%E6%95%B0%EF%BC%8C%E8%A6%81%E4%B9%88%E8%BF%94%E5%9B%9E%20None%0Aregistry%20%3D%20%5B%5D%0A%0Adef%20register(name%2C%20pass_fn)%3A%0A%20%20%20%20def%20callback(requested)%3A%0A%20%20%20%20%20%20%20%20return%20pass_fn%20if%20requested%20%3D%3D%20name%20else%20None%20%20%20%23%20%E5%90%8D%E5%AD%97%E5%8C%B9%E9%85%8D%E6%89%8D%E8%AE%A4%E9%A2%86%0A%20%20%20%20registry.append(callback)%0A%0A%23%20----%20%E4%B8%89%E4%B8%AA%20Pass%EF%BC%88%E7%AE%80%E5%8C%96%E6%88%90%22%E5%AF%B9%E6%8C%87%E4%BB%A4%E5%88%97%E8%A1%A8%E7%9A%84%E5%8F%98%E6%8D%A2%22%EF%BC%8C%E8%BF%94%E5%9B%9E%20(%E6%96%B0%E5%88%97%E8%A1%A8%2C%20%E6%98%AF%E5%90%A6%E4%BF%9D%E7%95%99CFG)%EF%BC%89%20----%0Adef%20count_inst(instrs)%3A%0A%20%20%20%20print(f%22%20%20%20%20%5Bcount-inst%5D%20%E5%BD%93%E5%89%8D%20%7Blen(instrs)%7D%20%E6%9D%A1%E6%8C%87%E4%BB%A4%22)%0A%20%20%20%20return%20instrs%2C%20True%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8F%AA%E8%AF%BB%EF%BC%8C%E4%BF%9D%E7%95%99%E4%B8%80%E5%88%87%0A%0Adef%20dce(instrs)%3A%0A%20%20%20%20kept%20%3D%20%5Bi%20for%20i%20in%20instrs%20if%20not%20i.get(%22dead%22)%5D%0A%20%20%20%20removed%20%3D%20len(instrs)%20-%20len(kept)%0A%20%20%20%20print(f%22%20%20%20%20%5Bdce%5D%20%E5%88%A0%E9%99%A4%20%7Bremoved%7D%20%E6%9D%A1%E6%AD%BB%E6%8C%87%E4%BB%A4%22)%0A%20%20%20%20return%20kept%2C%20True%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%88%A0%E6%8C%87%E4%BB%A4%E4%BD%86%E4%B8%8D%E5%8A%A8%20CFG%0A%0Adef%20simplifycfg(instrs)%3A%0A%20%20%20%20print(f%22%20%20%20%20%5Bsimplifycfg%5D%20%E5%90%88%E5%B9%B6%E5%9F%BA%E6%9C%AC%E5%9D%97%EF%BC%88%E6%94%B9%E5%8A%A8%20CFG%EF%BC%89%22)%0A%20%20%20%20return%20instrs%2C%20False%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8A%A8%E4%BA%86%20CFG%0A%0A%23%20%E6%8F%92%E4%BB%B6%E6%8A%8A%E8%BF%99%E4%B8%89%E4%B8%AA%E5%90%8D%E5%AD%97%E6%8E%A5%E8%BF%9B%20PassBuilder%0Aregister(%22count-inst%22%2C%20count_inst)%0Aregister(%22dce%22%2C%20dce)%0Aregister(%22simplifycfg%22%2C%20simplifycfg)%0A%0A%23%20----%20opt%20%E4%BE%A7%EF%BC%9A%E8%A7%A3%E6%9E%90%20-passes%3D...%20%E5%AD%97%E7%AC%A6%E4%B8%B2%EF%BC%8C%E7%94%A8%E5%9B%9E%E8%B0%83%E6%8A%8A%E5%90%8D%E5%AD%97%E5%8F%98%E6%88%90%20Pass%20----%0Adef%20parse_pipeline(passes_str)%3A%0A%20%20%20%20pipeline%20%3D%20%5B%5D%0A%20%20%20%20for%20name%20in%20passes_str.split(%22%2C%22)%3A%0A%20%20%20%20%20%20%20%20name%20%3D%20name.strip()%0A%20%20%20%20%20%20%20%20fn%20%3D%20None%0A%20%20%20%20%20%20%20%20for%20cb%20in%20registry%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%8C%A8%E4%B8%AA%E9%97%AE%E6%AF%8F%E4%B8%AA%E5%9B%9E%E8%B0%83%EF%BC%9A%22%E8%BF%99%E5%90%8D%E5%AD%97%E4%BD%A0%E8%AE%A4%E9%A2%86%E5%90%97%EF%BC%9F%22%0A%20%20%20%20%20%20%20%20%20%20%20%20fn%20%3D%20cb(name)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20fn%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20break%0A%20%20%20%20%20%20%20%20if%20not%20fn%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20raise%20ValueError(f%22unknown%20pass%20'%7Bname%7D'%EF%BC%88%E6%B2%A1%E6%9C%89%E5%9B%9E%E8%B0%83%E8%AE%A4%E9%A2%86%E8%BF%99%E4%B8%AA%E5%90%8D%E5%AD%97%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20pipeline.append((name%2C%20fn))%0A%20%20%20%20return%20pipeline%0A%0A%23%20----%20%E8%BF%90%E8%A1%8C%EF%BC%9Aopt%20-passes%3D'dce%2Ccount-inst%2Csimplifycfg%2Ccount-inst'%20----%0Ainstrs%20%3D%20%5B%0A%20%20%20%20%7B%22name%22%3A%20%22%25a%22%7D%2C%20%7B%22name%22%3A%20%22%25b%22%7D%2C%0A%20%20%20%20%7B%22name%22%3A%20%22%25dead%22%2C%20%22dead%22%3A%20True%7D%2C%20%20%20%20%20%20%20%20%23%20%E6%AD%BB%E6%8C%87%E4%BB%A4%0A%20%20%20%20%7B%22name%22%3A%20%22%25r%22%7D%2C%0A%5D%0Apipeline%20%3D%20parse_pipeline(%22dce%2Ccount-inst%2Csimplifycfg%2Ccount-inst%22)%0Aprint(f%22%E8%A7%A3%E6%9E%90%E5%87%BA%E7%AE%A1%E7%BA%BF%EF%BC%9A%7B%5Bn%20for%20n%2C%20_%20in%20pipeline%5D%7D%5Cn%22)%0A%0Apreserved_cfg%20%3D%20True%0Afor%20name%2C%20fn%20in%20pipeline%3A%0A%20%20%20%20print(f%22%E8%BF%90%E8%A1%8C%20%7Bname%7D%EF%BC%9A%22)%0A%20%20%20%20instrs%2C%20keeps_cfg%20%3D%20fn(instrs)%0A%20%20%20%20if%20not%20keeps_cfg%20and%20preserved_cfg%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%20%20%20%20%E2%86%92%20CFG%20%E8%A2%AB%E6%94%B9%E5%8A%A8%EF%BC%8C%E4%BE%9D%E8%B5%96%20CFG%20%E7%9A%84%E5%88%86%E6%9E%90%E7%BC%93%E5%AD%98%E4%BD%9C%E5%BA%9F%22)%0A%20%20%20%20preserved_cfg%20%3D%20preserved_cfg%20and%20keeps_cfg"># 模拟 opt 的插件机制：注册回调认领名字 → 解析 -passes → 依次跑 Pass
+
+# ---- 插件侧：registerPipelineParsingCallback 注册的回调 ----
+# 每个回调：给它一个名字，它要么"认领"并返回一个 Pass 函数，要么返回 None
+registry = []
+
+def register(name, pass_fn):
+    def callback(requested):
+        return pass_fn if requested == name else None   # 名字匹配才认领
+    registry.append(callback)
+
+# ---- 三个 Pass（简化成"对指令列表的变换"，返回 (新列表, 是否保留CFG)） ----
+def count_inst(instrs):
+    print(f"    [count-inst] 当前 {len(instrs)} 条指令")
+    return instrs, True                     # 只读，保留一切
+
+def dce(instrs):
+    kept = [i for i in instrs if not i.get("dead")]
+    removed = len(instrs) - len(kept)
+    print(f"    [dce] 删除 {removed} 条死指令")
+    return kept, True                       # 删指令但不动 CFG
+
+def simplifycfg(instrs):
+    print(f"    [simplifycfg] 合并基本块（改动 CFG）")
+    return instrs, False                    # 动了 CFG
+
+# 插件把这三个名字接进 PassBuilder
+register("count-inst", count_inst)
+register("dce", dce)
+register("simplifycfg", simplifycfg)
+
+# ---- opt 侧：解析 -passes=... 字符串，用回调把名字变成 Pass ----
+def parse_pipeline(passes_str):
+    pipeline = []
+    for name in passes_str.split(","):
+        name = name.strip()
+        fn = None
+        for cb in registry:                 # 挨个问每个回调："这名字你认领吗？"
+            fn = cb(name)
+            if fn:
+                break
+        if not fn:
+            raise ValueError(f"unknown pass '{name}'（没有回调认领这个名字）")
+        pipeline.append((name, fn))
+    return pipeline
+
+# ---- 运行：opt -passes='dce,count-inst,simplifycfg,count-inst' ----
+instrs = [
+    {"name": "%a"}, {"name": "%b"},
+    {"name": "%dead", "dead": True},        # 死指令
+    {"name": "%r"},
+]
+pipeline = parse_pipeline("dce,count-inst,simplifycfg,count-inst")
+print(f"解析出管线：{[n for n, _ in pipeline]}\n")
+
+preserved_cfg = True
+for name, fn in pipeline:
+    print(f"运行 {name}：")
+    instrs, keeps_cfg = fn(instrs)
+    if not keeps_cfg and preserved_cfg:
+        print("      → CFG 被改动，依赖 CFG 的分析缓存作废")
+    preserved_cfg = preserved_cfg and keeps_cfg</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">解析出管线：['dce', 'count-inst', 'simplifycfg', 'count-inst']
+
+运行 dce：
+    [dce] 删除 1 条死指令
+运行 count-inst：
+    [count-inst] 当前 3 条指令
+运行 simplifycfg：
+    [simplifycfg] 合并基本块（改动 CFG）
+      → CFG 被改动，依赖 CFG 的分析缓存作废
+运行 count-inst：
+    [count-inst] 当前 3 条指令</code></pre>
+</div><p>这个模型把 <code>opt</code> 的两段机制演清楚了：<strong>插件端</strong>用 <code>register</code> 把名字和 Pass 绑定（对应 <code>registerPipelineParsingCallback</code>）；<strong>opt 端</strong>的 <code>parse_pipeline</code> 把 <code>-passes</code> 字符串切开，挨个问回调「这名字你认领吗」，拼出一条 Pass 序列再顺序执行。<code>dce</code> 删掉死指令后 <code>count-inst</code> 看到的就只剩 3 条——和你在真实命令行里看到的完全一致。请动手改：在 <code>-passes</code> 字符串里加一个没注册的名字（如 <code>&quot;dce,foobar&quot;</code>），你会看到 <code>parse_pipeline</code> 抛出 <code>unknown pass &#39;foobar&#39;</code>——这正是 <code>opt</code> 在名字没有任何回调认领时的真实报错。</p>
+<h2>小结与下一步</h2>
+<p>你完成了从「读框架」到「用框架」的跨越：</p>
+<ul>
+<li>一个 Function Pass = 一个有 <code>PreservedAnalyses run(Function&amp;, FunctionAnalysisManager&amp;)</code> 的类 + <code>PassInfoMixin</code> CRTP 混入。只读就返回 <code>all()</code>，改了 IR 就返回精确的收据（删指令用 <code>preserveSet&lt;CFGAnalyses&gt;()</code>）。</li>
+<li>做成<strong>插件</strong>：导出约定函数 <strong><code>llvmGetPassPluginInfo</code></strong>（返回 <code>PassPluginLibraryInfo</code>，带 <code>LLVM_PLUGIN_API_VERSION</code>），在里面用 <strong><code>registerPipelineParsingCallback</code></strong> 把文本名字翻译成「往管线加哪个 Pass」。</li>
+<li>用 <strong><code>opt -load-pass-plugin=./X.so -passes=&#39;dce,my-pass&#39; in.ll -S</code></strong> 加载并运行；<code>-passes</code> 里逗号分隔的名字从左到右依次跑，正是第 4 章那个顺序循环。</li>
+<li>改 IR 时注意<strong>两段式</strong>（先收集后删除）避免迭代器失效；用 <strong><code>.ll</code> + <code>RUN:</code>/<code>CHECK:</code> 的 LIT 测试 + <code>FileCheck</code></strong> 给行为上保险。</li>
+</ul>
+<p>下一章我们从「自己写一个 Pass」放大到「LLVM 是怎么把上百个 Pass 组织成 <code>-O2</code> 那条流水线的」：<code>PassBuilder</code>（<code>llvm/lib/Passes/PassBuilderPipelines.cpp</code>）如何用第 4 章的适配器把 Module/CGSCC/Function/Loop 层层嵌套，拼出 O0–O3 的默认管线。你这一章手动写在 <code>-passes=</code> 里的东西，<code>PassBuilder</code> 是用 C++ 代码批量搭出来的。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>Function Pass 最小实现：<code>struct P : PassInfoMixin&lt;P&gt; { PreservedAnalyses run(Function&amp;, FunctionAnalysisManager&amp;); }</code>；遍历用 <code>for (BasicBlock &amp;BB : F) for (Instruction &amp;I : BB)</code>。</li>
+<li>插件入口是硬约定：<code>extern &quot;C&quot; ... llvmGetPassPluginInfo()</code> 返回 <code>{LLVM_PLUGIN_API_VERSION, name, version, registerCB}</code>；在 <code>registerCB</code> 里调 <code>PB.registerPipelineParsingCallback(...)</code> 匹配 <code>-passes</code> 名字、<code>addPass</code> 并返回 <code>true</code>。</li>
+<li>运行：<code>clang++ -shared -fPIC X.cpp $(llvm-config --cxxflags) -o X.so</code> 编库；<code>opt -load-pass-plugin=./X.so -passes=name in.ll -S</code> 加载运行；处理该选项的是 <code>llvm/tools/opt/</code>。</li>
+<li>改 IR 的 Pass：用 <code>I.use_empty()</code>（查 def-use）+ <code>isInstructionTriviallyDead</code> 判死、<code>eraseFromParent()</code> 删除；<strong>两段式</strong>（先收集后删）避免迭代器失效；收据据实写（删指令 → <code>preserveSet&lt;CFGAnalyses&gt;()</code>）。</li>
+<li>验证用 <strong>LIT</strong>：<code>.ll</code> 顶部 <code>; RUN: opt ... | FileCheck %s</code>，配 <code>CHECK</code>/<code>CHECK-NOT</code>/<code>CHECK-LABEL</code> 断言输出。</li>
+<li>树内登记 Pass 走 <code>llvm/lib/Passes/PassRegistry.def</code> 并重编；外部实验用插件，免重编。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch04.html">← 第 4 章 Pass 框架（一）：新 PassManager 的设计</a>
+  <a class="nav-next" href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

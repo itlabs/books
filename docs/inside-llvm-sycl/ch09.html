@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li class="active"><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 8 章设备代码编成了 SPIR-V（或第 11 章的 PTX），但它还只是一段孤立的二进制。要让程序真正跑起来，它必须和主机端代码<strong>打包进同一个可执行文件</strong>，运行时才能在启动 kernel 时把它取出来交给驱动。这一章讲的就是完成这件事的 offload 工具链——一组 <code>clang-offload-*</code> / <code>clang-linker-wrapper</code> 工具，源码在 <code>clang/tools/</code> 下。</p>
+<p>你会看清「胖二进制（fat binary）」是怎么造出来的：设备镜像如何被<strong>嵌入</strong>主机目标文件的特殊 section、如何被<strong>包装</strong>成带注册代码的 bitcode、以及链接时那个<strong>包装器（linker-wrapper）</strong>如何扫描并抽取这些嵌入数据、驱动设备端链接、最终产出一个「主机 + 多个设备镜像」合体的可执行文件。这是连接「编译期」（前 8 章）和「运行期」（第 10 章 kernel 上设备）的关键一环。</p>
+</div><h2>问题：主机和设备代码，最终得在一个文件里</h2>
+<p>回顾第 1、8 章那条链：一份源码，设备部分编成了 SPIR-V/PTX，主机部分编成了普通 x86 目标文件。现在面对一个很实际的工程问题：<strong>这些东西最后怎么变成一个能双击运行的可执行文件？</strong></p>
+<p>约束是苛刻的：</p>
+<ul>
+<li><strong>只能有一个可执行文件</strong>：用户期望 <code>./myapp</code> 就能跑，不想管理一堆散落的 <code>.spv</code>/<code>.ptx</code>。</li>
+<li><strong>可能有多个设备镜像</strong>：同一个 kernel 可能编了 Intel GPU 的 SPIR-V、NVIDIA 的 PTX、甚至 CPU fallback——都得塞进去，运行时按实际设备挑。</li>
+<li><strong>主机端要能在运行时找到它们</strong>：程序启动时得知道「我身上带着哪些设备镜像、每个对应什么设备」，才能在提交 kernel 时取用。</li>
+</ul>
+<p>解决方案就是 <strong>胖二进制（fat binary）</strong>：把设备镜像作为<strong>数据</strong>嵌进主机可执行文件里，再附上一段<strong>启动时自动运行的注册代码</strong>，把这些镜像登记到 offload 运行时。造这个胖二进制的活，就分给了下面几个工具。</p>
+<div class="concept">
+<svg viewBox="0 0 640 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">从「散件」到「胖二进制」：offload 打包链路</text>
+  <!-- device images -->
+  <rect x="24" y="44" width="110" height="30" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="79" y="64" text-anchor="middle" font-size="9" fill="#a53f1c">device.spv (Intel)</text>
+  <rect x="24" y="80" width="110" height="30" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="79" y="100" text-anchor="middle" font-size="9" fill="#a53f1c">device.ptx (NVIDIA)</text>
+  <!-- host obj -->
+  <rect x="24" y="130" width="110" height="30" rx="5" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="79" y="150" text-anchor="middle" font-size="9" fill="#2b6cb0">host.o (主机对象)</text>
+  <!-- embed: .llvm.offloading -->
+  <path d="M134 90 L176 90" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c9)"/>
+  <rect x="176" y="60" width="150" height="70" rx="8" fill="#f7f8fa" stroke="#9ca3af"/>
+  <text x="251" y="80" text-anchor="middle" font-size="10" font-weight="bold" fill="#374151">嵌入主机对象</text>
+  <text x="251" y="98" text-anchor="middle" font-size="8" fill="#6b7280">设备镜像 → 特殊 section</text>
+  <text x="251" y="112" text-anchor="middle" font-size="8" fill="#6b7280">.llvm.offloading</text>
+  <text x="251" y="124" text-anchor="middle" font-size="8" fill="#6b7280">（bundler / -fembed）</text>
+  <path d="M134 145 L176 110" stroke="#2b6cb0" stroke-width="1.3" marker-end="url(#c9b)"/>
+  <!-- linker-wrapper -->
+  <path d="M326 95 L368 95" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c9)"/>
+  <rect x="368" y="58" width="160" height="74" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.5"/>
+  <text x="448" y="80" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">clang-linker-wrapper</text>
+  <text x="448" y="97" text-anchor="middle" font-size="8" fill="#6b7280">① 扫 .llvm.offloading 抽出镜像</text>
+  <text x="448" y="110" text-anchor="middle" font-size="8" fill="#6b7280">② 驱动设备端链接</text>
+  <text x="448" y="123" text-anchor="middle" font-size="8" fill="#6b7280">③ wrapper 生成注册代码</text>
+  <!-- exe -->
+  <path d="M448 132 L448 175" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c9)"/>
+  <rect x="330" y="178" width="236" height="80" rx="8" fill="#e5edf5" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="448" y="200" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">胖二进制 a.out</text>
+  <text x="448" y="220" text-anchor="middle" font-size="9" fill="#6b7280">主机机器码 + 嵌入的设备镜像</text>
+  <text x="448" y="236" text-anchor="middle" font-size="9" fill="#6b7280">+ 启动时自动注册镜像的代码</text>
+  <text x="448" y="250" text-anchor="middle" font-size="8" fill="#9ca3af">运行时（第 10 章）据此找镜像上设备</text>
+  <text x="180" y="288" text-anchor="middle" font-size="10" fill="#2d2a26">设备镜像被当「数据」嵌进主机对象，链接期由 linker-wrapper 抽取、链接、加注册代码</text>
+  <text x="180" y="306" text-anchor="middle" font-size="9" fill="#6b7280">最终一个可执行文件里既有主机码、又有多份设备镜像</text>
+  <defs>
+    <marker id="c9" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c9b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 9-1　offload 打包链路。设备镜像先被嵌进主机目标文件的 <code>.llvm.offloading</code> section；链接时 <code>clang-linker-wrapper</code> 扫描并抽取它们、驱动设备端链接、再用 wrapper 生成"启动时注册镜像"的代码，最终产出主机与设备合体的胖二进制</div>
+</div><h2>工具家族：clang/tools/ 下的 offload 工具</h2>
+<p>这套工具都在 <code>clang/tools/</code> 下，各司一职。先认清楚谁干什么（本书代码库即 intel/llvm 的 <code>sycl</code> 分支，以下都以它为准）：</p>
+<ul>
+<li><strong><code>clang-offload-bundler</code></strong>（<code>clang/tools/clang-offload-bundler/</code>）：<strong>打包 / 拆包</strong>。把多个目标的设备对象捆成一个「bundled 文件」，或反过来拆开。它建立在一个 <code>OffloadBundler</code> API 之上。经典 offload 流程里用它把不同 target 的产物打成一捆。</li>
+<li><strong><code>clang-offload-wrapper</code></strong>（<code>clang/tools/clang-offload-wrapper/</code>）：<strong>包装成可注册的 bitcode</strong>。它的源码注释说得很直白——「接收 offload 目标二进制，生成一个 wrapper bitcode 文件，把这些二进制作为数据打包进去；wrapper bitcode 还包含初始化代码，在程序启动时把目标二进制注册到 offload 运行时」。这就是图里那段「启动时自动注册」代码的来源。</li>
+<li><strong><code>clang-linker-wrapper</code></strong>（<code>clang/tools/clang-linker-wrapper/</code>）：<strong>链接期的总指挥</strong>。注释：「作为链接任务的包装器……用来为 offload 创建链接好的设备镜像。它扫描链接器的输入里嵌在 <code>.llvm.offloading</code> section 的 offload 数据、抽取出来……再交给设备端链接任务生成最终设备镜像」。它是把前面几件事在<strong>链接时</strong>串起来的那个工具。</li>
+<li><strong><code>clang-sycl-linker</code></strong>（<code>clang/tools/clang-sycl-linker/</code>）：<strong>SYCL 专用的设备链接器</strong>。注释：「执行链接 SYCL 设备镜像所需的一系列步骤」——链接 LLVM bitcode、链接 bitcode 库（如 libclc/libdevice）、跑 SYCL 特有的 post-link 步骤、生成最终镜像。</li>
+<li>还有 <strong><code>clang-offload-extract</code></strong>、<strong><code>clang-offload-deps</code></strong>、<strong><code>clang-nvlink-wrapper</code></strong>、<strong><code>offload-arch/</code></strong>（枚举本机 GPU，含 <code>NVPTXArch.cpp</code>、<code>LevelZeroArch.cpp</code> 等）作为辅助。</li>
+</ul>
+<div class="warn">
+<strong>此分支里没有 <code>clang-offload-packager</code></strong>
+上游主线 LLVM 有一个 <code>clang-offload-packager</code> 工具，但在本书用的 <strong>intel/llvm <code>sycl</code> 分支里它并不存在</strong>（只有一个 driver 测试 <code>clang/test/Driver/offload-packager.c</code> 顺带提到这个名字）。这类差异是"读真实源码"必然会遇到的——上游 LLVM 和厂商分支的工具集会有出入。本章按 <code>sycl</code> 分支<strong>实际存在</strong>的工具来讲（bundler / wrapper / linker-wrapper / sycl-linker）。你在自己的树里 <code>ls clang/tools/ | grep offload</code> 确认一下，是个好习惯。
+</div><h2>关键机制一：把设备镜像「嵌」进主机对象</h2>
+<p>胖二进制的核心技巧，是把设备镜像当作<strong>普通数据</strong>塞进主机目标文件的一个特殊 section——在 LLVM offload 里这个 section 叫 <strong><code>.llvm.offloading</code></strong>。</p>
+<p>为什么用 section？因为目标文件（ELF 等）本来就支持任意命名的数据 section，链接器会原样保留、合并它们。于是设备镜像搭上主机对象的&quot;便车&quot;：主机代码正常编译链接，设备镜像作为 <code>.llvm.offloading</code> section 里的字节一路跟着走，最后落在可执行文件里。这一步在编译设备端时由前端/驱动完成（把设备产物 embed 进去）。</p>
+<p>这带来一个漂亮的性质：<strong>对系统链接器（<code>ld</code>）来说，带 offload 数据的目标文件和普通目标文件没区别</strong>——它只是多了个它不认识但会保留的 section。真正&quot;读懂&quot;这个 section 的是下一步的 linker-wrapper。</p>
+<div class="note">
+<strong>为什么 <code>.bc</code>（第 3 章）在这里很关键</strong>
+被嵌进 <code>.llvm.offloading</code> 的设备侧数据，很多时候是 <strong>LLVM 位码（<code>.bc</code>）</strong>而非最终的 SPIR-V/PTX——因为设备端的<strong>最终链接</strong>（把多个翻译单元的设备 <code>.bc</code> 合并、链上 libclc/libdevice）要推迟到链接期才做。第 3 章说"<code>.bc</code> 可嵌入是异构 offload 的物理前提"，这里就是兑现：正因为 IR 能落成可嵌入的 <code>.bc</code>，设备代码才能以数据形式搭主机对象的便车、延迟到链接期再统一处理。
+</div><h2>关键机制二：linker-wrapper 在链接期收网</h2>
+<p>普通编译最后一步是调链接器 <code>ld</code> 把一堆 <code>.o</code> 链成可执行文件。offload 编译则用 <strong><code>clang-linker-wrapper</code></strong> <strong>包住</strong>这个链接步骤——它在真正调 <code>ld</code> 前后插入设备端的处理。它干三件事：</p>
+<ol>
+<li><strong>扫描并抽取</strong>：遍历所有输入目标文件，找出 <code>.llvm.offloading</code> section，把里面嵌的设备镜像/<code>.bc</code> 抽出来，按目标（Intel SPIR-V / NVIDIA PTX / …）分组。</li>
+<li><strong>驱动设备端链接</strong>：对每一组，调用对应的设备链接工具（SYCL 走 <code>clang-sycl-linker</code>，NVIDIA 走 <code>clang-nvlink-wrapper</code> 等）把该目标的所有设备 <code>.bc</code> 合并、链上设备库、跑 post-link、生成该目标<strong>最终的</strong>设备镜像（SPIR-V/PTX/…）。</li>
+<li><strong>生成注册代码并合并</strong>：把这些最终设备镜像交给 wrapper 逻辑，生成&quot;启动时把镜像注册到 offload 运行时&quot;的 bitcode，再连同主机对象一起交给系统链接器，链成最终胖二进制。</li>
+</ol>
+<p>一句话：<strong>linker-wrapper 是把「散落在各主机对象里的设备数据」在链接期收拢、完成设备端链接、再打包注册的总调度</strong>。它让整条 offload 编译对用户表现为&quot;就是普通的 <code>clang -fsycl a.cpp -o a.out</code>&quot;，背后的设备打包全被这一层藏起来了。</p>
+<div class="keypoint">
+<strong>offload 工具链 = 让「一个可执行文件装下主机+多设备」成为可能</strong>
+<strong>设备镜像以 <code>.bc</code>/二进制形式嵌进主机对象的 <code>.llvm.offloading</code> section（搭便车）；<code>clang-linker-wrapper</code> 在链接期扫描抽取、按目标驱动设备端链接（<code>clang-sycl-linker</code> 等）、再用 wrapper 逻辑生成"启动时注册镜像"的代码，合成胖二进制。</strong>这套机制把"编译期产出的多份设备镜像"和"运行期要用它们的主机程序"缝合到一个文件里——正是它让第 10 章的运行时能在程序启动后"就地"找到镜像并上设备。
+</div><h2>亲手看一眼：胖二进制里的 offload section</h2>
+<p>你可以用标准的 ELF 工具直接观察胖二进制里那个 offload section。编一个最小 SYCL 程序（或任意 offload 程序）后：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 看目标文件/可执行文件里有没有 offload section
+llvm-objdump --section-headers a.out | grep offloading
+# 或用 readelf 看 section 列表
+readelf -S a.out | grep llvm.offloading</code></pre>
+</div><p>你会看到类似 <code>.llvm.offloading</code> 的 section 条目——那就是设备镜像&quot;搭便车&quot;的地方。还能用 offload 专用工具把内容抽出来看：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 用 clang-offload-extract 把嵌入的设备镜像抽取出来（sycl 分支提供）
+clang-offload-extract a.out
+# 或者用 bundler 拆一个 bundled 文件
+clang-offload-bundler --unbundle --type=o --targets=... -i bundled.o -o device.out</code></pre>
+</div><p>这就是&quot;IR/镜像能落盘、能被独立工具处理&quot;（第 1、3 章）在 offload 场景的又一次体现：整条链路的每个中间产物都能停下来、用工具打开检查——调试 offload 问题时，第一步往往就是 <code>readelf -S</code> 看镜像到底有没有被正确嵌进去。</p>
+<h2>动手：模拟胖二进制的打包与运行时挑镜像</h2>
+<p>把这一章的机制——「设备镜像嵌进主机对象 → linker-wrapper 收拢并加注册代码 → 运行时按设备挑镜像」——浓缩成一个浏览器里能跑的小模型。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20offload%20%E8%83%96%E4%BA%8C%E8%BF%9B%E5%88%B6%EF%BC%9A%E5%B5%8C%E5%85%A5%E8%AE%BE%E5%A4%87%E9%95%9C%E5%83%8F%20%E2%86%92%20%E9%93%BE%E6%8E%A5%E6%9C%9F%E6%94%B6%E6%8B%A2%E6%B3%A8%E5%86%8C%20%E2%86%92%20%E8%BF%90%E8%A1%8C%E6%97%B6%E6%8C%89%E8%AE%BE%E5%A4%87%E6%8C%91%E9%95%9C%E5%83%8F%0A%0A%23%20----%20%E7%BC%96%E8%AF%91%E6%9C%9F%EF%BC%9A%E6%AF%8F%E4%B8%AA%E4%B8%BB%E6%9C%BA%E5%AF%B9%E8%B1%A1%E9%87%8C%22%E5%B5%8C%22%E7%9D%80%E8%8B%A5%E5%B9%B2%E8%AE%BE%E5%A4%87%E9%95%9C%E5%83%8F%EF%BC%88.llvm.offloading%20section%EF%BC%89----%0Ahost_objects%20%3D%20%5B%0A%20%20%20%20%7B%22name%22%3A%20%22main.o%22%2C%20%20%22offloading%22%3A%20%5B(%22spir64%22%2C%20%22%3CVecAdd%20%E7%9A%84%20SPIR-V%3E%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22nvptx64%22%2C%20%22%3CVecAdd%20%E7%9A%84%20PTX%3E%22)%5D%7D%2C%0A%20%20%20%20%7B%22name%22%3A%20%22util.o%22%2C%20%20%22offloading%22%3A%20%5B(%22spir64%22%2C%20%22%3CHelper%20%E7%9A%84%20SPIR-V%3E%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22nvptx64%22%2C%20%22%3CHelper%20%E7%9A%84%20PTX%3E%22)%5D%7D%2C%0A%5D%0A%0A%23%20----%20clang-linker-wrapper%EF%BC%9A%E9%93%BE%E6%8E%A5%E6%9C%9F%E6%89%AB%E6%8F%8F%E6%89%80%E6%9C%89%E5%AF%B9%E8%B1%A1%EF%BC%8C%E6%8A%BD%E5%8F%96%E5%B9%B6%E6%8C%89%E7%9B%AE%E6%A0%87%E5%88%86%E7%BB%84%20----%0Adef%20link_wrapper(objects)%3A%0A%20%20%20%20images_by_target%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20target%20-%3E%20%5B%E9%95%9C%E5%83%8F...%5D%0A%20%20%20%20for%20obj%20in%20objects%3A%0A%20%20%20%20%20%20%20%20for%20target%2C%20image%20in%20obj%5B%22offloading%22%5D%3A%20%20%20%23%20%E6%89%AB%E6%8F%8F%20.llvm.offloading%0A%20%20%20%20%20%20%20%20%20%20%20%20images_by_target.setdefault(target%2C%20%5B%5D).append(image)%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%5Blinker-wrapper%5D%20%E4%BB%8E%20%7Bobj%5B'name'%5D%7D%20%E6%8A%BD%E5%87%BA%20%7Btarget%7D%20%E9%95%9C%E5%83%8F%22)%0A%20%20%20%20%23%20%E5%AF%B9%E6%AF%8F%E4%B8%AA%E7%9B%AE%E6%A0%87%22%E8%AE%BE%E5%A4%87%E7%AB%AF%E9%93%BE%E6%8E%A5%22%E6%88%90%E4%B8%80%E4%BB%BD%E6%9C%80%E7%BB%88%E9%95%9C%E5%83%8F%EF%BC%88%E8%BF%99%E9%87%8C%E7%AE%80%E5%8C%96%E4%B8%BA%E6%8B%BC%E6%8E%A5%EF%BC%89%0A%20%20%20%20final%20%3D%20%7B%7D%0A%20%20%20%20for%20target%2C%20imgs%20in%20images_by_target.items()%3A%0A%20%20%20%20%20%20%20%20final%5Btarget%5D%20%3D%20%22%20%2B%20%22.join(imgs)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%5Bsycl-linker%5D%20%E9%93%BE%E6%8E%A5%20%7Btarget%7D%20%E7%9A%84%20%7Blen(imgs)%7D%20%E4%BB%BD%E9%95%9C%E5%83%8F%20%E2%86%92%20%E6%9C%80%E7%BB%88%E8%AE%BE%E5%A4%87%E9%95%9C%E5%83%8F%22)%0A%20%20%20%20return%20final%0A%0Aprint(%22%3D%3D%3D%20%E9%93%BE%E6%8E%A5%E6%9C%9F%EF%BC%9A%E9%80%A0%E8%83%96%E4%BA%8C%E8%BF%9B%E5%88%B6%20%3D%3D%3D%22)%0Adevice_images%20%3D%20link_wrapper(host_objects)%0A%23%20wrapper%20%E7%94%9F%E6%88%90%E7%9A%84%22%E6%B3%A8%E5%86%8C%E8%A1%A8%22%E9%9A%8F%E5%8F%AF%E6%89%A7%E8%A1%8C%E6%96%87%E4%BB%B6%E4%B8%80%E8%B5%B7%EF%BC%8C%E7%A8%8B%E5%BA%8F%E5%90%AF%E5%8A%A8%E6%97%B6%E6%B3%A8%E5%86%8C%E8%BF%9B%E8%BF%90%E8%A1%8C%E6%97%B6%0Afat_binary%20%3D%20%7B%22host_code%22%3A%20%22%3Cx86%20%E4%B8%BB%E6%9C%BA%E6%9C%BA%E5%99%A8%E7%A0%81%3E%22%2C%20%22registered_images%22%3A%20device_images%7D%0Aprint(f%22%5Cn%E8%83%96%E4%BA%8C%E8%BF%9B%E5%88%B6%E6%90%BA%E5%B8%A6%E7%9A%84%E8%AE%BE%E5%A4%87%E9%95%9C%E5%83%8F%E7%9B%AE%E6%A0%87%EF%BC%9A%7Blist(fat_binary%5B'registered_images'%5D)%7D%5Cn%22)%0A%0A%23%20----%20%E8%BF%90%E8%A1%8C%E6%9C%9F%EF%BC%88%E7%AC%AC%2010%20%E7%AB%A0%EF%BC%89%EF%BC%9A%E6%8C%89%E5%AE%9E%E9%99%85%E9%80%89%E4%B8%AD%E7%9A%84%E8%AE%BE%E5%A4%87%EF%BC%8C%E6%8C%91%E5%AF%B9%E5%BA%94%E7%9B%AE%E6%A0%87%E7%9A%84%E9%95%9C%E5%83%8F%20----%0Adef%20run_on(device_target)%3A%0A%20%20%20%20imgs%20%3D%20fat_binary%5B%22registered_images%22%5D%0A%20%20%20%20if%20device_target%20in%20imgs%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20%E9%80%89%E4%B8%AD%E8%AE%BE%E5%A4%87%20%7Bdevice_target%7D%20%E2%86%92%20%E5%8F%96%E7%94%A8%E9%95%9C%E5%83%8F%EF%BC%9A%7Bimgs%5Bdevice_target%5D%7D%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20%E9%80%89%E4%B8%AD%E8%AE%BE%E5%A4%87%20%7Bdevice_target%7D%20%E2%86%92%20%E8%83%96%E4%BA%8C%E8%BF%9B%E5%88%B6%E9%87%8C%E6%B2%A1%E6%9C%89%E8%AF%A5%E7%9B%AE%E6%A0%87%E7%9A%84%E9%95%9C%E5%83%8F%EF%BC%8C%E5%9B%9E%E9%80%80%E5%A4%B1%E8%B4%A5%22)%0A%0Aprint(%22%3D%3D%3D%20%E8%BF%90%E8%A1%8C%E6%9C%9F%EF%BC%9A%E6%8C%89%E8%AE%BE%E5%A4%87%E6%8C%91%E9%95%9C%E5%83%8F%20%3D%3D%3D%22)%0Arun_on(%22spir64%22)%20%20%20%20%20%23%20%E8%B7%91%E5%9C%A8%20Intel%20GPU%0Arun_on(%22nvptx64%22)%20%20%20%20%23%20%E8%B7%91%E5%9C%A8%20NVIDIA%20GPU%0Arun_on(%22amdgcn%22)%20%20%20%20%20%23%20%E6%B2%A1%E7%BC%96%E8%BF%99%E4%B8%AA%E7%9B%AE%E6%A0%87%20%E2%86%92%20%E6%89%BE%E4%B8%8D%E5%88%B0"># 模拟 offload 胖二进制：嵌入设备镜像 → 链接期收拢注册 → 运行时按设备挑镜像
+
+# ---- 编译期：每个主机对象里"嵌"着若干设备镜像（.llvm.offloading section）----
+host_objects = [
+    {"name": "main.o",  "offloading": [("spir64", "&lt;VecAdd 的 SPIR-V&gt;"),
+                                        ("nvptx64", "&lt;VecAdd 的 PTX&gt;")]},
+    {"name": "util.o",  "offloading": [("spir64", "&lt;Helper 的 SPIR-V&gt;"),
+                                        ("nvptx64", "&lt;Helper 的 PTX&gt;")]},
+]
+
+# ---- clang-linker-wrapper：链接期扫描所有对象，抽取并按目标分组 ----
+def link_wrapper(objects):
+    images_by_target = {}                     # target -&gt; [镜像...]
+    for obj in objects:
+        for target, image in obj["offloading"]:   # 扫描 .llvm.offloading
+            images_by_target.setdefault(target, []).append(image)
+            print(f"  [linker-wrapper] 从 {obj['name']} 抽出 {target} 镜像")
+    # 对每个目标"设备端链接"成一份最终镜像（这里简化为拼接）
+    final = {}
+    for target, imgs in images_by_target.items():
+        final[target] = " + ".join(imgs)
+        print(f"  [sycl-linker] 链接 {target} 的 {len(imgs)} 份镜像 → 最终设备镜像")
+    return final
+
+print("=== 链接期：造胖二进制 ===")
+device_images = link_wrapper(host_objects)
+# wrapper 生成的"注册表"随可执行文件一起，程序启动时注册进运行时
+fat_binary = {"host_code": "&lt;x86 主机机器码&gt;", "registered_images": device_images}
+print(f"\n胖二进制携带的设备镜像目标：{list(fat_binary['registered_images'])}\n")
+
+# ---- 运行期（第 10 章）：按实际选中的设备，挑对应目标的镜像 ----
+def run_on(device_target):
+    imgs = fat_binary["registered_images"]
+    if device_target in imgs:
+        print(f"[运行时] 选中设备 {device_target} → 取用镜像：{imgs[device_target]}")
+    else:
+        print(f"[运行时] 选中设备 {device_target} → 胖二进制里没有该目标的镜像，回退失败")
+
+print("=== 运行期：按设备挑镜像 ===")
+run_on("spir64")     # 跑在 Intel GPU
+run_on("nvptx64")    # 跑在 NVIDIA GPU
+run_on("amdgcn")     # 没编这个目标 → 找不到</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 链接期：造胖二进制 ===
+  [linker-wrapper] 从 main.o 抽出 spir64 镜像
+  [linker-wrapper] 从 main.o 抽出 nvptx64 镜像
+  [linker-wrapper] 从 util.o 抽出 spir64 镜像
+  [linker-wrapper] 从 util.o 抽出 nvptx64 镜像
+  [sycl-linker] 链接 spir64 的 2 份镜像 → 最终设备镜像
+  [sycl-linker] 链接 nvptx64 的 2 份镜像 → 最终设备镜像
+
+胖二进制携带的设备镜像目标：['spir64', 'nvptx64']
+
+=== 运行期：按设备挑镜像 ===
+[运行时] 选中设备 spir64 → 取用镜像：&lt;VecAdd 的 SPIR-V&gt; + &lt;Helper 的 SPIR-V&gt;
+[运行时] 选中设备 nvptx64 → 取用镜像：&lt;VecAdd 的 PTX&gt; + &lt;Helper 的 PTX&gt;
+[运行时] 选中设备 amdgcn → 胖二进制里没有该目标的镜像，回退失败</code></pre>
+</div><p>这个模型把打包链路演清楚了：编译期每个主机对象各自&quot;背着&quot;若干目标的设备镜像；linker-wrapper 在链接期把<strong>分散在多个 <code>.o</code> 里、同一目标的</strong>镜像收拢、各自链成一份最终镜像；运行时再按实际选中的设备去这份&quot;注册表&quot;里挑。请动手改：给 <code>-fsycl-targets</code> 只编 Intel（把两个对象里的 <code>nvptx64</code> 项都删掉），再 <code>run_on(&quot;nvptx64&quot;)</code>——你会看到运行时报&quot;没有该目标的镜像&quot;，这正是&quot;编译时没为某设备编镜像、运行时就没法在它上面跑&quot;的真实后果。</p>
+<h2>小结与下一步</h2>
+<p>你现在理解了&quot;设备代码怎么和主机代码合成一个可执行文件&quot;：</p>
+<ul>
+<li>目标是<strong>胖二进制</strong>：一个可执行文件里既有主机机器码、又有多份设备镜像、还有启动时把镜像注册到 offload 运行时的代码。</li>
+<li>核心技巧是把设备镜像（常以 <code>.bc</code> 形态，呼应第 3 章）<strong>嵌进主机对象的 <code>.llvm.offloading</code> section</strong>，搭主机对象的便车通过系统链接器。</li>
+<li>工具家族（<code>clang/tools/</code>）：<strong><code>clang-offload-bundler</code></strong>（打包/拆包）、<strong><code>clang-offload-wrapper</code></strong>（生成带注册代码的 wrapper bitcode）、<strong><code>clang-linker-wrapper</code></strong>（链接期扫描抽取、驱动设备链接、合成）、<strong><code>clang-sycl-linker</code></strong>（SYCL 设备端链接）。⚠️ 本 <code>sycl</code> 分支<strong>没有</strong> <code>clang-offload-packager</code>。</li>
+<li><strong><code>clang-linker-wrapper</code></strong> 是链接期总指挥：扫 <code>.llvm.offloading</code> → 抽取分组 → 驱动设备端链接 → wrapper 加注册代码 → 合成胖二进制。</li>
+<li>用 <code>readelf -S</code> / <code>llvm-objdump</code> / <code>clang-offload-extract</code> 可直接观察和抽取胖二进制里的设备镜像。</li>
+</ul>
+<p>下一章我们跨过&quot;编译期&quot;进入&quot;运行期&quot;：胖二进制跑起来后，那段注册代码把镜像登记到了 offload 运行时——<strong><code>liboffload</code> 和 <code>plugins-nextgen</code></strong>（源码在顶层 <code>offload/</code> 目录）如何拿着这些镜像，通过针对 CUDA / AMDGPU / Level Zero / Host 的插件，把 kernel 真正加载到设备上、分配内存、发起执行。第 10 章带你看 kernel 上设备的&quot;最后一步&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>offload 的产物是<strong>胖二进制</strong>：一个可执行文件 = 主机机器码 + 多份设备镜像 + 启动时注册镜像的代码。</li>
+<li>设备镜像（多为可嵌入的 <strong><code>.bc</code></strong>，见第 3 章）被嵌进主机对象的 <strong><code>.llvm.offloading</code></strong> section，对系统链接器透明。</li>
+<li>工具（<code>clang/tools/</code>）：<strong><code>clang-offload-bundler</code></strong>（打包/拆包）、<strong><code>clang-offload-wrapper</code></strong>（生成含注册代码的 wrapper bitcode）、<strong><code>clang-linker-wrapper</code></strong>（链接期总指挥）、<strong><code>clang-sycl-linker</code></strong>（SYCL 设备链接）；辅助有 <code>clang-offload-extract</code>/<code>clang-offload-deps</code>/<code>clang-nvlink-wrapper</code>/<code>offload-arch</code>。</li>
+<li><strong>本 <code>sycl</code> 分支不存在 <code>clang-offload-packager</code></strong>（上游主线才有）——读真实源码要以自己的树为准。</li>
+<li><strong><code>clang-linker-wrapper</code></strong> 流程：扫 <code>.llvm.offloading</code> → 抽取按目标分组 → 调设备链接器（<code>clang-sycl-linker</code> 等）生成最终镜像 → wrapper 加注册代码 → 合成。</li>
+<li>观察工具：<code>readelf -S</code>/<code>llvm-objdump --section-headers</code> 看 section，<code>clang-offload-extract</code>/<code>clang-offload-bundler --unbundle</code> 抽取镜像。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch08.html">← 第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a>
+  <a class="nav-next" href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li class="active"><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你在 kernel 里写过 <code>sycl::sqrt(x)</code>、<code>std::sin(x)</code>、甚至 <code>assert(i &lt; N)</code> 吗？在 CPU 上这些靠链接系统的 libm/libc 实现——可 <strong>GPU 上没有系统 libc/libm</strong>。那这些函数的实现从哪来？这一章收掉这个从第 8、11 章就埋下的悬念：<strong><code>libdevice/</code></strong> 提供 C 库/数学/复数/assert 的<strong>设备端 fallback 实现</strong>，<strong><code>libclc/</code></strong> 提供底层 SPIR-V/OpenCL 内建，二者以 LLVM bitcode（<code>.bc</code>）的形态在设备链接时被选择性地链进设备镜像。</p>
+<p>读完你会看清一条完整的解析链：<code>sycl::sqrt</code> → <code>__spirv_ocl_sqrt</code>（SPIR-V 扩展指令）→ 在原生支持 SPIR-V 的后端直接用、在 NVIDIA 等后端由 libclc 兜底；<code>std::ceil</code> → libdevice 的 <code>__devicelib_ceilf</code> → 还是落到 <code>__spirv_ocl_ceil</code>。你还会理解那个精妙的 <strong>weak 符号 fallback 机制</strong>——设备驱动若原生支持某功能就用原生的，否则用编进 <code>.bc</code> 的 fallback，以及 driver 如何按目标选择该链哪些设备库。这是第三部分的收尾，把"设备端标准库从哪来"彻底讲透。</p>
+</div><h2>问题：GPU 上没有 libc/libm</h2>
+<p>先把困境摆清。一个设备 kernel 里可能有：</p>
+<ul>
+<li><strong>数学函数</strong>：<code>sycl::sqrt</code>、<code>sycl::sin</code>、<code>sycl::fma</code>……</li>
+<li><strong>C 标准库</strong>：<code>memcpy</code>、<code>memset</code>、<code>assert</code>……</li>
+<li><strong>复数运算</strong>：<code>std::complex</code> 的乘除。</li>
+<li><strong>Intel 数学函数（IMF）</strong>：一批 Intel 特有的高性能/特定舍入数学函数。</li>
+</ul>
+<p>在主机上这些都靠链接器把系统的 libm.so / libc.so 链进来解决。但设备端<strong>没有这些系统库</strong>——GPU 不跑操作系统、没有 libc。所以 SYCL 必须<strong>自己提供一套面向设备的实现</strong>，在设备代码链接时链进设备镜像。这套实现分两层，各司其职：<strong><code>libdevice</code>（C 库/数学的 fallback）</strong> 和 <strong><code>libclc</code>（底层 SPIR-V 内建）</strong>。</p>
+<h2>libdevice：设备端的 C 库/数学 fallback</h2>
+<p><code>libdevice/</code> 是一个<strong>顶层目录</strong>（和 <code>sycl/</code>、<code>llvm/</code> 平级，不在 <code>sycl/</code> 下）。它的定位，<code>CMakeLists.txt</code> 开头的注释一句话讲明：&quot;为<strong>没有原生支持这些功能</strong>的 SPIR-V 设备提供各种功能的工具项目&quot;。里面是一批 wrapper 源文件，编译成设备端 bitcode 库：</p>
+<table>
+<thead>
+<tr>
+<th>源文件</th>
+<th>内容</th>
+<th>编成的库</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>crt_wrapper.cpp</code></td>
+<td>C 运行时：<code>memcpy</code>/<code>memset</code>/<code>memcmp</code>、<code>assert</code> 支持</td>
+<td><code>libsycl-crt.bc</code></td>
+</tr>
+<tr>
+<td><code>cmath_wrapper.cpp</code></td>
+<td>C 数学：<code>fabsf</code>/<code>ceilf</code>/<code>logf</code>/<code>rint</code>…</td>
+<td><code>libsycl-cmath.bc</code></td>
+</tr>
+<tr>
+<td><code>imf_wrapper.cpp</code></td>
+<td>Intel 数学函数（IMF）</td>
+<td><code>libsycl-imf.bc</code></td>
+</tr>
+<tr>
+<td><code>fallback-bfloat16.cpp</code></td>
+<td>bfloat16 转换（emulated）</td>
+<td><code>libsycl-fallback-bfloat16.bc</code></td>
+</tr>
+<tr>
+<td><code>itt_*.cpp</code></td>
+<td>ITT 性能instrumentation</td>
+<td><code>libsycl-itt-*.bc</code></td>
+</tr>
+<tr>
+<td><code>sanitizer/*.cpp</code></td>
+<td>设备端 asan/msan/tsan 运行时</td>
+<td><code>libsycl-asan.bc</code> 等</td>
+</tr>
+</tbody></table>
+<h3>fallback 的核心：weak 符号 + 转发到 SPIR-V 内建</h3>
+<p>libdevice 最精巧的地方是它的 <strong>fallback 机制</strong>，理解它就理解了 libdevice 的全部设计。以 <code>ceilf</code> 为例，链条是三层：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// ① wrapper（cmath_wrapper.cpp）：暴露标准 libc 名字，转发到 __devicelib_*
+DEVICE_EXTERN_C_INLINE float ceilf(float x) { return __devicelib_ceilf(x); }
+
+// ② fallback 定义（fallback-cmath.hpp）：__devicelib_* 落到 SPIR-V 内建
+static inline float __devicelib_ceilf(float x) { return __spirv_ocl_ceil(x); }
+
+// ③ 所有 wrapper 符号被标成 weak（device.h）
+#define DEVICE_EXTERNAL SYCL_EXTERNAL __attribute__((weak))</code></pre>
+</div><p>关键就在那个 <strong><code>__attribute__((weak))</code></strong>（弱符号）。弱符号的语义是&quot;<strong>如果别处有同名的强符号，就用别处的；否则才用我这个</strong>&quot;。于是：</p>
+<ul>
+<li><strong>如果设备驱动/后端原生提供了 <code>ceilf</code> 的实现</strong>（强符号），链接时那个原生实现胜出，libdevice 的 fallback 被丢弃——用上硬件最优的版本。</li>
+<li><strong>如果后端没有原生实现</strong>，libdevice 编进 <code>.bc</code> 的这个 weak fallback 就被链进去兜底——保证 kernel 至少能跑。</li>
+</ul>
+<p>这就是 libdevice 名字里&quot;fallback&quot;的含义：<strong>它是保底实现，原生实现优先</strong>。一个 weak 属性就优雅地表达了&quot;能用原生就用原生、不行我兜底&quot;的策略——不需要运行时判断，链接器自动完成。</p>
+<div class="note">
+<strong>fallback 实现现在多是 <code>.hpp</code>，不是 <code>fallback-*.cpp</code></strong>
+老资料常提 <code>fallback-cmath.cpp</code>/<code>fallback-complex.cpp</code>/<code>fallback-cstring.cpp</code> 这些独立源文件。在当前分支上它们已经变成<strong>头文件</strong>（<code>fallback-cmath.hpp</code>/<code>fallback-complex.hpp</code>/<code>fallback-cstring.hpp</code>），被对应的 wrapper <code>.cpp</code> 包含。<code>fallback-bfloat16.cpp</code> 是仅剩的独立 <code>fallback-*.cpp</code>。assert 没有独立 fallback 文件——它在 <code>crt_wrapper.cpp</code> + <code>wrapper.h</code> 里（<code>__devicelib_assert_fail</code>）。又一次"以你手上的树为准"的提醒。
+</div><h2>libclc：底层 SPIR-V/OpenCL 内建</h2>
+<p>上面 fallback 的终点是 <code>__spirv_ocl_ceil</code> 这样的 <strong>SPIR-V 内建</strong>。这些内建本身的实现，是<strong>另一层</strong>——<code>libclc/</code>（也是顶层目录，第 11 章见过）。分工是这样的：</p>
+<ul>
+<li><strong>libclc</strong> 提供 <strong>SPIR-V/OpenCL 内建原语本身</strong>：<code>__spirv_ocl_*</code>（数学扩展指令）、work-item 查询（<code>__spirv_BuiltInGlobalInvocationId</code> 等取 global id）、原子、group 操作。核心在 <code>libclc/libspirv/</code>。它尤其重要于 <strong>NVPTX/AMDGPU</strong> ——那些后端没有 SPIR-V 消费者，<code>__spirv_*</code> 得靠 libclc 提供具体实现。</li>
+<li><strong>libdevice</strong> 提供<strong>更高层的 C/C++ 标准库表面</strong>（<code>&lt;cmath&gt;</code>/<code>&lt;complex&gt;</code>/<code>&lt;cstring&gt;</code>/<code>assert</code>）和 <strong>IMF</strong>，实现成薄薄的 <code>__devicelib_*</code> fallback，<strong>它们自己再调 libclc 的 <code>__spirv_ocl_*</code> 内建</strong>。</li>
+</ul>
+<p>一句话对比：<strong>libclc = 各目标的 SPIR-V/OpenCL 内建原语；libdevice = 建在这些原语之上的 C/C++ 标准库与 Intel 数学 fallback</strong>（外加 assert/sanitizer/ITT/bfloat16）。</p>
+<div class="keypoint">
+<strong>两层设备库：libclc 提供 SPIR-V 内建原语，libdevice 提供建于其上的 C/C++ 标准库 fallback</strong>
+<strong>设备端没有 libc/libm。<code>libclc/</code>（顶层，<code>libspirv/</code>）提供底层 <code>__spirv_ocl_*</code> 内建与 work-item 查询；<code>libdevice/</code>（顶层）提供 <code>&lt;cmath&gt;</code>/<code>&lt;complex&gt;</code>/<code>&lt;cstring&gt;</code>/<code>assert</code>/IMF 的 <code>__devicelib_*</code> fallback，转发到 libclc 的内建。</strong>fallback 用 <strong>weak 符号</strong>（<code>SYCL_EXTERNAL __attribute__((weak))</code>）：驱动原生支持则用原生、否则用编进 <code>.bc</code> 的 fallback。两层都以 LLVM bitcode 在设备链接时链入。
+</div><h2>sycl::sqrt 的完整解析链</h2>
+<p>把这一章串起来，看 <code>sycl::sqrt(x)</code> 从 SYCL 头到设备内建的完整旅程：</p>
+<ol>
+<li><strong><code>sycl::sqrt</code></strong>（公开 API，<code>sycl/include/sycl/builtins.hpp</code>）——经 <code>sycl/include/sycl/detail/builtins/math_functions.hpp</code> 里的宏（<code>BUILTIN_GENF_NATIVE_OPT(..., sqrt)</code>）展开。</li>
+<li><strong><code>__spirv_ocl_sqrt</code></strong>——宏展开后调用的 SPIR-V 扩展指令（对应 OpenCL.std 扩展指令集里的 <code>sqrt</code>）。这些 <code>__spirv_ocl_*</code> 是<strong>编译器声明的内建</strong>，由 driver 的 <code>-fdeclare-spirv-builtins</code> 开启（对应 LangOption <code>DeclareSPIRVBuiltins</code>），内建表从 <code>clang/lib/Sema/SPIRVBuiltins.td</code> 生成。</li>
+<li><strong>落地分两条路</strong>：<ul>
+<li><strong>原生支持 SPIR-V 的后端</strong>（Intel GPU 经 Level Zero、OpenCL）：<code>__spirv_ocl_sqrt</code> 由 <code>llvm-spirv</code> 翻成 SPIR-V 的 <code>OpExtInst</code>（<code>OpenCL.std sqrt</code>），交给驱动，用硬件的 sqrt。</li>
+<li><strong>NVPTX/AMDGPU</strong>（无 SPIR-V 消费者）：<code>__spirv_ocl_sqrt</code> 由 <strong>libclc</strong> 的对应目标实现（<code>libclc/libspirv/lib/nvptx/math/</code> 等）提供。</li>
+</ul>
+</li>
+</ol>
+<p>而 <code>std::ceil</code> / C 库那条路则多绕一层 libdevice：<code>std::ceil</code> → libdevice 的 <code>ceilf</code>(weak) → <code>__devicelib_ceilf</code> → <code>__spirv_ocl_ceil</code> → 同样落到上面两条路之一。</p>
+<div class="concept">
+<svg viewBox="0 0 660 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">设备端数学函数的解析链：两层库 + weak fallback</text>
+  <!-- sycl::sqrt -->
+  <rect x="40" y="46" width="150" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="115" y="63" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">sycl::sqrt(x)</text>
+  <text x="115" y="77" text-anchor="middle" font-size="8" fill="#6b7280">builtins/math_functions.hpp</text>
+  <!-- std::ceil -->
+  <rect x="40" y="250" width="150" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="115" y="267" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">std::ceil(x)</text>
+  <text x="115" y="281" text-anchor="middle" font-size="8" fill="#6b7280">C 库/数学：多绕一层 libdevice</text>
+  <!-- libdevice -->
+  <rect x="235" y="230" width="180" height="80" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="325" y="249" text-anchor="middle" font-size="11" font-weight="bold" fill="#a53f1c">libdevice（顶层）</text>
+  <text x="325" y="265" text-anchor="middle" font-size="8" fill="#6b7280">ceilf (weak) → __devicelib_ceilf</text>
+  <text x="325" y="278" text-anchor="middle" font-size="8" fill="#6b7280">C库/complex/cstring/assert/IMF</text>
+  <text x="325" y="292" text-anchor="middle" font-size="8" fill="#a53f1c">weak：原生优先，否则兜底</text>
+  <text x="325" y="304" text-anchor="middle" font-size="8" fill="#6b7280">编成 libsycl-*.bc</text>
+  <path d="M190 270 L235 270" stroke="#6b7280" stroke-width="1.2" marker-end="url(#c19)"/>
+  <!-- __spirv_ocl -->
+  <rect x="255" y="110" width="200" height="46" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="355" y="130" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">__spirv_ocl_sqrt / _ceil</text>
+  <text x="355" y="146" text-anchor="middle" font-size="8" fill="#6b7280">SPIR-V 扩展指令（编译器声明的内建）</text>
+  <path d="M190 66 Q230 66 300 110" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c19b)"/>
+  <text x="240" y="92" font-size="8" fill="#2f7a45">宏展开</text>
+  <path d="M340 230 L350 156" stroke="#e06a3b" stroke-width="1.4" marker-end="url(#c19c)"/>
+  <text x="380" y="195" font-size="8" fill="#a53f1c">转发到内建</text>
+  <!-- two paths -->
+  <path d="M300 156 L200 195" stroke="#2b6cb0" stroke-width="1.2" marker-end="url(#c19d)"/>
+  <path d="M420 156 L520 195" stroke="#e06a3b" stroke-width="1.2" marker-end="url(#c19c)"/>
+  <rect x="70" y="196" width="160" height="30" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="150" y="208" text-anchor="middle" font-size="8" font-weight="bold" fill="#2b6cb0">原生 SPIR-V 后端</text>
+  <text x="150" y="219" text-anchor="middle" font-size="7" fill="#6b7280">llvm-spirv → OpExtInst → 驱动</text>
+  <rect x="470" y="196" width="170" height="30" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="555" y="208" text-anchor="middle" font-size="8" font-weight="bold" fill="#a53f1c">NVPTX / AMDGPU</text>
+  <text x="555" y="219" text-anchor="middle" font-size="7" fill="#6b7280">libclc/libspirv 提供实现</text>
+  <text x="330" y="330" text-anchor="middle" font-size="9" fill="#6b7280">数学内建直接走上路；C库/std 数学多绕 libdevice 一层，终点都是 __spirv_ocl_* 再落两条后端路</text>
+  <defs>
+    <marker id="c19" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c19b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="c19c" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+    <marker id="c19d" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 19-1　设备端数学函数解析链。<code>sycl::sqrt</code> 经宏展开直达 <code>__spirv_ocl_sqrt</code>；<code>std::ceil</code> 多绕一层 libdevice 的 weak fallback（<code>__devicelib_ceilf</code>）再到 <code>__spirv_ocl_ceil</code>。SPIR-V 内建终点分两路：原生 SPIR-V 后端经 <code>llvm-spirv</code> 交驱动；NVPTX/AMDGPU 由 libclc 提供实现</div>
+</div><h2>driver 如何选择并链接设备库</h2>
+<p>这些 <code>.bc</code> 库不是全部无脑链进去——driver 按<strong>目标</strong>挑选。逻辑在 <code>clang/lib/Driver/ToolChains/SYCL.cpp</code> 的 <code>getDeviceLibNames()</code>：</p>
+<ul>
+<li><strong>SPIR/SPIR-V 目标</strong>：链基础集 <code>libsycl-crt</code>、<code>libsycl-cmath</code>、<code>libsycl-imf</code>（Windows 还有 <code>libsycl-msvc-math</code>），除非你传 <code>--no-offloadlib</code>。</li>
+<li><strong>NVPTX 目标</strong> → 单个大 bitcode <code>devicelib-nvptx64-nvidia-cuda.bc</code>；<strong>AMDGCN</strong> → <code>devicelib-amdgcn-amd-amdhsa.bc</code>（第 11 章提过）。</li>
+<li><strong>按需追加</strong>：<code>-fsycl-instrument-device-code</code> 加 ITT 库；bfloat16 按设备能力选 <code>libsycl-native-bfloat16</code> 或 <code>libsycl-fallback-bfloat16</code>；<code>-fsanitize=</code> 加对应的 asan/msan/tsan 设备库。</li>
+</ul>
+<p>链接方式是 <code>-mlink-builtin-bitcode</code> 且默认 <strong>internalize</strong>（<code>--internalize --only-needed</code>）——只把 kernel <strong>实际引用到</strong>的函数链进去，没用到的 fallback 不进镜像，保持设备镜像精简。开关是 <code>--no-offloadlib</code> / <code>--offloadlib</code>（双横线、无 <code>f</code>；<code>-nogpulib</code>/<code>-nocudalib</code> 是它的别名。不是想象中的 <code>-fsycl-device-lib</code>）。</p>
+<p>至于 <strong>bfloat16 的原生 vs fallback</strong> 决策，还有一层运行时判断：program manager（<code>sycl/source/detail/program_manager/program_manager.cpp</code>）读设备库镜像的元信息（版本 <code>0</code>=fallback、<code>1</code>=native），查后端能力，支持就用 native 镜像、否则 fallback——这是 weak 符号 fallback 思想在运行时的又一次体现（第 8、14 章的 property set 机制）。</p>
+<h2>亲手追踪解析链</h2>
+<p>在源码里走一遍这条链：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># sycl::sqrt 怎么映射到 __spirv_ocl_sqrt
+grep -n 'sqrt' sycl/include/sycl/detail/builtins/math_functions.hpp | head
+
+# libdevice 的 fallback：ceilf → __devicelib_ceilf → __spirv_ocl_ceil
+grep -n 'ceilf' libdevice/cmath_wrapper.cpp libdevice/fallback-cmath.hpp
+
+# weak 属性是 fallback 的核心
+grep -n 'weak\|DEVICE_EXTERNAL' libdevice/device.h
+
+# driver 按目标选设备库
+grep -n 'libsycl-crt\|libsycl-cmath\|devicelib-nvptx' clang/lib/Driver/ToolChains/SYCL.cpp | head</code></pre>
+</div><p>想看 <code>sqrt</code> 到底落成了什么，编设备端 IR 看：<code>clang++ -fsycl -fsycl-device-only -S -emit-llvm</code> 后 grep <code>__spirv_ocl_sqrt</code>——你会看到 kernel 里对它的 <code>call</code>，而它的<strong>定义</strong>要么来自 SPIR-V（原生后端）、要么来自链进来的 libclc <code>.bc</code>。这正是&quot;设备端标准库从哪来&quot;最直接的答案。</p>
+<h2>动手：模拟 weak 符号 fallback 的选择</h2>
+<p>把这一章的核心——「weak fallback：原生实现优先，否则用编进 .bc 的兜底」——用一个浏览器里能跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20libdevice%20%E7%9A%84%20weak%20%E7%AC%A6%E5%8F%B7%20fallback%EF%BC%9A%E9%93%BE%E6%8E%A5%E5%99%A8%E5%A6%82%E4%BD%95%E5%9C%A8%E5%8E%9F%E7%94%9F%20vs%20fallback%20%E9%97%B4%E9%80%89%E6%8B%A9%0A%0A%23%20----%20libdevice%20%E6%8F%90%E4%BE%9B%E7%9A%84%20weak%20fallback%20%E5%AE%9E%E7%8E%B0%EF%BC%88%E7%BC%96%E8%BF%9B%20.bc%EF%BC%89----%0AFALLBACK_SYMBOLS%20%3D%20%7B%0A%20%20%20%20%22ceilf%22%3A%20%20(%22weak%22%2C%20%22__devicelib_ceilf%20%E2%86%92%20__spirv_ocl_ceil%22)%2C%0A%20%20%20%20%22sqrtf%22%3A%20%20(%22weak%22%2C%20%22__devicelib_sqrtf%20%E2%86%92%20__spirv_ocl_sqrt%22)%2C%0A%20%20%20%20%22sinf%22%3A%20%20%20(%22weak%22%2C%20%22__devicelib_sinf%20%E2%86%92%20__spirv_ocl_sin%22)%2C%0A%20%20%20%20%22assert%22%3A%20(%22weak%22%2C%20%22__devicelib_assert_fail%22)%2C%0A%7D%0A%0Adef%20link_device_image(used_symbols%2C%20native_strong_symbols)%3A%0A%20%20%20%20%22%22%22%E6%A8%A1%E6%8B%9F%E8%AE%BE%E5%A4%87%E9%93%BE%E6%8E%A5%EF%BC%9A%E7%94%A8%E5%88%B0%E7%9A%84%E7%AC%A6%E5%8F%B7%EF%BC%8C%E4%BC%98%E5%85%88%E7%94%A8%E5%90%8E%E7%AB%AF%E6%8F%90%E4%BE%9B%E7%9A%84%E5%BC%BA%E7%AC%A6%E5%8F%B7%EF%BC%8C%E5%90%A6%E5%88%99%E7%94%A8%20weak%20fallback%E3%80%82%0A%20%20%20%20%20%20%20internalize%EF%BC%9A%E5%8F%AA%E9%93%BE%20kernel%20%E5%AE%9E%E9%99%85%E7%94%A8%E5%88%B0%E7%9A%84%E7%AC%A6%E5%8F%B7%E3%80%82%22%22%22%0A%20%20%20%20print(f%22kernel%20%E7%94%A8%E5%88%B0%E7%9A%84%E7%AC%A6%E5%8F%B7%3A%20%7Bused_symbols%7D%22)%0A%20%20%20%20print(f%22%E5%90%8E%E7%AB%AF%E5%8E%9F%E7%94%9F%E6%8F%90%E4%BE%9B(%E5%BC%BA%E7%AC%A6%E5%8F%B7)%3A%20%7Bnative_strong_symbols%20or%20'%EF%BC%88%E6%97%A0%EF%BC%89'%7D%5Cn%22)%0A%20%20%20%20linked%20%3D%20%5B%5D%0A%20%20%20%20for%20sym%20in%20used_symbols%3A%0A%20%20%20%20%20%20%20%20if%20sym%20in%20native_strong_symbols%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20linked.append((sym%2C%20%22%E5%8E%9F%E7%94%9F%E5%BC%BA%E7%AC%A6%E5%8F%B7%22%2C%20native_strong_symbols%5Bsym%5D))%0A%20%20%20%20%20%20%20%20elif%20sym%20in%20FALLBACK_SYMBOLS%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20_%2C%20impl%20%3D%20FALLBACK_SYMBOLS%5Bsym%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20linked.append((sym%2C%20%22libdevice%20weak%20fallback%22%2C%20impl))%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20linked.append((sym%2C%20%22!!%20%E6%9C%AA%E8%A7%A3%E6%9E%90%20!!%22%2C%20%22%E9%93%BE%E6%8E%A5%E9%94%99%E8%AF%AF%22))%0A%20%20%20%20for%20sym%2C%20kind%2C%20impl%20in%20linked%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bsym%3A%3C8%7D%20%E2%86%92%20%5B%7Bkind%7D%5D%20%7Bimpl%7D%22)%0A%20%20%20%20%23%20internalize%EF%BC%9AFALLBACK%20%E9%87%8C%E6%B2%A1%E8%A2%AB%E7%94%A8%E5%88%B0%E7%9A%84%E4%B8%8D%E8%BF%9B%E9%95%9C%E5%83%8F%0A%20%20%20%20unused%20%3D%20set(FALLBACK_SYMBOLS)%20-%20set(used_symbols)%0A%20%20%20%20print(f%22%5Cn%20%20(internalize%EF%BC%9A%E6%9C%AA%E7%94%A8%E5%88%B0%E7%9A%84%20fallback%20%E4%B8%8D%E9%93%BE%E5%85%A5%20%E2%86%92%20%7Bsorted(unused)%7D)%22)%0A%0Aprint(%22%3D%3D%3D%20%E5%90%8E%E7%AB%AF%20A%EF%BC%9A%E9%A9%B1%E5%8A%A8%E5%8E%9F%E7%94%9F%E6%94%AF%E6%8C%81%20sqrtf%EF%BC%88%E5%A6%82%E6%9F%90%20GPU%20%E6%9C%89%E7%A1%AC%E4%BB%B6%20sqrt%EF%BC%89%3D%3D%3D%22)%0Alink_device_image(%0A%20%20%20%20used_symbols%3D%5B%22sqrtf%22%2C%20%22ceilf%22%2C%20%22assert%22%5D%2C%0A%20%20%20%20native_strong_symbols%3D%7B%22sqrtf%22%3A%20%22%E7%A1%AC%E4%BB%B6%20sqrt.f32%20%E6%8C%87%E4%BB%A4%22%7D%2C%20%20%20%23%20%E5%8E%9F%E7%94%9F%E5%BC%BA%E7%AC%A6%E5%8F%B7%E8%83%9C%E5%87%BA%0A)%0Aprint(%22%5Cn%3D%3D%3D%20%E5%90%8E%E7%AB%AF%20B%EF%BC%9A%E9%A9%B1%E5%8A%A8%E5%95%A5%E6%95%B0%E5%AD%A6%E9%83%BD%E4%B8%8D%E5%8E%9F%E7%94%9F%E6%8F%90%E4%BE%9B%20%3D%3D%3D%22)%0Alink_device_image(%0A%20%20%20%20used_symbols%3D%5B%22sqrtf%22%2C%20%22ceilf%22%5D%2C%0A%20%20%20%20native_strong_symbols%3D%7B%7D%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%A8%E9%83%A8%E7%94%A8%20fallback%20%E5%85%9C%E5%BA%95%0A)"># 模拟 libdevice 的 weak 符号 fallback：链接器如何在原生 vs fallback 间选择
+
+# ---- libdevice 提供的 weak fallback 实现（编进 .bc）----
+FALLBACK_SYMBOLS = {
+    "ceilf":  ("weak", "__devicelib_ceilf → __spirv_ocl_ceil"),
+    "sqrtf":  ("weak", "__devicelib_sqrtf → __spirv_ocl_sqrt"),
+    "sinf":   ("weak", "__devicelib_sinf → __spirv_ocl_sin"),
+    "assert": ("weak", "__devicelib_assert_fail"),
+}
+
+def link_device_image(used_symbols, native_strong_symbols):
+    """模拟设备链接：用到的符号，优先用后端提供的强符号，否则用 weak fallback。
+       internalize：只链 kernel 实际用到的符号。"""
+    print(f"kernel 用到的符号: {used_symbols}")
+    print(f"后端原生提供(强符号): {native_strong_symbols or '（无）'}\n")
+    linked = []
+    for sym in used_symbols:
+        if sym in native_strong_symbols:
+            linked.append((sym, "原生强符号", native_strong_symbols[sym]))
+        elif sym in FALLBACK_SYMBOLS:
+            _, impl = FALLBACK_SYMBOLS[sym]
+            linked.append((sym, "libdevice weak fallback", impl))
+        else:
+            linked.append((sym, "!! 未解析 !!", "链接错误"))
+    for sym, kind, impl in linked:
+        print(f"  {sym:&lt;8} → [{kind}] {impl}")
+    # internalize：FALLBACK 里没被用到的不进镜像
+    unused = set(FALLBACK_SYMBOLS) - set(used_symbols)
+    print(f"\n  (internalize：未用到的 fallback 不链入 → {sorted(unused)})")
+
+print("=== 后端 A：驱动原生支持 sqrtf（如某 GPU 有硬件 sqrt）===")
+link_device_image(
+    used_symbols=["sqrtf", "ceilf", "assert"],
+    native_strong_symbols={"sqrtf": "硬件 sqrt.f32 指令"},   # 原生强符号胜出
+)
+print("\n=== 后端 B：驱动啥数学都不原生提供 ===")
+link_device_image(
+    used_symbols=["sqrtf", "ceilf"],
+    native_strong_symbols={},                                # 全部用 fallback 兜底
+)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 后端 A：驱动原生支持 sqrtf（如某 GPU 有硬件 sqrt）===
+kernel 用到的符号: ['sqrtf', 'ceilf', 'assert']
+后端原生提供(强符号): {'sqrtf': '硬件 sqrt.f32 指令'}
+
+  sqrtf    → [原生强符号] 硬件 sqrt.f32 指令
+  ceilf    → [libdevice weak fallback] __devicelib_ceilf → __spirv_ocl_ceil
+  assert   → [libdevice weak fallback] __devicelib_assert_fail
+
+  (internalize：未用到的 fallback 不链入 → ['sinf'])
+
+=== 后端 B：驱动啥数学都不原生提供 ===
+kernel 用到的符号: ['sqrtf', 'ceilf']
+后端原生提供(强符号): {}
+
+  sqrtf    → [libdevice weak fallback] __devicelib_ceilf 类似 → __spirv_ocl_sqrt
+  ceilf    → [libdevice weak fallback] __devicelib_ceilf → __spirv_ocl_ceil
+
+  (internalize：未用到的 fallback 不链入 → ['assert', 'sinf'])</code></pre>
+</div><p>看清 weak fallback 的两种结局：<strong>后端 A</strong> 原生提供 <code>sqrtf</code>（强符号），链接器就用硬件版、丢弃 libdevice 的 weak fallback；而 <code>ceilf</code>/<code>assert</code> 没有原生实现，就用 libdevice 兜底。<strong>后端 B</strong> 什么都不提供，全部落到 fallback。注意 <code>internalize</code> 的效果：没被 kernel 用到的 <code>sinf</code>（和后端 A 的场景）根本不链进镜像——这就是 <code>--only-needed</code> 保持设备镜像精简的作用。请动手改：给后端 B 的 <code>native_strong_symbols</code> 加上 <code>{&quot;ceilf&quot;: &quot;硬件 ceil&quot;}</code>，重新运行——你会看到 <code>ceilf</code> 立刻从 fallback 切成原生。一个 weak 属性就实现了这套&quot;能用原生就用原生&quot;的策略，全程无需运行时判断。</p>
+<h2>小结与下一步</h2>
+<p>第三部分的收尾——设备端&quot;标准库从哪来&quot;讲透了：</p>
+<ul>
+<li>设备端<strong>没有系统 libc/libm</strong>，SYCL 靠两层设备库补齐，都以 <strong>LLVM bitcode（<code>.bc</code>）</strong> 在设备链接时链入：<ul>
+<li><strong><code>libdevice/</code></strong>（顶层）：<code>&lt;cmath&gt;</code>/<code>&lt;complex&gt;</code>/<code>&lt;cstring&gt;</code>/<code>assert</code>/<strong>IMF</strong> 的设备端实现，加 bfloat16/ITT/sanitizer。编成 <code>libsycl-crt.bc</code>/<code>libsycl-cmath.bc</code>/<code>libsycl-imf.bc</code> 等。</li>
+<li><strong><code>libclc/</code></strong>（顶层，<code>libspirv/</code>）：底层 <code>__spirv_ocl_*</code> 内建与 work-item 查询，尤其为 NVPTX/AMDGPU 提供 SPIR-V 内建实现。</li>
+</ul>
+</li>
+<li><strong>fallback 机制</strong>：libdevice 的 wrapper 符号是 <strong>weak</strong>（<code>SYCL_EXTERNAL __attribute__((weak))</code>，<code>device.h</code>），转发到 <code>__devicelib_*</code> → <code>__spirv_ocl_*</code>。驱动原生支持则原生强符号胜出，否则用编进 <code>.bc</code> 的 weak fallback——链接器自动选择，无需运行时判断。</li>
+<li><strong>解析链</strong>：<code>sycl::sqrt</code>（<code>math_functions.hpp</code> 宏）→ <code>__spirv_ocl_sqrt</code>（<code>-fdeclare-spirv-builtins</code> 开启、<code>SPIRVBuiltins.td</code> 生成）→ 原生 SPIR-V 后端经 <code>llvm-spirv</code> 出 <code>OpExtInst</code> / NVPTX 等由 libclc 实现。<code>std::ceil</code> 多绕一层 libdevice。</li>
+<li><strong>driver 选库</strong>（<code>SYCL.cpp</code> 的 <code>getDeviceLibNames()</code>）：SPIR-V 目标链 crt/cmath/imf 基础集；NVPTX/AMDGCN 链单个大 <code>.bc</code>；按 <code>-fsycl-instrument-device-code</code>/<code>-fsanitize=</code>/bfloat16 能力追加；<code>-mlink-builtin-bitcode</code> + <strong>internalize</strong>（只链用到的）；开关 <code>--no-offloadlib</code>。</li>
+</ul>
+<p><strong>第三部分（SYCL 的真实实现）到此完成。</strong> 你已经走完从头文件（13）、设备端编译（14-15）、运行时对象与调度（16-17）、UR（18）到设备库（19）的完整链条——一份 SYCL <code>.cpp</code> 如何被编译、命名、调度、上设备、并补齐设备端标准库，全部拆开看过了。</p>
+<p>下一部分转向<strong>实践</strong>：如何给 SYCL <strong>写一个扩展</strong>。第 20 章先讲扩展的解剖——命名约定、feature-test 宏、<code>doc/extensions/</code> 的组织，为后面动手实现 free function kernels 扩展（第 21 章）、需要编译器配合的扩展（第 22 章）打底。第三部分建立的&quot;编译期 + 运行期&quot;全景，正是写扩展时要落脚的地方。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>设备端无 libc/libm，靠两层 <code>.bc</code> 设备库补齐：<strong><code>libdevice/</code></strong>（顶层，C库/数学/complex/cstring/assert/IMF/bfloat16/sanitizer fallback）+ <strong><code>libclc/</code></strong>（顶层，<code>libspirv/</code>，底层 <code>__spirv_ocl_*</code> 内建与 work-item 查询，尤为 NVPTX/AMDGPU）。</li>
+<li><strong>fallback = weak 符号</strong>：wrapper 符号 <code>SYCL_EXTERNAL __attribute__((weak))</code>（<code>device.h</code>），<code>ceilf</code>→<code>__devicelib_ceilf</code>→<code>__spirv_ocl_ceil</code>。原生强符号优先，否则用 <code>.bc</code> fallback——链接器自动选。</li>
+<li>解析链：<code>sycl::sqrt</code>（<code>builtins/math_functions.hpp</code>）→ <code>__spirv_ocl_sqrt</code>（<code>-fdeclare-spirv-builtins</code>，表从 <code>SPIRVBuiltins.td</code> 生成）→ 原生后端经 <code>llvm-spirv</code> 出 <code>OpExtInst</code> / NVPTX 由 libclc 实现；C库/<code>std</code> 数学多绕一层 libdevice。</li>
+<li>driver <code>getDeviceLibNames()</code>（<code>SYCL.cpp</code>）按目标选库：SPIR-V 链 <code>libsycl-crt</code>/<code>cmath</code>/<code>imf</code>；NVPTX→<code>devicelib-nvptx64-nvidia-cuda.bc</code>；按 flag 追加 ITT/sanitizer/bfloat16；<code>-mlink-builtin-bitcode</code>+internalize；开关 <code>--no-offloadlib</code>。</li>
+<li>bfloat16 原生 vs fallback 还有运行时判断（program manager 读镜像元信息版本 0/1 + 查后端能力）。</li>
+<li>注意：fallback 实现多为 <code>.hpp</code>（<code>fallback-cmath.hpp</code> 等），<code>fallback-bfloat16.cpp</code> 是仅剩独立 <code>.cpp</code>；assert 在 <code>crt_wrapper.cpp</code>+<code>wrapper.h</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch18.html">← 第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a>
+  <a class="nav-next" href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

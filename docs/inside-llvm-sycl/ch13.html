@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 头文件地图：sycl.hpp 里到底有什么</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li class="active"><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 13 章 头文件地图：sycl.hpp 里到底有什么</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 12 章你有了 SYCL 实现的宏观地图——两趟编译、集成头文件、运行时。现在钻进第三部分的第一层砖：<strong>头文件</strong>。你写的每个 SYCL 程序开头都是 <code>#include &lt;sycl/sycl.hpp&gt;</code>，这一行背后到底拉进来了什么？<code>queue</code>/<code>buffer</code>/<code>accessor</code>/<code>handler</code> 这些类各自声明在哪个头？那个神秘的 <code>detail/</code> 目录装的是什么？</p>
+<p>读完你会有一张<strong>头文件导航图</strong>：知道 <code>sycl.hpp</code> 只是个"总入口"、真正的类分散在几十个头里；知道 SYCL 用 <strong>pImpl（pointer-to-implementation）</strong>把「公开接口」和「私有实现」彻底分开——公开头里只有一个 <code>shared_ptr&lt;detail::X_impl&gt;</code>，真身在 <code>sycl/source/detail/</code> 编进动态库。摸清这张图，你后面读运行时源码（第 16–18 章）时才知道「这个类型从哪个头来、它的实现该去哪个 <code>.cpp</code> 找」。</p>
+</div><h2>一行 include 背后：sycl.hpp 是个总入口</h2>
+<p>打开 <code>sycl/include/sycl/sycl.hpp</code>（就在 <code>intel/llvm</code> 里，约 7KB），你会发现它自己几乎不定义任何类——它是一个<strong>把整套公共 API 汇集起来的总入口（umbrella header）</strong>。它做的事大致是：</p>
+<ol>
+<li>先检查你有没有带 <code>-fsycl</code>——没带就发一个编译警告（除非你定义了 <code>SYCL_DISABLE_FSYCL_SYCLHPP_WARNING</code>）。这本身就印证了第 12 章：<code>sycl.hpp</code> 是为「两趟编译」这套 <code>-fsycl</code> 流程设计的。</li>
+<li>拉进宏与版本头：<code>sycl/khr/split_headers/version.hpp</code>（&quot;所有 SYCL 宏由此提供&quot;）、以及构建时生成的 <code>sycl/version.hpp</code>（库版本）。</li>
+<li>拉进一个<strong>核心聚合头</strong> <code>sycl/detail/core.hpp</code>。</li>
+<li>再逐个 <code>#include</code> 完整的公共 API 面：<code>context.hpp</code>、<code>device.hpp</code>、<code>event.hpp</code>、<code>handler.hpp</code>、<code>kernel.hpp</code>、<code>platform.hpp</code>、<code>range.hpp</code>、<code>id.hpp</code>、<code>nd_range.hpp</code>、<code>item.hpp</code>、<code>nd_item.hpp</code>、<code>usm.hpp</code>、<code>builtins.hpp</code>、<code>group.hpp</code>、<code>reduction.hpp</code>、<code>stream.hpp</code>…… 一长串。</li>
+<li>最后拉进一大堆扩展头（<code>ext/intel/…</code>、<code>ext/oneapi/…</code>）和 KHR 头。</li>
+</ol>
+<div class="note">
+<strong><code>queue</code>/<code>buffer</code>/<code>accessor</code> 不在 <code>sycl.hpp</code> 里直接 include</strong>
+有意思的细节：<code>queue.hpp</code>、<code>buffer.hpp</code>、<code>accessor.hpp</code> 这三个最常用的头，<strong>并不</strong>被 <code>sycl.hpp</code> 直接包含——它们是通过 <code>sycl/detail/core.hpp</code> <strong>间接</strong>进来的。<code>core.hpp</code> 是个较新的"精简核心"聚合头，只包含 <code>accessor.hpp</code>/<code>buffer.hpp</code>/<code>queue.hpp</code>/<code>backend_types.hpp</code>/<code>feature_test.hpp</code>，它的注释说这是为了<strong>减少传递包含（transitive include）的膨胀</strong>的实验性努力——但外部代码仍应继续用 <code>&lt;sycl/sycl.hpp&gt;</code>。这就是大型头文件库的现实：一个 <code>#include</code> 背后可能是上百个头，团队会持续做"包含瘦身"。
+</div><h2>核心类各住在哪个头</h2>
+<p>第 16 章要讲的运行时对象、你天天用的那些类，各自声明在一个专属头里。记住这张表，读源码时按图索骥：</p>
+<table>
+<thead>
+<tr>
+<th>类 / API</th>
+<th>头文件（<code>sycl/include/sycl/</code>）</th>
+<th>声明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>queue</code></td>
+<td><code>queue.hpp</code></td>
+<td><code>class __SYCL_EXPORT queue : public detail::OwnerLessBase&lt;queue&gt;</code></td>
+</tr>
+<tr>
+<td><code>buffer</code></td>
+<td><code>buffer.hpp</code></td>
+<td><code>class buffer : public detail::buffer_plain, ...</code></td>
+</tr>
+<tr>
+<td><code>accessor</code></td>
+<td><code>accessor.hpp</code></td>
+<td>（最大的头，约 121KB）</td>
+</tr>
+<tr>
+<td><code>handler</code></td>
+<td><code>handler.hpp</code></td>
+<td><code>class __SYCL_EXPORT handler</code></td>
+</tr>
+<tr>
+<td><code>device</code></td>
+<td><code>device.hpp</code></td>
+<td><code>class __SYCL_EXPORT device</code></td>
+</tr>
+<tr>
+<td><code>context</code></td>
+<td><code>context.hpp</code></td>
+<td><code>class __SYCL_EXPORT context : public detail::OwnerLessBase&lt;context&gt;</code></td>
+</tr>
+<tr>
+<td><code>platform</code></td>
+<td><code>platform.hpp</code></td>
+<td><code>class __SYCL_EXPORT platform : public detail::OwnerLessBase&lt;platform&gt;</code></td>
+</tr>
+<tr>
+<td><code>event</code></td>
+<td><code>event.hpp</code></td>
+<td><code>class __SYCL_EXPORT event : public detail::OwnerLessBase&lt;event&gt;</code></td>
+</tr>
+<tr>
+<td><code>kernel</code></td>
+<td><code>kernel.hpp</code></td>
+<td><code>class __SYCL_EXPORT kernel : public detail::OwnerLessBase&lt;kernel&gt;</code></td>
+</tr>
+<tr>
+<td><code>range&lt;N&gt;</code> / <code>id&lt;N&gt;</code> / <code>nd_range&lt;N&gt;</code></td>
+<td><code>range.hpp</code> / <code>id.hpp</code> / <code>nd_range.hpp</code></td>
+<td>模板类</td>
+</tr>
+<tr>
+<td><code>malloc_device</code>/<code>malloc_host</code>/<code>malloc_shared</code></td>
+<td><code>usm.hpp</code></td>
+<td><code>__SYCL_EXPORT</code> 自由函数</td>
+</tr>
+</tbody></table>
+<p>两个反复出现的标记值得解释：<strong><code>__SYCL_EXPORT</code></strong>（定义在 <code>sycl/detail/export.hpp</code>）控制符号从动态库导出、是 ABI 边界的标志；<strong><code>detail::OwnerLessBase&lt;T&gt;</code></strong> 是给这些&quot;引用计数句柄&quot;类提供统一比较/哈希能力的基类。它们出现在几乎每个公开类上，正是下一节要讲的 pImpl 设计的外在特征。</p>
+<h2>pImpl：公开接口与私有实现的一刀两断</h2>
+<p>SYCL 的公开类几乎都用了 <strong>pImpl（pointer-to-implementation，指针指向实现）</strong> 惯用法。它的形状很固定，以 <code>queue.hpp</code> 为例（行号为真实位置）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">namespace detail { class queue_impl; }          // 只前向声明，不给定义（queue.hpp:99）
+
+class __SYCL_EXPORT queue : public detail::OwnerLessBase&lt;queue&gt; {
+  // …公开成员函数：submit / wait / memcpy / parallel_for …
+  bool operator==(const queue &amp;RHS) const { return impl == RHS.impl; }  // 比较即指针身份
+
+private:
+  queue(std::shared_ptr&lt;detail::queue_impl&gt; impl);   // 私有构造（queue.hpp:3638）
+  std::shared_ptr&lt;detail::queue_impl&gt; impl;          // 唯一的数据成员（queue.hpp:3637）
+};</code></pre>
+</div><p>关键点：<strong>公开头里只有一个 <code>shared_ptr&lt;detail::queue_impl&gt;</code>，<code>queue_impl</code> 的真正定义根本不在公共头里</strong>。用户代码 <code>#include &lt;sycl/sycl.hpp&gt;</code> 只看到「有这么个 impl 指针」，看不到里面有什么。同样的形状出现在 <code>device</code>（<code>device_impl</code>）、<code>context</code>（<code>context_impl</code>）、<code>platform</code>（<code>platform_impl</code>）、<code>event</code>（<code>event_impl</code>）、<code>kernel</code>（<code>kernel_impl</code>）、<code>handler</code>（<code>handler_impl</code>）身上。</p>
+<p>这样设计有两个直接好处：</p>
+<ul>
+<li><strong>ABI 稳定</strong>：<code>queue_impl</code> 里加个字段、改个成员，公共头里的 <code>queue</code> 大小和布局<strong>一个字节都不变</strong>（它永远只是一个指针）。用户不用重编就能升级 SYCL 运行时库。这对一个要长期维护 ABI 的库（第 12 章说 DPC++ 是&quot;盖在 LLVM 上的一层楼&quot;）是刚需。</li>
+<li><strong>编译解耦</strong>：用户代码不必看见运行时实现的一大堆内部头（调度器、UR 句柄……），编译更快、耦合更松。</li>
+</ul>
+<p>注意那个 <code>operator==</code> 直接比较 <code>impl</code> 指针——这说明 SYCL 的 <code>queue</code>/<code>context</code> 等都是<strong>引用语义的句柄</strong>：拷贝一个 <code>queue</code> 只是拷了个 <code>shared_ptr</code>，两者指向同一个 <code>queue_impl</code>。这解释了为什么你可以随手按值传递 <code>queue</code>。</p>
+<div class="concept">
+<svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">pImpl：公开头是"壳"，实现在 source/detail 的 .cpp 里</text>
+  <!-- user code -->
+  <rect x="30" y="44" width="150" height="40" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="105" y="62" text-anchor="middle" font-size="10" fill="#374151">你的代码</text>
+  <text x="105" y="77" text-anchor="middle" font-size="8" fill="#6b7280">#include &lt;sycl/sycl.hpp&gt;</text>
+  <path d="M180 64 L212 64" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c13)"/>
+  <!-- public header -->
+  <rect x="212" y="40" width="200" height="90" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="312" y="60" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">公开头 queue.hpp</text>
+  <text x="312" y="78" text-anchor="middle" font-size="9" fill="#6b7280">class queue { … }</text>
+  <text x="312" y="95" text-anchor="middle" font-size="9" fill="#2d2a26">唯一成员：</text>
+  <text x="312" y="112" text-anchor="middle" font-size="9" font-family="monospace" fill="#a53f1c">shared_ptr&lt;queue_impl&gt; impl</text>
+  <!-- pointer to impl -->
+  <path d="M412 100 L468 100" stroke="#e06a3b" stroke-width="1.5" marker-end="url(#c13b)"/>
+  <text x="440" y="93" text-anchor="middle" font-size="8" fill="#e06a3b">指向</text>
+  <!-- impl -->
+  <rect x="468" y="60" width="150" height="120" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="543" y="80" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">queue_impl</text>
+  <text x="543" y="96" text-anchor="middle" font-size="8" fill="#6b7280">source/detail/</text>
+  <text x="543" y="108" text-anchor="middle" font-size="8" fill="#6b7280">queue_impl.{hpp,cpp}</text>
+  <line x1="480" y1="118" x2="606" y2="118" stroke="#e5c4b0"/>
+  <text x="543" y="134" text-anchor="middle" font-size="8" fill="#a53f1c">ur_queue_handle_t</text>
+  <text x="543" y="148" text-anchor="middle" font-size="8" fill="#a53f1c">context / device</text>
+  <text x="543" y="162" text-anchor="middle" font-size="8" fill="#a53f1c">async handler …</text>
+  <text x="543" y="176" text-anchor="middle" font-size="8" fill="#6b7280">编进 libsycl.so</text>
+  <!-- barrier line -->
+  <line x1="440" y1="200" x2="440" y2="270" stroke="#9ca3af" stroke-dasharray="4 4"/>
+  <text x="230" y="230" text-anchor="middle" font-size="10" fill="#2b6cb0">用户可见（公共头，ABI 边界）</text>
+  <text x="535" y="230" text-anchor="middle" font-size="10" fill="#a53f1c">用户不可见（库内部）</text>
+  <text x="320" y="258" text-anchor="middle" font-size="10" fill="#2d2a26">加字段、改实现只动右侧；<tspan font-weight="bold">左侧 queue 永远只是一个指针 → ABI 不变</tspan></text>
+  <text x="320" y="284" text-anchor="middle" font-size="9" fill="#6b7280">queue 拷贝 = 拷 shared_ptr；operator== 比较指针身份 → 引用语义句柄</text>
+  <defs>
+    <marker id="c13" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c13b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 13-1　pImpl 惯用法。公开头 <code>queue.hpp</code> 里的 <code>queue</code> 只有一个 <code>shared_ptr&lt;queue_impl&gt;</code> 成员；<code>queue_impl</code> 的真身在 <code>sycl/source/detail/queue_impl.{hpp,cpp}</code>、编进动态库。改实现不动公共头 → ABI 稳定；<code>queue</code> 是引用语义句柄，拷贝即共享同一 impl</div>
+</div><h2>include 与 source：接口在头、实现在库</h2>
+<p>pImpl 引出一条清晰的目录分工，这是你读 SYCL 源码时最该先建立的心智：</p>
+<ul>
+<li><strong><code>sycl/include/sycl/</code></strong> —— <strong>公共头</strong>。类的接口、模板、以及能在设备端内联的路径（比如 SPIR-V 内建调用），加上前向声明的 <code>*_impl</code> 指针。用户 <code>#include</code> 的就是这里。</li>
+<li><strong><code>sycl/source/</code></strong> —— <strong>主机端运行时的 <code>.cpp</code></strong>，一个大类一个文件：<code>queue.cpp</code>、<code>buffer.cpp</code>、<code>handler.cpp</code>、<code>device.cpp</code>、<code>context.cpp</code>、<code>platform.cpp</code>、<code>event.cpp</code>、<code>kernel.cpp</code>…… 这些实现公共 API 的主机侧行为，还有 ABI/版本脚本（<code>ld-version-script.txt</code> 等）。</li>
+<li><strong><code>sycl/source/detail/</code></strong> —— <strong>pImpl 的真身 + 运行时内部子系统</strong>。<code>*_impl</code> 类在这里成对出现（<code>queue_impl.{hpp,cpp}</code>、<code>context_impl.{hpp,cpp}</code>、<code>device_impl.{hpp,cpp}</code>、<code>event_impl.{hpp,cpp}</code>……）；还有整个运行时的核心子系统：<code>scheduler/</code>（第 17 章）、<code>program_manager/</code>、<code>graph/</code>、<code>kernel_compiler/</code>、<code>memory_manager.{hpp,cpp}</code>、<code>adapter_impl.{hpp,cpp}</code> 与 <code>ur.{hpp,cpp}</code>（第 18 章 UR 接入点）、<code>config.{hpp,cpp}</code> 等。</li>
+</ul>
+<p>一句话：<strong>模板化的接口是纯头文件（在 <code>include/sycl/</code>），重的主机运行时逻辑和 pImpl 实现只编译一次进动态库（在 <code>source/</code>）</strong>。所以当你想「<code>queue::submit</code> 到底干了什么」，路径是明确的：从 <code>include/sycl/queue.hpp</code> 看接口 → 到 <code>source/queue.cpp</code> 看它怎么转发 → 落到 <code>source/detail/queue_impl.cpp</code> 看真实逻辑。这条&quot;头 → source → detail/impl&quot;的三跳，是本书第三部分反复要走的路。</p>
+<div class="warn">
+<strong>别在 <code>include/sycl/detail/</code> 找 <code>queue_impl</code> 的定义</strong>
+容易混淆两个 <code>detail/</code>：<code>sycl/include/sycl/detail/</code> 装的是<strong>会随头文件发布</strong>的内部工具（类型 traits、<code>kernel_desc.hpp</code>、<code>ur.hpp</code> 声明、<code>export.hpp</code> 宏等），但它<strong>不含</strong> <code>queue_impl</code> 这些 pImpl 真身；pImpl 的定义在 <code>sycl/source/detail/</code>（不发布、只编进库）。查实现类记得去 <code>source/detail/</code>，不是 <code>include/.../detail/</code>。这正是 pImpl 把实现藏进库的目的。
+</div><h2>头文件树里其他要认识的角落</h2>
+<p><code>sycl/include/sycl/</code> 下还有几个子目录，遇到时能认出它们的用途：</p>
+<ul>
+<li><strong><code>detail/</code></strong> —— 随头发布的内部实现细节：<code>kernel_desc.hpp</code>（第 12、14 章的集成头文件契约：<code>KernelInfo</code>/<code>kernel_param_desc_t</code>/<code>kernel_param_kind_t</code>）、<code>ur.hpp</code>（Unified Runtime 声明，注意旧的 <code>pi.*</code> 已被 UR 取代）、<code>export.hpp</code>/<code>defines.hpp</code>（<code>__SYCL_EXPORT</code> 等宏）、以及大量 ABI 中立工具类型。还有嵌套的 <code>detail/builtins/</code>、<code>detail/type_traits/</code>、<code>detail/fwd/</code>（前向声明头）。</li>
+<li><strong><code>ext/</code></strong> —— <strong>扩展树</strong>（第四部分的主场），按厂商分：<code>ext/oneapi/</code>（含 <code>experimental/</code>，如 <code>graph.hpp</code>、<code>bindless_images</code>、<code>matrix/</code>）、<code>ext/intel/</code>（如 <code>esimd/</code>、<code>math/</code>）、<code>ext/codeplay/</code>。第 20–24 章讲的扩展就落在这里。</li>
+<li><strong><code>__spirv/</code></strong> —— <strong>设备端 SPIR-V 内建</strong>：<code>spirv_ops.hpp</code>、<code>spirv_types.hpp</code>、<code>spirv_vars.hpp</code> 等。设备代码里 <code>sycl::sqrt</code>、取 global id 最终都落到这里的 <code>__spirv_*</code> 调用（第 8、19 章）。</li>
+<li><strong><code>stl_wrappers/</code></strong> —— 设备代码用的标准库替身：<code>cmath</code>、<code>complex</code>、<code>cassert</code>、<code>cstdlib</code> 的设备端包装（连着第 19 章的 libdevice）。</li>
+<li><strong><code>backend/</code></strong>（<code>cuda.hpp</code>/<code>level_zero.hpp</code>/<code>opencl.hpp</code>，各后端 interop）、<strong><code>info/</code></strong>（<code>get_info&lt;&gt;</code> 的描述符）、<strong><code>properties/</code></strong>（属性系统）、<strong><code>access/</code></strong>（访问模式枚举）、<strong><code>khr/</code></strong>（Khronos 标准的细粒度&quot;拆分头&quot;）。</li>
+</ul>
+<div class="keypoint">
+<strong>头文件地图 = 一个总入口 + pImpl 分层</strong>
+<strong><code>&lt;sycl/sycl.hpp&gt;</code> 是总入口，本身几乎不定义类，而是把散在几十个专属头（<code>queue.hpp</code>/<code>buffer.hpp</code>/<code>handler.hpp</code>…）里的公共 API 汇集起来。每个公开类用 pImpl：公共头里只有 <code>shared_ptr&lt;detail::X_impl&gt;</code>，真身在 <code>sycl/source/detail/X_impl.{hpp,cpp}</code> 编进动态库——这换来 ABI 稳定 + 编译解耦，也让这些类成为引用语义句柄。</strong>读实现走"<code>include/sycl/X.hpp</code>（接口）→ <code>source/X.cpp</code>（转发）→ <code>source/detail/X_impl.cpp</code>（真实逻辑）"三跳。
+</div><h2>亲手翻一翻头文件</h2>
+<p>不用编译，直接在源码树里走一遍就能验证这一章：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># sycl.hpp 到底 include 了哪些公共头
+grep '#include' sycl/include/sycl/sycl.hpp | head -40
+
+# 确认 queue 的 pImpl：只有一个 shared_ptr&lt;queue_impl&gt; 成员
+grep -n 'queue_impl' sycl/include/sycl/queue.hpp
+
+# pImpl 的真身在 source/detail，不在 include
+ls sycl/source/detail/queue_impl.*      # queue_impl.hpp / queue_impl.cpp
+ls sycl/include/sycl/detail/ | grep -i queue   # 找不到 queue_impl —— 它不在这
+
+# "头 → source → detail" 三跳里的中间层
+ls sycl/source/queue.cpp</code></pre>
+</div><p>这就是「源码为锚」在头文件层面的落地：任何一句「<code>queue</code> 是个 pImpl 句柄」，你都能用两条 <code>grep</code> 亲眼确认。调试编译期问题（比如某个类型找不到、ABI 报错）时，第一步往往就是这样定位「这个符号声明在哪个头、实现在哪个 <code>.cpp</code>」。</p>
+<h2>动手：模拟 pImpl 如何隔离 ABI 变化</h2>
+<p>把这一章的核心——「公开类只持有一个指向实现的指针，改实现不改公开布局」——用一个浏览器里能跑的小模型演出来。我们造一个 <code>Queue</code>（公开壳）+ <code>QueueImpl</code>（真身），然后给实现&quot;加字段&quot;，看公开壳的成员纹丝不动。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20pImpl%EF%BC%9A%E5%85%AC%E5%BC%80%E7%B1%BB%E5%8F%AA%E6%9C%89%E4%B8%80%E4%B8%AA%22%E6%8C%87%E9%92%88%22%EF%BC%8C%E5%AE%9E%E7%8E%B0%E9%9A%8F%E4%BE%BF%E6%94%B9%E9%83%BD%E4%B8%8D%E5%BD%B1%E5%93%8D%E5%85%AC%E5%BC%80%E5%B8%83%E5%B1%80%EF%BC%88ABI%20%E7%A8%B3%E5%AE%9A%EF%BC%89%0A%0A%23%20----%20%E5%BA%93%E5%86%85%E9%83%A8%EF%BC%9A%E7%9C%9F%E6%AD%A3%E7%9A%84%E5%AE%9E%E7%8E%B0%EF%BC%8C%E5%AD%97%E6%AE%B5%E9%9A%8F%E7%89%88%E6%9C%AC%E6%BC%94%E8%BF%9B%20----%0Aclass%20QueueImpl_v1%3A%0A%20%20%20%20def%20__init__(self%2C%20ctx%2C%20dev)%3A%0A%20%20%20%20%20%20%20%20self.ur_handle%20%3D%20f%22ur_queue(ctx%3D%7Bctx%7D%2C%20dev%3D%7Bdev%7D)%22%20%20%20%23%20UR%20%E5%8F%A5%E6%9F%84%0A%20%20%20%20%20%20%20%20self.context%20%3D%20ctx%0A%20%20%20%20%20%20%20%20self.device%20%3D%20dev%0A%0Aclass%20QueueImpl_v2%3A%20%20%20%20%20%20%20%20%20%20%23%20%E6%96%B0%E7%89%88%E6%9C%AC%EF%BC%9A%E5%8A%A0%E4%BA%86%E5%AD%97%E6%AE%B5%EF%BC%88%E6%A8%A1%E6%8B%9F%E8%BF%90%E8%A1%8C%E6%97%B6%E5%8D%87%E7%BA%A7%EF%BC%89%0A%20%20%20%20def%20__init__(self%2C%20ctx%2C%20dev)%3A%0A%20%20%20%20%20%20%20%20self.ur_handle%20%3D%20f%22ur_queue(ctx%3D%7Bctx%7D%2C%20dev%3D%7Bdev%7D)%22%0A%20%20%20%20%20%20%20%20self.context%20%3D%20ctx%0A%20%20%20%20%20%20%20%20self.device%20%3D%20dev%0A%20%20%20%20%20%20%20%20self.async_handler%20%3D%20%22default%22%20%20%20%20%20%23%20%E2%86%90%20%E6%96%B0%E5%A2%9E%0A%20%20%20%20%20%20%20%20self.is_inorder%20%3D%20False%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E2%86%90%20%E6%96%B0%E5%A2%9E%0A%0A%23%20----%20%E5%85%AC%E5%BC%80%E5%A3%B3%EF%BC%9A%E6%97%A0%E8%AE%BA%E5%AE%9E%E7%8E%B0%E5%93%AA%E4%B8%AA%E7%89%88%E6%9C%AC%EF%BC%8C%E6%88%90%E5%91%98%E6%B0%B8%E8%BF%9C%E5%8F%AA%E6%9C%89%E4%B8%80%E4%B8%AA%20impl%20%E6%8C%87%E9%92%88%20----%0Aclass%20Queue%3A%0A%20%20%20%20def%20__init__(self%2C%20impl)%3A%0A%20%20%20%20%20%20%20%20self.impl%20%3D%20impl%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%94%AF%E4%B8%80%E6%88%90%E5%91%98%EF%BC%9A%E6%8C%87%E5%90%91%E5%AE%9E%E7%8E%B0%EF%BC%88%3D%20shared_ptr%3Cqueue_impl%3E%EF%BC%89%0A%20%20%20%20def%20public_layout(self)%3A%0A%20%20%20%20%20%20%20%20return%20list(self.__dict__.keys())%20%20%23%20%E5%85%AC%E5%BC%80%E7%B1%BB%22%E7%9C%8B%E5%BE%97%E8%A7%81%22%E7%9A%84%E6%88%90%E5%91%98%0A%20%20%20%20def%20submit(self%2C%20cg)%3A%0A%20%20%20%20%20%20%20%20return%20f%22%5B%7Bself.impl.ur_handle%7D%5D%20%E6%8F%90%E4%BA%A4%E5%91%BD%E4%BB%A4%E7%BB%84%20%7Bcg%7D%22%0A%20%20%20%20def%20__eq__(self%2C%20other)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%94%E8%BE%83%E5%8D%B3%E6%8C%87%E9%92%88%E8%BA%AB%E4%BB%BD%EF%BC%88%E5%BC%95%E7%94%A8%E8%AF%AD%E4%B9%89%E5%8F%A5%E6%9F%84%EF%BC%89%0A%20%20%20%20%20%20%20%20return%20self.impl%20is%20other.impl%0A%0Adef%20show(version%2C%20impl_cls)%3A%0A%20%20%20%20q%20%3D%20Queue(impl_cls(ctx%3D%22ctx0%22%2C%20dev%3D%22gpu0%22))%0A%20%20%20%20print(f%22%7Bversion%7D%3A%20%E5%AE%9E%E7%8E%B0%E5%AD%97%E6%AE%B5%20%3D%20%7Blist(q.impl.__dict__)%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%E5%85%AC%E5%BC%80%E7%B1%BB%20Queue%20%E7%9A%84%E5%B8%83%E5%B1%80%20%3D%20%7Bq.public_layout()%7D%20%20%20%E2%86%90%20%E5%A7%8B%E7%BB%88%E5%8F%AA%E6%9C%89%20%5B'impl'%5D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%7Bq.submit('VecAdd')%7D%22)%0A%20%20%20%20%23%20%E5%BC%95%E7%94%A8%E8%AF%AD%E4%B9%89%EF%BC%9A%E6%8B%B7%E8%B4%9D%E5%8F%A5%E6%9F%84%20%3D%20%E5%85%B1%E4%BA%AB%E5%90%8C%E4%B8%80%E5%AE%9E%E7%8E%B0%0A%20%20%20%20q2%20%3D%20q%0A%20%20%20%20print(f%22%20%20%20%20%20%20%20%20q%20%3D%3D%20%E5%AE%83%E7%9A%84%E6%8B%B7%E8%B4%9D%3F%20%7Bq%20%3D%3D%20q2%7D%EF%BC%88%E6%AF%94%E8%BE%83%20impl%20%E6%8C%87%E9%92%88%E8%BA%AB%E4%BB%BD%EF%BC%89%5Cn%22)%0A%0Ashow(%22v1%EF%BC%88%E8%80%81%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%89%22%2C%20QueueImpl_v1)%0Ashow(%22v2%EF%BC%88%E5%8D%87%E7%BA%A7%E5%90%8E%EF%BC%8C%E5%AE%9E%E7%8E%B0%E5%8A%A0%E4%BA%86%202%20%E4%B8%AA%E5%AD%97%E6%AE%B5%EF%BC%89%22%2C%20QueueImpl_v2)%0Aprint(%22%E7%BB%93%E8%AE%BA%EF%BC%9A%E5%AE%9E%E7%8E%B0%E4%BB%8E%20v1%20%E5%8F%98%E5%88%B0%20v2%EF%BC%8C%E5%85%AC%E5%BC%80%E7%B1%BB%20Queue%20%E7%9A%84%E5%B8%83%E5%B1%80%E6%B2%A1%E5%8F%98%20%E2%86%92%20%E7%94%A8%E6%88%B7%E4%B8%8D%E7%94%A8%E9%87%8D%E7%BC%96%EF%BC%88ABI%20%E7%A8%B3%E5%AE%9A%EF%BC%89%22)"># 模拟 pImpl：公开类只有一个"指针"，实现随便改都不影响公开布局（ABI 稳定）
+
+# ---- 库内部：真正的实现，字段随版本演进 ----
+class QueueImpl_v1:
+    def __init__(self, ctx, dev):
+        self.ur_handle = f"ur_queue(ctx={ctx}, dev={dev})"   # UR 句柄
+        self.context = ctx
+        self.device = dev
+
+class QueueImpl_v2:          # 新版本：加了字段（模拟运行时升级）
+    def __init__(self, ctx, dev):
+        self.ur_handle = f"ur_queue(ctx={ctx}, dev={dev})"
+        self.context = ctx
+        self.device = dev
+        self.async_handler = "default"     # ← 新增
+        self.is_inorder = False            # ← 新增
+
+# ---- 公开壳：无论实现哪个版本，成员永远只有一个 impl 指针 ----
+class Queue:
+    def __init__(self, impl):
+        self.impl = impl                   # 唯一成员：指向实现（= shared_ptr&lt;queue_impl&gt;）
+    def public_layout(self):
+        return list(self.__dict__.keys())  # 公开类"看得见"的成员
+    def submit(self, cg):
+        return f"[{self.impl.ur_handle}] 提交命令组 {cg}"
+    def __eq__(self, other):               # 比较即指针身份（引用语义句柄）
+        return self.impl is other.impl
+
+def show(version, impl_cls):
+    q = Queue(impl_cls(ctx="ctx0", dev="gpu0"))
+    print(f"{version}: 实现字段 = {list(q.impl.__dict__)}")
+    print(f"        公开类 Queue 的布局 = {q.public_layout()}   ← 始终只有 ['impl']")
+    print(f"        {q.submit('VecAdd')}")
+    # 引用语义：拷贝句柄 = 共享同一实现
+    q2 = q
+    print(f"        q == 它的拷贝? {q == q2}（比较 impl 指针身份）\n")
+
+show("v1（老运行时）", QueueImpl_v1)
+show("v2（升级后，实现加了 2 个字段）", QueueImpl_v2)
+print("结论：实现从 v1 变到 v2，公开类 Queue 的布局没变 → 用户不用重编（ABI 稳定）")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">v1（老运行时）: 实现字段 = ['ur_handle', 'context', 'device']
+        公开类 Queue 的布局 = ['impl']   ← 始终只有 ['impl']
+        [ur_queue(ctx=ctx0, dev=gpu0)] 提交命令组 VecAdd
+        q == 它的拷贝? True（比较 impl 指针身份）
+
+v2（升级后，实现加了 2 个字段）: 实现字段 = ['ur_handle', 'context', 'device', 'async_handler', 'is_inorder']
+        公开类 Queue 的布局 = ['impl']   ← 始终只有 ['impl']
+        [ur_queue(ctx=ctx0, dev=gpu0)] 提交命令组 VecAdd
+        q == 它的拷贝? True（比较 impl 指针身份）</code></pre>
+</div><p>看清 pImpl 的价值：实现从 <code>v1</code> 换到 <code>v2</code>、字段从 3 个涨到 5 个，<strong>公开类 <code>Queue</code> 的布局始终只是 <code>[&#39;impl&#39;]</code></strong>——一个指针。这就是为什么 SYCL 能在不破坏 ABI 的前提下持续演进运行时。请动手改：给 <code>QueueImpl_v2</code> 再加几个字段、或加个方法，重新运行——你会看到 <code>Queue</code> 的 <code>public_layout()</code> <strong>依然纹丝不动</strong>。这正是真实 <code>queue.hpp</code> 里那一行 <code>shared_ptr&lt;detail::queue_impl&gt; impl</code> 在做的事。</p>
+<h2>小结与下一步</h2>
+<p>你现在有了 SYCL 的头文件导航图：</p>
+<ul>
+<li><strong><code>&amp;lt;sycl/sycl.hpp&amp;gt;</code>（<code>sycl/include/sycl/sycl.hpp</code>）是总入口</strong>，自己几乎不定义类，而是汇集散在几十个专属头里的公共 API；<code>queue</code>/<code>buffer</code>/<code>accessor</code> 经 <code>detail/core.hpp</code> 间接进来（&quot;包含瘦身&quot;的产物）。</li>
+<li><strong>核心类各有专属头</strong>：<code>queue.hpp</code>/<code>buffer.hpp</code>/<code>accessor.hpp</code>/<code>handler.hpp</code>/<code>device.hpp</code>/<code>context.hpp</code>/<code>platform.hpp</code>/<code>event.hpp</code>/<code>kernel.hpp</code>，<code>range</code>/<code>id</code>/<code>nd_range</code> 在各自模板头，USM 在 <code>usm.hpp</code>。</li>
+<li><strong>pImpl 惯用法</strong>：公开类只持有 <code>shared_ptr&lt;detail::X_impl&gt;</code>，真身在 <code>sycl/source/detail/X_impl.{hpp,cpp}</code> 编进动态库 → <strong>ABI 稳定 + 编译解耦</strong>，且这些类是<strong>引用语义句柄</strong>（<code>operator==</code> 比指针）。</li>
+<li><strong>目录分工</strong>：<code>include/sycl/</code>（接口，纯头）↔ <code>source/</code>（主机运行时 <code>.cpp</code>）↔ <code>source/detail/</code>（pImpl 真身 + 调度器/程序管理/UR 等子系统）；读实现走&quot;头 → source → detail/impl&quot;三跳。</li>
+<li>其他角落：<code>detail/</code>（含 <code>kernel_desc.hpp</code>/<code>ur.hpp</code>）、<code>ext/</code>（扩展，第四部分）、<code>__spirv/</code>（设备内建）、<code>stl_wrappers/</code>（连第 19 章）、<code>backend/</code>/<code>info/</code>/<code>properties/</code>。</li>
+</ul>
+<p>下一章回到第 12 章那座桥——<strong>集成头文件</strong>。我们打开设备编译趟真正生成的那个 <code>.h</code>，看 <code>SYCLIntegrationHeader</code> 怎么把每个 kernel 的名字（<code>_ZTS…</code> 修饰名）、参数个数与类型顺序写成 <code>KernelInfo</code> 特化，还有它的孪生兄弟<strong>集成 footer</strong> 干什么、kernel 命名到底是怎么在 <code>SemaSYCL</code> 里算出来的。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong><code>sycl.hpp</code> 是总入口（umbrella header）</strong>，几乎不定义类，只汇集公共 API；<code>queue</code>/<code>buffer</code>/<code>accessor</code> 经 <code>sycl/detail/core.hpp</code> 间接引入（减少传递包含膨胀）。</li>
+<li>核心类各住专属头：<code>queue.hpp</code>/<code>buffer.hpp</code>/<code>accessor.hpp</code>/<code>handler.hpp</code>/<code>device.hpp</code>/<code>context.hpp</code>/<code>platform.hpp</code>/<code>event.hpp</code>/<code>kernel.hpp</code>；<code>__SYCL_EXPORT</code> 标记 ABI 导出边界。</li>
+<li><strong>pImpl</strong>：公开类唯一成员是 <code>shared_ptr&lt;detail::X_impl&gt;</code>，<code>X_impl</code> 真身在 <strong><code>sycl/source/detail/</code></strong>（编进 libsycl，不随头发布）→ ABI 稳定、编译解耦、引用语义句柄。</li>
+<li>目录三分：<code>include/sycl/</code>（接口）/ <code>source/</code>（主机运行时）/ <code>source/detail/</code>（impl + scheduler/program_manager/ur 等）；读实现三跳&quot;头→source→detail&quot;。</li>
+<li>注意<strong>两个 <code>detail/</code></strong>：<code>include/sycl/detail/</code>（随头发布的工具，如 <code>kernel_desc.hpp</code>/<code>ur.hpp</code>）≠ <code>source/detail/</code>（pImpl 真身）。</li>
+<li>其他子目录：<code>ext/</code>（扩展）、<code>__spirv/</code>（设备内建）、<code>stl_wrappers/</code>、<code>backend/</code>/<code>info/</code>/<code>properties/</code>/<code>access/</code>/<code>khr/</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch12.html">← 第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a>
+  <a class="nav-next" href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

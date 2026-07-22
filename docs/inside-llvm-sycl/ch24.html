@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 24 章 从提案到落地：写扩展的完整流程与测试</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li class="active"><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 24 章 从提案到落地：写扩展的完整流程与测试</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 20–23 章教你<strong>读</strong>扩展——命名三位一体、一个轻量扩展的切面、需要编译器配合的两条路线、两个大案例。这一章把它们<strong>倒过来</strong>：假设<em>你</em>要给 DPC++ 写一个新扩展，从零到进主线，完整流程是什么。这是全书正文的收尾，也是把前面所有知识串成"能动手"的一章。</p>
+<p>读完你会掌握一条端到端的路：① <code>README-process.md</code> 定义的<strong>扩展生命周期</strong>（提案 proposed → 实现并移到 experimental/supported → 版本化演进 → 弃用 deprecated → 移除 removed）；② <strong>先写文档、再写代码</strong>——复制 <code>template.asciidoc</code> 起草规范、定 feature-test 宏、选 vendor 与目录；③ 实现落到哪几层（头文件 / SemaSYCL / 运行时 / UR，取决于第 22–23 章教的"重心在哪"）；④ 最关键的 <strong>两级测试</strong>——<code>sycl/test/</code>（LIT，不上真机、查编译产物）与 <code>sycl/test-e2e/</code>（E2E，上真设备跑结果），扩展没有这两级测试兜底就进不了主线。这一章不引入新机制，而是把前面每一章的落点，编织成一张"怎么写一个扩展"的作战地图。</p>
+</div><h2>扩展的一生：README-process.md 定义的生命周期</h2>
+<p>第 20 章讲过五态目录（proposed / experimental / supported / deprecated / removed），当时是从&quot;读者视角&quot;看成熟度。现在从&quot;作者视角&quot;看：<strong>这五个目录其实是一个扩展要依次走过的驿站</strong>，规则写死在 <code>sycl/doc/extensions/README-process.md</code>（标题就叫 &quot;Lifetime of an Extension&quot;）：</p>
+<ol>
+<li><strong>提案（proposed/）</strong>：扩展先以纯文档形式落地 <code>proposed/</code>，<strong>尚无实现</strong>。此阶段规范可以随便改——因为还没人依赖它。目的是把设计摊开讨论。</li>
+<li><strong>实现并移动（→ experimental/ 或 supported/）</strong>：实现它的那个 PR <strong>连同把文档从 <code>proposed/</code> 移到 <code>experimental/</code></strong>（API 还可能变）或 <code>supported/</code>（承诺稳定）。<strong>文档移动和代码实现在同一个 PR 里</strong>——这是硬规矩，保证&quot;文档说支持&quot;和&quot;代码真支持&quot;永远一致。</li>
+<li><strong>版本化演进</strong>：扩展加新 API 就把 feature-test 宏 +1（第 20 章：值即版本号，bindless images 已到 6）。用户靠 <code>#if 宏 &gt;= N</code> 精确要求版本。</li>
+<li><strong>弃用（→ deprecated/）</strong>：功能被核心 SYCL 吸收、或有更好的替代时，移到 <code>deprecated/</code>——仍能用，但编译时给 deprecation 警告，告诉用户尽快迁移。</li>
+<li><strong>移除（→ removed/）</strong>：过了弃用期，实现删除，文档移到 <code>removed/</code> 存档——留个&quot;曾经有过、为何移除&quot;的记录。</li>
+</ol>
+<div class="keypoint">
+<strong>写扩展是"文档驱动"的：先提案文档，实现时文档随代码同 PR 移动目录</strong>
+<strong><code>README-process.md</code>（"Lifetime of an Extension"）规定：新扩展先以文档形式进 <code>proposed/</code>（无实现、可随意改）；实现它的 PR <strong>同时</strong>把文档移到 <code>experimental/</code>（API 可变）或 <code>supported/</code>（稳定）；之后版本化演进（宏 +1）；被取代则 <code>deprecated/</code> → <code>removed/</code>。</strong>核心纪律是<strong>文档与实现永远同步</strong>——目录位置就是"这个扩展现在有多可信"的权威声明。所以写扩展第一步永远是写规范，而不是写代码。
+</div><h2>第一步：起草规范（复制 template.asciidoc）</h2>
+<p><code>README-process.md</code> 开门见山：&quot;Start by making a copy of the template extension specification document&quot;——<strong>从复制 <code>sycl/doc/extensions/template.asciidoc</code> 开始</strong>，按里面的说明填空，并遵守 SYCL 2020 规范第 6 章 &quot;Guidelines for portable extensions&quot;。起草时要定死这几件事（都是第 20 章的&quot;三位一体&quot;落到笔头）：</p>
+<ul>
+<li><strong>扩展名 / 文件名 / 宏名</strong>：<code>sycl_ext_&lt;vendor&gt;_&lt;feature&gt;</code>，三者一致（大小写差异）。vendor 默认 <code>oneapi</code>，很 Intel 硬件专属才用 <code>intel</code>，Codeplay 贡献用 <code>codeplay</code>。</li>
+<li><strong>放哪个目录</strong>：新提案进 <code>proposed/</code>（<code>Status</code> 一节写 proposed 样板文字）。</li>
+<li><strong>feature-test 宏与版本表</strong>：在 <code>Specification → Feature test macro</code> 一节声明宏名和初值（实验扩展一般从 <code>1</code> 起）。</li>
+<li><strong>依赖</strong>：<code>Dependencies</code> 一节写依赖哪版 SYCL、哪些其他扩展。</li>
+</ul>
+<p><code>template.asciidoc</code> 规定的标准骨架（第 20 章列过）：Notice / Contact / Dependencies / Status / Backend support（可选）/ Overview / Specification（含 Feature test macro）/ Implementation notes / Issues。<strong>先把&quot;提供什么能力、宏叫什么、放哪个目录、依赖什么&quot;想清楚，再写一行实现</strong>——这是 DPC++ 扩展流程和普通功能开发最不一样的地方。</p>
+<h2>第二步：实现——重心在哪，前四章已经教过</h2>
+<p>规范定稿后才动代码。<strong>实现落到哪几层，完全取决于第 22–23 章教的&quot;重心在哪&quot;</strong>——这一章不重复机制，只把它当成一张选路表：</p>
+<table>
+<thead>
+<tr>
+<th>扩展类型</th>
+<th>主要改动</th>
+<th>本书对应</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>纯库扩展</td>
+<td>只加头文件里的类/函数 + 运行时</td>
+<td>（最常见，不用动编译器）</td>
+</tr>
+<tr>
+<td>要把意图带到 IR（通用路线）</td>
+<td>头文件里用 <code>add_ir_attributes_*</code> 编码属性</td>
+<td>第 22 章通用路线、第 21 章</td>
+</tr>
+<tr>
+<td>要语义检查/新 metadata（专用路线）</td>
+<td><code>Attr.td</code>→<code>AttrDocs.td</code>→<code>SemaSYCLDeclAttr.cpp</code>→CodeGen</td>
+<td>第 22 章专用路线</td>
+</tr>
+<tr>
+<td>要认新 kernel 形态</td>
+<td><code>SemaSYCL.cpp</code>（<code>isFreeFunction</code> 那类）+ 诊断</td>
+<td>第 21、22 章</td>
+</tr>
+<tr>
+<td>纯运行时 + 后端能力</td>
+<td>运行时 <code>detail/</code> + UR 的 <code>ur*Exp</code> 入口</td>
+<td>第 23 章 bindless images</td>
+</tr>
+<tr>
+<td>引入独立子系统</td>
+<td>顶层子项目（如 <code>sycl-jit/</code>）</td>
+<td>第 23 章 kernel_compiler</td>
+</tr>
+</tbody></table>
+<p>无论走哪条，都要记住第 20 章的收尾：<strong>头文件里 feature-test 宏的定义（<code>sycl/source/feature_test.hpp.in</code>）要和文档同步添加</strong>——这是&quot;扩展真的被实现了&quot;在代码里的第一个可见证据，也是用户 <code>#ifdef</code> 能检测到它的前提。</p>
+<h2>第三步（也是能不能进主线的关卡）：两级测试</h2>
+<p>DPC++ 对扩展的测试要求很硬：<strong>没有测试的扩展进不了主线</strong>。测试分<strong>两级</strong>，分工清晰，都在 <code>sycl/</code> 下：</p>
+<h3>LIT 测试（<code>sycl/test/</code>）——不上真机，查&quot;编译产物对不对&quot;</h3>
+<p>LIT 测试<strong>不需要真实 GPU</strong>，用 <code>clang</code>/<code>opt</code> 等把源码编到某个中间阶段，然后用 <code>FileCheck</code> 断言产物里该有/不该有什么。它验证的是<strong>编译器行为</strong>，跑得快、能在任何 CI 机器上跑。对扩展来说，典型的 LIT 断言：</p>
+<ul>
+<li>属性有没有正确落到 IR（第 21/22 章）：<code>-fsycl-device-only -S -emit-llvm</code> 后 <code>FileCheck</code> 那条 <code>&quot;sycl-nd-range-kernel&quot;</code> 字符串属性在不在。</li>
+<li>诊断对不对（第 22 章的专用路线）：<code>// expected-error{{...}}</code> 断言非法用法确实报了预期的 <code>err_*</code>。</li>
+<li>feature-test 宏定义对不对：<code>#ifdef</code> 检测宏在预期条件下有定义、值正确。</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># LIT 测试长这样（示意）：一个 .cpp 里嵌 RUN 行 + CHECK/expected 断言
+# RUN: %clangxx -fsycl -fsycl-device-only -S -emit-llvm %s -o - | FileCheck %s
+# CHECK: define {{.*}} @{{.*}}scale{{.*}} #[[ATTR:[0-9]+]]
+# CHECK: attributes #[[ATTR]] = { {{.*}}"sycl-nd-range-kernel"="3"{{.*}} }</code></pre>
+</div><h3>E2E 测试（<code>sycl/test-e2e/</code>）——上真设备，查&quot;跑出来对不对&quot;</h3>
+<p>E2E（end-to-end）测试<strong>要真实设备</strong>（Intel GPU / CUDA / …），它把扩展的完整用法编译、上设备<strong>真跑</strong>，断言计算结果正确。<code>sycl/test-e2e/</code> 下按功能分目录（上百个），比如 bindless images、kernel_compiler 各有自己的目录。它验证的是<strong>端到端语义</strong>——不光编译对，跑出来也对。E2E 测试因为要真机，通常在带 GPU 的专用 CI（<code>llvm/buildbot/</code> 那套构建/测试基础设施）上跑。</p>
+<p>一个负责任的扩展 PR <strong>两级都要覆盖</strong>：LIT 保证&quot;编译器把属性/诊断/宏处理对了&quot;，E2E 保证&quot;用户照文档写、在真设备上结果对&quot;。两者缺一——只有 LIT 没 E2E，你不知道它真机上跑不跑得起来；只有 E2E 没 LIT，编译器的细节回归（比如属性名拼错）可能被忽略。</p>
+<div class="concept">
+<svg viewBox="0 0 680 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="340" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">写一个 SYCL 扩展：从提案到落地的作战地图</text>
+  <!-- proposed -->
+  <rect x="20" y="44" width="150" height="70" rx="8" fill="#faf5ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="95" y="65" text-anchor="middle" font-size="10" font-weight="bold" fill="#6b21a8">① 提案</text>
+  <text x="95" y="82" text-anchor="middle" font-size="8" fill="#6b7280">复制 template.asciidoc</text>
+  <text x="95" y="95" text-anchor="middle" font-size="8" fill="#6b7280">进 proposed/，定宏/vendor</text>
+  <text x="95" y="108" text-anchor="middle" font-size="7.5" fill="#6b21a8">无实现，可随意改</text>
+  <!-- implement -->
+  <rect x="190" y="44" width="160" height="70" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="270" y="65" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">② 实现</text>
+  <text x="270" y="82" text-anchor="middle" font-size="8" fill="#6b7280">头文件/Sema/运行时/UR</text>
+  <text x="270" y="95" text-anchor="middle" font-size="8" fill="#6b7280">+ feature_test.hpp.in 加宏</text>
+  <text x="270" y="108" text-anchor="middle" font-size="7.5" fill="#a53f1c">文档同 PR 移到 experimental/</text>
+  <!-- test -->
+  <rect x="370" y="44" width="160" height="70" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.5"/>
+  <text x="450" y="65" text-anchor="middle" font-size="10" font-weight="bold" fill="#2f7a45">③ 测试（关卡）</text>
+  <text x="450" y="82" text-anchor="middle" font-size="8" fill="#6b7280">sycl/test/ = LIT（查产物）</text>
+  <text x="450" y="95" text-anchor="middle" font-size="8" fill="#6b7280">sycl/test-e2e/ = 真机跑</text>
+  <text x="450" y="108" text-anchor="middle" font-size="7.5" fill="#2f7a45">两级都要，缺一进不了主线</text>
+  <!-- merge -->
+  <rect x="550" y="44" width="110" height="70" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="605" y="65" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">④ 进主线</text>
+  <text x="605" y="83" text-anchor="middle" font-size="8" fill="#6b7280">用户 #ifdef 宏</text>
+  <text x="605" y="96" text-anchor="middle" font-size="8" fill="#6b7280">检测后使用</text>
+  <path d="M170 79 L190 79" stroke="#6b7280" stroke-width="1.3" marker-end="url(#e24)"/>
+  <path d="M350 79 L370 79" stroke="#6b7280" stroke-width="1.3" marker-end="url(#e24)"/>
+  <path d="M530 79 L550 79" stroke="#6b7280" stroke-width="1.3" marker-end="url(#e24)"/>
+  <!-- lifecycle bar -->
+  <text x="340" y="150" text-anchor="middle" font-size="11" font-weight="bold" fill="#374151">之后的一生（目录 = 成熟度，文档随状态移动）</text>
+  <rect x="60" y="164" width="110" height="38" rx="6" fill="#faf5ff" stroke="#7c3aed"/>
+  <text x="115" y="187" text-anchor="middle" font-size="9" fill="#6b21a8">proposed</text>
+  <rect x="190" y="164" width="120" height="38" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="250" y="187" text-anchor="middle" font-size="9" fill="#a53f1c">experimental</text>
+  <rect x="330" y="164" width="110" height="38" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="385" y="187" text-anchor="middle" font-size="9" fill="#2f7a45">supported</text>
+  <rect x="460" y="164" width="110" height="38" rx="6" fill="#fffbeb" stroke="#d97706"/>
+  <text x="515" y="187" text-anchor="middle" font-size="9" fill="#b45309">deprecated</text>
+  <rect x="590" y="164" width="80" height="38" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="630" y="187" text-anchor="middle" font-size="9" fill="#6b7280">removed</text>
+  <path d="M170 183 L190 183" stroke="#6b7280" stroke-width="1" marker-end="url(#e24)"/>
+  <path d="M310 183 L330 183" stroke="#6b7280" stroke-width="1" marker-end="url(#e24)"/>
+  <path d="M440 183 L460 183" stroke="#6b7280" stroke-width="1" marker-end="url(#e24)"/>
+  <path d="M570 183 L590 183" stroke="#6b7280" stroke-width="1" marker-end="url(#e24)"/>
+  <text x="250" y="216" text-anchor="middle" font-size="7.5" fill="#6b7280">↑ 版本化演进：加 API 就宏 +1</text>
+  <!-- two-tier test detail -->
+  <rect x="90" y="238" width="240" height="72" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.2"/>
+  <text x="210" y="257" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#2f7a45">LIT（sycl/test/）不上真机</text>
+  <text x="210" y="273" text-anchor="middle" font-size="8" fill="#6b7280">clang/opt 编到中间态 + FileCheck</text>
+  <text x="210" y="286" text-anchor="middle" font-size="8" fill="#6b7280">查：属性落 IR / 诊断 / 宏定义</text>
+  <text x="210" y="300" text-anchor="middle" font-size="7.5" fill="#2f7a45">快、任意 CI 机可跑</text>
+  <rect x="350" y="238" width="240" height="72" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/>
+  <text x="470" y="257" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#2b6cb0">E2E（sycl/test-e2e/）真设备</text>
+  <text x="470" y="273" text-anchor="middle" font-size="8" fill="#6b7280">编译 + 上 GPU 真跑 + 断言结果</text>
+  <text x="470" y="286" text-anchor="middle" font-size="8" fill="#6b7280">查：端到端语义、跑出来对不对</text>
+  <text x="470" y="300" text-anchor="middle" font-size="7.5" fill="#2b6cb0">需带 GPU 的专用 CI</text>
+  <defs>
+    <marker id="e24" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 24-1　写扩展的作战地图。① 复制 <code>template.asciidoc</code> 进 <code>proposed/</code> 起草规范 → ② 实现（重心按第 22–23 章定位）并让文档随代码同 PR 移到 <code>experimental/</code>、同步在 <code>feature_test.hpp.in</code> 加宏 → ③ 补齐 LIT + E2E 两级测试（关卡）→ ④ 进主线供用户 <code>#ifdef</code> 检测。之后沿五态目录演进</div>
+</div><h2>一个好扩展的软性准则</h2>
+<p>流程之外，<code>README-process.md</code> 和 SYCL 2020 第 6 章还隐含一些&quot;好扩展&quot;的判断，值得记住：</p>
+<ul>
+<li><strong>可移植优先</strong>：能用通用 <code>oneapi</code> vendor 就别绑 <code>intel</code>；能靠 feature-test 宏协商能力就别加新驱动开关（第 22 章）。目标是&quot;增能力而不破坏可移植性&quot;。</li>
+<li><strong>搭在既有机制上</strong>：第 21 章 free function kernels 复用 kernel_bundle、第 23 章 kernel_compiler 复用 bundle 状态机、bindless images 复用 UR 适配器——<strong>好扩展尽量不另起炉灶</strong>。这既省实现量，也让用户的既有心智模型能迁移过来。</li>
+<li><strong>先 experimental 后 supported</strong>：不确定 API 会不会变，就先进 <code>experimental/</code>（宏恒为 1、命名空间进 <code>::experimental</code>），等设计沉淀了再考虑上提到 <code>supported/</code> 甚至推给 Khronos 进核心标准。别一上来就承诺稳定。</li>
+</ul>
+<div class="warn">
+<strong>文档、宏、实现、测试——四者必须同时到位</strong>
+最容易犯的错是"四件套"缺角：改了实现忘了移动/更新文档、加了宏忘了写 E2E、写了文档没同步 <code>feature_test.hpp.in</code>。DPC++ 的 code review 会卡这些。记住第 20 章的三位一体 + 这一章的两级测试，凑齐<strong>规范文档 + feature-test 宏 + 分层实现 + LIT/E2E 测试</strong>四件套，才是一个能进主线的完整扩展 PR。
+</div><h2>亲手把流程走一遍</h2>
+<p>不写真扩展，也能在源码树里把这条流程的每个锚点摸清：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># ① 流程权威文档：扩展的一生
+sed -n '1,40p' sycl/doc/extensions/README-process.md      # "Lifetime of an Extension"
+ls sycl/doc/extensions/template.asciidoc                  # 起草规范的模板
+
+# ② 五态目录 = 生命周期驿站
+ls -d sycl/doc/extensions/{proposed,experimental,supported,deprecated,removed}
+
+# ③ 宏在这里同步添加
+grep -n 'SYCL_EXT_ONEAPI_FREE_FUNCTION_KERNELS' sycl/source/feature_test.hpp.in
+
+# ④ 两级测试
+ls sycl/test/          # LIT：不上真机，FileCheck 查编译产物
+ls sycl/test-e2e/      # E2E：上真设备跑结果（按功能分目录）</code></pre>
+</div><p>想把&quot;作者视角&quot;落到实处：挑一个你熟的扩展（比如第 21 章 free function kernels），在 <code>sycl/test/</code> 和 <code>sycl/test-e2e/</code> 里 <code>grep -r free_function</code> 找它的测试，对照它的 <code>.asciidoc</code> 规范、<code>feature_test.hpp.in</code> 里的宏、头文件里的实现——<strong>四件套齐活</strong>的样子看一遍，你就知道自己写扩展时该补哪些文件。</p>
+<h2>动手：模拟&quot;扩展 PR 完整性&quot;检查</h2>
+<p>把这一章的核心——「一个扩展 PR 必须四件套齐全：规范文档 + feature-test 宏 + 分层实现 + 两级测试」——做成一个能在浏览器里跑的小检查器。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20DPC%2B%2B%20%E6%89%A9%E5%B1%95%20PR%20%E7%9A%84%E5%AE%8C%E6%95%B4%E6%80%A7%E9%97%A8%E7%A6%81%EF%BC%9A%E5%9B%9B%E4%BB%B6%E5%A5%97%20%2B%20%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E7%9B%AE%E5%BD%95%E6%A3%80%E6%9F%A5%0A%0AREQUIRED%20%3D%20%5B%22spec_doc%22%2C%20%22feature_macro%22%2C%20%22implementation%22%2C%20%22lit_test%22%2C%20%22e2e_test%22%5D%0AVALID_DIRS%20%3D%20%7B%22proposed%22%2C%20%22experimental%22%2C%20%22supported%22%2C%20%22deprecated%22%2C%20%22removed%22%7D%0A%0Adef%20review_extension_pr(name%2C%20artifacts%2C%20target_dir)%3A%0A%20%20%20%20print(f%22%3D%3D%3D%20%E5%AE%A1%E6%9F%A5%E6%89%A9%E5%B1%95%20PR%3A%20%7Bname%7D%20%20(%E7%9B%AE%E6%A0%87%E7%9B%AE%E5%BD%95%3A%20%7Btarget_dir%7D%2F)%20%3D%3D%3D%22)%0A%20%20%20%20ok%20%3D%20True%0A%20%20%20%20%23%201.%20%E7%9B%AE%E5%BD%95%E5%90%88%E6%B3%95%E6%80%A7%20%2B%20proposed%20%E7%89%B9%E4%BE%8B%EF%BC%88proposed%20%E4%B8%8D%E8%A6%81%E6%B1%82%E5%AE%9E%E7%8E%B0%2F%E6%B5%8B%E8%AF%95%EF%BC%89%0A%20%20%20%20if%20target_dir%20not%20in%20VALID_DIRS%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E2%9C%97%20%E9%9D%9E%E6%B3%95%E7%9B%AE%E5%BD%95%20%7Btarget_dir%7D%EF%BC%88%E9%A1%BB%E6%98%AF%E4%BA%94%E6%80%81%E4%B9%8B%E4%B8%80%EF%BC%89%22)%3B%20ok%20%3D%20False%0A%20%20%20%20proposed_only%20%3D%20(target_dir%20%3D%3D%20%22proposed%22)%0A%20%20%20%20%23%202.%20%E5%9B%9B%E4%BB%B6%E5%A5%97%E6%A3%80%E6%9F%A5%0A%20%20%20%20for%20item%20in%20REQUIRED%3A%0A%20%20%20%20%20%20%20%20have%20%3D%20artifacts.get(item%2C%20False)%0A%20%20%20%20%20%20%20%20%23%20proposed%20%E9%98%B6%E6%AE%B5%EF%BC%9A%E5%8F%AA%E9%9C%80%E6%96%87%E6%A1%A3%20%2B%20%E5%AE%8F%E5%A3%B0%E6%98%8E%EF%BC%8C%E5%AE%9E%E7%8E%B0%2F%E6%B5%8B%E8%AF%95%E5%8F%AF%E7%BC%BA%0A%20%20%20%20%20%20%20%20optional_now%20%3D%20proposed_only%20and%20item%20in%20(%22implementation%22%2C%20%22lit_test%22%2C%20%22e2e_test%22)%0A%20%20%20%20%20%20%20%20if%20have%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%E2%9C%93%20%7Bitem%7D%22)%0A%20%20%20%20%20%20%20%20elif%20optional_now%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%E2%80%93%20%7Bitem%7D%EF%BC%88proposed%20%E9%98%B6%E6%AE%B5%E5%8F%AF%E6%9A%82%E7%BC%BA%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%E2%9C%97%20%E7%BC%BA%E5%B0%91%20%7Bitem%7D%22)%3B%20ok%20%3D%20False%0A%20%20%20%20%23%203.%20%E5%91%BD%E5%90%8D%E4%B8%89%E4%BD%8D%E4%B8%80%E4%BD%93%EF%BC%88%E7%AC%AC20%E7%AB%A0%EF%BC%89%0A%20%20%20%20if%20not%20name.startswith(%22sycl_ext_%22)%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E2%9C%97%20%E6%89%A9%E5%B1%95%E5%90%8D%E4%B8%8D%E7%AC%A6%20sycl_ext_%3Cvendor%3E_%3Cfeature%3E%22)%3B%20ok%20%3D%20False%0A%20%20%20%20print(f%22%20%20%E2%86%92%20%7B'%E5%8F%AF%E4%BB%A5%E5%90%88%E5%85%A5%20%E2%9C%85'%20if%20ok%20else%20'%E6%89%93%E5%9B%9E%EF%BC%8C%E8%A1%A5%E9%BD%90%E5%90%8E%E5%86%8D%E6%8F%90%20%E2%9D%8C'%7D%5Cn%22)%0A%20%20%20%20return%20ok%0A%0A%23%20PR%20A%EF%BC%9A%E5%AE%9E%E9%AA%8C%E6%89%A9%E5%B1%95%EF%BC%8C%E5%9B%9B%E4%BB%B6%E5%A5%97%E9%BD%90%E5%85%A8%20%E2%86%92%20%E9%80%9A%E8%BF%87%0Areview_extension_pr(%22sycl_ext_oneapi_free_function_kernels%22%2C%0A%20%20%20%20%7B%22spec_doc%22%3A%20True%2C%20%22feature_macro%22%3A%20True%2C%20%22implementation%22%3A%20True%2C%0A%20%20%20%20%20%22lit_test%22%3A%20True%2C%20%22e2e_test%22%3A%20True%7D%2C%20%22experimental%22)%0A%0A%23%20PR%20B%EF%BC%9A%E6%83%B3%E8%BF%9B%20experimental%20%E4%BD%86%E6%B2%A1%E5%86%99%20E2E%20%E2%86%92%20%E6%89%93%E5%9B%9E%0Areview_extension_pr(%22sycl_ext_oneapi_fancy%22%2C%0A%20%20%20%20%7B%22spec_doc%22%3A%20True%2C%20%22feature_macro%22%3A%20True%2C%20%22implementation%22%3A%20True%2C%0A%20%20%20%20%20%22lit_test%22%3A%20True%2C%20%22e2e_test%22%3A%20False%7D%2C%20%22experimental%22)%0A%0A%23%20PR%20C%EF%BC%9A%E7%BA%AF%E6%8F%90%E6%A1%88%E8%BF%9B%20proposed%20%E2%86%92%20%E5%8F%AA%E9%9C%80%E6%96%87%E6%A1%A3%2B%E5%AE%8F%EF%BC%8C%E9%80%9A%E8%BF%87%0Areview_extension_pr(%22sycl_ext_oneapi_future_idea%22%2C%0A%20%20%20%20%7B%22spec_doc%22%3A%20True%2C%20%22feature_macro%22%3A%20True%7D%2C%20%22proposed%22)"># 模拟 DPC++ 扩展 PR 的完整性门禁：四件套 + 生命周期目录检查
+
+REQUIRED = ["spec_doc", "feature_macro", "implementation", "lit_test", "e2e_test"]
+VALID_DIRS = {"proposed", "experimental", "supported", "deprecated", "removed"}
+
+def review_extension_pr(name, artifacts, target_dir):
+    print(f"=== 审查扩展 PR: {name}  (目标目录: {target_dir}/) ===")
+    ok = True
+    # 1. 目录合法性 + proposed 特例（proposed 不要求实现/测试）
+    if target_dir not in VALID_DIRS:
+        print(f"  ✗ 非法目录 {target_dir}（须是五态之一）"); ok = False
+    proposed_only = (target_dir == "proposed")
+    # 2. 四件套检查
+    for item in REQUIRED:
+        have = artifacts.get(item, False)
+        # proposed 阶段：只需文档 + 宏声明，实现/测试可缺
+        optional_now = proposed_only and item in ("implementation", "lit_test", "e2e_test")
+        if have:
+            print(f"  ✓ {item}")
+        elif optional_now:
+            print(f"  – {item}（proposed 阶段可暂缺）")
+        else:
+            print(f"  ✗ 缺少 {item}"); ok = False
+    # 3. 命名三位一体（第20章）
+    if not name.startswith("sycl_ext_"):
+        print(f"  ✗ 扩展名不符 sycl_ext_&lt;vendor&gt;_&lt;feature&gt;"); ok = False
+    print(f"  → {'可以合入 ✅' if ok else '打回，补齐后再提 ❌'}\n")
+    return ok
+
+# PR A：实验扩展，四件套齐全 → 通过
+review_extension_pr("sycl_ext_oneapi_free_function_kernels",
+    {"spec_doc": True, "feature_macro": True, "implementation": True,
+     "lit_test": True, "e2e_test": True}, "experimental")
+
+# PR B：想进 experimental 但没写 E2E → 打回
+review_extension_pr("sycl_ext_oneapi_fancy",
+    {"spec_doc": True, "feature_macro": True, "implementation": True,
+     "lit_test": True, "e2e_test": False}, "experimental")
+
+# PR C：纯提案进 proposed → 只需文档+宏，通过
+review_extension_pr("sycl_ext_oneapi_future_idea",
+    {"spec_doc": True, "feature_macro": True}, "proposed")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 审查扩展 PR: sycl_ext_oneapi_free_function_kernels  (目标目录: experimental/) ===
+  ✓ spec_doc
+  ✓ feature_macro
+  ✓ implementation
+  ✓ lit_test
+  ✓ e2e_test
+  → 可以合入 ✅
+
+=== 审查扩展 PR: sycl_ext_oneapi_fancy  (目标目录: experimental/) ===
+  ✓ spec_doc
+  ✓ feature_macro
+  ✓ implementation
+  ✓ lit_test
+  ✗ 缺少 e2e_test
+  → 打回，补齐后再提 ❌
+
+=== 审查扩展 PR: sycl_ext_oneapi_future_idea  (目标目录: proposed/) ===
+  ✓ spec_doc
+  ✓ feature_macro
+  – implementation（proposed 阶段可暂缺）
+  – lit_test（proposed 阶段可暂缺）
+  – e2e_test（proposed 阶段可暂缺）
+  → 可以合入 ✅</code></pre>
+</div><p>这个检查器把这一章编成了一道门禁：<strong>PR A</strong> 四件套齐全、进 <code>experimental/</code>，放行；<strong>PR B</strong> 少了 E2E 测试——真机上跑不跑得起来没人知道，打回；<strong>PR C</strong> 只是纯提案进 <code>proposed/</code>，此阶段允许暂无实现和测试（对应生命周期第 1 步&quot;无实现、可随意改&quot;），放行。这正是 DPC++ 对扩展的真实要求：<strong>目录决定门槛，<code>experimental</code>/<code>supported</code> 必须四件套齐全，<code>proposed</code> 只需文档先行</strong>。请动手改：把 PR C 的 <code>target_dir</code> 从 <code>&quot;proposed&quot;</code> 改成 <code>&quot;experimental&quot;</code>，重新运行——它立刻因为缺实现和两级测试被打回。这就是&quot;想承诺支持，就得拿出实现和测试&quot;的落地含义。</p>
+<h2>小结与下一步</h2>
+<p>这一章把前四章拆开看的扩展，倒过来编成了&quot;写一个扩展&quot;的完整流程：</p>
+<ul>
+<li><strong>生命周期</strong>（<code>README-process.md</code> &quot;Lifetime of an Extension&quot;）：<code>proposed</code>（文档先行、无实现）→ 实现 PR 同时把文档移到 <code>experimental</code>（API 可变）/<code>supported</code>（稳定）→ 版本化演进（宏 +1）→ <code>deprecated</code> → <code>removed</code>。<strong>目录位置 = 权威的成熟度声明，文档与实现永远同 PR 同步</strong>。</li>
+<li><strong>第一步永远是文档</strong>：复制 <code>template.asciidoc</code>，定死扩展名/文件名/宏名（三位一体）、vendor（默认 <code>oneapi</code>）、目标目录、feature-test 宏与版本、依赖；遵 SYCL 2020 第 6 章。</li>
+<li><strong>实现分层看重心</strong>（第 22–23 章）：纯库 / 通用 IR 属性路线 / 专用属性路线（<code>Attr.td</code>→Sema→CodeGen）/ 认新 kernel 形态 / 运行时+UR / 独立子项目——重心不同，改的目录完全不同；同时在 <code>feature_test.hpp.in</code> 加宏。</li>
+<li><strong>两级测试是进主线的关卡</strong>：<code>sycl/test/</code>（<strong>LIT</strong>，不上真机，<code>FileCheck</code> 查属性落 IR/诊断/宏）+ <code>sycl/test-e2e/</code>（<strong>E2E</strong>，上真设备跑结果、断言正确）。两级缺一不可。</li>
+<li><strong>四件套</strong>：规范文档 + feature-test 宏 + 分层实现 + LIT/E2E 测试，凑齐才是能进主线的扩展 PR；好扩展可移植优先、搭在既有机制上、先 experimental 后 supported。</li>
+</ul>
+<p><strong>第四部分（扩展篇）到此完成，全书正文也就此收尾。</strong> 你从第一部分的 LLVM 基础、第二部分的 LLVM 核心机制、第三部分 SYCL 的真实实现（头文件→设备编译→运行时→UR→设备库），走到第四部分&quot;如何给 SYCL 写扩展&quot;——一条从&quot;读懂编译器&quot;到&quot;改造编译器&quot;的完整路径。接下来的三个<strong>附录</strong>是你日后动手时的常备手册：<strong>附录 A</strong> 手把手搭建与构建 intel/llvm（config、compile、常用命令）；<strong>附录 B</strong> LLVM/SYCL/SPIR-V/UR 术语与缩写对照；<strong>附录 C</strong> 源码导览地图——想看某个功能该去哪个目录。正文教你&quot;为什么&quot;，附录帮你&quot;上手做&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>扩展生命周期（<code>sycl/doc/extensions/README-process.md</code>）：<code>proposed</code>（无实现、可随意改）→ 实现 PR <strong>同时</strong>移文档到 <code>experimental</code>/<code>supported</code> → 版本化（宏 +1）→ <code>deprecated</code> → <code>removed</code>。<strong>文档与实现永远同 PR 同步，目录即成熟度</strong>。</li>
+<li>第一步是文档：复制 <code>template.asciidoc</code>（Notice/Contact/Dependencies/Status/Overview/Specification+Feature test macro/…），定三位一体命名、vendor、目录、宏与版本；遵 SYCL 2020 第 6 章可移植扩展指南。</li>
+<li>实现重心按第 22–23 章定位（纯库 / 通用或专用属性路线 / 新 kernel 形态 / 运行时+UR / 独立子项目），并在 <code>sycl/source/feature_test.hpp.in</code> 同步加宏。</li>
+<li><strong>两级测试（进主线关卡）</strong>：<code>sycl/test/</code>=<strong>LIT</strong>（不上真机，<code>clang</code>/<code>opt</code>+<code>FileCheck</code> 查属性落 IR、<code>expected-error</code> 查诊断、宏定义）；<code>sycl/test-e2e/</code>=<strong>E2E</strong>（真设备跑、断言结果，按功能分目录）。两级缺一不可。</li>
+<li><strong>四件套</strong>：规范文档 + feature-test 宏 + 分层实现 + LIT/E2E 测试。好扩展：可移植优先（默认 <code>oneapi</code>、少加驱动开关）、搭在既有机制上、先 <code>experimental</code> 后 <code>supported</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch23.html">← 第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a>
+  <a class="nav-next" href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

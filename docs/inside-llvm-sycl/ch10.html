@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li class="active"><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 9 章把设备镜像打进了胖二进制，程序启动时那段注册代码把镜像登记到了 offload 运行时。这一章讲"最后一步"：<strong>运行时如何拿着这些镜像，把 kernel 真正加载到某块具体设备上、分配显存、拷数据、发起执行</strong>。主角是顶层 <code>offload/</code> 目录下的两块东西——<strong><code>liboffload</code></strong>（一层设备无关的统一 API）和 <strong><code>plugins-nextgen</code></strong>（针对 CUDA / AMDGPU / Level Zero / Host 各写一份的插件）。</p>
+<p>你会看清一个贯穿本书的架构母题的又一次出现：<strong>用一层设备无关的抽象接口，把上层运行时和下层各家 GPU 的驱动 API 解耦</strong>——和第 1 章 IR 解耦前后端、第 8 章 SPIR-V 解耦编译器与驱动是同一种思路。理解了 offload 运行时的"接口 + 插件"结构，你就为第 18 章（SYCL 的 Unified Runtime）打好了底——它们是同一个模式在不同层的化身。</p>
+</div><h2>问题：kernel 已在身边，可设备千差万别</h2>
+<p>程序跑起来后，情况是这样的：胖二进制里带着编好的设备镜像（SPIR-V / PTX / …），运行时也已经通过启动注册代码知道&quot;我有哪些镜像&quot;。现在用户代码要求&quot;把这个 kernel 跑在 GPU 上&quot;。运行时要完成的动作其实很固定：</p>
+<ol>
+<li><strong>发现并选设备</strong>：机器上有哪些设备（NVIDIA GPU？Intel GPU？就用 CPU？），选一个。</li>
+<li><strong>加载镜像</strong>：把对应目标的设备镜像加载进该设备、拿到可执行的 kernel 句柄。</li>
+<li><strong>分配设备内存</strong>：在设备上开显存，把输入数据从主机拷过去。</li>
+<li><strong>发起执行</strong>：按指定的线程组织（多少个 work-item）启动 kernel。</li>
+<li><strong>取回结果并同步</strong>：把输出拷回主机、等执行完成。</li>
+</ol>
+<p>问题在于：<strong>每家设备的驱动 API 完全不同</strong>。NVIDIA 用 CUDA Driver API（<code>cuMemAlloc</code>、<code>cuLaunchKernel</code>…），AMD 用 HSA/HIP，Intel 用 Level Zero（<code>zeMemAllocDevice</code>、<code>zeCommandListAppendLaunchKernel</code>…）。上面那五步动作<strong>语义相同、API 迥异</strong>。如果让上层运行时直接去调各家 API，代码会被 <code>#ifdef CUDA / #ifdef LEVEL_ZERO</code> 撕成碎片。</p>
+<p>解法你已经在第 1、8 章见过两次：<strong>插一层设备无关的接口</strong>。上层运行时只对着这层统一接口编程，每家设备各提供一个<strong>插件</strong>去实现这层接口、内部翻译成自己的驱动调用。</p>
+<div class="concept">
+<svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">统一接口 + 各设备插件：offload 运行时的解耦</text>
+  <!-- upper runtime -->
+  <rect x="180" y="40" width="280" height="42" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="320" y="60" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">上层运行时 / 语言运行时</text>
+  <text x="320" y="75" text-anchor="middle" font-size="9" fill="#6b7280">只想说"分配内存、启动 kernel"，不关心是哪家 GPU</text>
+  <!-- unified API -->
+  <path d="M320 82 L320 100" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c10)"/>
+  <rect x="150" y="102" width="340" height="46" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="320" y="122" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f7a45">liboffload 统一 API（设备无关）</text>
+  <text x="320" y="138" text-anchor="middle" font-size="9" fill="#6b7280">olMemAlloc / olLaunchKernel / … （从 .td 生成）</text>
+  <!-- plugins -->
+  <path d="M220 148 L150 182" stroke="#e06a3b" stroke-width="1.2" marker-end="url(#c10b)"/>
+  <path d="M290 148 L285 182" stroke="#e06a3b" stroke-width="1.2" marker-end="url(#c10b)"/>
+  <path d="M360 148 L415 182" stroke="#e06a3b" stroke-width="1.2" marker-end="url(#c10b)"/>
+  <path d="M430 148 L540 182" stroke="#e06a3b" stroke-width="1.2" marker-end="url(#c10b)"/>
+  <g font-size="9">
+    <rect x="60" y="184" width="110" height="52" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="115" y="203" text-anchor="middle" font-weight="bold" fill="#a53f1c">cuda 插件</text>
+    <text x="115" y="219" text-anchor="middle" fill="#6b7280">→ CUDA Driver</text>
+    <text x="115" y="231" text-anchor="middle" fill="#6b7280">cuLaunchKernel</text>
+    <rect x="180" y="184" width="110" height="52" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="235" y="203" text-anchor="middle" font-weight="bold" fill="#a53f1c">amdgpu 插件</text>
+    <text x="235" y="219" text-anchor="middle" fill="#6b7280">→ HSA</text>
+    <rect x="360" y="184" width="120" height="52" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="420" y="203" text-anchor="middle" font-weight="bold" fill="#a53f1c">level_zero 插件</text>
+    <text x="420" y="219" text-anchor="middle" fill="#6b7280">→ Level Zero</text>
+    <text x="420" y="231" text-anchor="middle" fill="#6b7280">zeCommandList…</text>
+    <rect x="490" y="184" width="90" height="52" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="535" y="203" text-anchor="middle" font-weight="bold" fill="#a53f1c">host 插件</text>
+    <text x="535" y="219" text-anchor="middle" fill="#6b7280">→ 在 CPU 跑</text>
+  </g>
+  <text x="320" y="262" text-anchor="middle" font-size="10" fill="#2d2a26">上层只对<tspan font-weight="bold">一层统一 API</tspan> 编程；每家设备的插件把它翻译成各自的驱动调用</text>
+  <text x="320" y="282" text-anchor="middle" font-size="9" fill="#6b7280">加一款新设备 = 加一个插件，上层运行时一行不改（又是 N+M 的思路）</text>
+  <defs>
+    <marker id="c10" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c10b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 10-1　offload 运行时的"统一接口 + 各设备插件"结构。上层只对 <code>liboffload</code> 的设备无关 API 编程；<code>plugins-nextgen</code> 下每家设备（cuda/amdgpu/level_zero/host）各实现一个插件，把统一动作翻译成自己的驱动调用。加一款设备只需加一个插件——和第 1 章的 N+M、第 18 章的 UR 是同一个模式</div>
+</div><h2>offload/ 目录：运行时住在哪</h2>
+<p>先纠正一个常见的旧印象：这套 offload 运行时<strong>不在</strong> <code>openmp/libomptarget</code> 下——在本书代码库（intel/llvm <code>sycl</code> 分支）里，它已经被搬到<strong>顶层的 <code>offload/</code> 目录</strong>。结构大致是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">offload/
+├── liboffload/        # 新的设备无关统一 API（本章主角之一）
+│   ├── API/           # 用 TableGen (.td) 描述 API，构建时生成头文件
+│   └── src/           # OffloadImpl.cpp 等实现
+├── plugins-nextgen/   # 各设备插件（本章主角之二）
+│   ├── cuda/
+│   ├── amdgpu/
+│   ├── level_zero/
+│   ├── host/          # CPU 上"假装设备"跑，便于调试
+│   └── common/        # 插件共享的基础设施
+├── libomptarget/      # OpenMP target offload 运行时（历史主体）
+└── include/           # omptarget.h、PluginManager.h、rtl.h 等共享头</code></pre>
+</div><p>这里有个历史层次要理清：<code>libomptarget</code> 是<strong>为 OpenMP <code>target</code> offload</strong> 服务的运行时，是这块代码最初的主体；<code>liboffload</code> 则是一层<strong>更通用的新 API</strong>——它的 README 说得明确：「liboffload 提供一个适合实现多种 offload 语言运行时的抽象层，而不只是 OpenMP」。也就是说，offload 社区正在把&quot;设备无关的运行时能力&quot;从 OpenMP 专用中提炼成一个通用层。而两者都共享同一套 <strong><code>plugins-nextgen</code></strong> 插件——插件层是设备无关的公共资产。</p>
+<div class="note">
+<strong>"nextgen"是相对旧插件而言</strong>
+<code>plugins-nextgen</code> 的"下一代"是相对早期 libomptarget 那套旧插件接口而言的重写：它把"一个设备插件要实现什么"抽象成一组清晰的 C++ 基类（在 <code>plugins-nextgen/common/</code> 里），各设备（cuda/amdgpu/level_zero/host）继承并实现之。这种"公共基类定义契约、各设备子类实现"的组织，让新增设备、共享通用逻辑（内存管理、镜像加载框架）都更干净——本质还是"接口与实现分离"。
+</div><h2>liboffload 的 API 是「生成」出来的</h2>
+<p><code>liboffload</code> 有个值得一看的工程细节：它的<strong>公共 API 头文件不是手写的，而是从 TableGen 描述生成的</strong>。在 <code>offload/liboffload/API/</code> 下是一堆 <code>.td</code> 文件——<code>OffloadAPI.td</code>、<code>Device.td</code>、<code>Memory.td</code>、<code>Kernel.td</code>、<code>Queue.td</code>、<code>Program.td</code> 等，每个描述一类 API（设备管理、内存、kernel、队列……）。构建时用 offload 版的 TableGen 把它们生成成：</p>
+<ul>
+<li><code>OffloadAPI.h</code> —— 公共 API 头（<code>-gen-api</code>）。</li>
+<li><code>OffloadPrint.hpp</code> —— 打印/追踪辅助（<code>-gen-print-header</code>）。</li>
+</ul>
+<p>所以你在源码树里<strong>找不到</strong> <code>OffloadAPI.h</code>——它只在构建目录里出现。这和第 7 章后端用 TableGen 描述芯片、生成 C++ 是同一种手法：<strong>用声明式描述批量生成本该重复的样板代码</strong>。好处是 API 的形状（函数签名、参数、错误码、枚举）单一来源、一致、可同时生成文档和追踪代码。</p>
+<div class="warn">
+<strong>在源码里 grep 不到 <code>olMemAlloc</code> 别惊讶</strong>
+既然 API 是生成的，你直接搜某个 API 函数名可能只搜到它在 <code>.td</code> 里的<strong>声明</strong>，而非 <code>.h</code>。想看完整 API，要么去<strong>构建目录</strong>找生成的 <code>OffloadAPI.h</code>，要么读 <code>offload/liboffload/API/*.td</code> 这些"源头"。本章正文里的 <code>olMemAlloc</code>/<code>olLaunchKernel</code> 是<strong>示意名</strong>，帮助理解 API 的形状；请以你构建出的 <code>OffloadAPI.h</code> 为准来查确切拼写。启用 <code>OFFLOAD_TRACE</code> 环境变量可以在运行时打印每次 API 调用，是观察这层接口最直接的方式。
+</div><h2>一个插件要实现什么</h2>
+<p>站在 <code>plugins-nextgen/common/</code> 定义的契约角度，一个设备插件大致要提供这几类能力（对应本章开头那五步）：</p>
+<ul>
+<li><strong>平台/设备管理</strong>：初始化驱动、枚举设备、查询设备属性。cuda 插件里就是 <code>cuInit</code>、<code>cuDeviceGet</code>、<code>cuDeviceGetAttribute</code> 之类。</li>
+<li><strong>镜像加载</strong>：接收一份设备镜像（对 NVIDIA 是 PTX/cubin），加载成设备上的模块，从中取出 kernel 函数句柄。cuda 用 <code>cuModuleLoadData</code> + <code>cuModuleGetFunction</code>。</li>
+<li><strong>内存管理</strong>：设备内存分配/释放、主机↔设备数据拷贝。cuda 用 <code>cuMemAlloc</code>/<code>cuMemcpyHtoD</code>/<code>cuMemcpyDtoH</code>。</li>
+<li><strong>kernel 启动</strong>：按给定的线程网格（grid/block 维度）和参数发起执行。cuda 用 <code>cuLaunchKernel</code>。</li>
+<li><strong>同步与事件</strong>：等待队列/流完成、事件依赖。cuda 用 stream/event API。</li>
+</ul>
+<p>上层运行时通过 <code>liboffload</code> 统一 API 说&quot;分配 1MB、把这段数据拷过去、用这些参数启动这个 kernel、等它跑完&quot;，插件层把每一句翻译成对应设备驱动的真实调用。<strong><code>host</code> 插件</strong>是个特别有用的存在：它不对接任何 GPU，而是在 CPU 上&quot;假装&quot;成一个设备把 kernel 跑起来——这让你在没有 GPU 的机器上也能调试整条 offload 链路，是排查&quot;到底是运行时的问题还是驱动的问题&quot;的利器。</p>
+<div class="keypoint">
+<strong>offload 运行时 = 统一 API（liboffload）+ 各设备插件（plugins-nextgen）</strong>
+<strong>上层运行时对着 <code>liboffload</code> 的设备无关 API（从 <code>offload/liboffload/API/*.td</code> 生成）编程；<code>plugins-nextgen</code> 下每家设备（cuda/amdgpu/level_zero/host）实现同一套契约，把"选设备、加载镜像、分配内存、启动 kernel、同步"翻译成各自的驱动调用。</strong>加一款设备只需加一个插件，上层不改——这就是第 1 章 N+M 思路在运行时层的再现。记住这个"接口+插件"骨架，第 18 章的 SYCL Unified Runtime 你会一眼认出：它是同一个模式，只是服务于 SYCL。
+</div><h2>liboffload 与 SYCL 的关系：别混淆两层</h2>
+<p>这里要划清一条界线，避免和第 18 章打架。本书语境里有<strong>两套</strong>&quot;设备无关运行时 API&quot;：</p>
+<ul>
+<li><strong><code>liboffload</code>（本章）</strong>：offload 项目的通用运行时 API，脱胎于 OpenMP offload，目标是服务多种 offload 语言运行时。</li>
+<li><strong>Unified Runtime（UR，第 18 章）</strong>：SYCL/DPC++ 运行时对接各后端（Level Zero / CUDA / OpenCL）用的抽象层。</li>
+</ul>
+<p>两者<strong>理念完全一致</strong>（都是&quot;统一接口 + 后端适配器&quot;），也都对接 CUDA/Level Zero 这些驱动，但它们是<strong>不同的层、服务不同的上层</strong>：SYCL 运行时（第 16–17 章）走的是 UR。你现在只需记住：&quot;接口+插件/适配器&quot;这个模式在 LLVM 异构栈里出现了不止一次；<code>liboffload</code> 是 offload 侧的那个，UR 是 SYCL 侧的那个。第 18 章会专门讲 UR，届时可回头对照本章。</p>
+<h2>亲手观察：让运行时把动作打印出来</h2>
+<p><code>liboffload</code> 内建了追踪能力。跑一个 offload 程序时打开追踪，就能看到运行时对着统一 API 依次做了哪些动作：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 打开 liboffload 追踪，观察运行时的每一步 API 调用
+OFFLOAD_TRACE=1 ./my_offload_app</code></pre>
+</div><p>你会看到类似&quot;发现设备 → 加载镜像 → 分配内存 → 拷数据 → 启动 kernel → 同步&quot;的一串调用日志。对 CUDA 后端，还能用 NVIDIA 自己的工具交叉验证插件到底调了哪些底层 API：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 用 nsys 追踪底层 CUDA Driver API 调用，和 OFFLOAD_TRACE 对照
+nsys profile --trace=cuda ./my_offload_app</code></pre>
+</div><p>把两份日志对照着看，你能亲眼确认那层翻译：<code>liboffload</code> 的一次 <code>launch</code>，在 cuda 插件里变成了一次 <code>cuLaunchKernel</code>。这种&quot;上层统一动作 ↔ 下层驱动调用&quot;的对照，是理解和调试运行时最有效的手段——也再次体现&quot;每一层都可观察&quot;这个贯穿本书的性质。</p>
+<h2>动手：模拟统一 API 分派到各设备插件</h2>
+<p>把这一章的机制——「上层对统一 API 编程 → 运行时按选中的设备分派到对应插件 → 插件翻译成自己的驱动调用」——浓缩成一个浏览器里能跑的小模型。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20offload%20%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%9A%E7%BB%9F%E4%B8%80%20API%20%2B%20%E5%90%84%E8%AE%BE%E5%A4%87%E6%8F%92%E4%BB%B6%EF%BC%88plugins-nextgen%EF%BC%89%0A%0A%23%20----%20%E6%AF%8F%E4%B8%AA%E6%8F%92%E4%BB%B6%E5%AE%9E%E7%8E%B0%E5%90%8C%E4%B8%80%E5%A5%97%E5%A5%91%E7%BA%A6%EF%BC%9A%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%20%2F%20%E5%88%86%E9%85%8D%E5%86%85%E5%AD%98%20%2F%20%E5%90%AF%E5%8A%A8%20kernel%20----%0A%23%20%E7%94%A8%E4%B8%80%E4%B8%AA%E5%9F%BA%E7%B1%BB%E8%A1%A8%E8%BE%BE%22%E5%A5%91%E7%BA%A6%22%EF%BC%8C%E5%90%84%E8%AE%BE%E5%A4%87%E5%AD%90%E7%B1%BB%E6%8A%8A%E7%BB%9F%E4%B8%80%E5%8A%A8%E4%BD%9C%E7%BF%BB%E8%AF%91%E6%88%90%E8%87%AA%E5%B7%B1%E7%9A%84%E9%A9%B1%E5%8A%A8%E8%B0%83%E7%94%A8%0Aclass%20Plugin%3A%0A%20%20%20%20name%20%3D%20%22base%22%0A%20%20%20%20def%20load_image(self%2C%20image)%3A%20raise%20NotImplementedError%0A%20%20%20%20def%20alloc(self%2C%20nbytes)%3A%20%20%20%20%20raise%20NotImplementedError%0A%20%20%20%20def%20launch(self%2C%20kernel%2C%20grid)%3A%20raise%20NotImplementedError%0A%0Aclass%20CudaPlugin(Plugin)%3A%0A%20%20%20%20name%20%3D%20%22cuda%22%0A%20%20%20%20def%20load_image(self%2C%20image)%3A%20return%20f%22cuModuleLoadData(%7Bimage%7D)%22%0A%20%20%20%20def%20alloc(self%2C%20n)%3A%20%20%20%20%20%20%20%20%20%20return%20f%22cuMemAlloc(%7Bn%7D)%22%0A%20%20%20%20def%20launch(self%2C%20k%2C%20grid)%3A%20%20%20return%20f%22cuLaunchKernel(%7Bk%7D%2C%20grid%3D%7Bgrid%7D)%22%0A%0Aclass%20LevelZeroPlugin(Plugin)%3A%0A%20%20%20%20name%20%3D%20%22level_zero%22%0A%20%20%20%20def%20load_image(self%2C%20image)%3A%20return%20f%22zeModuleCreate(%7Bimage%7D)%22%0A%20%20%20%20def%20alloc(self%2C%20n)%3A%20%20%20%20%20%20%20%20%20%20return%20f%22zeMemAllocDevice(%7Bn%7D)%22%0A%20%20%20%20def%20launch(self%2C%20k%2C%20grid)%3A%20%20%20return%20f%22zeCommandListAppendLaunchKernel(%7Bk%7D%2C%20grid%3D%7Bgrid%7D)%22%0A%0Aclass%20HostPlugin(Plugin)%3A%20%20%20%20%20%20%20%20%23%20%E5%9C%A8%20CPU%20%E4%B8%8A%22%E5%81%87%E8%A3%85%22%E8%AE%BE%E5%A4%87%EF%BC%8C%E4%BE%BF%E4%BA%8E%E8%B0%83%E8%AF%95%0A%20%20%20%20name%20%3D%20%22host%22%0A%20%20%20%20def%20load_image(self%2C%20image)%3A%20return%20f%22dlopen(%7Bimage%7D)%20%20%23%20%E5%BD%93%E6%99%AE%E9%80%9A%E5%87%BD%E6%95%B0%E5%8A%A0%E8%BD%BD%22%0A%20%20%20%20def%20alloc(self%2C%20n)%3A%20%20%20%20%20%20%20%20%20%20return%20f%22malloc(%7Bn%7D)%22%0A%20%20%20%20def%20launch(self%2C%20k%2C%20grid)%3A%20%20%20return%20f%22%E7%9B%B4%E6%8E%A5%E5%9C%A8%20CPU%20%E7%BA%BF%E7%A8%8B%E6%B1%A0%E8%B7%91%20%7Bk%7D%2C%20grid%3D%7Bgrid%7D%22%0A%0A%23%20----%20%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%9A%E6%B3%A8%E5%86%8C%E6%8F%92%E4%BB%B6%EF%BC%8C%E6%8C%89%E9%80%89%E4%B8%AD%E7%9A%84%E8%AE%BE%E5%A4%87%E5%88%86%E6%B4%BE%EF%BC%88%E4%B8%8A%E5%B1%82%E5%AE%8C%E5%85%A8%E4%B8%8D%E7%A2%B0%E5%85%B7%E4%BD%93%E9%A9%B1%E5%8A%A8%20API%EF%BC%89----%0APLUGINS%20%3D%20%7Bp.name%3A%20p%20for%20p%20in%20%5BCudaPlugin()%2C%20LevelZeroPlugin()%2C%20HostPlugin()%5D%7D%0A%0Adef%20run_kernel_on(device%2C%20image%2C%20kernel%2C%20nbytes%2C%20grid)%3A%0A%20%20%20%20plugin%20%3D%20PLUGINS.get(device)%0A%20%20%20%20if%20not%20plugin%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20%E6%B2%A1%E6%9C%89%20%7Bdevice%7D%20%E7%9A%84%E6%8F%92%E4%BB%B6%22)%3B%20return%0A%20%20%20%20print(f%22%5B%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20%E9%80%89%E4%B8%AD%E8%AE%BE%E5%A4%87%20%7Bdevice%7D%EF%BC%8C%E5%88%86%E6%B4%BE%E7%BB%99%20%7Bplugin.name%7D%20%E6%8F%92%E4%BB%B6%EF%BC%9A%22)%0A%20%20%20%20print(f%22%20%20%20%20%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%20%E2%86%92%20%7Bplugin.load_image(image)%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%E5%88%86%E9%85%8D%E5%86%85%E5%AD%98%20%E2%86%92%20%7Bplugin.alloc(nbytes)%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%E5%90%AF%E5%8A%A8kernel%E2%86%92%20%7Bplugin.launch(kernel%2C%20grid)%7D%22)%0A%20%20%20%20print()%0A%0A%23%20%E4%B8%8A%E5%B1%82%E8%BF%90%E8%A1%8C%E6%97%B6%E8%AF%B4%E7%9A%84%E9%83%BD%E6%98%AF%E5%90%8C%E4%B8%80%E5%8F%A5%22%E6%8A%BD%E8%B1%A1%E7%9A%84%E8%AF%9D%22%EF%BC%8C%E5%8F%AA%E6%98%AF%20device%20%E4%B8%8D%E5%90%8C%0Afor%20dev%2C%20img%20in%20%5B(%22cuda%22%2C%20%22VecAdd.ptx%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22level_zero%22%2C%20%22VecAdd.spv%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22host%22%2C%20%22VecAdd.so%22)%5D%3A%0A%20%20%20%20run_kernel_on(dev%2C%20img%2C%20kernel%3D%22VecAdd%22%2C%20nbytes%3D1024%2C%20grid%3D(256%2C%201%2C%201))"># 模拟 offload 运行时：统一 API + 各设备插件（plugins-nextgen）
+
+# ---- 每个插件实现同一套契约：加载镜像 / 分配内存 / 启动 kernel ----
+# 用一个基类表达"契约"，各设备子类把统一动作翻译成自己的驱动调用
+class Plugin:
+    name = "base"
+    def load_image(self, image): raise NotImplementedError
+    def alloc(self, nbytes):     raise NotImplementedError
+    def launch(self, kernel, grid): raise NotImplementedError
+
+class CudaPlugin(Plugin):
+    name = "cuda"
+    def load_image(self, image): return f"cuModuleLoadData({image})"
+    def alloc(self, n):          return f"cuMemAlloc({n})"
+    def launch(self, k, grid):   return f"cuLaunchKernel({k}, grid={grid})"
+
+class LevelZeroPlugin(Plugin):
+    name = "level_zero"
+    def load_image(self, image): return f"zeModuleCreate({image})"
+    def alloc(self, n):          return f"zeMemAllocDevice({n})"
+    def launch(self, k, grid):   return f"zeCommandListAppendLaunchKernel({k}, grid={grid})"
+
+class HostPlugin(Plugin):        # 在 CPU 上"假装"设备，便于调试
+    name = "host"
+    def load_image(self, image): return f"dlopen({image})  # 当普通函数加载"
+    def alloc(self, n):          return f"malloc({n})"
+    def launch(self, k, grid):   return f"直接在 CPU 线程池跑 {k}, grid={grid}"
+
+# ---- 运行时：注册插件，按选中的设备分派（上层完全不碰具体驱动 API）----
+PLUGINS = {p.name: p for p in [CudaPlugin(), LevelZeroPlugin(), HostPlugin()]}
+
+def run_kernel_on(device, image, kernel, nbytes, grid):
+    plugin = PLUGINS.get(device)
+    if not plugin:
+        print(f"[运行时] 没有 {device} 的插件"); return
+    print(f"[运行时] 选中设备 {device}，分派给 {plugin.name} 插件：")
+    print(f"    加载镜像 → {plugin.load_image(image)}")
+    print(f"    分配内存 → {plugin.alloc(nbytes)}")
+    print(f"    启动kernel→ {plugin.launch(kernel, grid)}")
+    print()
+
+# 上层运行时说的都是同一句"抽象的话"，只是 device 不同
+for dev, img in [("cuda", "VecAdd.ptx"),
+                 ("level_zero", "VecAdd.spv"),
+                 ("host", "VecAdd.so")]:
+    run_kernel_on(dev, img, kernel="VecAdd", nbytes=1024, grid=(256, 1, 1))</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[运行时] 选中设备 cuda，分派给 cuda 插件：
+    加载镜像 → cuModuleLoadData(VecAdd.ptx)
+    分配内存 → cuMemAlloc(1024)
+    启动kernel→ cuLaunchKernel(VecAdd, grid=(256, 1, 1))
+
+[运行时] 选中设备 level_zero，分派给 level_zero 插件：
+    加载镜像 → zeModuleCreate(VecAdd.spv)
+    分配内存 → zeMemAllocDevice(1024)
+    启动kernel→ zeCommandListAppendLaunchKernel(VecAdd, grid=(256, 1, 1))
+
+[运行时] 选中设备 host，分派给 host 插件：
+    加载镜像 → dlopen(VecAdd.so)  # 当普通函数加载
+    分配内存 → malloc(1024)
+    启动kernel→ 直接在 CPU 线程池跑 VecAdd, grid=(256, 1, 1)</code></pre>
+</div><p>看清这层分派：上层 <code>run_kernel_on</code> 说的永远是同一句抽象的话（&quot;加载镜像、分配内存、启动 kernel&quot;），运行时按 <code>device</code> 分派给对应插件，<strong>每个插件把同一动作翻译成自己驱动 API 的真实调用</strong>——CUDA 的 <code>cuLaunchKernel</code>、Level Zero 的 <code>zeCommandListAppendLaunchKernel</code>、host 的线程池。上层代码对这些差异一无所知，这正是&quot;统一 API + 插件&quot;解耦的价值。请动手改：加一个 <code>class AmdgpuPlugin(Plugin)</code> 实现那三个方法（用 HSA 风格的名字），注册进 <code>PLUGINS</code>，再 <code>run_kernel_on(&quot;amdgpu&quot;, ...)</code>——你会发现<strong>上层的 <code>run_kernel_on</code> 一个字都不用改</strong>就支持了新设备。这就是&quot;加一款设备 = 加一个插件&quot;。</p>
+<h2>小结与下一步</h2>
+<p>你现在补齐了异构编译&quot;运行期&quot;的关键一环：</p>
+<ul>
+<li>运行时要完成的动作很固定（<strong>发现设备 → 加载镜像 → 分配内存/拷数据 → 启动 kernel → 同步</strong>），但各家设备的驱动 API 迥异。</li>
+<li>解法是<strong>统一接口 + 各设备插件</strong>：<strong><code>liboffload</code></strong>（顶层 <code>offload/liboffload/</code>）提供设备无关的 API，<strong><code>plugins-nextgen</code></strong>（<code>offload/plugins-nextgen/</code>，含 <code>cuda</code>/<code>amdgpu</code>/<code>level_zero</code>/<code>host</code>/<code>common</code>）各实现一份。</li>
+<li><code>liboffload</code> 的 API <strong>由 TableGen（<code>API/*.td</code>）生成</strong>（<code>OffloadAPI.h</code> 在构建目录，不在源码树）——和第 7 章后端描述芯片同法。<code>libomptarget</code> 是 OpenMP 专用运行时，<code>liboffload</code> 是提炼出的通用层，二者共享 <code>plugins-nextgen</code>。</li>
+<li><strong><code>host</code> 插件</strong>在 CPU 上模拟设备，是无 GPU 调试的利器；<code>OFFLOAD_TRACE=1</code> 可观察运行时的每步 API 调用。</li>
+<li>这个&quot;接口+插件&quot;骨架和第 1 章 IR、第 8 章 SPIR-V 是同一种解耦思路，也预告了第 18 章 SYCL 的 <strong>Unified Runtime</strong>（别把 <code>liboffload</code> 和 UR 混为一层——理念相同，服务不同上层）。</li>
+</ul>
+<p><strong>第二部分的通用异构基础（offload 工具链 + 运行时）到此打通。</strong> 下一章聚焦一个具体后端家族——<strong>NVIDIA</strong>：设备端 IR 如何经 <strong>NVPTX 后端</strong>（第 7 章那个特殊后端）降级成 <strong>PTX</strong>、<strong>libclc</strong> 如何为设备端提供数学函数与内建实现、以及 SYCL 怎么通过 <code>-fsycl-targets=nvptx64-nvidia-cuda</code> 选中这条 NVIDIA 路径。之后我们就带着完整的异构栈，进入第三部分的 SYCL 实现。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>offload 运行时固定动作：<strong>发现/选设备 → 加载镜像 → 分配内存与拷数据 → 启动 kernel → 同步</strong>；难点是各设备驱动 API 完全不同。</li>
+<li>解法 = <strong>统一接口 + 插件</strong>：<strong><code>liboffload</code></strong>（<code>offload/liboffload/</code>，设备无关 API）+ <strong><code>plugins-nextgen</code></strong>（<code>offload/plugins-nextgen/</code>，子目录 <code>cuda</code>/<code>amdgpu</code>/<code>level_zero</code>/<code>host</code>/<code>common</code>）。</li>
+<li>运行时在<strong>顶层 <code>offload/</code></strong>（不在旧的 <code>openmp/libomptarget</code>）；<code>libomptarget</code> 是 OpenMP 专用运行时，<code>liboffload</code> 是面向多语言的通用层，二者共用插件。</li>
+<li><code>liboffload</code> 公共 API <strong>由 TableGen 生成</strong>（<code>offload/liboffload/API/*.td</code> → 构建目录的 <code>OffloadAPI.h</code>/<code>OffloadPrint.hpp</code>）；源码树里 grep 不到生成后的头。</li>
+<li>一个插件实现平台/设备管理、镜像加载、内存管理、kernel 启动、同步；<strong><code>host</code> 插件</strong>在 CPU 模拟设备便于调试；<code>OFFLOAD_TRACE=1</code> 追踪 API 调用。</li>
+<li>&quot;接口+插件&quot;是贯穿本书的解耦母题（IR/SPIR-V/UR）；<strong><code>liboffload</code> ≠ Unified Runtime（第 18 章）</strong>，理念同、层次异。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch09.html">← 第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a>
+  <a class="nav-next" href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
