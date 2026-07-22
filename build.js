@@ -152,6 +152,15 @@ renderer.code = function (token) {
 </div>`;
 };
 
+// 作者在 md 里内联的 <svg> 概念图，如果内部留了空行，marked 会把空行当段落分隔、
+// 在 SVG 内部塞进 <p>，导致这张图在浏览器里渲染失败。构建前先把每个
+// <svg>...</svg> 块内部的空行去掉（不动 SVG 外的正文），从根上避免这个坑。
+function stripBlankLinesInSvg(md) {
+  return md.replace(/<svg[\s\S]*?<\/svg>/g, (svg) =>
+    svg.replace(/\n[ \t]*\n/g, "\n"),
+  );
+}
+
 marked.setOptions({ renderer, breaks: false, gfm: true });
 
 // ---- HTML 页面模板（书内页面：assets/vendor 都在本书目录下）----
@@ -236,7 +245,7 @@ function buildBook(book) {
       return;
     }
     blockId = 0;
-    const md = fs.readFileSync(mdPath, "utf8");
+    const md = stripBlankLinesInSvg(fs.readFileSync(mdPath, "utf8"));
     const body = marked.parse(md);
     const prev = book.chapters[i - 1];
     const next = book.chapters[i + 1];
@@ -256,7 +265,7 @@ function buildBook(book) {
   // 本书首页（目录）：来自 books/<slug>/README.md
   const readmePath = path.join(book.dir, "README.md");
   if (fs.existsSync(readmePath)) {
-    const indexMd = fs.readFileSync(readmePath, "utf8");
+    const indexMd = stripBlankLinesInSvg(fs.readFileSync(readmePath, "utf8"));
     // 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html
     const indexBody = marked.parse(
       indexMd.replace(/chapters\/([\w-]+)\.md/g, "$1.html"),

@@ -84,8 +84,10 @@ y = y + bias           # kernel 3：读 y、读 bias，写 y</code></pre>
   <text x="90" y="150" text-anchor="middle" font-size="9" fill="#a53f1c">读 / 写</text>
   <text x="290" y="150" text-anchor="middle" font-size="9" fill="#a53f1c">读 / 写</text>
   <text x="490" y="150" text-anchor="middle" font-size="9" fill="#a53f1c">读 / 写</text>
-  <text x="300" y="172" text-anchor="middle" font-size="11" fill="#e06a3b">共 6 次全局内存访问（3 读 + 3 写）</text>  <!-- 分隔 -->
-  <line x1="20" y1="192" x2="580" y2="192" stroke="#d1d5db" stroke-dasharray="4 4"/><p>  <text x="300" y="216" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">融合：1 个 kernel，数据往返显存 1 趟</text>
+  <text x="300" y="172" text-anchor="middle" font-size="11" fill="#e06a3b">共 6 次全局内存访问（3 读 + 3 写）</text>
+  <!-- 分隔 -->
+  <line x1="20" y1="192" x2="580" y2="192" stroke="#d1d5db" stroke-dasharray="4 4"/>
+  <text x="300" y="216" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">融合：1 个 kernel，数据往返显存 1 趟</text>
   <rect x="20" y="230" width="560" height="26" rx="4" fill="#3c3c3c"/>
   <text x="300" y="248" text-anchor="middle" font-size="11" fill="#9fe3b0">显存 / 全局内存</text>
   <rect x="200" y="290" width="200" height="38" rx="5" fill="#eef6ff" stroke="#2b6cb0"/>
@@ -101,7 +103,7 @@ y = y + bias           # kernel 3：读 y、读 bias，写 y</code></pre>
     <marker id="af" markerWidth="9" markerHeight="9" refX="4" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
     <marker id="ag" markerWidth="9" markerHeight="9" refX="4" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f9b5c"/></marker>
   </defs>
-</svg></p>
+</svg>
 <div class="caption">图 14-1　同一串逐元素操作：未融合要 3 个 kernel、6 次全局内存访问；融合成 1 个 kernel 后，数据读一次、在寄存器里连着算完三步、写一次——省下 2/3 的显存流量</div>
 </div><h2>两种写法的对照</h2>
 <div class="compare">

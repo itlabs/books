@@ -78,7 +78,8 @@ snake = [[7, 5], [6, 5], [5, 5]]
   <text x="245" y="77" text-anchor="middle" font-size="14" fill="#333" font-family="monospace">[5,5]</text>
   <text x="150" y="40" text-anchor="middle" font-size="11" fill="#6b6459">snake 列表（左边是头）</text>
   <text x="105" y="112" text-anchor="middle" font-size="11" fill="#e06a3b">↑ 蛇头</text>
-  <text x="245" y="112" text-anchor="middle" font-size="11" fill="#6b6459">↑ 蛇尾</text>  <!-- 网格上画出来 -->
+  <text x="245" y="112" text-anchor="middle" font-size="11" fill="#6b6459">↑ 蛇尾</text>
+  <!-- 网格上画出来 -->
   <g>
     <rect x="360" y="120" width="160" height="80" fill="#111"/>
     <!-- 网格线 -->
@@ -114,24 +115,25 @@ snake = [[7, 5], [6, 5], [5, 5]]
 <p><strong>在蛇前进的方向上，新添一个头；然后把最后的尾巴去掉。</strong> 就这两步，蛇看起来就整整齐齐地前进了一格，而且长度不变。</p>
 <div class="concept">
 <svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
-  <text x="280" y="24" text-anchor="middle" font-size="15" fill="#333" font-weight="bold">移动 = 加一个新头 + 去掉旧尾</text>  <!-- 原来的蛇 -->
-<p>  <text x="60" y="60" font-size="12" fill="#6b6459">原来：</text>
+  <text x="280" y="24" text-anchor="middle" font-size="15" fill="#333" font-weight="bold">移动 = 加一个新头 + 去掉旧尾</text>
+  <!-- 原来的蛇 -->
+  <text x="60" y="60" font-size="12" fill="#6b6459">原来：</text>
   <rect x="120" y="45" width="26" height="26" fill="#e06a3b"/>
   <rect x="150" y="45" width="26" height="26" fill="#3f9b5c"/>
   <rect x="180" y="45" width="26" height="26" fill="#3f9b5c"/>
   <text x="133" y="88" text-anchor="middle" font-size="10" fill="#6b6459">头</text>
-  <text x="193" y="88" text-anchor="middle" font-size="10" fill="#6b6459">尾</text></p>
+  <text x="193" y="88" text-anchor="middle" font-size="10" fill="#6b6459">尾</text>
   <!-- 第一步：加头 -->
-<p>  <text x="60" y="130" font-size="12" fill="#6b6459">① 前面加新头：</text>
+  <text x="60" y="130" font-size="12" fill="#6b6459">① 前面加新头：</text>
   <rect x="165" y="115" width="26" height="26" fill="#2f6db3"/>
   <rect x="195" y="115" width="26" height="26" fill="#e06a3b"/>
   <rect x="225" y="115" width="26" height="26" fill="#3f9b5c"/>
   <rect x="255" y="115" width="26" height="26" fill="#3f9b5c"/>
   <text x="178" y="158" text-anchor="middle" font-size="10" fill="#2f6db3">新头</text>
   <path d="M300 128 L340 128" stroke="#333" stroke-width="2" marker-end="url(#a13)"/>
-  <text x="392" y="132" font-size="11" fill="#6b6459">变长了1节</text></p>
+  <text x="392" y="132" font-size="11" fill="#6b6459">变长了1节</text>
   <!-- 第二步：去尾 -->
-<p>  <text x="60" y="205" font-size="12" fill="#6b6459">② 去掉旧尾：</text>
+  <text x="60" y="205" font-size="12" fill="#6b6459">② 去掉旧尾：</text>
   <rect x="165" y="190" width="26" height="26" fill="#2f6db3"/>
   <rect x="195" y="190" width="26" height="26" fill="#e06a3b"/>
   <rect x="225" y="190" width="26" height="26" fill="#3f9b5c"/>
@@ -144,7 +146,7 @@ snake = [[7, 5], [6, 5], [5, 5]]
       <path d="M0,0 L8,4 L0,8 Z" fill="#333"/>
     </marker>
   </defs>
-</svg></p>
+</svg>
 <div class="caption">图 12-2　蛇每走一步：先在头前面插入一个新格子，再删掉尾巴那一格</div>
 </div><p>用列表操作来写，就是这么两行。假设蛇正在往右走（横坐标每次 +1）：</p>
 <div class="code-block">
