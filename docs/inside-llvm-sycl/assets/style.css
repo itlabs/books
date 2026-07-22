@@ -235,3 +235,6 @@ pre[class*="language-"] { padding: 16px 14px; font-size: 15px; }
   body { font-size: 17px; }
   h1 { font-size: 27px; }
 }
+
+/* 本书自定义正文宽度（build.js 由 book.json contentWidth 注入）*/
+article { max-width: 1040px; }
