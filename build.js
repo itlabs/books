@@ -220,6 +220,15 @@ function buildBook(book) {
     const src = path.join(SHARED_DIR, f);
     if (fs.statSync(src).isFile()) fs.copyFileSync(src, path.join(assetDir, f));
   }
+
+  // 可选：本书自定义正文宽度（book.json 里的 contentWidth）——只覆盖本书，
+  // 追加在共享 style.css 之后。对照页（.compare，1240px）用 :has 更高特异性，不受影响。
+  if (book.contentWidth) {
+    fs.appendFileSync(
+      path.join(assetDir, "style.css"),
+      `\n/* 本书自定义正文宽度（build.js 由 book.json contentWidth 注入）*/\narticle { max-width: ${book.contentWidth}; }\n`,
+    );
+  }
   for (const f of fs.readdirSync(path.join(SHARED_DIR, "vendor"))) {
     fs.copyFileSync(
       path.join(SHARED_DIR, "vendor", f),

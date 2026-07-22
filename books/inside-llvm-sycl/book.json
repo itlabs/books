@@ -2,6 +2,7 @@
   "slug": "inside-llvm-sycl",
   "title": "深入 LLVM 与 SYCL",
   "titleEn": "Inside LLVM and SYCL",
+  "contentWidth": "1040px",
   "subtitle": "写给编译器工程师的源码之旅：LLVM、DPC++/SYCL 实现与扩展",
   "description": "从 LLVM 的三段式架构与 IR 讲起，沿着 Pass 框架、SPIR-V、异构 offload 工具链与 liboffload 运行时一路走到 NVIDIA 后端；再深入 intel/llvm 里 SYCL(DPC++) 的真实实现——头文件、两趟编译、属性、运行时与 Unified Runtime；最后手把手教你实现一个 SYCL 扩展（free function kernels、bindless images、运行时编译）。以可视化图示 + 真实源码路径讲清编译器内部机制。",
   "chapters": [
