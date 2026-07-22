@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 章 后端与代码生成：Target、指令选择到机器码</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li class="active"><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 7 章 后端与代码生成：Target、指令选择到机器码</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1–6 章你走完了 LLVM 的前半程：源码 → IR → 优化后的 IR。这一章补上最后一段——<strong>后端（backend）</strong>：把与目标无关的 LLVM IR 翻译成某款具体芯片的机器码。这是「懂硬件」的那一段，也是 <code>llvm/lib/Target/&lt;芯片&gt;/</code>（X86、AArch64、NVPTX、SPIRV…）里那一大堆代码在干的事。</p>
+<p>你会建立一张后端流水线的地图：<strong>指令选择（ISel）→ 寄存器分配 → 指令调度 → 汇编输出</strong>，看清哪些是<strong>与芯片无关的通用框架</strong>（<code>llvm/lib/CodeGen/</code>）、哪些是<strong>每款芯片各写一份</strong>的目标描述（<code>lib/Target/&lt;芯片&gt;/</code>，大量用 <code>.td</code> TableGen 文件描述）。理解这一层，你才明白第 1 章「加一款芯片 = 加一个后端」具体要加什么，也才能读懂第 11 章 NVPTX（NVIDIA）后端、以及 SPIR-V 到底是"后端"还是"翻译器"这个区分。</p>
+</div><h2>后端要解决的落差：从 IR 到真实硬件</h2>
+<p>优化后的 LLVM IR 仍然是<strong>理想化、与硬件无关</strong>的：它有无限多个 SSA 虚拟寄存器（<code>%1</code>、<code>%sum</code>…想用多少有多少）、有抽象的类型（<code>i32</code>、<code>i64</code>）、指令是 <code>add</code>/<code>load</code>/<code>br</code> 这种通用操作。但真实芯片是<strong>残酷而具体</strong>的：</p>
+<ul>
+<li>寄存器<strong>数量有限</strong>（x86-64 通用寄存器就 16 个），IR 里无限的 SSA 值必须挤进去，挤不下的要&quot;溢出（spill）&quot;到栈上。</li>
+<li>指令是<strong>特定 ISA 的真实指令</strong>（x86 的 <code>addl</code>、ARM 的 <code>add</code>、还带各种寻址模式和操作数约束），不是抽象的 <code>add</code>。</li>
+<li>指令有<strong>执行时序、流水线约束</strong>，排列顺序影响性能。</li>
+<li>有<strong>调用约定（calling convention）</strong>：参数放哪个寄存器、返回值怎么传、谁负责保存哪些寄存器。</li>
+</ul>
+<p>后端的工作，就是把这些落差一层层填平。它被组织成一条<strong>代码生成流水线</strong>，每一步解决其中一个落差。</p>
+<div class="concept">
+<svg viewBox="0 0 640 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">后端代码生成流水线：把 IR 逐步落到真实硬件</text>
+  <!-- IR in -->
+  <rect x="20" y="70" width="86" height="48" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="63" y="90" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">LLVM IR</text>
+  <text x="63" y="106" text-anchor="middle" font-size="8" fill="#6b7280">优化后</text>
+  <!-- ISel -->
+  <path d="M106 94 L128 94" stroke="#6b7280" stroke-width="1.3" marker-end="url(#b7)"/>
+  <rect x="128" y="66" width="98" height="56" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="177" y="86" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">指令选择</text>
+  <text x="177" y="100" text-anchor="middle" font-size="8" fill="#6b7280">ISel</text>
+  <text x="177" y="112" text-anchor="middle" font-size="8" fill="#6b7280">IR → 目标指令</text>
+  <!-- Sched -->
+  <path d="M226 94 L248 94" stroke="#6b7280" stroke-width="1.3" marker-end="url(#b7)"/>
+  <rect x="248" y="66" width="98" height="56" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="297" y="86" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">指令调度</text>
+  <text x="297" y="100" text-anchor="middle" font-size="8" fill="#6b7280">排指令顺序</text>
+  <text x="297" y="112" text-anchor="middle" font-size="8" fill="#6b7280">（仍用虚拟寄存器）</text>
+  <!-- RegAlloc -->
+  <path d="M346 94 L368 94" stroke="#6b7280" stroke-width="1.3" marker-end="url(#b7)"/>
+  <rect x="368" y="66" width="98" height="56" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="417" y="86" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">寄存器分配</text>
+  <text x="417" y="100" text-anchor="middle" font-size="8" fill="#6b7280">虚拟→物理</text>
+  <text x="417" y="112" text-anchor="middle" font-size="8" fill="#6b7280">挤不下就 spill</text>
+  <!-- Emit -->
+  <path d="M466 94 L488 94" stroke="#6b7280" stroke-width="1.3" marker-end="url(#b7)"/>
+  <rect x="488" y="66" width="98" height="56" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="537" y="86" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">汇编/机器码</text>
+  <text x="537" y="100" text-anchor="middle" font-size="8" fill="#6b7280">AsmPrinter</text>
+  <text x="537" y="112" text-anchor="middle" font-size="8" fill="#6b7280">.s / .o</text>
+  <!-- 分层说明 -->
+  <rect x="128" y="150" width="218" height="34" rx="6" fill="#e5edf5" stroke="#2b6cb0" stroke-dasharray="4 3"/>
+  <text x="237" y="164" text-anchor="middle" font-size="9" fill="#2b6cb0">通用框架 llvm/lib/CodeGen/</text>
+  <text x="237" y="177" text-anchor="middle" font-size="8" fill="#6b7280">算法骨架：所有芯片共用</text>
+  <rect x="368" y="150" width="218" height="34" rx="6" fill="#fdeee7" stroke="#e06a3b" stroke-dasharray="4 3"/>
+  <text x="477" y="164" text-anchor="middle" font-size="9" fill="#a53f1c">目标描述 lib/Target/&lt;芯片&gt;/</text>
+  <text x="477" y="177" text-anchor="middle" font-size="8" fill="#6b7280">TableGen .td：每款芯片各一份</text>
+  <text x="320" y="212" text-anchor="middle" font-size="10" fill="#2d2a26">每一步的<tspan font-weight="bold">算法</tspan>是通用的，但要<tspan font-weight="bold">喂给它这款芯片的描述</tspan>（有哪些寄存器、指令、约束）</text>
+  <text x="320" y="234" text-anchor="middle" font-size="9" fill="#6b7280">这就是「加一款芯片 = 写一份目标描述」的含义</text>
+  <defs>
+    <marker id="b7" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 7-1　后端代码生成流水线。指令选择 → 调度 → 寄存器分配 → 汇编输出，每步的算法骨架在 <code>llvm/lib/CodeGen/</code>（所有芯片共用），而每步需要的"这款芯片长什么样"由 <code>lib/Target/&lt;芯片&gt;/</code> 的 TableGen 描述提供</div>
+</div><h2>通用框架 vs 目标描述：后端的两半</h2>
+<p>第 1 章说后端代码分两处，这里说清它们的分工——这是理解整个后端的钥匙：</p>
+<ul>
+<li><strong><code>llvm/lib/CodeGen/</code></strong> —— <strong>与具体芯片无关</strong>的代码生成框架。它实现了指令选择的骨架、寄存器分配算法（如贪心分配器 <code>RegAllocGreedy</code>）、指令调度器、栈帧布局逻辑等。这些<strong>算法</strong>对所有芯片都一样。</li>
+<li><strong><code>llvm/lib/Target/&lt;芯片&gt;/</code></strong> —— <strong>每款芯片一份</strong>的目标描述。它回答通用框架的提问：这款芯片有哪些寄存器？分几类（通用/浮点/向量）？有哪些指令、各自的操作数约束和汇编写法？调用约定是什么？IR 的 <code>add i32</code> 该选成哪条真实指令？</li>
+</ul>
+<p>打个比方：<code>lib/CodeGen/</code> 是一台<strong>通用的装配机器人</strong>，<code>lib/Target/X86/</code> 是<strong>X86 这款产品的图纸</strong>。同一个机器人，换一套图纸就能装配另一款芯片的代码——这就是为什么加一款新芯片主要是&quot;写一份目标描述&quot;，而不用重写代码生成算法。</p>
+<p>这些目标描述大量用 <strong>TableGen（<code>.td</code> 文件）</strong> 来写。TableGen 是 LLVM 自己的一种声明式描述语言：你用它声明&quot;这款芯片有寄存器 R0–R15&quot;&quot;有一条指令叫 ADD、汇编写法是 <code>add $dst, $src1, $src2</code>&quot;&quot;IR 的 <code>add</code> 模式匹配到这条 ADD 指令&quot;，构建时由 <code>llvm-tblgen</code> 工具把这些 <code>.td</code> <strong>生成成 C++ 代码</strong>，编进后端。你在 <code>lib/Target/X86/</code> 下会看到 <code>X86RegisterInfo.td</code>、<code>X86InstrInfo.td</code> 这类文件——它们不是手写 C++，而是声明式的芯片描述。</p>
+<div class="note">
+<strong>为什么用 TableGen 而不是手写 C++</strong>
+一款现代芯片有成百上千条指令、几十类寄存器、无数操作数约束。若全手写 C++，代码量爆炸且极易出错。TableGen 让你<strong>声明式</strong>地描述这些事实，再由工具批量生成寄存器信息、指令信息、指令选择匹配表、汇编器/反汇编器等一大堆本该重复的 C++ 代码。它是 LLVM 后端能支持这么多芯片的工程基础——写新后端，很大一部分工作就是写 <code>.td</code>。
+</div><h2>流水线四步，各解决一个落差</h2>
+<p><strong>① 指令选择（Instruction Selection, ISel）</strong>：把与目标无关的 IR 操作，翻译成目标芯片的真实指令。IR 的一条 <code>add i32 %a, %b</code> 在 x86 上要选成 <code>ADD32rr</code>，还可能把 <code>load</code> + <code>add</code> 一起匹配成一条带内存操作数的指令。LLVM 有几种 ISel 实现：经典的 <strong>SelectionDAG ISel</strong>（把基本块建成 DAG 再做模式匹配，最成熟）、新一些的 <strong>GlobalISel</strong>（可跨基本块，更模块化）、以及简单快速的 <strong>FastISel</strong>（O0 用，图快）。匹配规则大多来自 <code>.td</code> 里描述的指令模式（pattern）。这一步之后，指令变成了目标指令，但操作数仍用<strong>无限的虚拟寄存器</strong>。</p>
+<p><strong>② 指令调度（Scheduling）</strong>：重排指令顺序以更好地利用流水线（隐藏内存延迟、避免执行单元冲突），同时不改变语义。它需要芯片的时序模型（<code>.td</code> 里的 scheduling model 描述每条指令占几个周期、用哪个执行端口）。</p>
+<p><strong>③ 寄存器分配（Register Allocation）</strong>：把无限的虚拟寄存器映射到芯片<strong>有限的物理寄存器</strong>上。当同时活跃的值超过物理寄存器数，就得把一些值**溢出（spill）**到栈上、用时再加载回来。这是 NP 难问题，LLVM 用启发式（默认是 <code>RegAllocGreedy</code> 贪心分配器）。分配器需要知道芯片有哪些物理寄存器、分几类——又来自 <code>.td</code>。</p>
+<p><strong>④ 汇编 / 机器码输出（AsmPrinter / MC 层）</strong>：把最终的目标指令打印成汇编文本（<code>.s</code>），或直接由 <strong>MC 层</strong>编码成目标文件里的机器码字节（<code>.o</code>）。每条指令怎么写成汇编、怎么编码成二进制，同样在 <code>.td</code> 里描述。</p>
+<p><code>llc</code> 这个工具（第 1 章见过）就是把这整条后端流水线暴露成命令行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">llc -march=x86-64 add.ll -o add.s      # IR → x86-64 汇编
+llc -march=aarch64 add.ll -o add.s     # 同一份 IR → ARM64 汇编（换个后端）
+llc -filetype=obj add.ll -o add.o      # 直接出目标文件（走 MC 层）</code></pre>
+</div><p>同一份 <code>add.ll</code> 喂给不同 <code>-march</code>，走不同的 <code>lib/Target/</code> 后端，出不同芯片的代码——这就是第 1 章那张&quot;N+M&quot;图在后端侧的兑现。</p>
+<h2>SPIR-V、NVPTX：不太一样的「后端」</h2>
+<p>这一层对理解本书第二部分至关重要。LLVM 的 <code>lib/Target/</code> 里除了 CPU（X86/AArch64/RISCV），还有几个<strong>面向 GPU / 虚拟 ISA</strong> 的特殊后端，它们的产物不是 CPU 机器码：</p>
+<ul>
+<li><strong>NVPTX</strong>（<code>lib/Target/NVPTX/</code>）：产出的是 <strong>PTX</strong>——NVIDIA 的一种虚拟汇编，本身还要再由 NVIDIA 驱动/工具编成真正的 GPU 机器码（SASS）。所以 NVPTX 后端的&quot;机器码&quot;其实是文本的 PTX。这是第 11 章的主角。</li>
+<li><strong>SPIRV</strong>（<code>lib/Target/SPIRV/</code>）：产出 SPIR-V。但注意第 8 章的提醒——SYCL 当前默认走的是 <code>llvm/llvm-spirv/</code> 那个<strong>翻译器</strong>（SPIRV-LLVM-Translator），而不是这个后端；两者目标相似、历史不同。</li>
+</ul>
+<div class="warn">
+<strong>GPU「后端」和 CPU 后端不是一码事</strong>
+CPU 后端（X86 等）产出的是<strong>能直接在硬件上跑的机器码</strong>；而 NVPTX / SPIRV 后端产出的是<strong>还需再经一层厂商编译</strong>的虚拟 ISA（PTX / SPIR-V）。原因正是第 8 章讲的：GPU 的"最后一英里"（虚拟 ISA → 原生指令）由厂商驱动闭源完成，LLVM 只负责到虚拟 ISA 为止。所以看到 <code>lib/Target/NVPTX/</code> 时别以为它像 X86 后端那样直出可执行机器码——它止步于 PTX。
+</div><h2>亲手看一眼：同一段 IR，两款芯片的汇编</h2>
+<p>还是那个 <code>add</code>。用 <code>llc</code> 分别出 x86-64 和 AArch64 汇编，你能直观看到&quot;同一份 IR、不同后端选出不同真实指令、遵循不同调用约定&quot;：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">; add.ll（第 1 章那段）
+define i32 @add(i32 %a, i32 %b) {
+  %sum = add i32 %a, %b
+  ret i32 %sum
+}</code></pre>
+</div><p><code>llc -march=x86-64 add.ll -o -</code> 大致得到（x86-64 调用约定：前两个整型参数在 <code>edi</code>、<code>esi</code>，返回值在 <code>eax</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">add:
+    leal    (%rdi,%rsi), %eax   # eax = edi + esi（用 lea 做加法是 x86 常见技巧）
+    retq</code></pre>
+</div><p><code>llc -march=aarch64 add.ll -o -</code> 则得到（AArch64 约定：参数在 <code>w0</code>、<code>w1</code>，返回值在 <code>w0</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">add:
+    add     w0, w1, w0         # w0 = w1 + w0
+    ret</code></pre>
+</div><p>同一条 IR 的 <code>add</code>，在 x86 上被指令选择成了 <code>leal</code>、参数走 <code>edi/esi</code>，在 ARM 上是 <code>add</code>、参数走 <code>w0/w1</code>——<strong>指令选择、寄存器、调用约定全都由各自的目标描述决定</strong>。这就是后端在做的事。</p>
+<h2>动手：模拟寄存器分配与 spill</h2>
+<p>后端里最能体现&quot;理想 IR 撞上残酷硬件&quot;的一步是寄存器分配：无限虚拟寄存器 → 有限物理寄存器，挤不下就 spill。用一个浏览器里能跑的小模型演示：给定每个虚拟寄存器的&quot;活跃区间&quot;和有限的物理寄存器数，做一个简单的线性扫描分配，看谁拿到寄存器、谁被溢出到栈。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%E5%AF%84%E5%AD%98%E5%99%A8%E5%88%86%E9%85%8D%EF%BC%88%E7%BA%BF%E6%80%A7%E6%89%AB%E6%8F%8F%E7%AE%80%E5%8C%96%E7%89%88%EF%BC%89%EF%BC%9A%E8%99%9A%E6%8B%9F%E5%AF%84%E5%AD%98%E5%99%A8%E6%8C%A4%E8%BF%9B%E6%9C%89%E9%99%90%E7%89%A9%E7%90%86%E5%AF%84%E5%AD%98%E5%99%A8%EF%BC%8C%E6%8C%A4%E4%B8%8D%E4%B8%8B%E5%B0%B1%20spill%0A%0ANUM_PHYS_REGS%20%3D%203%20%20%20%20%23%20%E8%BF%99%E6%AC%BE%22%E8%8A%AF%E7%89%87%22%E5%8F%AA%E6%9C%89%203%20%E4%B8%AA%E7%89%A9%E7%90%86%E5%AF%84%E5%AD%98%E5%99%A8%0A%0A%23%20%E6%AF%8F%E4%B8%AA%E8%99%9A%E6%8B%9F%E5%AF%84%E5%AD%98%E5%99%A8%E7%9A%84%E6%B4%BB%E8%B7%83%E5%8C%BA%E9%97%B4%20%5Bstart%2C%20end)%EF%BC%9A%E4%BB%8E%E5%93%AA%E6%9D%A1%E6%8C%87%E4%BB%A4%E5%AE%9A%E4%B9%89%E3%80%81%E5%88%B0%E5%93%AA%E6%9D%A1%E6%8C%87%E4%BB%A4%E6%9C%80%E5%90%8E%E4%B8%80%E6%AC%A1%E4%BD%BF%E7%94%A8%0Avregs%20%3D%20%5B%0A%20%20%20%20(%22%25a%22%2C%200%2C%204)%2C%0A%20%20%20%20(%22%25b%22%2C%201%2C%203)%2C%0A%20%20%20%20(%22%25c%22%2C%202%2C%206)%2C%0A%20%20%20%20(%22%25d%22%2C%203%2C%205)%2C%20%20%20%23%20%E5%AE%9A%E4%B9%89%E6%97%B6%20a%2Cb%2Cc%20%E5%8F%AF%E8%83%BD%E9%83%BD%E8%BF%98%E6%B4%BB%E7%9D%80%20%E2%86%92%20%E5%8F%AF%E8%83%BD%E6%8C%A4%E4%B8%8D%E4%B8%8B%0A%20%20%20%20(%22%25e%22%2C%205%2C%207)%2C%0A%5D%0A%0Afree_regs%20%3D%20%5Bf%22R%7Bi%7D%22%20for%20i%20in%20range(NUM_PHYS_REGS)%5D%20%20%23%20%E5%8F%AF%E7%94%A8%E7%89%A9%E7%90%86%E5%AF%84%E5%AD%98%E5%99%A8%E6%B1%A0%0Aactive%20%3D%20%5B%5D%20%20%20%20%20%20%20%20%20%20%23%20%E5%BD%93%E5%89%8D%E6%B4%BB%E8%B7%83%E4%B8%94%E5%B7%B2%E5%88%86%E9%85%8D%E5%AF%84%E5%AD%98%E5%99%A8%E7%9A%84%EF%BC%9A(end%2C%20vreg%2C%20phys)%0Aassignment%20%3D%20%7B%7D%20%20%20%20%20%20%23%20vreg%20-%3E%20%E7%89%A9%E7%90%86%E5%AF%84%E5%AD%98%E5%99%A8%20%E6%88%96%20%22spill(%E6%A0%88)%22%0A%0A%23%20%E6%8C%89%E6%B4%BB%E8%B7%83%E5%8C%BA%E9%97%B4%E8%B5%B7%E7%82%B9%E6%8E%92%E5%BA%8F%EF%BC%8C%E7%BA%BF%E6%80%A7%E6%89%AB%E6%8F%8F%0Afor%20name%2C%20start%2C%20end%20in%20sorted(vregs%2C%20key%3Dlambda%20v%3A%20v%5B1%5D)%3A%0A%20%20%20%20%23%20%E5%85%88%E5%9B%9E%E6%94%B6%EF%BC%9A%E6%89%80%E6%9C%89%E5%9C%A8%20start%20%E4%B9%8B%E5%89%8D%E5%B0%B1%E7%BB%93%E6%9D%9F%E7%9A%84%E6%B4%BB%E8%B7%83%E5%8C%BA%E9%97%B4%EF%BC%8C%E6%8A%8A%E5%AF%84%E5%AD%98%E5%99%A8%E8%BF%98%E5%9B%9E%E6%B1%A0%E5%AD%90%0A%20%20%20%20still_active%20%3D%20%5B%5D%0A%20%20%20%20for%20a_end%2C%20a_name%2C%20a_phys%20in%20active%3A%0A%20%20%20%20%20%20%20%20if%20a_end%20%3C%3D%20start%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20free_regs.append(a_phys)%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%E6%8C%87%E4%BB%A4%7Bstart%7D%EF%BC%9A%7Ba_name%7D%20%E6%B4%BB%E8%B7%83%E6%9C%9F%E7%BB%93%E6%9D%9F%EF%BC%8C%E9%87%8A%E6%94%BE%20%7Ba_phys%7D%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20still_active.append((a_end%2C%20a_name%2C%20a_phys))%0A%20%20%20%20active%20%3D%20still_active%0A%0A%20%20%20%20%23%20%E5%88%86%E9%85%8D%0A%20%20%20%20if%20free_regs%3A%0A%20%20%20%20%20%20%20%20phys%20%3D%20free_regs.pop(0)%0A%20%20%20%20%20%20%20%20assignment%5Bname%5D%20%3D%20phys%0A%20%20%20%20%20%20%20%20active.append((end%2C%20name%2C%20phys))%0A%20%20%20%20%20%20%20%20print(f%22%E6%8C%87%E4%BB%A4%7Bstart%7D%EF%BC%9A%7Bname%7D%20%E5%88%86%E5%88%B0%E7%89%A9%E7%90%86%E5%AF%84%E5%AD%98%E5%99%A8%20%7Bphys%7D%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20assignment%5Bname%5D%20%3D%20%22spill(%E6%A0%88)%22%0A%20%20%20%20%20%20%20%20print(f%22%E6%8C%87%E4%BB%A4%7Bstart%7D%EF%BC%9A%7Bname%7D%20%E6%97%A0%E7%A9%BA%E9%97%B2%E5%AF%84%E5%AD%98%E5%99%A8%20%E2%86%92%20SPILL%20%E5%88%B0%E6%A0%88%22)%0A%0Aprint(%22%5Cn%E6%9C%80%E7%BB%88%E5%88%86%E9%85%8D%EF%BC%9A%22)%0Afor%20name%2C%20_%2C%20_%20in%20vregs%3A%0A%20%20%20%20print(f%22%20%20%7Bname%7D%20-%3E%20%7Bassignment%5Bname%5D%7D%22)"># 模拟寄存器分配（线性扫描简化版）：虚拟寄存器挤进有限物理寄存器，挤不下就 spill
+
+NUM_PHYS_REGS = 3    # 这款"芯片"只有 3 个物理寄存器
+
+# 每个虚拟寄存器的活跃区间 [start, end)：从哪条指令定义、到哪条指令最后一次使用
+vregs = [
+    ("%a", 0, 4),
+    ("%b", 1, 3),
+    ("%c", 2, 6),
+    ("%d", 3, 5),   # 定义时 a,b,c 可能都还活着 → 可能挤不下
+    ("%e", 5, 7),
+]
+
+free_regs = [f"R{i}" for i in range(NUM_PHYS_REGS)]  # 可用物理寄存器池
+active = []          # 当前活跃且已分配寄存器的：(end, vreg, phys)
+assignment = {}      # vreg -&gt; 物理寄存器 或 "spill(栈)"
+
+# 按活跃区间起点排序，线性扫描
+for name, start, end in sorted(vregs, key=lambda v: v[1]):
+    # 先回收：所有在 start 之前就结束的活跃区间，把寄存器还回池子
+    still_active = []
+    for a_end, a_name, a_phys in active:
+        if a_end &lt;= start:
+            free_regs.append(a_phys)
+            print(f"  指令{start}：{a_name} 活跃期结束，释放 {a_phys}")
+        else:
+            still_active.append((a_end, a_name, a_phys))
+    active = still_active
+
+    # 分配
+    if free_regs:
+        phys = free_regs.pop(0)
+        assignment[name] = phys
+        active.append((end, name, phys))
+        print(f"指令{start}：{name} 分到物理寄存器 {phys}")
+    else:
+        assignment[name] = "spill(栈)"
+        print(f"指令{start}：{name} 无空闲寄存器 → SPILL 到栈")
+
+print("\n最终分配：")
+for name, _, _ in vregs:
+    print(f"  {name} -&gt; {assignment[name]}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">指令0：%a 分到物理寄存器 R0
+指令1：%b 分到物理寄存器 R1
+指令2：%c 分到物理寄存器 R2
+  指令3：%b 活跃期结束，释放 R1
+指令3：%d 分到物理寄存器 R1
+  指令5：%a 活跃期结束，释放 R0
+  指令5：%d 活跃期结束，释放 R1
+指令5：%e 分到物理寄存器 R0
+最终分配：
+  %a -&gt; R0
+  %b -&gt; R1
+  %c -&gt; R2
+  %d -&gt; R1
+  %e -&gt; R0</code></pre>
+</div><p>这个模型演清了寄存器分配的核心张力：物理寄存器是<strong>稀缺资源</strong>，分配器按活跃区间&quot;占用—释放&quot;循环利用（<code>%b</code> 在指令 3 结束后，它的 <code>R1</code> 立刻被 <code>%d</code> 复用）。这一版恰好没触发 spill——因为同时活跃的虚拟寄存器数没超过 3。请动手改：把 <code>NUM_PHYS_REGS</code> 改成 <strong>2</strong>，重新运行——你会看到当三个值同时活跃、只有 2 个寄存器时，有一个被 <strong>SPILL 到栈</strong>。这正是&quot;IR 里无限的 SSA 值撞上真实芯片有限寄存器&quot;时后端必须做的取舍；真实的 <code>RegAllocGreedy</code> 用更聪明的启发式决定&quot;溢出谁代价最小&quot;，但基本矛盾一模一样。</p>
+<h2>小结与下一步</h2>
+<p>第一部分的最后一块地基就位——你现在有了从源码到机器码的完整 LLVM 心智模型：</p>
+<ul>
+<li>后端填平 IR 与真实硬件的落差：<strong>有限寄存器、真实指令、时序约束、调用约定</strong>。</li>
+<li>它分两半：<strong><code>llvm/lib/CodeGen/</code></strong>（与芯片无关的算法框架：ISel 骨架、寄存器分配、调度）+ <strong><code>llvm/lib/Target/&lt;芯片&gt;/</code></strong>（每款芯片一份的目标描述，大量用 <strong>TableGen <code>.td</code></strong> 声明寄存器/指令/约定，由 <code>llvm-tblgen</code> 生成 C++）。</li>
+<li>流水线四步：<strong>指令选择（ISel）→ 指令调度 → 寄存器分配（挤不下就 spill）→ 汇编/机器码输出（AsmPrinter/MC）</strong>。命令行工具是 <strong><code>llc</code></strong>（<code>-march=</code> 选后端，<code>-filetype=obj</code> 出目标文件）。</li>
+<li><strong>NVPTX / SPIRV 是特殊后端</strong>：产出的是虚拟 ISA（PTX / SPIR-V），还需厂商再编一层——这直接连到第二部分。</li>
+</ul>
+<p><strong>第一部分（LLVM 基础）到此完成。</strong> 你已经掌握：三段式与 IR 中心（ch1）、IR 数据结构与 SSA（ch2）、IR 三形态（ch3）、Pass 框架设计（ch4）、写 Pass 与插件（ch5）、优化管线（ch6）、后端代码生成（ch7）。</p>
+<p>下一章进入<strong>第二部分·异构世界</strong>：第 8 章 SPIR-V 你其实已经读过——它正是接在本章&quot;GPU 后端产出虚拟 ISA&quot;之后的一环：设备端 IR 如何经 <code>llvm-spirv</code> 变成厂商中立的 SPIR-V 合同，交给 GPU 驱动完成&quot;最后一英里&quot;。带着后端这张图去读，你会看得更透。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>后端把与目标无关的 IR 落到真实硬件，解决四个落差：<strong>有限物理寄存器、特定 ISA 指令、执行时序、调用约定</strong>。</li>
+<li>分两半：<strong><code>llvm/lib/CodeGen/</code></strong>（芯片无关算法：ISel 骨架、<code>RegAllocGreedy</code>、调度器）+ <strong><code>llvm/lib/Target/&lt;芯片&gt;/</code></strong>（每芯片一份目标描述）。</li>
+<li>目标描述大量用 <strong>TableGen（<code>.td</code>）</strong> 声明寄存器、指令、调用约定、指令选择模式，由 <strong><code>llvm-tblgen</code></strong> 生成 C++——写新后端主要就是写 <code>.td</code>。</li>
+<li>流水线四步：<strong>指令选择（SelectionDAG / GlobalISel / FastISel）→ 调度 → 寄存器分配（溢出 spill 到栈）→ AsmPrinter/MC 输出</strong>。</li>
+<li>工具 <strong><code>llc</code></strong>：<code>-march=</code> 选目标后端，同一份 IR 出不同芯片汇编；<code>-filetype=obj</code> 经 MC 层直出 <code>.o</code>。</li>
+<li><strong>NVPTX</strong>（→ PTX，第 11 章）、<strong>SPIRV</strong>（→ SPIR-V，第 8 章）是产出虚拟 ISA 的特殊后端，需厂商再编一层，别与 X86 那种直出机器码的 CPU 后端混为一谈。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch06.html">← 第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a>
+  <a class="nav-next" href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

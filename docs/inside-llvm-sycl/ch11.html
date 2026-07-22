@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li class="active"><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面几章反复出现一句话："Intel/AMD 走 SPIR-V，NVIDIA 走 PTX。" 这一章把 NVIDIA 这条岔路走完整：设备端 LLVM IR 如何经 <strong>NVPTX 后端</strong>（第 7 章那个"产出虚拟 ISA 的特殊后端"）降级成 <strong>PTX</strong>，<strong>libclc</strong> 如何为设备代码补上数学函数与内建的实现，以及 SYCL 怎么通过 <code>-fsycl-targets=nvptx64-nvidia-cuda</code> 选中这条路径。</p>
+<p>读完你会明白：为什么 NVIDIA 不吃 SPIR-V 却依然能被同一套 DPC++ 编译器支持——因为解耦发生在<strong>更靠前的 IR 层</strong>（第 1、8 章），换后端就换出路。你也会看清 PTX 和 SPIR-V 一样是"虚拟 ISA / 交接合同"，最后一英里（PTX → SASS）同样交给 NVIDIA 驱动。这一章是第二部分的收尾，把异构栈的两条后端路径都补齐，然后我们带着完整地图进第三部分的 SYCL 实现。</p>
+</div><h2>NVIDIA 的岔路：同一条 IR 链，换一个出口</h2>
+<p>回顾第 8、9 章那条设备端链路，对 Intel/AMD 是：</p>
+<blockquote>
+<p>设备代码 → LLVM IR → <strong><code>llvm-spirv</code></strong> → SPIR-V → 厂商驱动 → 原生指令</p>
+</blockquote>
+<p>NVIDIA 的不同<strong>只在倒数第二段</strong>。前面完全一样——设备代码照样编成 LLVM IR、照样在 IR 上做优化。分叉点是&quot;IR 之后翻成什么虚拟 ISA&quot;：</p>
+<blockquote>
+<p>设备代码 → LLVM IR → <strong>NVPTX 后端</strong> → PTX → CUDA 驱动 → SASS</p>
+</blockquote>
+<p>关键洞察：<strong>分叉发生在 IR 之后，而 IR 是与目标无关的</strong>。这正是第 1 章&quot;IR 中心&quot;哲学的红利——前端（clang）、中端优化、乃至 SYCL 的设备代码外提（第 12 章）对&quot;最后去 SPIR-V 还是 PTX&quot;一无所知，它们只管产出 IR。要支持 NVIDIA，不用改前端、不用改优化，只需在 IR 后面接上 <strong>NVPTX 这个后端</strong>。这就是&quot;加一款芯片 = 加一个后端&quot;（第 1、7 章）在 NVIDIA 上的具体兑现。</p>
+<div class="concept">
+<svg viewBox="0 0 640 270" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">同一条 IR 链，IR 之后分叉：SPIR-V vs PTX</text>
+  <!-- device code -->
+  <rect x="30" y="110" width="90" height="44" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="75" y="130" text-anchor="middle" font-size="10" fill="#374151">设备代码</text>
+  <text x="75" y="145" text-anchor="middle" font-size="8" fill="#6b7280">SYCL kernel</text>
+  <!-- IR -->
+  <path d="M120 132 L152 132" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c11)"/>
+  <rect x="152" y="108" width="110" height="48" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="207" y="128" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">LLVM IR</text>
+  <text x="207" y="144" text-anchor="middle" font-size="8" fill="#6b7280">与目标无关</text>
+  <!-- 分叉点 -->
+  <path d="M262 122 L300 92" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c11)"/>
+  <path d="M262 142 L300 172" stroke="#6b7280" stroke-width="1.3" marker-end="url(#c11)"/>
+  <!-- 上路 SPIR-V -->
+  <rect x="300" y="66" width="110" height="40" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="355" y="83" text-anchor="middle" font-size="9" font-weight="bold" fill="#2b6cb0">llvm-spirv</text>
+  <text x="355" y="97" text-anchor="middle" font-size="8" fill="#6b7280">翻译器（第 8 章）</text>
+  <path d="M410 86 L440 86" stroke="#2b6cb0" stroke-width="1.3" marker-end="url(#c11b)"/>
+  <rect x="440" y="64" width="90" height="44" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="485" y="82" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">SPIR-V</text>
+  <text x="485" y="97" text-anchor="middle" font-size="8" fill="#6b7280">Intel / AMD 驱动</text>
+  <!-- 下路 PTX -->
+  <rect x="300" y="152" width="110" height="40" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="355" y="169" text-anchor="middle" font-size="9" font-weight="bold" fill="#a53f1c">NVPTX 后端</text>
+  <text x="355" y="183" text-anchor="middle" font-size="8" fill="#6b7280">LLVM 后端（第 7 章）</text>
+  <path d="M410 172 L440 172" stroke="#e06a3b" stroke-width="1.3" marker-end="url(#c11c)"/>
+  <rect x="440" y="150" width="90" height="44" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="485" y="168" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">PTX</text>
+  <text x="485" y="183" text-anchor="middle" font-size="8" fill="#6b7280">CUDA 驱动→SASS</text>
+  <text x="320" y="228" text-anchor="middle" font-size="10" fill="#2d2a26">前端、优化、IR 全部共用；<tspan font-weight="bold">只在 IR 之后换一个"出口"</tspan></text>
+  <text x="320" y="248" text-anchor="middle" font-size="9" fill="#6b7280">SPIR-V 走翻译器，PTX 走 LLVM 后端；两者都是"虚拟 ISA"，最后一英里都归厂商驱动</text>
+  <defs>
+    <marker id="c11" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c11b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="c11c" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 11-1　NVIDIA 岔路。设备代码 → IR 这一段和 Intel/AMD 完全共用；分叉只在 IR 之后：Intel/AMD 用 <code>llvm-spirv</code> 翻译器出 SPIR-V，NVIDIA 用 NVPTX <strong>后端</strong>出 PTX。注意两者一个是"翻译器"、一个是"LLVM 后端"（第 7、8 章的区分），但产物都是需驱动再编一层的虚拟 ISA</div>
+</div><h2>PTX：NVIDIA 的「虚拟 ISA / 交接合同」</h2>
+<p><strong>PTX（Parallel Thread Execution）</strong> 是 NVIDIA 定义的一种<strong>虚拟指令集</strong>。它的定位和 SPIR-V 惊人地相似（第 8 章）：它不是 GPU 真正执行的原生指令，而是一层<strong>稳定的、面向&quot;编译器 → 驱动&quot;交接的中间表示</strong>。真正在硬件上跑的是 <strong>SASS</strong>（各代 GPU 架构的原生机器码），由 CUDA 驱动/工具（<code>ptxas</code>）在运行时或安装时把 PTX 编成 SASS。</p>
+<p>为什么 NVIDIA 也要这么一层？和 SPIR-V 的理由一模一样：</p>
+<ul>
+<li><strong>前向兼容</strong>：一份 PTX 能在未来的新 GPU 上跑——驱动负责把它编成新架构的 SASS。程序不用为每代 GPU 重编。</li>
+<li><strong>厂商把最后一英里握在自己手里</strong>：PTX → SASS 的编译（寄存器分配到真实硬件、架构特定优化）由 NVIDIA 闭源完成，正如 SPIR-V → Gen ISA 由 Intel 驱动完成。</li>
+</ul>
+<p>所以你可以把 PTX 理解成&quot;<strong>NVIDIA 世界里的 SPIR-V</strong>&quot;——同样是虚拟 ISA、同样是交接合同、同样把原生代码生成留给驱动。区别只在于：SPIR-V 是 Khronos 的跨厂商标准，PTX 是 NVIDIA 私有的；而在 LLVM 里，产出 SPIR-V 用的是外挂<strong>翻译器</strong>，产出 PTX 用的是树内的 <strong>NVPTX 后端</strong>。</p>
+<div class="note">
+<strong>PTX 是文本，你能直接读</strong>
+和二进制的 SPIR-V 不同，PTX 是<strong>人可读的文本汇编</strong>（<code>.ptx</code> 文件）。你能直接打开看：里面是 <code>ld.global.f32</code>（从全局内存加载）、<code>add.f32</code>、<code>st.global.f32</code>、<code>bar.sync</code>（线程同步屏障）这类指令，还有 <code>.visible .entry</code> 标注的 kernel 入口。因为可读，调试 NVIDIA 路径时看 PTX 比看 SPIR-V 二进制方便——这也是本章能直接给你展示 PTX 片段的原因。
+</div><h2>NVPTX 后端：IR → PTX 的那台机器</h2>
+<p>产出 PTX 的是 LLVM 树内的 <strong>NVPTX 后端</strong>，源码在 <code>llvm/lib/Target/NVPTX/</code>。它就是第 7 章讲的那种 LLVM 后端——有指令选择、有 AsmPrinter——只不过它的&quot;机器码&quot;是文本 PTX。几个关键文件（都在该目录下）：</p>
+<ul>
+<li><code>NVPTXTargetMachine.{cpp,h}</code> —— 后端的顶层入口，把整条 codegen 流水线组织起来。</li>
+<li><code>NVPTXISelLowering.{cpp,h}</code>、<code>NVPTXISelDAGToDAG.cpp</code> —— 指令选择：把 IR 操作降级成 PTX 指令。</li>
+<li><code>NVPTXInstrInfo.td</code>、<code>NVPTXIntrinsics.td</code> —— 用 TableGen 描述 PTX 指令与 NVIDIA 特有内建（如线程 id、同步屏障）。</li>
+<li><code>NVPTXAsmPrinter.{cpp,h}</code> —— 把最终指令<strong>打印成 PTX 文本</strong>（相当于别的后端的汇编输出）。</li>
+<li><code>NVVMReflect.cpp</code>、<code>NVPTXLowerArgs.cpp</code> 等 —— NVIDIA 特有的降级/改写 Pass。</li>
+</ul>
+<p>它和 CPU 后端（第 7 章的 X86）<strong>结构同源、产物不同</strong>：X86 后端最后 AsmPrinter 出 x86 汇编、再由汇编器出可直接执行的机器码；NVPTX 后端最后 AsmPrinter 出 PTX 文本、还需 CUDA 驱动再编成 SASS 才能执行。这正是第 7 章那句&quot;GPU 后端产出的是需再编一层的虚拟 ISA&quot;。</p>
+<p>命令行上，<code>llc</code> 就能驱动 NVPTX 后端把 IR 翻成 PTX：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 用 NVPTX 后端把设备端 IR 翻成 PTX（nvptx64 = 64 位 NVIDIA 目标）
+llc -march=nvptx64 -mcpu=sm_80 device.ll -o device.ptx</code></pre>
+</div><p><code>-mcpu=sm_80</code> 指定目标计算能力（compute capability，这里是 Ampere 架构 A100 那档）。PTX 有版本和 target 概念，<code>sm_XX</code> 决定能用哪些特性——这和第 8 章 SPIR-V 的 <code>OpCapability</code> 是同一个意思：<strong>声明我需要什么硬件能力</strong>。</p>
+<h2>libclc：给设备代码补上「标准库」</h2>
+<p>还有一块拼图：设备代码里会调用一些函数——数学函数（<code>sin</code>、<code>sqrt</code>、<code>fma</code>）、以及 SYCL/OpenCL 的内建（拿全局 id、同步屏障、原子操作等）。这些在设备端<strong>没有系统 libc/libm 可链接</strong>，必须有一套<strong>面向设备的实现</strong>。这套实现就是 <strong>libclc</strong>（<code>libclc/</code>）。</p>
+<p>libclc 是&quot;OpenCL C 库需求的开源实现&quot;，为 clang 的 OpenCL/SYCL 前端提供设备端内建/库函数的实现，并且是<strong>跨目标可移植</strong>的。它在本书代码库里已被重组成分层结构（不再是旧的 <code>generic/ ptx/ spirv/</code> 平铺）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">libclc/
+├── clc/        # 核心 CLC 内建层
+│   └── lib/{generic, amdgpu, nvptx, spirv}/   # 通用实现 + 各目标特化
+├── libspirv/   # SPIR-V 内建实现（SYCL 设备端大量用）
+│   └── lib/{generic, amdgpu, nvptx, native_cpu}/
+└── opencl/     # OpenCL C 库层
+    └── lib/{generic, amdgpu, spirv}/</code></pre>
+</div><p>注意每一层的 <code>lib/</code> 下都有<strong>按目标划分的子目录</strong>：绝大多数函数用<strong>通用实现（<code>generic/</code>）</strong>、只在必要时为某个目标（如 <code>nvptx/</code>）提供<strong>特化版本</strong>——比如某个数学函数在 NVIDIA 上有更快的硬件指令，就在 <code>nvptx/</code> 下覆盖。这些库以 <strong>LLVM bitcode（<code>.bc</code>，第 3 章）</strong> 的形态存在，在设备端链接时（第 9 章的 <code>clang-sycl-linker</code>）被 <code>llvm-link</code> 链进设备镜像，把 kernel 里对 <code>sqrt</code>、<code>get_global_id</code> 的调用补上真正的实现。</p>
+<p>对 NVIDIA 路径，SYCL 会链接 <strong><code>libspirv</code> 的 nvptx 版</strong>加上一个设备库 <code>devicelib-nvptx64-nvidia-cuda.bc</code>——把 SYCL 设备代码依赖的内建都补齐，再交给 NVPTX 后端出 PTX。</p>
+<div class="keypoint">
+<strong>NVIDIA 支持 = 换后端（NVPTX）+ 换设备库（libclc nvptx）</strong>
+<strong>支持 NVIDIA 不需要动前端和中端优化——因为解耦在与目标无关的 IR 层。只需：① 用 <code>llvm/lib/Target/NVPTX/</code> 这个后端把 IR 降级成 PTX（NVIDIA 的"SPIR-V"，一层虚拟 ISA，最后一英里 PTX→SASS 归 CUDA 驱动）；② 用 <code>libclc/</code> 的 nvptx 特化实现补上设备端数学函数与内建。</strong>这就是"IR 中心"哲学最有说服力的一次兑现：同一套 DPC++ 编译器，靠换后端+换设备库就把 kernel 送上了本不吃 SPIR-V 的 NVIDIA GPU。
+</div><h2>SYCL 怎么选中 NVIDIA 路径</h2>
+<p>站在 SYCL 用户角度，选 NVIDIA 就是一个编译选项：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 编译 SYCL 程序，目标设为 NVIDIA GPU
+clang++ -fsycl -fsycl-targets=nvptx64-nvidia-cuda app.cpp -o app</code></pre>
+</div><p><code>nvptx64-nvidia-cuda</code> 是一个<strong>目标三元组（target triple）</strong>，字面意思就是&quot;64 位 NVPTX / NVIDIA / CUDA&quot;。driver（<code>clang/lib/Driver/</code>）看到它之后做的事，正是本章讲的链路的组织：</p>
+<ul>
+<li><code>clang/lib/Driver/ToolChains/SYCL.cpp</code> 里的 SYCL 工具链检测到 <code>TargetTriple.isNVPTX()</code>，就切到 NVIDIA 分支：选设备库 <code>devicelib-nvptx64-nvidia-cuda.bc</code>、链接 libclc 的 <code>libspirv</code>（nvptx）。</li>
+<li>它复用 <code>Cuda.cpp</code> 里的 CUDA 工具链作为设备侧工具链（因为要用到 CUDA 的 <code>ptxas</code> 等）。</li>
+<li>设备端最终链接推迟到 <code>clang-linker-wrapper</code>（第 9 章）——SYCL.cpp 里的注释明说：&quot;NVPTX、AMD 等目标在链接期通过 clang-linker-wrapper 链接&quot;。</li>
+</ul>
+<p>于是第 9、10 章的通用 offload 机制和本章的 NVIDIA 后端在这里合流：设备端 IR →（NVPTX 后端）→ PTX → 嵌进胖二进制 →（运行时）经 cuda 插件（第 10 章 <code>plugins-nextgen/cuda/</code>）用 <code>cuModuleLoadData</code> 加载、<code>cuLaunchKernel</code> 启动。整条 NVIDIA 路径就此贯通。</p>
+<div class="warn">
+<strong>SPIR-V 用翻译器、PTX 用后端——别把两条路的"形状"搞混</strong>
+容易误以为 NVIDIA 也有个"<code>llvm-ptx</code> 翻译器"对应 <code>llvm-spirv</code>。没有。PTX 是<strong>通过 LLVM 树内的 NVPTX 后端</strong>（走标准 codegen 流水线、<code>llc</code> 可驱动）产出的；而 SYCL 当前的 SPIR-V 是通过外挂<strong>翻译器</strong> <code>llvm-spirv</code>（第 8 章）产出的。两条路一个"后端"、一个"翻译器"，这是第 7、8 章反复强调的区分。记住：<strong>SPIR-V ↔ 翻译器，PTX ↔ 后端</strong>。（题外话：<code>llvm/lib/Target/SPIRV/</code> 那个 SPIR-V 后端也存在，但 SYCL 默认没用它。）
+</div><h2>亲手看一眼：IR 到 PTX 的对应</h2>
+<p>还是那个加法 kernel，看它经 NVPTX 后端出的 PTX 长什么样。设备端 IR 片段：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">; 设备端 LLVM IR：一个把两数相加写回的 kernel（简化）
+define void @add(float %a, float %b, float* %out) {
+entry:
+  %sum = fadd float %a, %b
+  store float %sum, float* %out
+  ret void
+}</code></pre>
+</div><p><code>llc -march=nvptx64 -mcpu=sm_80</code> 出的 PTX（大幅简化、示意）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">//
+// Generated by NVPTX backend
+//
+.version 7.0
+.target sm_80              // 目标计算能力，呼应 SPIR-V 的能力声明
+.address_size 64
+
+.visible .entry add(       // .entry 标注这是一个 kernel 入口
+    .param .f32 add_a,
+    .param .f32 add_b,
+    .param .u64 add_out
+)
+{
+    ld.param.f32   %f1, [add_a];      // 读参数 a
+    ld.param.f32   %f2, [add_b];      // 读参数 b
+    add.f32        %f3, %f1, %f2;     // 对应 IR 的 fadd
+    ld.param.u64   %rd1, [add_out];
+    st.global.f32  [%rd1], %f3;       // 对应 IR 的 store
+    ret;                              // 对应 ret void
+}</code></pre>
+</div><p>连线看：IR 的 <code>fadd</code> → PTX 的 <code>add.f32</code>，<code>store</code> → <code>st.global.f32</code>，<code>ret void</code> → <code>ret</code>；函数被标成 <code>.visible .entry</code>（kernel 入口）。和第 8 章那段 SPIR-V 对照，你会发现它们<strong>在做同一件事</strong>——把 IR 的操作一一映射到各自虚拟 ISA 的指令，只是一个用 <code>OpFAdd</code>、一个用 <code>add.f32</code>。这就是&quot;两条后端路径、同一种 IR 起点&quot;最直观的证据。</p>
+<h2>动手：模拟 IR 到 SPIR-V / PTX 的双路后端</h2>
+<p>把这一章的核心——「同一份 IR，按目标选不同后端出不同虚拟 ISA」——浓缩成一个浏览器里能跑的小模型。我们写一个极简的&quot;IR&quot;，再实现两个后端（SPIR-V 风格、PTX 风格），看同一份 IR 如何走出两条路。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%E5%8F%8C%E8%B7%AF%E5%90%8E%E7%AB%AF%EF%BC%9A%E5%90%8C%E4%B8%80%E4%BB%BD%20IR%EF%BC%8C%E6%8C%89%E7%9B%AE%E6%A0%87%E9%80%89%20llvm-spirv%EF%BC%88%E7%BF%BB%E8%AF%91%E5%99%A8%EF%BC%89%E6%88%96%20NVPTX%EF%BC%88%E5%90%8E%E7%AB%AF%EF%BC%89%0A%0A%23%20----%20%E4%B8%8E%E7%9B%AE%E6%A0%87%E6%97%A0%E5%85%B3%E7%9A%84%20IR%EF%BC%88%E7%AC%AC%201%E3%80%812%20%E7%AB%A0%EF%BC%89%EF%BC%9A%E4%B8%80%E4%B8%B2%E6%93%8D%E4%BD%9C%20----%0Air%20%3D%20%5B%0A%20%20%20%20(%22fadd%22%2C%20%22%25sum%22%2C%20%5B%22%25a%22%2C%20%22%25b%22%5D)%2C%0A%20%20%20%20(%22store%22%2C%20None%2C%20%20%5B%22%25out%22%2C%20%22%25sum%22%5D)%2C%0A%20%20%20%20(%22ret%22%2C%20%20None%2C%20%20%20%5B%5D)%2C%0A%5D%0A%0A%23%20----%20SPIR-V%20%E5%90%8E%E7%AB%AF%EF%BC%88%E5%AF%B9%E5%BA%94%20llvm-spirv%20%E7%BF%BB%E8%AF%91%E5%99%A8%EF%BC%8C%E7%AC%AC%208%20%E7%AB%A0%EF%BC%89----%0Adef%20to_spirv(ir)%3A%0A%20%20%20%20op_map%20%3D%20%7B%22fadd%22%3A%20%22OpFAdd%22%2C%20%22store%22%3A%20%22OpStore%22%2C%20%22ret%22%3A%20%22OpReturn%22%7D%0A%20%20%20%20print(%22%20%20OpCapability%20Kernel%20%20%20%20%20%20%20%20%20%20%20%3B%20%E5%A3%B0%E6%98%8E%E8%83%BD%E5%8A%9B%EF%BC%88%E8%83%BD%E5%8A%9B%E5%8D%8F%E5%95%86%EF%BC%8C%E7%AC%AC%208%20%E7%AB%A0%EF%BC%89%22)%0A%20%20%20%20for%20op%2C%20dst%2C%20uses%20in%20ir%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bop_map%5Bop%5D%3A%3C10%7D%20%7B'%20'.join(uses)%7D%22)%0A%0A%23%20----%20PTX%20%E5%90%8E%E7%AB%AF%EF%BC%88%E5%AF%B9%E5%BA%94%20NVPTX%20%E5%90%8E%E7%AB%AF%EF%BC%8C%E6%9C%AC%E7%AB%A0%EF%BC%89----%0Adef%20to_ptx(ir%2C%20sm%3D%22sm_80%22)%3A%0A%20%20%20%20op_map%20%3D%20%7B%22fadd%22%3A%20%22add.f32%22%2C%20%22store%22%3A%20%22st.global.f32%22%2C%20%22ret%22%3A%20%22ret%22%7D%0A%20%20%20%20print(f%22%20%20.target%20%7Bsm%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%3B%20%E7%9B%AE%E6%A0%87%E8%AE%A1%E7%AE%97%E8%83%BD%E5%8A%9B%EF%BC%88%E7%B1%BB%E6%AF%94%20OpCapability%EF%BC%89%22)%0A%20%20%20%20print(f%22%20%20.visible%20.entry%20add(...)%22)%0A%20%20%20%20for%20op%2C%20dst%2C%20uses%20in%20ir%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%7Bop_map%5Bop%5D%3A%3C14%7D%20%7B'%20'.join(uses)%7D%22)%0A%0A%23%20----%20driver%EF%BC%9A%E6%8C%89%20-fsycl-targets%20%E9%80%89%E5%90%8E%E7%AB%AF%E3%80%82IR%20%E5%AE%8C%E5%85%A8%E7%9B%B8%E5%90%8C%EF%BC%8C%E5%8F%AA%E6%98%AF%E5%87%BA%E5%8F%A3%E4%B8%8D%E5%90%8C%20----%0Adef%20compile_for(target)%3A%0A%20%20%20%20print(f%22%3D%3D%3D%20%E7%9B%AE%E6%A0%87%20%7Btarget%7D%20%3D%3D%3D%22)%0A%20%20%20%20if%20target%20%3D%3D%20%22spir64%22%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20Intel%2FAMD%0A%20%20%20%20%20%20%20%20print(%22%20%20%E2%86%92%20%E8%B5%B0%20llvm-spirv%20%E7%BF%BB%E8%AF%91%E5%99%A8%EF%BC%8C%E4%BA%A7%E5%87%BA%20SPIR-V%EF%BC%9A%22)%0A%20%20%20%20%20%20%20%20to_spirv(ir)%0A%20%20%20%20elif%20target%20%3D%3D%20%22nvptx64-nvidia-cuda%22%3A%20%20%20%20%20%20%20%20%23%20NVIDIA%0A%20%20%20%20%20%20%20%20print(%22%20%20%E2%86%92%20%E8%B5%B0%20NVPTX%20%E5%90%8E%E7%AB%AF%EF%BC%8C%E4%BA%A7%E5%87%BA%20PTX%EF%BC%9A%22)%0A%20%20%20%20%20%20%20%20to_ptx(ir)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%E2%86%92%20%E6%9C%AA%E7%9F%A5%E7%9B%AE%E6%A0%87%EF%BC%8C%E6%97%A0%E5%AF%B9%E5%BA%94%E5%90%8E%E7%AB%AF%22)%0A%20%20%20%20print()%0A%0Acompile_for(%22spir64%22)%0Acompile_for(%22nvptx64-nvidia-cuda%22)"># 模拟双路后端：同一份 IR，按目标选 llvm-spirv（翻译器）或 NVPTX（后端）
+
+# ---- 与目标无关的 IR（第 1、2 章）：一串操作 ----
+ir = [
+    ("fadd", "%sum", ["%a", "%b"]),
+    ("store", None,  ["%out", "%sum"]),
+    ("ret",  None,   []),
+]
+
+# ---- SPIR-V 后端（对应 llvm-spirv 翻译器，第 8 章）----
+def to_spirv(ir):
+    op_map = {"fadd": "OpFAdd", "store": "OpStore", "ret": "OpReturn"}
+    print("  OpCapability Kernel           ; 声明能力（能力协商，第 8 章）")
+    for op, dst, uses in ir:
+        print(f"  {op_map[op]:&lt;10} {' '.join(uses)}")
+
+# ---- PTX 后端（对应 NVPTX 后端，本章）----
+def to_ptx(ir, sm="sm_80"):
+    op_map = {"fadd": "add.f32", "store": "st.global.f32", "ret": "ret"}
+    print(f"  .target {sm}                    ; 目标计算能力（类比 OpCapability）")
+    print(f"  .visible .entry add(...)")
+    for op, dst, uses in ir:
+        print(f"      {op_map[op]:&lt;14} {' '.join(uses)}")
+
+# ---- driver：按 -fsycl-targets 选后端。IR 完全相同，只是出口不同 ----
+def compile_for(target):
+    print(f"=== 目标 {target} ===")
+    if target == "spir64":                       # Intel/AMD
+        print("  → 走 llvm-spirv 翻译器，产出 SPIR-V：")
+        to_spirv(ir)
+    elif target == "nvptx64-nvidia-cuda":        # NVIDIA
+        print("  → 走 NVPTX 后端，产出 PTX：")
+        to_ptx(ir)
+    else:
+        print("  → 未知目标，无对应后端")
+    print()
+
+compile_for("spir64")
+compile_for("nvptx64-nvidia-cuda")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 目标 spir64 ===
+  → 走 llvm-spirv 翻译器，产出 SPIR-V：
+  OpCapability Kernel           ; 声明能力（能力协商，第 8 章）
+  OpFAdd      %a %b
+  OpStore     %out %sum
+  OpReturn    
+=== 目标 nvptx64-nvidia-cuda ===
+  → 走 NVPTX 后端，产出 PTX：
+  .target sm_80                    ; 目标计算能力（类比 OpCapability）
+  .visible .entry add(...)
+      add.f32        %a %b
+      st.global.f32  %out %sum
+      ret            </code></pre>
+</div><p>看清这条对称：<strong>同一份 <code>ir</code></strong> 喂给 <code>compile_for</code>，只因 <code>target</code> 不同就走了两条后端、出了两种虚拟 ISA——SPIR-V 的 <code>OpFAdd</code> 和 PTX 的 <code>add.f32</code> 是对同一个 IR <code>fadd</code> 的两种&quot;方言翻译&quot;。这正是&quot;IR 中心 + 换后端&quot;支撑跨厂商的可运行缩影：前面的 IR 一个字不用改。请动手改：给 <code>ir</code> 加一条 <code>(&quot;fmul&quot;, &quot;%p&quot;, [&quot;%sum&quot;, &quot;%a&quot;])</code>，并在两个后端的 <code>op_map</code> 里补上它的映射（SPIR-V 的 <code>OpFMul</code>、PTX 的 <code>mul.f32</code>），重新运行——你会看到两条路同步长出对应指令，因为它们共享同一个 IR 源头。</p>
+<h2>小结与下一步</h2>
+<p>第二部分的最后一块拼图就位——NVIDIA 这条后端路径补齐了：</p>
+<ul>
+<li>NVIDIA 的岔路<strong>只在 IR 之后</strong>：前端、优化、IR 全与 Intel/AMD 共用，因为 IR 与目标无关（第 1 章&quot;IR 中心&quot;的红利）。</li>
+<li><strong>PTX</strong> 是 NVIDIA 的虚拟 ISA / 交接合同，定位等同 SPIR-V：稳定、前向兼容，最后一英里（PTX → SASS）由 CUDA 驱动（<code>ptxas</code>）完成。PTX 是<strong>可读文本</strong>。</li>
+<li>产出 PTX 靠 <strong>NVPTX 后端</strong>（<code>llvm/lib/Target/NVPTX/</code>，第 7 章那种 LLVM 后端，<code>llc -march=nvptx64</code> 可驱动）——注意是&quot;<strong>后端</strong>&quot;，与 SPIR-V 走&quot;<strong>翻译器</strong>&quot;不同。</li>
+<li><strong>libclc</strong>（<code>libclc/</code>，分层为 <code>clc/</code>/<code>libspirv/</code>/<code>opencl/</code>，每层 <code>lib/</code> 下按 <code>generic</code>+各目标特化）为设备端补上数学函数与内建，以 <code>.bc</code> 形态在设备链接时链入。NVIDIA 用 <code>libspirv</code> 的 nvptx 版 + <code>devicelib-nvptx64-nvidia-cuda.bc</code>。</li>
+<li>SYCL 用 <strong><code>-fsycl-targets=nvptx64-nvidia-cuda</code></strong> 选中此路径；driver（<code>SYCL.cpp</code> 检测 <code>isNVPTX()</code>，复用 <code>Cuda.cpp</code> 工具链，设备链接交 <code>clang-linker-wrapper</code>）把本章后端与第 9、10 章的 offload 机制合流。</li>
+</ul>
+<p><strong>第二部分（异构：SPIR-V、offload、运行时、NVIDIA）到此完成。</strong> 你现在手握完整的异构编译栈心智模型：IR → SPIR-V/PTX → 打包进胖二进制 → 运行时经插件上设备。</p>
+<p>下一章正式进入<strong>第三部分·SYCL 实现</strong>。第 12 章（SYCL 全景）你已经读过——它把这两部分的 LLVM/异构知识接到 SYCL 上：一份 <code>.cpp</code> 如何两趟编译、设备趟产出的 IR 正是走本章和第 8 章这两条后端路径。带着第一、二部分的全部积累，去看 DPC++ 到底怎么实现 SYCL。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>NVIDIA 岔路只在 <strong>IR 之后</strong>：前端/优化/IR 与 Intel/AMD 共用（IR 与目标无关）；换后端即换出口——&quot;加芯片 = 加后端&quot;。</li>
+<li><strong>PTX</strong> = NVIDIA 的虚拟 ISA / 交接合同，等同 SPIR-V 的角色（稳定、前向兼容，PTX→SASS 由 CUDA 驱动完成）；PTX 是<strong>可读文本</strong>（<code>ld.global</code>/<code>add.f32</code>/<code>bar.sync</code>/<code>.entry</code>）。</li>
+<li>产出 PTX 用 <strong>NVPTX 后端</strong>（<code>llvm/lib/Target/NVPTX/</code>：<code>NVPTXTargetMachine</code>/<code>NVPTXISelLowering</code>/<code>NVPTXAsmPrinter</code> + <code>.td</code>）；<code>llc -march=nvptx64 -mcpu=sm_XX</code>。是<strong>后端</strong>不是翻译器（对比 <code>llvm-spirv</code>）。</li>
+<li><strong>libclc</strong>（<code>libclc/</code>，分层 <code>clc</code>/<code>libspirv</code>/<code>opencl</code>，各层 <code>lib/</code> 下 <code>generic</code>+目标特化如 <code>nvptx/</code>）补设备端数学/内建，以 <code>.bc</code> 链入；NVIDIA 用 <code>libspirv</code>(nvptx)+<code>devicelib-nvptx64-nvidia-cuda.bc</code>。</li>
+<li>SYCL 选路：<strong><code>-fsycl-targets=nvptx64-nvidia-cuda</code></strong>；driver <code>SYCL.cpp</code>（<code>isNVPTX()</code>）复用 <code>Cuda.cpp</code> 工具链、设备链接交 <code>clang-linker-wrapper</code>（第 9 章）、运行时经 <code>plugins-nextgen/cuda</code>（第 10 章）加载启动。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch10.html">← 第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a>
+  <a class="nav-next" href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li class="active"><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 16、17 章里反复出现两样东西却一直没展开：每个 impl 握着的 <code>ur_*_handle_t</code> 句柄、每次 <code>adapter.call&lt;UrApiKind::…&gt;(...)</code> 的调用。它们都指向同一层——<strong>Unified Runtime（UR，统一运行时）</strong>。这一章把这层单独讲清：UR 是什么、它的 API 长什么样、它怎么用<strong>适配器（adapter）</strong>对接 Level Zero / CUDA / OpenCL 等各家后端、以及 SYCL 运行时怎么通过一层薄薄的 glue 接上它。</p>
+<p>读完你会认出一个老朋友：UR 就是第 10 章 "统一接口 + 各设备插件" 那个解耦母题在 <strong>SYCL 侧</strong>的化身——上层 SYCL 运行时只对 UR 的设备无关 API 编程，每家 GPU 各写一个 adapter 把 UR 调用翻译成自己的驱动调用（<code>zeCommandListAppendLaunchKernel</code> / <code>cuLaunchKernel</code> / <code>clEnqueueNDRangeKernel</code>）。加一款设备 = 加一个 adapter，SYCL 运行时一行不改。这是 SYCL "一份代码跑遍 Intel/NVIDIA/AMD" 承诺的最后一块拼图。</p>
+</div><h2>UR 是什么：SYCL 的设备无关运行时层</h2>
+<p>回顾第 17 章结尾：调度器把命令 enqueue 到设备。但&quot;设备&quot;是抽象的——具体是 Intel GPU（走 Level Zero）、NVIDIA GPU（走 CUDA Driver API）还是 CPU（走 OpenCL）？这些后端的 API 完全不同。如果让 SYCL 运行时直接去调各家 API，代码会被 <code>#ifdef</code> 撕碎——这正是第 10 章讲过的困境。</p>
+<p><strong>Unified Runtime（UR）</strong> 就是插在中间的那层设备无关抽象。它在本书代码库里是一个<strong>顶层目录</strong> <code>unified-runtime/</code>（注意：<strong>不在</strong> <code>sycl/</code> 下面，是和 <code>sycl/</code>、<code>llvm/</code> 平级的独立组件）。SYCL 运行时只对着 UR 的 C API 编程，说&quot;创建一个队列&quot;&quot;分配设备内存&quot;&quot;启动这个 kernel&quot;，UR 再通过 adapter 分派到具体后端。</p>
+<div class="warn">
+<strong>UR ≠ liboffload（第 10 章），别混为一层</strong>
+第 10 章的 <code>liboffload</code> 和本章的 UR <strong>理念完全一致</strong>（都是"统一接口 + 后端适配"），也都对接 CUDA/Level Zero，但它们是<strong>两个不同的层、服务不同的上层</strong>：<code>liboffload</code> 脱胎于 OpenMP offload、面向多语言运行时；<strong>UR 是 SYCL/DPC++ 专用</strong>的那一层。SYCL 运行时走的是 UR，不是 liboffload。有意思的是它们之间有座桥——UR 的 <code>offload</code> adapter 能把 UR 调用转发给 liboffload。但请在脑子里把这两层分开：本章只讲 SYCL 侧的 UR。
+</div><h2>UR 的 API：从 YAML 规范生成</h2>
+<p>UR 的 API 是一套 C 接口，声明在 <code>unified-runtime/include/unified-runtime/ur_api.h</code>。和第 10 章 liboffload、第 7 章后端一样，它也是<strong>声明式描述 + 代码生成</strong>的产物——<code>ur_api.h</code> 由 <code>unified-runtime/scripts/core/*.yml</code> 这些 YAML 规范生成。YAML 单一来源地描述每个 API 的签名、参数、枚举、错误码，生成出一致的头文件、加载器代码和文档。</p>
+<p>UR 用一组**不透明句柄（opaque handle）**对应 SYCL 的核心对象——这正是第 16 章那些 <code>ur_*_handle_t</code> 的来源：</p>
+<table>
+<thead>
+<tr>
+<th>UR 句柄</th>
+<th>对应 SYCL 概念</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ur_platform_handle_t</code></td>
+<td>platform</td>
+</tr>
+<tr>
+<td><code>ur_device_handle_t</code></td>
+<td>device</td>
+</tr>
+<tr>
+<td><code>ur_context_handle_t</code></td>
+<td>context</td>
+</tr>
+<tr>
+<td><code>ur_queue_handle_t</code></td>
+<td>queue</td>
+</tr>
+<tr>
+<td><code>ur_program_handle_t</code></td>
+<td>编译好的设备程序</td>
+</tr>
+<tr>
+<td><code>ur_kernel_handle_t</code></td>
+<td>kernel</td>
+</tr>
+<tr>
+<td><code>ur_mem_handle_t</code></td>
+<td>buffer/image</td>
+</tr>
+<tr>
+<td><code>ur_event_handle_t</code></td>
+<td>event</td>
+</tr>
+</tbody></table>
+<p>对应的核心入口点（函数）也很好认，基本是&quot;动词 + 名词&quot;：<code>urLoaderInit</code>（初始化加载器）、<code>urAdapterGet</code>（枚举 adapter）、<code>urPlatformGet</code> / <code>urDeviceGet</code> / <code>urContextCreate</code> / <code>urQueueCreate</code> / <code>urMemBufferCreate</code> / <code>urUSMDeviceAlloc</code> / <code>urProgramCreateWithIL</code>（从 SPIR-V IL 建 program）/ <code>urKernelCreate</code>。而启动 kernel 的那一下是 <strong><code>urEnqueueKernelLaunchWithArgsExp</code></strong>。</p>
+<div class="note">
+<strong>启动 API 的确切名字有个坑</strong>
+你可能想当然地去搜 <code>urEnqueueKernelLaunch</code>——但当前分支上真正用的启动入口是 <strong><code>urEnqueueKernelLaunchWithArgsExp</code></strong>（带 <code>WithArgs</code> 和 <code>Exp</code> 后缀，<code>Exp</code> 表示 experimental 扩展入口）。这类"名字带 Exp 后缀""看起来有个更短的版本其实没有"的情况，在 UR 里不止一处。查 API 时以你构建出的 <code>ur_api.h</code> 为准，别凭记忆拼——这也是"源码为锚"的一个具体教训。
+</div><h2>adapter：把 UR 调用翻译成各家驱动</h2>
+<p>UR 的后端实现叫 <strong>adapter（适配器）</strong>，住在 <code>unified-runtime/source/adapters/</code> 下，每家后端一个子目录：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">unified-runtime/source/adapters/
+├── level_zero/        # Intel GPU（Level Zero）
+│   └── v2/            # Level Zero 的新一代实现（子目录，注意别看漏！）
+├── cuda/              # NVIDIA GPU（CUDA Driver API）
+├── hip/               # AMD GPU（HIP/ROCm）
+├── opencl/            # 任何 OpenCL 设备（含 CPU）
+├── native_cpu/        # 直接在 CPU 上跑，无需外部驱动
+├── offload/           # 桥接到 liboffload（第 10 章）
+└── mock/              # 测试用假 adapter</code></pre>
+</div><p>每个 adapter 实现同一套 UR API 契约，内部翻译成自己后端的调用。同一个 <code>urEnqueueKernelLaunchWithArgsExp</code>：</p>
+<ul>
+<li>在 <strong>level_zero</strong> adapter 里 → <code>zeCommandListAppendLaunchKernel</code></li>
+<li>在 <strong>cuda</strong> adapter 里 → <code>cuLaunchKernel</code></li>
+<li>在 <strong>opencl</strong> adapter 里 → <code>clEnqueueNDRangeKernel</code></li>
+</ul>
+<p>这就是第 10 章那张图的 SYCL 版：<strong>上层对一套 UR API 编程，adapter 把统一动作翻译成各自驱动的真实调用；加一款设备只要加一个 adapter</strong>。<code>mock</code> adapter 尤其有用——它不碰任何真实驱动，返回假句柄，让 SYCL 运行时的单元测试能在没有 GPU 的机器上跑。</p>
+<div class="note">
+<strong>两套 Level Zero 实现不是笔误</strong>
+你会在 <code>level_zero/</code> 目录里看到一个 <code>v2/</code> 子目录，里头是<strong>另一套</strong>实现。这是 Intel GPU 后端正在进行的一次重写——<code>v2</code> 是新一代实现（更贴合新的 Level Zero immediate command list 等特性），和旧的并存、逐步切换。读源码遇到两套别以为看错了。这种"新旧实现并存"在活跃演进的运行时里很常见（对比第 16 章 <code>plugins-nextgen</code> 相对旧插件的"nextgen"）。
+</div><h2>loader：UR 怎么找到并加载 adapter</h2>
+<p>adapter 是动态库，UR 需要在运行时<strong>发现并加载</strong>它们——这是 <strong>loader（加载器）</strong> 的活，代码在 <code>unified-runtime/source/loader/</code>。关键文件 <code>ur_adapter_registry.hpp</code>、<code>ur_manifests.hpp</code> 描述&quot;有哪些 adapter、去哪找&quot;。<code>urLoaderInit</code> 初始化加载器，<code>urAdapterGet</code> 枚举出当前环境可用的 adapter。</p>
+<p>用户侧控制&quot;用哪个后端/设备&quot;的旋钮是环境变量 <strong><code>ONEAPI_DEVICE_SELECTOR</code></strong>——比如 <code>ONEAPI_DEVICE_SELECTOR=level_zero:gpu</code> 选 Level Zero 的 GPU、<code>cuda:*</code> 选所有 CUDA 设备。loader 据此决定加载哪些 adapter、暴露哪些设备。这解释了第 16 章那句&quot;发现并选设备&quot;到底是谁在做——loader + adapter 枚举。</p>
+<div class="concept">
+<svg viewBox="0 0 660 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">SYCL → UR → adapter → 各家驱动</text>
+  <!-- sycl rt -->
+  <rect x="170" y="38" width="320" height="40" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="330" y="55" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">SYCL 运行时（第 16、17 章）</text>
+  <text x="330" y="70" text-anchor="middle" font-size="8" fill="#6b7280">queue_impl / context_impl … 持 ur_*_handle_t</text>
+  <!-- glue -->
+  <path d="M330 78 L330 96" stroke="#6b7280" stroke-width="1.2" marker-end="url(#c18)"/>
+  <rect x="210" y="98" width="240" height="34" rx="6" fill="#faf5ff" stroke="#7c3aed" stroke-width="1.3"/>
+  <text x="330" y="114" text-anchor="middle" font-size="9" font-weight="bold" fill="#6b21a8">glue: sycl/source/detail/ur.{hpp,cpp}</text>
+  <text x="330" y="126" text-anchor="middle" font-size="8" fill="#6b7280">adapter_impl::call&lt;UrApiKind::…&gt;</text>
+  <!-- UR API -->
+  <path d="M330 132 L330 148" stroke="#6b7280" stroke-width="1.2" marker-end="url(#c18)"/>
+  <rect x="150" y="150" width="360" height="46" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="330" y="170" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">Unified Runtime API（设备无关，从 *.yml 生成）</text>
+  <text x="330" y="186" text-anchor="middle" font-size="8" fill="#6b7280">urQueueCreate / urProgramCreateWithIL / urEnqueueKernelLaunchWithArgsExp …</text>
+  <!-- loader note -->
+  <rect x="520" y="150" width="125" height="46" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1"/>
+  <text x="582" y="167" text-anchor="middle" font-size="8" font-weight="bold" fill="#b45309">loader</text>
+  <text x="582" y="180" text-anchor="middle" font-size="7" fill="#6b7280">发现+加载 adapter</text>
+  <text x="582" y="191" text-anchor="middle" font-size="7" fill="#6b7280">ONEAPI_DEVICE_SELECTOR</text>
+  <!-- adapters -->
+  <path d="M240 196 L150 224" stroke="#e06a3b" stroke-width="1.1" marker-end="url(#c18b)"/>
+  <path d="M310 196 L300 224" stroke="#e06a3b" stroke-width="1.1" marker-end="url(#c18b)"/>
+  <path d="M400 196 L450 224" stroke="#e06a3b" stroke-width="1.1" marker-end="url(#c18b)"/>
+  <g font-size="8">
+    <rect x="55" y="226" width="120" height="60" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="115" y="244" text-anchor="middle" font-weight="bold" fill="#a53f1c">level_zero adapter</text>
+    <text x="115" y="259" text-anchor="middle" fill="#6b7280">→ Level Zero</text>
+    <text x="115" y="271" text-anchor="middle" fill="#6b7280">zeCommandListAppend…</text>
+    <text x="115" y="282" text-anchor="middle" fill="#9ca3af">(内含 v2 子目录)</text>
+    <rect x="245" y="226" width="110" height="60" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="300" y="244" text-anchor="middle" font-weight="bold" fill="#a53f1c">cuda adapter</text>
+    <text x="300" y="259" text-anchor="middle" fill="#6b7280">→ CUDA Driver</text>
+    <text x="300" y="271" text-anchor="middle" fill="#6b7280">cuLaunchKernel</text>
+    <rect x="415" y="226" width="120" height="60" rx="6" fill="#fff4ec" stroke="#e06a3b"/>
+    <text x="475" y="244" text-anchor="middle" font-weight="bold" fill="#a53f1c">opencl adapter</text>
+    <text x="475" y="259" text-anchor="middle" fill="#6b7280">→ OpenCL</text>
+    <text x="475" y="271" text-anchor="middle" fill="#6b7280">clEnqueueNDRangeKernel</text>
+  </g>
+  <text x="330" y="306" text-anchor="middle" font-size="9" fill="#6b7280">hip / native_cpu / offload / mock 同理。加一款设备 = 加一个 adapter，SYCL 运行时不改</text>
+  <text x="330" y="322" text-anchor="middle" font-size="9" fill="#2d2a26">这就是第 10 章"统一接口 + 插件"母题在 SYCL 侧的化身</text>
+  <defs>
+    <marker id="c18" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c18b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 18-1　SYCL → UR → adapter → 驱动。SYCL 运行时经 <code>sycl/source/detail/ur.{hpp,cpp}</code> 这层 glue 调 UR 的设备无关 API；loader（受 <code>ONEAPI_DEVICE_SELECTOR</code> 控制）发现并加载 adapter；每个 adapter 把 <code>urEnqueueKernelLaunchWithArgsExp</code> 翻译成自己后端的启动调用。加设备只加 adapter</div>
+</div><h2>SYCL 侧的 glue：sycl 怎么接上 UR</h2>
+<p>UR 是独立组件（顶层 <code>unified-runtime/</code>），SYCL 运行时通过一层<strong>薄薄的 glue</strong> 接上它，代码在 <code>sycl/source/detail/ur.{hpp,cpp}</code>（还记得第 13 章那个 <code>source/detail/</code> 吗？就在那）。这层 glue 把第 16 章那个模板调用 <code>Adapter.call&lt;UrApiKind::xxx&gt;(...)</code> 落到实处——<code>UrApiKind::urQueueCreate</code> 这样的枚举被映射到真正的 UR 函数指针，<code>call&lt;&gt;</code> 还统一做错误检查（UR 返回错误码就抛 SYCL 异常）。</p>
+<p>所以第 16 章那条脊柱的最后一跳现在闭合了：
+<code>queue_impl</code> 建队列 → <code>getAdapter().call&lt;UrApiKind::urQueueCreate&gt;(...)</code>（<code>queue_impl.hpp:543</code>）→ glue 查到 UR 的 <code>urQueueCreate</code> 函数指针 → loader 分派到选中的 adapter（如 level_zero）→ adapter 内部调 <code>zeCommandListCreate</code> 之类 → 拿到 <code>ze_command_queue_handle_t</code>，包成 <code>ur_queue_handle_t</code> 交回来。第 17 章调度器最终 enqueue kernel 时，同样这条链走到 <code>urEnqueueKernelLaunchWithArgsExp</code> → adapter → <code>zeCommandListAppendLaunchKernel</code>。<strong>整条从 <code>q.submit</code> 到硬件启动的路径，到这里全部贯通</strong>。</p>
+<h2>观察 UR：把每次调用打印出来</h2>
+<p>UR 内建追踪，是观察这层最直接的方式。核心开关是 <code>SYCL_UR_TRACE</code>（定义在 <code>sycl/source/detail/config.def</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 打印 SYCL 运行时对 UR 的每一次调用（urQueueCreate、urEnqueueKernelLaunch… 全打出来）
+SYCL_UR_TRACE=1 ./my_sycl_app
+
+# 选后端/设备：只用 Level Zero 的 GPU
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu ./my_sycl_app
+
+# 它是位掩码（bit-mask）：-1 打开所有追踪类型，输出更全
+SYCL_UR_TRACE=-1 ./my_sycl_app</code></pre>
+</div><p><code>SYCL_UR_TRACE=1</code> 的输出是理解一个 SYCL 程序&quot;到底对运行时下了哪些命令&quot;的最佳窗口——你会看到 <code>urContextCreate</code> → <code>urQueueCreate</code> → <code>urProgramCreateWithIL</code> → <code>urKernelCreate</code> → <code>urEnqueueKernelLaunchWithArgsExp</code> 这一串，和你源码里的 <code>context</code>/<code>queue</code>/<code>parallel_for</code> 一一对上。再配合第 10 章的 <code>nsys</code>（CUDA）或 Level Zero 的追踪工具看底层驱动调用，就能亲眼确认 adapter 那层翻译。调试性能或&quot;kernel 没跑&quot;问题时，这是第一现场。</p>
+<div class="keypoint">
+<strong>UR = SYCL 的"统一接口 + adapter 插件"层</strong>
+<strong>UR 是顶层组件 <code>unified-runtime/</code>（不在 <code>sycl/</code> 下），API（<code>ur_api.h</code>）从 <code>scripts/core/*.yml</code> 生成，用 <code>ur_*_handle_t</code> 不透明句柄对应 SYCL 对象。<code>unified-runtime/source/adapters/</code> 下每家后端一个 adapter（level_zero[_v2]/cuda/hip/opencl/native_cpu/offload/mock），把同一个 <code>urEnqueueKernelLaunchWithArgsExp</code> 翻成 <code>zeCommandListAppendLaunchKernel</code>/<code>cuLaunchKernel</code>/<code>clEnqueueNDRangeKernel</code>。</strong>loader（受 <code>ONEAPI_DEVICE_SELECTOR</code> 控制）发现加载 adapter；SYCL 经 <code>sycl/source/detail/ur.{hpp,cpp}</code> 的 <code>adapter.call&lt;UrApiKind::…&gt;</code> 接上。这是第 10 章解耦母题在 SYCL 侧的化身——加设备只加 adapter。
+</div><h2>动手：模拟 UR 分派到各后端 adapter</h2>
+<p>把这一章的核心——「SYCL 对 UR 统一 API 编程 → loader 按选择器加载 adapter → adapter 翻译成各家驱动调用」——用一个浏览器里能跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20Unified%20Runtime%EF%BC%9A%E7%BB%9F%E4%B8%80%20UR%20API%20%2B%20%E5%90%84%E5%90%8E%E7%AB%AF%20adapter%0A%0A%23%20----%20%E6%AF%8F%E4%B8%AA%20adapter%20%E5%AE%9E%E7%8E%B0%E5%90%8C%E4%B8%80%E5%A5%97%20UR%20%E5%A5%91%E7%BA%A6%EF%BC%8C%E7%BF%BB%E8%AF%91%E6%88%90%E8%87%AA%E5%B7%B1%E5%90%8E%E7%AB%AF%E7%9A%84%E9%A9%B1%E5%8A%A8%E8%B0%83%E7%94%A8%20----%0Aclass%20Adapter%3A%0A%20%20%20%20name%20%3D%20%22base%22%0A%20%20%20%20def%20urContextCreate(self%2C%20dev)%3A%20%20%20%20%20%20raise%20NotImplementedError%0A%20%20%20%20def%20urQueueCreate(self%2C%20ctx%2C%20dev)%3A%20%20%20raise%20NotImplementedError%0A%20%20%20%20def%20urProgramCreateWithIL(self%2C%20il)%3A%20raise%20NotImplementedError%0A%20%20%20%20def%20urEnqueueKernelLaunchWithArgsExp(self%2C%20k%2C%20nd)%3A%20raise%20NotImplementedError%0A%0Aclass%20LevelZeroAdapter(Adapter)%3A%0A%20%20%20%20name%20%3D%20%22level_zero%22%0A%20%20%20%20def%20urContextCreate(self%2C%20dev)%3A%20%20%20%20%20%20return%20%22zeContextCreate()%22%0A%20%20%20%20def%20urQueueCreate(self%2C%20ctx%2C%20dev)%3A%20%20%20return%20%22zeCommandQueueCreate()%22%0A%20%20%20%20def%20urProgramCreateWithIL(self%2C%20il)%3A%20return%20f%22zeModuleCreate(%7Bil%7D)%20%20%23%20%E5%90%83%20SPIR-V%22%0A%20%20%20%20def%20urEnqueueKernelLaunchWithArgsExp(self%2C%20k%2C%20nd)%3A%20return%20f%22zeCommandListAppendLaunchKernel(%7Bk%7D%2C%20%7Bnd%7D)%22%0A%0Aclass%20CudaAdapter(Adapter)%3A%0A%20%20%20%20name%20%3D%20%22cuda%22%0A%20%20%20%20def%20urContextCreate(self%2C%20dev)%3A%20%20%20%20%20%20return%20%22cuCtxCreate()%22%0A%20%20%20%20def%20urQueueCreate(self%2C%20ctx%2C%20dev)%3A%20%20%20return%20%22cuStreamCreate()%22%0A%20%20%20%20def%20urProgramCreateWithIL(self%2C%20il)%3A%20return%20f%22cuModuleLoadData(%7Bil%7D)%20%20%23%20%E5%90%83%20PTX%22%0A%20%20%20%20def%20urEnqueueKernelLaunchWithArgsExp(self%2C%20k%2C%20nd)%3A%20return%20f%22cuLaunchKernel(%7Bk%7D%2C%20%7Bnd%7D)%22%0A%0Aclass%20OpenCLAdapter(Adapter)%3A%0A%20%20%20%20name%20%3D%20%22opencl%22%0A%20%20%20%20def%20urContextCreate(self%2C%20dev)%3A%20%20%20%20%20%20return%20%22clCreateContext()%22%0A%20%20%20%20def%20urQueueCreate(self%2C%20ctx%2C%20dev)%3A%20%20%20return%20%22clCreateCommandQueue()%22%0A%20%20%20%20def%20urProgramCreateWithIL(self%2C%20il)%3A%20return%20f%22clCreateProgramWithIL(%7Bil%7D)%22%0A%20%20%20%20def%20urEnqueueKernelLaunchWithArgsExp(self%2C%20k%2C%20nd)%3A%20return%20f%22clEnqueueNDRangeKernel(%7Bk%7D%2C%20%7Bnd%7D)%22%0A%0A%23%20----%20loader%EF%BC%9A%E6%8C%89%20ONEAPI_DEVICE_SELECTOR%20%E6%8C%91%20adapter%20----%0AADAPTERS%20%3D%20%7Ba.name%3A%20a%20for%20a%20in%20%5BLevelZeroAdapter()%2C%20CudaAdapter()%2C%20OpenCLAdapter()%5D%7D%0A%0Adef%20loader_select(selector)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%BD%A2%E5%A6%82%20%22level_zero%3Agpu%22%0A%20%20%20%20backend%20%3D%20selector.split(%22%3A%22)%5B0%5D%0A%20%20%20%20return%20ADAPTERS.get(backend)%0A%0A%23%20----%20SYCL%20%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%9A%E5%8F%AA%E8%AF%B4%20UR%20%E7%9A%84%E7%BB%9F%E4%B8%80%E5%8A%A8%E4%BD%9C%EF%BC%8C%E4%B8%8D%E7%A2%B0%E5%85%B7%E4%BD%93%E9%A9%B1%E5%8A%A8%20----%0Adef%20sycl_run(selector%2C%20il%2C%20kernel%2C%20ndrange)%3A%0A%20%20%20%20ad%20%3D%20loader_select(selector)%0A%20%20%20%20if%20not%20ad%3A%0A%20%20%20%20%20%20%20%20print(f%22%5Bloader%5D%20%E6%B2%A1%E6%9C%89%20%7Bselector%7D%20%E5%AF%B9%E5%BA%94%E7%9A%84%20adapter%22)%3B%20return%0A%20%20%20%20print(f%22%5Bloader%5D%20ONEAPI_DEVICE_SELECTOR%3D%7Bselector%7D%20%E2%86%92%20%E5%8A%A0%E8%BD%BD%20%7Bad.name%7D%20adapter%22)%0A%20%20%20%20print(f%22%20%20urContextCreate%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%E2%86%92%20%7Bad.urContextCreate('dev0')%7D%22)%0A%20%20%20%20print(f%22%20%20urQueueCreate%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%E2%86%92%20%7Bad.urQueueCreate('ctx'%2C'dev0')%7D%22)%0A%20%20%20%20print(f%22%20%20urProgramCreateWithIL%20%20%20%20%20%20%20%20%20%E2%86%92%20%7Bad.urProgramCreateWithIL(il)%7D%22)%0A%20%20%20%20print(f%22%20%20urEnqueueKernelLaunchWithArgsExp%20%E2%86%92%20%7Bad.urEnqueueKernelLaunchWithArgsExp(kernel%2C%20ndrange)%7D%22)%0A%20%20%20%20print()%0A%0A%23%20%E5%90%8C%E4%B8%80%E6%AE%B5%20SYCL%20%E9%80%BB%E8%BE%91%EF%BC%8C%E5%8F%AA%E5%9B%A0%E9%80%89%E6%8B%A9%E5%99%A8%E4%B8%8D%E5%90%8C%E5%B0%B1%E8%90%BD%E5%88%B0%E4%B8%8D%E5%90%8C%E5%90%8E%E7%AB%AF%0Asycl_run(%22level_zero%3Agpu%22%2C%20%22VecAdd.spv%22%2C%20%22VecAdd%22%2C%20(1024%2C))%0Asycl_run(%22cuda%3Agpu%22%2C%20%20%20%20%20%20%20%22VecAdd.ptx%22%2C%20%22VecAdd%22%2C%20(1024%2C))%0Asycl_run(%22opencl%3Acpu%22%2C%20%20%20%20%20%22VecAdd.spv%22%2C%20%22VecAdd%22%2C%20(1024%2C))"># 模拟 Unified Runtime：统一 UR API + 各后端 adapter
+
+# ---- 每个 adapter 实现同一套 UR 契约，翻译成自己后端的驱动调用 ----
+class Adapter:
+    name = "base"
+    def urContextCreate(self, dev):      raise NotImplementedError
+    def urQueueCreate(self, ctx, dev):   raise NotImplementedError
+    def urProgramCreateWithIL(self, il): raise NotImplementedError
+    def urEnqueueKernelLaunchWithArgsExp(self, k, nd): raise NotImplementedError
+
+class LevelZeroAdapter(Adapter):
+    name = "level_zero"
+    def urContextCreate(self, dev):      return "zeContextCreate()"
+    def urQueueCreate(self, ctx, dev):   return "zeCommandQueueCreate()"
+    def urProgramCreateWithIL(self, il): return f"zeModuleCreate({il})  # 吃 SPIR-V"
+    def urEnqueueKernelLaunchWithArgsExp(self, k, nd): return f"zeCommandListAppendLaunchKernel({k}, {nd})"
+
+class CudaAdapter(Adapter):
+    name = "cuda"
+    def urContextCreate(self, dev):      return "cuCtxCreate()"
+    def urQueueCreate(self, ctx, dev):   return "cuStreamCreate()"
+    def urProgramCreateWithIL(self, il): return f"cuModuleLoadData({il})  # 吃 PTX"
+    def urEnqueueKernelLaunchWithArgsExp(self, k, nd): return f"cuLaunchKernel({k}, {nd})"
+
+class OpenCLAdapter(Adapter):
+    name = "opencl"
+    def urContextCreate(self, dev):      return "clCreateContext()"
+    def urQueueCreate(self, ctx, dev):   return "clCreateCommandQueue()"
+    def urProgramCreateWithIL(self, il): return f"clCreateProgramWithIL({il})"
+    def urEnqueueKernelLaunchWithArgsExp(self, k, nd): return f"clEnqueueNDRangeKernel({k}, {nd})"
+
+# ---- loader：按 ONEAPI_DEVICE_SELECTOR 挑 adapter ----
+ADAPTERS = {a.name: a for a in [LevelZeroAdapter(), CudaAdapter(), OpenCLAdapter()]}
+
+def loader_select(selector):                 # 形如 "level_zero:gpu"
+    backend = selector.split(":")[0]
+    return ADAPTERS.get(backend)
+
+# ---- SYCL 运行时：只说 UR 的统一动作，不碰具体驱动 ----
+def sycl_run(selector, il, kernel, ndrange):
+    ad = loader_select(selector)
+    if not ad:
+        print(f"[loader] 没有 {selector} 对应的 adapter"); return
+    print(f"[loader] ONEAPI_DEVICE_SELECTOR={selector} → 加载 {ad.name} adapter")
+    print(f"  urContextCreate               → {ad.urContextCreate('dev0')}")
+    print(f"  urQueueCreate                 → {ad.urQueueCreate('ctx','dev0')}")
+    print(f"  urProgramCreateWithIL         → {ad.urProgramCreateWithIL(il)}")
+    print(f"  urEnqueueKernelLaunchWithArgsExp → {ad.urEnqueueKernelLaunchWithArgsExp(kernel, ndrange)}")
+    print()
+
+# 同一段 SYCL 逻辑，只因选择器不同就落到不同后端
+sycl_run("level_zero:gpu", "VecAdd.spv", "VecAdd", (1024,))
+sycl_run("cuda:gpu",       "VecAdd.ptx", "VecAdd", (1024,))
+sycl_run("opencl:cpu",     "VecAdd.spv", "VecAdd", (1024,))</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[loader] ONEAPI_DEVICE_SELECTOR=level_zero:gpu → 加载 level_zero adapter
+  urContextCreate               → zeContextCreate()
+  urQueueCreate                 → zeCommandQueueCreate()
+  urProgramCreateWithIL         → zeModuleCreate(VecAdd.spv)  # 吃 SPIR-V
+  urEnqueueKernelLaunchWithArgsExp → zeCommandListAppendLaunchKernel(VecAdd, (1024,))
+
+[loader] ONEAPI_DEVICE_SELECTOR=cuda:gpu → 加载 cuda adapter
+  urContextCreate               → cuCtxCreate()
+  urQueueCreate                 → cuStreamCreate()
+  urProgramCreateWithIL         → cuModuleLoadData(VecAdd.ptx)  # 吃 PTX
+  urEnqueueKernelLaunchWithArgsExp → cuLaunchKernel(VecAdd, (1024,))
+
+[loader] ONEAPI_DEVICE_SELECTOR=opencl:cpu → 加载 opencl adapter
+  urContextCreate               → clCreateContext()
+  urQueueCreate                 → clCreateCommandQueue()
+  urProgramCreateWithIL         → clCreateProgramWithIL(VecAdd.spv)
+  urEnqueueKernelLaunchWithArgsExp → clEnqueueNDRangeKernel(VecAdd, (1024,))</code></pre>
+</div><p>看清这层分派：<code>sycl_run</code> 说的永远是同一串 UR 动作（<code>urContextCreate</code>/<code>urQueueCreate</code>/<code>urProgramCreateWithIL</code>/<code>urEnqueueKernelLaunchWithArgsExp</code>），loader 按 <code>ONEAPI_DEVICE_SELECTOR</code> 挑 adapter，<strong>每个 adapter 把同一个 UR 调用翻成自己驱动的真实函数</strong>——Level Zero 的 <code>ze…</code>、CUDA 的 <code>cu…</code>、OpenCL 的 <code>cl…</code>。SYCL 运行时对这些差异一无所知。注意 <code>urProgramCreateWithIL</code> 那行还体现了第 8、11 章的分叉：Level Zero/OpenCL 吃 SPIR-V、CUDA 吃 PTX。请动手改：加一个 <code>class HipAdapter(Adapter)</code>（用 <code>hip…</code> 风格的名字）注册进 <code>ADAPTERS</code>，再 <code>sycl_run(&quot;hip:gpu&quot;, ...)</code>——你会发现 <code>sycl_run</code> 一个字都不用改就支持了 AMD。这就是&quot;加设备 = 加 adapter&quot;。</p>
+<h2>小结与下一步</h2>
+<p>第三部分的运行时三章（16-18）到此闭合，从 <code>q.submit</code> 到硬件启动的完整路径贯通了：</p>
+<ul>
+<li><strong>UR（Unified Runtime）</strong> 是 SYCL 的设备无关运行时层，位于<strong>顶层 <code>unified-runtime/</code></strong>（不在 <code>sycl/</code> 下）。API（<code>ur_api.h</code>）从 <code>unified-runtime/scripts/core/*.yml</code> <strong>生成</strong>，用 <code>ur_*_handle_t</code> 不透明句柄对应 platform/device/context/queue/program/kernel/mem/event。</li>
+<li>核心入口：<code>urLoaderInit</code>/<code>urAdapterGet</code>/<code>urPlatformGet</code>/<code>urDeviceGet</code>/<code>urContextCreate</code>/<code>urQueueCreate</code>/<code>urMemBufferCreate</code>/<code>urUSMDeviceAlloc</code>/<code>urProgramCreateWithIL</code>/<code>urKernelCreate</code>，启动是 <strong><code>urEnqueueKernelLaunchWithArgsExp</code></strong>（注意确切名字）。</li>
+<li><strong>adapter</strong>（<code>unified-runtime/source/adapters/</code>）每家后端一个：<code>level_zero</code>（内含 <code>v2/</code> 子目录，新一代实现）/<code>cuda</code>/<code>hip</code>/<code>opencl</code>/<code>native_cpu</code>/<code>offload</code>/<code>mock</code>，把统一 UR 调用翻成各家驱动（<code>ze…</code>/<code>cu…</code>/<code>cl…</code>）。加设备只加 adapter。</li>
+<li><strong>loader</strong>（<code>unified-runtime/source/loader/</code>，<code>ur_adapter_registry.hpp</code>）发现并加载 adapter，受 <strong><code>ONEAPI_DEVICE_SELECTOR</code></strong> 控制选后端/设备。</li>
+<li>SYCL 经 <strong><code>sycl/source/detail/ur.{hpp,cpp}</code></strong> 这层 glue（<code>adapter.call&lt;UrApiKind::…&gt;</code>）接上 UR——闭合了第 16 章那条脊柱的最后一跳。</li>
+<li>观察：<code>SYCL_UR_TRACE=1</code> 打印每次 UR 调用（<code>SYCL_UR_TRACE=-1</code> 位掩码全开，更全）。</li>
+<li><strong>UR ≠ liboffload（第 10 章）</strong>：理念同、层次异，服务不同上层；UR 的 <code>offload</code> adapter 是二者之间的桥。</li>
+</ul>
+<p>下一章是第三部分的收尾——<strong>设备库与 libdevice</strong>。设备代码里的 <code>sycl::sqrt</code>、<code>std::sin</code>、<code>assert</code>、复数运算，在 GPU 上没有系统 libc/libm 可用，靠 <code>libdevice/</code> 提供的 fallback 实现 + <code>libclc</code> 的 SPIR-V 内建补齐。第 19 章讲这些数学函数、fallback 机制和 <code>__spirv_*</code> 内建怎么被选择、链接进设备镜像——把设备端&quot;标准库从哪来&quot;这个悬念收掉。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>UR</strong> 是 SYCL 的设备无关运行时层，顶层组件 <code>unified-runtime/</code>（<strong>不在</strong> <code>sycl/</code> 下）；<code>ur_api.h</code> 从 <code>scripts/core/*.yml</code> 生成；用 <code>ur_*_handle_t</code> 句柄对应 SYCL 对象。</li>
+<li>核心入口 <code>urLoaderInit</code>/<code>urAdapterGet</code>/<code>urContextCreate</code>/<code>urQueueCreate</code>/<code>urProgramCreateWithIL</code>/<code>urKernelCreate</code>…，启动 = <strong><code>urEnqueueKernelLaunchWithArgsExp</code></strong>（无短版本，别搜 <code>urEnqueueKernelLaunch</code>）。</li>
+<li><strong>adapter</strong>（<code>unified-runtime/source/adapters/{level_zero,cuda,hip,opencl,native_cpu,offload,mock}</code>，其中 <code>level_zero/</code> 内含 <code>v2/</code> 子目录）把统一 UR 调用翻成各家驱动；一个启动 API 在三家分别是 <code>zeCommandListAppendLaunchKernel</code>/<code>cuLaunchKernel</code>/<code>clEnqueueNDRangeKernel</code>。加设备 = 加 adapter。</li>
+<li><strong>loader</strong>（<code>unified-runtime/source/loader/</code>）发现加载 adapter，<code>ONEAPI_DEVICE_SELECTOR</code> 选后端/设备；Level Zero 有新旧两套实现并存（<code>level_zero/</code> 与其 <code>v2/</code> 子目录）。</li>
+<li>SYCL 经 <strong><code>sycl/source/detail/ur.{hpp,cpp}</code></strong> 的 <code>adapter.call&lt;UrApiKind::…&gt;</code> 接上 UR，闭合第 16 章脊柱最后一跳。</li>
+<li>观察：<code>SYCL_UR_TRACE=1</code>（每次 UR 调用，位掩码；<code>-1</code> 全开）。<strong>UR ≠ liboffload</strong>（第 10 章）：理念同层次异；UR 的 <code>offload</code> adapter 桥接二者。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch17.html">← 第 17 章 运行时（二）：命令组、调度器与依赖图</a>
+  <a class="nav-next" href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

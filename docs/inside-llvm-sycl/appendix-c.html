@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 C 源码导览地图：想看某个功能去哪个目录</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li class="active"><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 C 源码导览地图：想看某个功能去哪个目录</h1>
+<h2>这份附录怎么用</h2>
+<div class="goal-box">
+<p>intel/llvm 是个几十万文件的 monorepo。全书教了你"某个功能在哪个文件"，这份附录把它们<strong>倒过来组织成一张地图</strong>：从"我想看 X 功能"出发，直接告诉你去哪个目录、哪个关键文件。它是你合上书、真正动手改代码时最先翻的一页。</p>
+<p>用法：先按<strong>顶层目录总览</strong>定位大区（编译器？运行时？设备库？），再查<strong>按功能索引</strong>找到具体文件。所有路径相对 intel/llvm（<code>sycl</code> 分支）根目录，<strong>行号会随分支演进漂移，以你手上的树为准</strong>（正文反复强调的"源码为锚"——先 <code>grep</code>/<code>find</code> 再引用）。</p>
+</div><h2>顶层目录总览</h2>
+<p>intel/llvm 根目录下和 SYCL/DPC++ 最相关的顶层目录（与 <code>llvm/</code>、<code>clang/</code> 平级）：</p>
+<table>
+<thead>
+<tr>
+<th>顶层目录</th>
+<th>是什么</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>llvm/</code></td>
+<td>LLVM 本体：IR、Pass、后端、工具（<code>opt</code>/<code>llc</code>……）</td>
+<td>第 1–11 章</td>
+</tr>
+<tr>
+<td><code>clang/</code></td>
+<td>Clang 前端：Sema、CodeGen、Driver、属性定义</td>
+<td>第 12–15、22 章</td>
+</tr>
+<tr>
+<td><code>sycl/</code></td>
+<td>SYCL 运行时、头文件、扩展文档、测试</td>
+<td>第 13–24 章</td>
+</tr>
+<tr>
+<td><code>libdevice/</code></td>
+<td>设备端 C 库/数学 fallback（编成 <code>libsycl-*.bc</code>）</td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td><code>libclc/</code></td>
+<td>底层 SPIR-V/OpenCL 内建原语（尤为 NVPTX/AMDGPU）</td>
+<td>第 11、19 章</td>
+</tr>
+<tr>
+<td><code>llvm-spirv/</code></td>
+<td>LLVM IR ↔ SPIR-V 翻译器</td>
+<td>第 9 章</td>
+</tr>
+<tr>
+<td><code>sycl-jit/</code></td>
+<td>进程内 SYCL RTC（kernel_compiler 的 SYCL 路径）</td>
+<td>第 23 章</td>
+</tr>
+<tr>
+<td><code>unified-runtime/</code></td>
+<td>UR：运行时到各后端的统一适配层 + adapters</td>
+<td>第 18 章</td>
+</tr>
+<tr>
+<td><code>xpti/</code> <code>xptifw/</code></td>
+<td>插桩/追踪框架</td>
+<td>第 18 章</td>
+</tr>
+<tr>
+<td><code>libsycl/</code></td>
+<td>新版 SYCL 运行时库（演进中）</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>offload/</code></td>
+<td>LLVM offload 基础设施</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<h2>clang/：编译器前端</h2>
+<p>想看<strong>编译器怎么处理 SYCL</strong>，几乎都在 <code>clang/</code> 下。关键子目录与文件：</p>
+<table>
+<thead>
+<tr>
+<th>想看什么</th>
+<th>去哪</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>SYCL 语义分析（认 kernel、free function）</td>
+<td><code>clang/lib/Sema/SemaSYCL.cpp</code></td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>SYCL 属性的 handle/add/merge 检查</td>
+<td><code>clang/lib/Sema/SemaSYCLDeclAttr.cpp</code></td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>所有属性的 TableGen 定义</td>
+<td><code>clang/include/clang/Basic/Attr.td</code></td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>属性文档（每个属性必须写）</td>
+<td><code>clang/include/clang/Basic/AttrDocs.td</code></td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>SYCL 相关诊断消息</td>
+<td><code>clang/include/clang/Basic/DiagnosticSemaKinds.td</code></td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>AST/属性 → LLVM IR（属性落 metadata/字符串）</td>
+<td><code>clang/lib/CodeGen/CodeGenFunction.cpp</code> <code>CodeGenModule.cpp</code> <code>CGCall.cpp</code></td>
+<td>第 15、22 章</td>
+</tr>
+<tr>
+<td>语言选项（<code>SYCLIsDevice</code> 等）</td>
+<td><code>clang/include/clang/Basic/LangOptions.def</code></td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>驱动/前端开关（<code>-fsycl</code> 等）</td>
+<td><code>clang/include/clang/Options/Options.td</code>（<strong>已从 <code>Driver/</code> 移来</strong>）</td>
+<td>第 22 章</td>
+</tr>
+<tr>
+<td>SYCL 设备库选择（<code>getDeviceLibNames</code>）</td>
+<td><code>clang/lib/Driver/ToolChains/SYCL.cpp</code></td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>SPIR-V 内建表</td>
+<td><code>clang/lib/Sema/SPIRVBuiltins.td</code></td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>SYCL 架构开发者文档</td>
+<td><code>clang/docs/SYCLSupport.rst</code></td>
+<td>第 12、22 章</td>
+</tr>
+</tbody></table>
+<h2>sycl/：运行时、头文件、扩展、测试</h2>
+<p><code>sycl/</code> 是 SYCL 侧的家，内部分工清晰：</p>
+<table>
+<thead>
+<tr>
+<th>想看什么</th>
+<th>去哪</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>用户 API 头文件（<code>queue</code>/<code>buffer</code>/<code>handler</code>……）</td>
+<td><code>sycl/include/sycl/</code></td>
+<td>第 16 章</td>
+</tr>
+<tr>
+<td>扩展 API 头（按 vendor 分）</td>
+<td><code>sycl/include/sycl/ext/{oneapi,intel,codeplay}/</code></td>
+<td>第 20、21 章</td>
+</tr>
+<tr>
+<td>数学内建映射（<code>sycl::sqrt</code>→<code>__spirv_ocl_*</code>）</td>
+<td><code>sycl/include/sycl/detail/builtins/math_functions.hpp</code></td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>feature-test 宏（生成 <code>feature_test.hpp</code>）</td>
+<td><code>sycl/source/feature_test.hpp.in</code></td>
+<td>第 20 章</td>
+</tr>
+<tr>
+<td>运行时实现（调度、镜像管理）</td>
+<td><code>sycl/source/detail/</code></td>
+<td>第 16–18 章</td>
+</tr>
+<tr>
+<td>程序/镜像管理器</td>
+<td><code>sycl/source/detail/program_manager/</code></td>
+<td>第 12、19 章</td>
+</tr>
+<tr>
+<td>bindless images 运行时</td>
+<td><code>sycl/source/detail/bindless_images.cpp</code></td>
+<td>第 23 章</td>
+</tr>
+<tr>
+<td>kernel_compiler 运行时（三语言分派）</td>
+<td><code>sycl/source/detail/kernel_compiler/</code></td>
+<td>第 23 章</td>
+</tr>
+<tr>
+<td>扩展规范文档（五态目录）</td>
+<td><code>sycl/doc/extensions/{proposed,experimental,supported,deprecated,removed}/</code></td>
+<td>第 20、24 章</td>
+</tr>
+<tr>
+<td>扩展流程/模板</td>
+<td><code>sycl/doc/extensions/README-process.md</code> <code>template.asciidoc</code></td>
+<td>第 24 章</td>
+</tr>
+<tr>
+<td>设计文档（编译期属性、RTC……）</td>
+<td><code>sycl/doc/design/</code> （<code>CompileTimeProperties.md</code> <code>SYCL-RTC.md</code>）</td>
+<td>第 22、23 章</td>
+</tr>
+<tr>
+<td>上手指南</td>
+<td><code>sycl/doc/GetStartedGuide.md</code></td>
+<td>附录 A</td>
+</tr>
+<tr>
+<td><strong>LIT 测试</strong>（不上真机）</td>
+<td><code>sycl/test/</code></td>
+<td>第 24 章</td>
+</tr>
+<tr>
+<td><strong>E2E 测试</strong>（上真设备）</td>
+<td><code>sycl/test-e2e/</code></td>
+<td>第 24 章</td>
+</tr>
+</tbody></table>
+<h2>设备库与 SPIR-V</h2>
+<p>设备端&quot;标准库从哪来&quot;和&quot;IR 怎么变 SPIR-V&quot;分散在几个顶层项目：</p>
+<table>
+<thead>
+<tr>
+<th>想看什么</th>
+<th>去哪</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>C 库/数学 fallback 的 wrapper</td>
+<td><code>libdevice/*_wrapper.cpp</code>（<code>crt_</code>/<code>cmath_</code>/<code>imf_</code>）</td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>fallback 具体实现</td>
+<td><code>libdevice/fallback-*.hpp</code>（<code>fallback-bfloat16.cpp</code> 仍是 <code>.cpp</code>）</td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>weak 属性宏定义</td>
+<td><code>libdevice/device.h</code>（<code>DEVICE_EXTERNAL</code>）</td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td><code>__spirv_*</code> 内建实现（各目标）</td>
+<td><code>libclc/libspirv/lib/&lt;target&gt;/</code></td>
+<td>第 11、19 章</td>
+</tr>
+<tr>
+<td>LLVM IR → SPIR-V 翻译</td>
+<td><code>llvm-spirv/lib/SPIRV/</code></td>
+<td>第 9 章</td>
+</tr>
+<tr>
+<td>SYCL 源码 RTC（进程内 clang）</td>
+<td><code>sycl-jit/jit-compiler/lib/rtc/DeviceCompilation.cpp</code></td>
+<td>第 23 章</td>
+</tr>
+<tr>
+<td>IR → SPIR-V（sycl-jit 内）</td>
+<td><code>sycl-jit/jit-compiler/lib/.../SPIRVLLVMTranslation.cpp</code></td>
+<td>第 23 章</td>
+</tr>
+</tbody></table>
+<h2>UR 与后端</h2>
+<p>运行时到硬件的最后一段：</p>
+<table>
+<thead>
+<tr>
+<th>想看什么</th>
+<th>去哪</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>UR C API 定义（<code>ur*</code>/<code>ur*Exp</code>）</td>
+<td><code>unified-runtime/include/unified-runtime/ur_api.h</code></td>
+<td>第 18、23 章</td>
+</tr>
+<tr>
+<td>各后端 adapter</td>
+<td><code>unified-runtime/source/adapters/{level_zero,opencl,cuda,hip}/</code></td>
+<td>第 18 章</td>
+</tr>
+<tr>
+<td>bindless images 的 UR 入口</td>
+<td><code>ur_api.h</code> 里 <code>urBindlessImages*Exp</code></td>
+<td>第 23 章</td>
+</tr>
+</tbody></table>
+<h2>一个实用工作流：从&quot;现象&quot;倒查到&quot;源码&quot;</h2>
+<p>合上书真动手时，最常见的不是&quot;我知道去哪个文件&quot;，而是&quot;我看到某个行为/字符串，想找它从哪来&quot;。推荐的倒查流程：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 1. 看到 IR 里一个陌生的字符串属性 "sycl-xxx"，全仓搜它从哪发出
+grep -rn '"sycl-xxx"' clang/lib sycl/source
+
+# 2. 看到一个 __spirv_ 或 __devicelib_ 符号，定位它的声明/实现
+grep -rn '__devicelib_ceilf' libdevice/
+
+# 3. 想知道某扩展宏在哪定义、值多少
+grep -n 'SYCL_EXT_ONEAPI_XXX' sycl/source/feature_test.hpp.in
+
+# 4. 想找某功能的测试当"活文档"看用法
+grep -rl 'feature_you_want' sycl/test/ sycl/test-e2e/
+
+# 5. 想找一个 clang 属性的全链（定义→检查→codegen）
+grep -rn 'SYCLReqdWorkGroupSize' clang/include clang/lib</code></pre>
+</div><div class="keypoint">
+<strong>定位三问：哪一层？哪个顶层目录？哪个文件？</strong>
+<strong>找任何功能先答三个问题：① 它属于哪一层（附录 B 的 LLVM/SYCL/SPIR-V/UR 四层坐标系）；② 对应哪个顶层目录（编译器→<code>clang/</code>，运行时→<code>sycl/source/</code>，设备库→<code>libdevice/</code>/<code>libclc/</code>，翻译→<code>llvm-spirv/</code>，适配→<code>unified-runtime/</code>）；③ 具体文件（查本附录的功能索引表）。</strong>找不准就用"倒查工作流"——从你看到的字符串/符号 <code>grep -rn</code> 反向定位，比记路径更可靠。行号一定以你手上的树为准，先搜再引。
+</div><h2>小结</h2>
+<ul>
+<li>本附录把全书源码锚点倒过来组织成地图：<strong>顶层目录总览 + 按功能索引（clang / sycl / 设备库+SPIR-V / UR）</strong>。</li>
+<li>找功能的顺序：先定层（附录 B 四层）→ 定顶层目录 → 查功能表定文件；记不住路径就用 <code>grep -rn</code> 从现象倒查。</li>
+<li>高频落点：编译器前端 <code>clang/lib/Sema/SemaSYCL*.cpp</code> + <code>clang/include/clang/Basic/Attr.td</code>；运行时 <code>sycl/source/detail/</code>；扩展文档 <code>sycl/doc/extensions/</code>；设备库 <code>libdevice/</code>+<code>libclc/</code>；翻译 <code>llvm-spirv/</code>；适配 <code>unified-runtime/</code>。</li>
+<li>铁律：<strong>行号会漂移，路径可能搬家（如 <code>Options.td</code> 从 <code>Driver/</code> 到 <code>Options/</code>）——永远先在你手上的树里搜一遍再引用</strong>。这也是全书&quot;源码为锚&quot;精神的收尾。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-b.html">← 附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

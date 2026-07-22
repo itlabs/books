@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li class="active"><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面十九章你反复撞见 <code>sycl::ext::oneapi::experimental</code> 这样的命名空间、<code>SYCL_EXT_ONEAPI_*</code> 这样的宏、<code>doc/extensions/experimental/</code> 里的一个个 <code>.asciidoc</code>。第四部分正式转向<strong>实践</strong>——如何给 SYCL 写一个扩展。而这一章是这一部分的地基：先把"扩展"这件事的<strong>解剖结构</strong>讲清，不写一行实现，只回答"一个 SYCL 扩展由哪些部件组成、它们叫什么、放在哪、彼此怎么对应"。</p>
+<p>读完你会掌握四件事：① 扩展文档的<strong>目录与生命周期</strong>（proposed / experimental / supported / deprecated / removed 五态）；② 雷打不动的<strong>命名约定</strong>——扩展名、feature-test 宏名、文件名三者一致的规则；③ feature-test 宏<strong>在哪定义、怎么取值、用户怎么检测</strong>（`feature_test.hpp.in` → 生成 `feature_test.hpp`）；④ vendor 前缀（<code>oneapi</code>/<code>intel</code>/<code>codeplay</code>）与 C++ 命名空间的映射。这套"解剖学"是你读<strong>任何</strong> SYCL 扩展、以及第 21–24 章动手写扩展的通用坐标系。</p>
+</div><h2>扩展是什么：SYCL 标准之外的官方增量</h2>
+<p>SYCL 是一份 Khronos 标准（第 12 章讲过 SYCL 2020 规范）。但标准的演进慢、覆盖面有限，而硬件和用户需求跑得快——于是 SYCL 规范第 6 章专门留了<strong>扩展机制</strong>：厂商可以在标准之外定义新特性，只要遵守一套命名和版本规则，就能既增加能力、又不破坏可移植性（用户能在编译期检测某扩展在不在）。</p>
+<p>DPC++（intel/llvm）就是这套机制的重度使用者。你用过的很多东西其实都是扩展而非核心 SYCL：USM 的一些高级形态、<code>ext_oneapi_graph</code>（第 17 章那个显式命令图）、bindless images（第 23 章）、free function kernels（第 21 章）——全是扩展。它们的<strong>规范文档</strong>统一住在：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">sycl/doc/extensions/</code></pre>
+</div><p>这一章就从这个目录的结构开始。</p>
+<h2>五个状态：一个扩展的生命周期</h2>
+<p><code>sycl/doc/extensions/</code> 下按扩展的<strong>成熟度</strong>分成五个子目录，每个扩展的 <code>.asciidoc</code> 规范文档住在其中之一。<code>README.md</code> 把五态定义得很清楚：</p>
+<table>
+<thead>
+<tr>
+<th>目录</th>
+<th>含义</th>
+<th>大致文档数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>proposed/</code></td>
+<td>已提案、<strong>尚未实现</strong></td>
+<td>~22</td>
+</tr>
+<tr>
+<td><code>experimental/</code></td>
+<td>已实现，但 <strong>API 可能变</strong></td>
+<td>~56</td>
+</tr>
+<tr>
+<td><code>supported/</code></td>
+<td>完全支持、稳定</td>
+<td>~32</td>
+</tr>
+<tr>
+<td><code>deprecated/</code></td>
+<td>仍支持，但<strong>即将移除</strong></td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>removed/</code></td>
+<td>曾经支持、<strong>现已移除</strong></td>
+<td>~17</td>
+</tr>
+</tbody></table>
+<p>（数字随分支演进会变，以你手上的树为准。）一个扩展的典型一生就是沿这条链走：先在 <code>proposed/</code> 里成型（此时可随意改），实现它的那个 PR 把文档移到 <code>experimental/</code> 或 <code>supported/</code>；若日后被核心 SYCL 吸收或废弃，就移到 <code>deprecated/</code> 再到 <code>removed/</code>。第 24 章会带你走完这条流程；这一章你只要记住：<strong>看一个扩展在哪个目录，就知道它有多稳</strong>。</p>
+<div class="warn">
+<strong><code>experimental/</code> 目录 ≠ C++ 的 <code>::experimental</code> 命名空间——但常常同步</strong>
+你会看到两个"experimental"：文档目录 <code>doc/extensions/experimental/</code>，和 C++ 命名空间 <code>sycl::ext::oneapi::experimental</code>。它们<strong>概念上是两回事</strong>（一个是文档成熟度，一个是 API 所在的命名空间），但实践中高度相关——实验阶段的扩展，其 API 通常就放在 <code>::experimental</code> 命名空间里，等稳定了再考虑上提。别把"目录名"当成"命名空间名"的硬绑定，但看到其一基本能猜到另一。
+</div><h2>命名约定：扩展名 = 宏名 = 文件名（大小写不同而已）</h2>
+<p>这是整章最该背下来的一条规则。<code>README-process.md</code>（&quot;Lifetime of an Extension&quot;）把它写死了：</p>
+<ul>
+<li><strong>扩展名</strong>：小写、下划线分词，形如 <code>sycl_ext_&lt;vendor&gt;_&lt;feature&gt;</code>——例如 <code>sycl_ext_oneapi_bindless_images</code>。</li>
+<li><strong>feature-test 宏名</strong>：和扩展名<strong>完全一样，只是全大写</strong>——<code>SYCL_EXT_ONEAPI_BINDLESS_IMAGES</code>。</li>
+<li><strong>规范文件名</strong>：和扩展名<strong>一致</strong>，加 <code>.asciidoc</code> 后缀——<code>sycl_ext_oneapi_bindless_images.asciidoc</code>。</li>
+</ul>
+<p>三者一一对应，是整个扩展体系的&quot;主键&quot;。几个真实的对应例子：</p>
+<table>
+<thead>
+<tr>
+<th>规范文件（<code>experimental/</code>）</th>
+<th>feature-test 宏</th>
+<th>当前值</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sycl_ext_oneapi_bindless_images.asciidoc</code></td>
+<td><code>SYCL_EXT_ONEAPI_BINDLESS_IMAGES</code></td>
+<td>6</td>
+</tr>
+<tr>
+<td><code>sycl_ext_oneapi_graph.asciidoc</code></td>
+<td><code>SYCL_EXT_ONEAPI_GRAPH</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>sycl_ext_oneapi_bfloat16_math_functions.asciidoc</code></td>
+<td><code>SYCL_EXT_ONEAPI_BFLOAT16_MATH_FUNCTIONS</code></td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>sycl_ext_intel_cache_config.asciidoc</code></td>
+<td><code>SYCL_EXT_INTEL_CACHE_CONFIG</code></td>
+<td>1</td>
+</tr>
+</tbody></table>
+<div class="note">
+<strong>vendor 字符串只有三个，且文件名的 vendor 未必等于宏的 vendor</strong>
+<code>&lt;vendor&gt;</code> 部分几乎总是三者之一：<strong><code>oneapi</code></strong>（oneAPI 通用，默认选它）、<strong><code>intel</code></strong>（很 Intel 硬件专属才用）、<strong><code>codeplay</code></strong>（Codeplay 贡献的）。<code>README-process.md</code> 明说："For DPC++, we use the string 'oneapi' unless the extension is very specific to Intel hardware."。有个容易踩的坑：<strong>文件名的 vendor 和宏里的 vendor 可以不一致</strong>——例如 codeplay 贡献的 <code>sycl_ext_codeplay_enqueue_native_command.asciidoc</code>，它的 feature-test 宏却是 <code>SYCL_EXT_ONEAPI_ENQUEUE_NATIVE_COMMAND</code>（因为功能通用）。以文档里 <em>Feature test macro</em> 一节写的宏名为准。
+</div><h2>feature-test 宏：在哪定义、怎么检测</h2>
+<p>宏名有了，<strong>值从哪来</strong>？答案是一个生成出来的头文件。模板源在：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">sycl/source/feature_test.hpp.in</code></pre>
+</div><p>构建时 CMake 用 <code>configure_file(...)</code>（<code>sycl/CMakeLists.txt</code>，约 235 行）把它生成成 <code>&lt;build&gt;/include/sycl/feature_test.hpp</code>，随 SYCL 头一起安装。文件顶部就写着&quot;DO NOT EDIT——原始定义在 <code>feature_test.hpp.in</code>&quot;。里面绝大多数就是一行行硬编码的 <code>#define</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// sycl/source/feature_test.hpp.in（节选）
+namespace sycl { inline namespace _V1 {
+#define SYCL_EXT_INTEL_DEVICE_INFO 9
+#define SYCL_EXT_ONEAPI_DEVICE_ARCHITECTURE 1
+#define SYCL_EXT_ONEAPI_BINDLESS_IMAGES 6
+#define SYCL_EXT_ONEAPI_BFLOAT16_MATH_FUNCTIONS 1
+} }</code></pre>
+</div><p>少数宏是<strong>构建期决定</strong>的——比如后端相关的用 <code>#cmakedefine01</code>（CUDA/HIP 后端有没有编进来）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#cmakedefine01 SYCL_EXT_ONEAPI_BACKEND_CUDA
+#cmakedefine01 SYCL_EXT_ONEAPI_BACKEND_HIP</code></pre>
+</div><p>用户侧的<strong>检测姿势</strong>因此非常标准——<code>#ifdef</code> + 比较版本值：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#include &lt;sycl/sycl.hpp&gt;            // 会带进 feature_test.hpp
+#if defined(SYCL_EXT_ONEAPI_BINDLESS_IMAGES) &amp;&amp; SYCL_EXT_ONEAPI_BINDLESS_IMAGES &gt;= 6
+  // 用 bindless images v6 的 API
+#else
+  #error "需要支持 bindless_images v6 的 DPC++"
+#endif</code></pre>
+</div><p><strong>宏的值就是扩展的版本号</strong>。<code>experimental/</code> 里的不稳定扩展，值常年是 <code>1</code>（文档里明说&quot;本实验扩展不做版本区分，宏恒为此值&quot;）；而版本化的扩展每加一批 API 就 +1（bindless images 已经到 6）。这就是&quot;可移植扩展&quot;的核心——用户<strong>先检测、后使用</strong>，宏不存在或版本不够就在编译期就报错，而不是运行期崩溃。</p>
+<div class="keypoint">
+<strong>扩展的三位一体：文件名 = 扩展名 = feature-test 宏名（大小写差异），宏值 = 版本号</strong>
+<strong>规范 <code>.asciidoc</code> 住在 <code>sycl/doc/extensions/{proposed,experimental,supported,deprecated,removed}/</code> 之一（成熟度五态）。命名规则（<code>README-process.md</code>）：扩展名 <code>sycl_ext_&lt;vendor&gt;_&lt;feature&gt;</code> 小写下划线，feature-test 宏是它的全大写，文件名与扩展名一致。宏在 <code>sycl/source/feature_test.hpp.in</code> 里 <code>#define</code>（构建期 <code>configure_file</code> 生成 <code>feature_test.hpp</code>），值即版本号。</strong>用户用 <code>#if defined(宏) &amp;&amp; 宏 >= N</code> 在编译期检测——这就是 SYCL 扩展"增能力而不破坏可移植性"的机制。
+</div><h2>vendor 前缀 ↔ C++ 命名空间</h2>
+<p>命名约定还延伸到代码里。<code>sycl/include/sycl/ext/</code> 下正好有三个 vendor 目录，和三个 vendor 字符串对齐：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">sycl/include/sycl/ext/
+├── oneapi/      → namespace sycl::ext::oneapi（实验特性再进 ::experimental）
+├── intel/       → namespace sycl::ext::intel
+└── codeplay/    → namespace sycl::ext::codeplay</code></pre>
+</div><p>对应关系用真实头文件一看便知：<code>ext/intel/math.hpp</code> 里是 <code>namespace ext::intel::math</code>；<code>ext/codeplay/experimental/max_registers_query.hpp</code> 里是 <code>namespace ext::codeplay::experimental</code>；<code>ext/oneapi/experimental/root_group.hpp</code> 里是 <code>namespace ext::oneapi::experimental</code>。所以看到一个 API 的命名空间，你就能反推它属于哪个 vendor、成熟度大概如何，进而去 <code>doc/extensions/</code> 对应目录找它的规范。<strong>命名空间是代码里的路标，doc 目录是文档里的路标，两者靠 vendor 字符串对齐</strong>。</p>
+<div class="concept">
+<svg viewBox="0 0 660 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一个扩展的"三位一体"与它的三个落点</text>
+  <!-- center name -->
+  <rect x="210" y="42" width="240" height="46" rx="8" fill="#faf5ff" stroke="#7c3aed" stroke-width="1.6"/>
+  <text x="330" y="61" text-anchor="middle" font-size="11" font-weight="bold" fill="#6b21a8">扩展名</text>
+  <text x="330" y="78" text-anchor="middle" font-size="9" fill="#6b7280">sycl_ext_oneapi_bindless_images</text>
+  <!-- three arrows -->
+  <path d="M240 88 L120 120" stroke="#6b7280" stroke-width="1.2" marker-end="url(#e20)"/>
+  <path d="M330 88 L330 120" stroke="#6b7280" stroke-width="1.2" marker-end="url(#e20)"/>
+  <path d="M420 88 L540 120" stroke="#6b7280" stroke-width="1.2" marker-end="url(#e20)"/>
+  <!-- doc -->
+  <rect x="30" y="122" width="190" height="72" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.4"/>
+  <text x="125" y="141" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">① 规范文档</text>
+  <text x="125" y="158" text-anchor="middle" font-size="8" fill="#6b7280">doc/extensions/experimental/</text>
+  <text x="125" y="170" text-anchor="middle" font-size="8" fill="#6b7280">…bindless_images.asciidoc</text>
+  <text x="125" y="185" text-anchor="middle" font-size="8" fill="#a53f1c">五态目录 = 成熟度</text>
+  <!-- macro -->
+  <rect x="235" y="122" width="190" height="72" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.4"/>
+  <text x="330" y="141" text-anchor="middle" font-size="10" font-weight="bold" fill="#2f7a45">② feature-test 宏</text>
+  <text x="330" y="158" text-anchor="middle" font-size="8" fill="#6b7280">feature_test.hpp.in</text>
+  <text x="330" y="171" text-anchor="middle" font-size="8" fill="#6b7280">#define …BINDLESS_IMAGES 6</text>
+  <text x="330" y="185" text-anchor="middle" font-size="8" fill="#2f7a45">全大写；值=版本号</text>
+  <!-- ns -->
+  <rect x="440" y="122" width="190" height="72" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.4"/>
+  <text x="535" y="141" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">③ C++ 命名空间 + 头</text>
+  <text x="535" y="158" text-anchor="middle" font-size="8" fill="#6b7280">include/sycl/ext/oneapi/…</text>
+  <text x="535" y="171" text-anchor="middle" font-size="8" fill="#6b7280">sycl::ext::oneapi::experimental</text>
+  <text x="535" y="185" text-anchor="middle" font-size="8" fill="#a53f1c">vendor: oneapi/intel/codeplay</text>
+  <!-- user check -->
+  <rect x="140" y="222" width="380" height="46" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.2"/>
+  <text x="330" y="241" text-anchor="middle" font-size="10" font-weight="bold" fill="#374151">用户：先检测后使用</text>
+  <text x="330" y="258" text-anchor="middle" font-size="8.5" fill="#6b7280">#if defined(SYCL_EXT_ONEAPI_BINDLESS_IMAGES) &amp;&amp; …&gt;=6 → 用 API，否则 #error</text>
+  <path d="M330 194 L330 222" stroke="#3f9b5c" stroke-width="1.2" marker-end="url(#e20)"/>
+  <text x="330" y="288" text-anchor="middle" font-size="9" fill="#6b7280">三个落点靠同一个扩展名 + vendor 字符串对齐——这是读任何 SYCL 扩展的坐标系</text>
+  <text x="330" y="306" text-anchor="middle" font-size="9" fill="#2d2a26">文件名的 vendor 未必等于宏的 vendor（codeplay 文件可带 ONEAPI 宏）——以文档 Feature test macro 一节为准</text>
+  <defs>
+    <marker id="e20" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 20-1　扩展的"三位一体"。一个扩展名同时对应三个落点：<code>doc/extensions/</code> 里的规范（目录=成熟度）、<code>feature_test.hpp.in</code> 里的宏（值=版本）、<code>include/sycl/ext/&lt;vendor&gt;/</code> 里的命名空间与头文件。用户靠 <code>#if defined(宏)&amp;&amp;宏&gt;=N</code> 先检测后使用</div>
+</div><h2>一份规范文档长什么样：template.asciidoc</h2>
+<p><code>doc/extensions/</code> 顶层有个 <code>template.asciidoc</code>——写新扩展就从复制它开始。它规定了一份规范的<strong>标准骨架</strong>（章节），照着填空即可：</p>
+<ul>
+<li><strong>Notice</strong> —— 版权/商标声明。</li>
+<li><strong>Contact</strong> —— 报 issue 的 URL。</li>
+<li><strong>Dependencies</strong> —— 依赖哪版 SYCL 规范、依赖哪些其他扩展。</li>
+<li><strong>Status</strong> —— proposed / experimental / supported / … 的样板文字（决定它该放哪个目录）。</li>
+<li><strong>Backend support status</strong>（可选）—— 哪些后端支持。</li>
+<li><strong>Overview</strong> —— 概述：这扩展解决什么问题。</li>
+<li><strong>Specification</strong> → <strong>Feature test macro</strong> —— 定义宏名和版本值表，然后是各 API 的规范。</li>
+<li><strong>Implementation notes</strong> / <strong>Issues</strong>（可选、非规范性）。</li>
+</ul>
+<p><code>README-process.md</code> 开门见山：&quot;Start by making a copy of the template extension specification document, and follow the instructions in that document.&quot;——并要求遵守 SYCL 2020 规范第 6 章&quot;Guidelines for portable extensions&quot;。所以写扩展的<strong>第一步永远是文档</strong>，而不是代码：先把&quot;要提供什么、宏叫什么、放哪个目录&quot;想清楚。第 24 章会把这条流程走完整。</p>
+<div class="note">
+<strong>老文档的章节和现在的模板未必一致</strong>
+<code>template.asciidoc</code> 是<strong>当前</strong>的模板，但仓库里有些年头较久的 <code>supported/</code> 文档（如 <code>sycl_ext_oneapi_enqueue_barrier.asciidoc</code>）用的是更早的章节约定（<code>== Introduction</code> / <code>== Version</code> / <code>== Feature Test Macro</code> / <code>== Specification changes</code>…）。读老扩展时别指望章节名和模板逐字对上——抓住"它一定有 Overview + Feature test macro + Specification"这个不变的内核即可。
+</div><h2>亲手逛一遍扩展目录</h2>
+<p>不用编译，直接在源码树里把这一章的结构走一遍：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 五个成熟度目录，各有多少扩展
+for d in proposed experimental supported deprecated removed; do
+  echo "$d: $(ls sycl/doc/extensions/$d/*.asciidoc 2&gt;/dev/null | wc -l)"
+done
+
+# 写扩展的三个锚文件
+ls sycl/doc/extensions/{README.md,README-process.md,template.asciidoc}
+
+# feature-test 宏在哪定义、某扩展的值是多少
+grep -n 'SYCL_EXT_ONEAPI_BINDLESS_IMAGES\|SYCL_EXT_ONEAPI_GRAPH' sycl/source/feature_test.hpp.in
+
+# 三个 vendor 目录
+ls sycl/include/sycl/ext/</code></pre>
+</div><p>挑一个你感兴趣的扩展（比如 <code>sycl_ext_oneapi_graph</code>），把它的<strong>三个落点</strong>串起来看：<code>doc/extensions/experimental/</code> 里的 <code>.asciidoc</code>（规范）、<code>feature_test.hpp.in</code> 里的宏值（版本）、<code>include/sycl/ext/oneapi/experimental/</code> 里的头（API）。这个&quot;顺着扩展名找三处&quot;的动作，就是你日后读任何扩展的起手式。</p>
+<h2>动手：模拟 feature-test 宏的检测与版本协商</h2>
+<p>把这一章的核心——「扩展名=宏名=文件名，用户按宏值先检测后使用」——用一个能在浏览器里跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20SYCL%20%E6%89%A9%E5%B1%95%E7%9A%84%E5%91%BD%E5%90%8D%E4%B8%89%E4%BD%8D%E4%B8%80%E4%BD%93%20%2B%20feature-test%20%E5%AE%8F%E7%9A%84%E7%89%88%E6%9C%AC%E6%A3%80%E6%B5%8B%0A%0A%23%20----%20%E5%AE%9E%E7%8E%B0%E6%96%B9%EF%BC%88DPC%2B%2B%EF%BC%89%E5%9C%A8%20feature_test.hpp%20%E9%87%8C%20%23define%20%E7%9A%84%E5%AE%8F%EF%BC%9A%E5%90%8D%20-%3E%20%E7%89%88%E6%9C%AC%E5%80%BC%20----%0AFEATURE_TEST%20%3D%20%7B%0A%20%20%20%20%22SYCL_EXT_ONEAPI_BINDLESS_IMAGES%22%3A%206%2C%0A%20%20%20%20%22SYCL_EXT_ONEAPI_GRAPH%22%3A%202%2C%0A%20%20%20%20%22SYCL_EXT_ONEAPI_BFLOAT16_MATH_FUNCTIONS%22%3A%201%2C%0A%20%20%20%20%23%20%E6%B3%A8%E6%84%8F%EF%BC%9A%E6%B2%A1%E6%9C%89%20SYCL_EXT_ONEAPI_FANCY_NEW%20%E2%80%94%E2%80%94%20%E8%AF%A5%E6%89%A9%E5%B1%95%E6%9C%AC%E5%AE%9E%E7%8E%B0%E6%B2%A1%E6%8F%90%E4%BE%9B%0A%7D%0A%0A%23%20----%20%E7%94%B1%E6%89%A9%E5%B1%95%E5%90%8D%E6%8E%A8%E5%87%BA%E4%B8%89%E4%BD%8D%E4%B8%80%E4%BD%93%EF%BC%88%E6%96%87%E4%BB%B6%E5%90%8D%2F%E5%AE%8F%E5%90%8D%2F%E5%91%BD%E5%90%8D%E7%A9%BA%E9%97%B4%EF%BC%89----%0Adef%20anatomy(ext_name)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20ext_name%20%E5%BD%A2%E5%A6%82%20sycl_ext_oneapi_graph%0A%20%20%20%20vendor%20%3D%20ext_name.split(%22_%22)%5B2%5D%20%20%20%20%20%20%20%20%20%20%23%20oneapi%20%2F%20intel%20%2F%20codeplay%0A%20%20%20%20return%20%7B%0A%20%20%20%20%20%20%20%20%22doc_file%22%3A%20f%22doc%2Fextensions%2Fexperimental%2F%7Bext_name%7D.asciidoc%22%2C%0A%20%20%20%20%20%20%20%20%22macro%22%3A%20%20%20%20ext_name.upper()%2C%0A%20%20%20%20%20%20%20%20%22namespace%22%3A%20f%22sycl%3A%3Aext%3A%3A%7Bvendor%7D%3A%3Aexperimental%22%2C%0A%20%20%20%20%7D%0A%0A%23%20----%20%E7%94%A8%E6%88%B7%E4%BB%A3%E7%A0%81%EF%BC%9A%23if%20defined(%E5%AE%8F)%20%26%26%20%E5%AE%8F%20%3E%3D%20%E9%9C%80%E8%A6%81%E7%9A%84%E7%89%88%E6%9C%AC%20----%0Adef%20user_check(ext_name%2C%20need_version)%3A%0A%20%20%20%20a%20%3D%20anatomy(ext_name)%0A%20%20%20%20macro%20%3D%20a%5B%22macro%22%5D%0A%20%20%20%20have%20%3D%20FEATURE_TEST.get(macro)%20%20%20%20%20%20%20%20%20%20%20%23%20None%20%3D%20%E5%AE%8F%E6%9C%AA%E5%AE%9A%E4%B9%89%EF%BC%88%E6%89%A9%E5%B1%95%E4%B8%8D%E5%AD%98%E5%9C%A8%EF%BC%89%0A%20%20%20%20print(f%22%E7%94%A8%E6%88%B7%E6%83%B3%E7%94%A8%20%7Bext_name%7D%EF%BC%88%E9%9C%80%20v%7Bneed_version%7D%EF%BC%89%22)%0A%20%20%20%20print(f%22%20%20%20%E6%96%87%E4%BB%B6%3A%20%7Ba%5B'doc_file'%5D%7D%22)%0A%20%20%20%20print(f%22%20%20%20%E5%91%BD%E5%90%8D%E7%A9%BA%E9%97%B4%3A%20%7Ba%5B'namespace'%5D%7D%22)%0A%20%20%20%20if%20have%20is%20None%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%23ifdef%20%7Bmacro%7D%20%E2%86%92%20%E6%9C%AA%E5%AE%9A%E4%B9%89%20%E2%9C%97%20%20%E6%9C%AC%E5%AE%9E%E7%8E%B0%E4%B8%8D%E6%8F%90%E4%BE%9B%E8%AF%A5%E6%89%A9%E5%B1%95%EF%BC%8C%23error%20%E7%BC%96%E8%AF%91%E6%9C%9F%E6%8A%A5%E9%94%99%5Cn%22)%0A%20%20%20%20elif%20have%20%3C%20need_version%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%7Bmacro%7D%3D%7Bhave%7D%20%3C%20%7Bneed_version%7D%20%E2%9C%97%20%20%E7%89%88%E6%9C%AC%E4%B8%8D%E5%A4%9F%EF%BC%8C%23error%20%E7%BC%96%E8%AF%91%E6%9C%9F%E6%8A%A5%E9%94%99%5Cn%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%7Bmacro%7D%3D%7Bhave%7D%20%3E%3D%20%7Bneed_version%7D%20%E2%9C%93%20%20%E6%94%BE%E5%BF%83%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%89%A9%E5%B1%95%E7%9A%84%20API%5Cn%22)%0A%0Auser_check(%22sycl_ext_oneapi_bindless_images%22%2C%206)%20%20%20%23%20%E7%89%88%E6%9C%AC%E6%AD%A3%E5%A5%BD%EF%BC%8COK%0Auser_check(%22sycl_ext_oneapi_graph%22%2C%203)%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E9%9C%80%E8%A6%81%20v3%EF%BC%8C%E4%BD%86%E5%8F%AA%E6%9C%89%20v2%20%E2%86%92%20%E6%8B%92%E7%BB%9D%0Auser_check(%22sycl_ext_oneapi_fancy_new%22%2C%201)%20%20%20%20%20%20%20%20%20%23%20%E5%AE%8F%E6%A0%B9%E6%9C%AC%E6%B2%A1%E5%AE%9A%E4%B9%89%20%E2%86%92%20%E6%8B%92%E7%BB%9D"># 模拟 SYCL 扩展的命名三位一体 + feature-test 宏的版本检测
+
+# ---- 实现方（DPC++）在 feature_test.hpp 里 #define 的宏：名 -&gt; 版本值 ----
+FEATURE_TEST = {
+    "SYCL_EXT_ONEAPI_BINDLESS_IMAGES": 6,
+    "SYCL_EXT_ONEAPI_GRAPH": 2,
+    "SYCL_EXT_ONEAPI_BFLOAT16_MATH_FUNCTIONS": 1,
+    # 注意：没有 SYCL_EXT_ONEAPI_FANCY_NEW —— 该扩展本实现没提供
+}
+
+# ---- 由扩展名推出三位一体（文件名/宏名/命名空间）----
+def anatomy(ext_name):                       # ext_name 形如 sycl_ext_oneapi_graph
+    vendor = ext_name.split("_")[2]          # oneapi / intel / codeplay
+    return {
+        "doc_file": f"doc/extensions/experimental/{ext_name}.asciidoc",
+        "macro":    ext_name.upper(),
+        "namespace": f"sycl::ext::{vendor}::experimental",
+    }
+
+# ---- 用户代码：#if defined(宏) &amp;&amp; 宏 &gt;= 需要的版本 ----
+def user_check(ext_name, need_version):
+    a = anatomy(ext_name)
+    macro = a["macro"]
+    have = FEATURE_TEST.get(macro)           # None = 宏未定义（扩展不存在）
+    print(f"用户想用 {ext_name}（需 v{need_version}）")
+    print(f"   文件: {a['doc_file']}")
+    print(f"   命名空间: {a['namespace']}")
+    if have is None:
+        print(f"   #ifdef {macro} → 未定义 ✗  本实现不提供该扩展，#error 编译期报错\n")
+    elif have &lt; need_version:
+        print(f"   {macro}={have} &lt; {need_version} ✗  版本不够，#error 编译期报错\n")
+    else:
+        print(f"   {macro}={have} &gt;= {need_version} ✓  放心使用该扩展的 API\n")
+
+user_check("sycl_ext_oneapi_bindless_images", 6)   # 版本正好，OK
+user_check("sycl_ext_oneapi_graph", 3)             # 需要 v3，但只有 v2 → 拒绝
+user_check("sycl_ext_oneapi_fancy_new", 1)         # 宏根本没定义 → 拒绝</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">用户想用 sycl_ext_oneapi_bindless_images（需 v6）
+   文件: doc/extensions/experimental/sycl_ext_oneapi_bindless_images.asciidoc
+   命名空间: sycl::ext::oneapi::experimental
+   SYCL_EXT_ONEAPI_BINDLESS_IMAGES=6 &gt;= 6 ✓  放心使用该扩展的 API
+
+用户想用 sycl_ext_oneapi_graph（需 v3）
+   文件: doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc
+   命名空间: sycl::ext::oneapi::experimental
+   SYCL_EXT_ONEAPI_GRAPH=2 &lt; 3 ✗  版本不够，#error 编译期报错
+
+用户想用 sycl_ext_oneapi_fancy_new（需 v1）
+   文件: doc/extensions/experimental/sycl_ext_oneapi_fancy_new.asciidoc
+   命名空间: sycl::ext::oneapi::experimental
+   #ifdef SYCL_EXT_ONEAPI_FANCY_NEW → 未定义 ✗  本实现不提供该扩展，#error 编译期报错</code></pre>
+</div><p>看清两件事：① <strong>一个扩展名机械地推出三个落点</strong>——<code>anatomy()</code> 只做字符串变换（大写得宏名、<code>ext/&lt;vendor&gt;/</code> 得命名空间、加后缀得文件名），这正是命名约定的价值：知其一即知其三。② <strong>feature-test 宏是&quot;能力协商&quot;的唯一凭据</strong>——版本够就用、不够或没有就在<strong>编译期</strong>（不是运行期）报错。这就是 SYCL 扩展既能加能力、又不破坏可移植性的关键。请动手改：把 <code>FEATURE_TEST</code> 里的 <code>SYCL_EXT_ONEAPI_GRAPH</code> 改成 <code>3</code>，重新运行——第二个检测立刻从&quot;拒绝&quot;变&quot;通过&quot;。这正是实现方发布新版本（把宏值 +1）后，用户代码自动解锁新 API 的过程。</p>
+<h2>小结与下一步</h2>
+<p>这一章给了第四部分一套坐标系——不写实现，只认部件：</p>
+<ul>
+<li>扩展规范住在 <strong><code>sycl/doc/extensions/</code></strong>，按成熟度分五态目录：<strong>proposed</strong>（提案未实现）/ <strong>experimental</strong>（实现了但 API 可能变）/ <strong>supported</strong>（稳定）/ <strong>deprecated</strong>（将移除）/ <strong>removed</strong>（已移除）。看目录即知稳定度。</li>
+<li><strong>命名三位一体</strong>（<code>README-process.md</code>）：扩展名 <code>sycl_ext_&lt;vendor&gt;_&lt;feature&gt;</code>（小写下划线）=  feature-test 宏（全大写）= 文件名（+<code>.asciidoc</code>）。vendor 为 <code>oneapi</code>（默认）/ <code>intel</code>（Intel 硬件专属）/ <code>codeplay</code>。</li>
+<li><strong>feature-test 宏</strong>在 <code>sycl/source/feature_test.hpp.in</code> 里 <code>#define</code>（构建期 <code>configure_file</code> 生成 <code>feature_test.hpp</code>），<strong>值即版本号</strong>；少数用 <code>#cmakedefine01</code>（后端相关）。用户用 <code>#if defined(宏) &amp;&amp; 宏 &gt;= N</code> <strong>先检测后使用</strong>。</li>
+<li><strong>vendor 前缀 ↔ 命名空间</strong>：<code>ext/oneapi/</code>→<code>sycl::ext::oneapi</code>（实验特性再进 <code>::experimental</code>）、<code>ext/intel/</code>→<code>sycl::ext::intel</code>、<code>ext/codeplay/</code>→<code>sycl::ext::codeplay</code>。命名空间是代码路标，doc 目录是文档路标，靠 vendor 对齐。</li>
+<li>写扩展从复制 <strong><code>template.asciidoc</code></strong> 开始（Notice/Contact/Dependencies/Status/Overview/Specification+Feature test macro/…），第一步永远是文档。</li>
+</ul>
+<p>下一章（你已经能读到）——<strong>第 21 章 free function kernels 实战</strong>——就用这套坐标系解剖一个真实扩展的完整切面：痛点 → 宏 → API → 编译器 → 运行时。而第 22 章深入这条链最难的一环：需要<strong>编译器前端配合</strong>的扩展怎么写（<code>SemaSYCL</code> 与 <code>Attr.td</code>）；第 23 章巡礼 bindless images 与运行时编译两个大案例；第 24 章走完&quot;从提案到落地&quot;的完整流程与测试。这一章的部件清单，是后面每一章的地基。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>扩展规范在 <code>sycl/doc/extensions/</code> 的五态目录：<strong>proposed / experimental / supported / deprecated / removed</strong>（成熟度递进），看目录即知稳定度；写新扩展从 <code>template.asciidoc</code> 复制起步，遵 <code>README-process.md</code> 与 SYCL 2020 第 6 章。</li>
+<li><strong>命名三位一体</strong>：扩展名 <code>sycl_ext_&lt;vendor&gt;_&lt;feature&gt;</code>（小写下划线）= feature-test 宏（全大写）= 文件名（<code>.asciidoc</code>）。vendor = <code>oneapi</code>（默认）/ <code>intel</code> / <code>codeplay</code>；<strong>文件名 vendor 未必等于宏 vendor</strong>（以文档 Feature test macro 一节为准）。</li>
+<li>feature-test 宏定义在 <strong><code>sycl/source/feature_test.hpp.in</code></strong>（构建 <code>configure_file</code> 生成 <code>feature_test.hpp</code>，<code>sycl/CMakeLists.txt</code> ~235），<strong>值即版本号</strong>；后端相关用 <code>#cmakedefine01</code>（如 <code>SYCL_EXT_ONEAPI_BACKEND_CUDA</code>）。</li>
+<li>用户检测：<code>#if defined(宏) &amp;&amp; 宏 &gt;= N</code> <strong>编译期先检测后使用</strong>——扩展&quot;增能力不破坏可移植性&quot;的机制。experimental 扩展宏常年为 <code>1</code>，版本化的随 API 增加而 +1（bindless images 已到 6）。</li>
+<li><strong>vendor ↔ 命名空间</strong>：<code>include/sycl/ext/{oneapi,intel,codeplay}/</code> 对应 <code>sycl::ext::{oneapi,intel,codeplay}</code>，实验特性再进 <code>::experimental</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch19.html">← 第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a>
+  <a class="nav-next" href="ch21.html">第 21 章 实战：free function kernels 扩展 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 16 章 运行时（一）：queue / context / device / handler 对象模型</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li class="active"><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 16 章 运行时（一）：queue / context / device / handler 对象模型</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 13 章你知道了 <code>queue</code>/<code>context</code>/<code>device</code> 这些类是 pImpl 句柄——公开壳里只有一个指向 <code>*_impl</code> 的指针。这一章翻到指针指向的另一侧：这些 <code>*_impl</code> 真身里装了什么、它们彼此怎么引用、谁拥有谁。然后走通那条最核心的路径——<strong><code>q.submit([](handler&amp; h){ h.parallel_for(...); })</code> 从公开 API 一路到向设备发起启动，中间经过哪些对象、每一跳做什么</strong>。</p>
+<p>读完你会有一张 SYCL 运行时的<strong>对象关系图</strong>：<code>queue_impl</code> 持有 UR 队列句柄、引用一个 <code>context_impl</code> 和一个 <code>device_impl</code>；<code>platform_impl</code> 拥有所有 <code>device_impl</code>；<code>handler</code> 是每次提交时临时建的"命令组构建器"，把你的 lambda 打包成一个<strong>命令组（command group, CG）</strong>交给调度器。这张图是第 17 章（调度器与依赖图）和第 18 章（UR）的地基。</p>
+</div><h2>pImpl 的另一侧：impl 类住在哪、装了什么</h2>
+<p>第 13 章讲过公开类和 impl 类的目录分工。这里把五个核心类的两侧对应关系钉死（都在 <code>intel/llvm</code> 里）：</p>
+<table>
+<thead>
+<tr>
+<th>公开类</th>
+<th>公开头</th>
+<th>impl 类</th>
+<th>impl 位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sycl::queue</code></td>
+<td><code>sycl/include/sycl/queue.hpp</code></td>
+<td><code>detail::queue_impl</code></td>
+<td><code>sycl/source/detail/queue_impl.{hpp,cpp}</code></td>
+</tr>
+<tr>
+<td><code>sycl::context</code></td>
+<td><code>sycl/include/sycl/context.hpp</code></td>
+<td><code>detail::context_impl</code></td>
+<td><code>sycl/source/detail/context_impl.{hpp,cpp}</code></td>
+</tr>
+<tr>
+<td><code>sycl::device</code></td>
+<td><code>sycl/include/sycl/device.hpp</code></td>
+<td><code>detail::device_impl</code></td>
+<td><code>sycl/source/detail/device_impl.{hpp,cpp}</code></td>
+</tr>
+<tr>
+<td><code>sycl::platform</code></td>
+<td><code>sycl/include/sycl/platform.hpp</code></td>
+<td><code>detail::platform_impl</code></td>
+<td><code>sycl/source/detail/platform_impl.{hpp,cpp}</code></td>
+</tr>
+<tr>
+<td><code>sycl::handler</code></td>
+<td><code>sycl/include/sycl/handler.hpp</code></td>
+<td><code>detail::handler_impl</code></td>
+<td><code>sycl/source/detail/handler_impl.hpp</code></td>
+</tr>
+</tbody></table>
+<p>每个 impl 类的核心，是它持有的那个 <strong>UR 句柄</strong>（第 18 章的主角）加上对其他 impl 的引用：</p>
+<ul>
+<li><strong><code>queue_impl</code></strong>（<code>queue_impl.hpp:71</code>）：<code>ur_queue_handle_t MQueue</code>（真正的 UR 队列）、<code>device_impl &amp;MDevice</code>（引用，不拥有）、<code>std::shared_ptr&lt;context_impl&gt; MContext</code>（共享拥有上下文）、<code>async_handler MAsyncHandler</code>、<code>property_list MPropList</code>、<code>bool MIsInorder</code>，以及一组依赖追踪状态（记录&quot;这个队列上最后一个事件是什么&quot;，供排序用）。</li>
+<li><strong><code>context_impl</code></strong>（<code>context_impl.hpp:43</code>）：<code>ur_context_handle_t MContext</code>、<code>std::vector&lt;device_impl *&gt; MDevices</code>（上下文里的设备）、<code>platform_impl &amp;MPlatform</code>、以及一个重量级成员 <code>KernelProgramCache MKernelProgramCache</code>——<strong>编译好的 program/kernel 缓存</strong>（同一个 kernel 不必每次都重新构建）。</li>
+<li><strong><code>device_impl</code></strong>（<code>device_impl.hpp:139</code>）：<code>ur_device_handle_t MDevice</code>、<code>platform_impl &amp;MPlatform</code>。</li>
+<li><strong><code>platform_impl</code></strong>（<code>platform_impl.hpp:34</code>）：<code>ur_platform_handle_t MPlatform</code>、<code>adapter_impl *MAdapter</code>，以及关键的 <code>std::vector&lt;std::unique_ptr&lt;device_impl&gt;&gt; MDevices</code>——<strong>平台拥有它的所有设备</strong>。</li>
+</ul>
+<div class="note">
+<strong>不是所有 pImpl 都是 <code>shared_ptr</code>——<code>device</code> 是个例外</strong>
+第 13 章说公开类"持有 <code>shared_ptr&lt;X_impl&gt;</code>"，这是主流形态（<code>queue</code>/<code>context</code>/<code>platform</code> 都是）。但 <code>device</code> 是<strong>非拥有的裸指针</strong>：<code>device.hpp:414</code> 是 <code>detail::device_impl *impl = nullptr;</code>。原因就在上面——<code>device_impl</code> 由它的父 <code>platform_impl</code> 用 <code>unique_ptr</code> 拥有（<code>platform_impl.hpp:215</code>），所以用户手里的 <code>device</code> 只是<strong>借用</strong>一个指针，生命周期挂靠在 platform 上。这是 pImpl 的一个合理变体：当实现对象已有明确的所有者时，句柄退化成"借用指针"而非"共享所有权"。<code>handler</code> 则更特殊——热路径上它的 <code>handler_impl</code> 是<strong>栈上</strong>建的、按引用传入（见下文），公开壳里的 <code>impl</code> 指向那个栈对象。
+</div><div class="concept">
+<svg viewBox="0 0 660 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">SYCL 运行时对象关系：谁引用谁、谁拥有谁</text>
+  <!-- platform -->
+  <rect x="40" y="50" width="150" height="80" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="115" y="70" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">platform_impl</text>
+  <text x="115" y="88" text-anchor="middle" font-size="8" fill="#a53f1c">ur_platform_handle_t</text>
+  <text x="115" y="103" text-anchor="middle" font-size="8" fill="#6b7280">拥有(unique_ptr):</text>
+  <text x="115" y="117" text-anchor="middle" font-size="8" fill="#6b7280">vector&lt;device_impl&gt;</text>
+  <!-- device -->
+  <rect x="40" y="170" width="150" height="70" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="115" y="190" text-anchor="middle" font-size="11" font-weight="bold" fill="#a53f1c">device_impl</text>
+  <text x="115" y="208" text-anchor="middle" font-size="8" fill="#a53f1c">ur_device_handle_t</text>
+  <text x="115" y="223" text-anchor="middle" font-size="8" fill="#6b7280">&amp;platform_impl</text>
+  <path d="M115 130 L115 170" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c16)"/>
+  <text x="150" y="153" font-size="8" fill="#2b6cb0">拥有</text>
+  <!-- context -->
+  <rect x="255" y="50" width="160" height="90" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.5"/>
+  <text x="335" y="70" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f7a45">context_impl</text>
+  <text x="335" y="88" text-anchor="middle" font-size="8" fill="#a53f1c">ur_context_handle_t</text>
+  <text x="335" y="102" text-anchor="middle" font-size="8" fill="#6b7280">vector&lt;device_impl*&gt;</text>
+  <text x="335" y="116" text-anchor="middle" font-size="8" fill="#6b7280">&amp;platform_impl</text>
+  <text x="335" y="132" text-anchor="middle" font-size="8" fill="#2f7a45">KernelProgramCache（缓存）</text>
+  <!-- queue -->
+  <rect x="480" y="50" width="150" height="90" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="555" y="70" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">queue_impl</text>
+  <text x="555" y="88" text-anchor="middle" font-size="8" fill="#a53f1c">ur_queue_handle_t</text>
+  <text x="555" y="102" text-anchor="middle" font-size="8" fill="#6b7280">shared_ptr&lt;context_impl&gt;</text>
+  <text x="555" y="116" text-anchor="middle" font-size="8" fill="#6b7280">&amp;device_impl</text>
+  <text x="555" y="130" text-anchor="middle" font-size="8" fill="#6b7280">MIsInorder / 依赖追踪</text>
+  <path d="M480 100 L415 100" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c16b)"/>
+  <text x="430" y="93" font-size="8" fill="#3f9b5c">shared</text>
+  <path d="M480 128 L190 205" stroke="#e06a3b" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#c16c)"/>
+  <text x="330" y="188" font-size="8" fill="#e06a3b">引用 device</text>
+  <path d="M255 110 L190 200" stroke="#6b7280" stroke-width="1" stroke-dasharray="3 3" marker-end="url(#c16d)"/>
+  <!-- handler -->
+  <rect x="255" y="180" width="160" height="80" rx="8" fill="#faf5ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="335" y="200" text-anchor="middle" font-size="11" font-weight="bold" fill="#6b21a8">handler / handler_impl</text>
+  <text x="335" y="218" text-anchor="middle" font-size="8" fill="#6b7280">每次 submit 临时建（栈上）</text>
+  <text x="335" y="232" text-anchor="middle" font-size="8" fill="#6b7280">命令组构建器</text>
+  <text x="335" y="246" text-anchor="middle" font-size="8" fill="#6b7280">MCGType / MKernelData</text>
+  <path d="M555 140 L400 190" stroke="#2b6cb0" stroke-width="1.2" marker-end="url(#c16)"/>
+  <text x="470" y="160" font-size="8" fill="#2b6cb0">submit 创建</text>
+  <text x="330" y="290" text-anchor="middle" font-size="9" fill="#6b7280">实线=拥有/持有 shared，虚线=引用(不拥有)。platform 拥有 device；queue 共享 context、引用 device</text>
+  <text x="330" y="308" text-anchor="middle" font-size="9" fill="#6b7280">每个 impl 都握着一个 ur_*_handle_t —— 通往第 18 章 Unified Runtime 的门</text>
+  <defs>
+    <marker id="c16" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+    <marker id="c16b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="c16c" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+    <marker id="c16d" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 16-1　SYCL 运行时对象关系。<code>platform_impl</code> 用 <code>unique_ptr</code> 拥有所有 <code>device_impl</code>；<code>queue_impl</code> 共享持有 <code>context_impl</code>、引用一个 <code>device_impl</code>，并握着 <code>ur_queue_handle_t</code>；<code>handler</code> 是每次 <code>submit</code> 临时建的命令组构建器。每个 impl 都持有一个 <code>ur_*_handle_t</code>——通往 UR 的门</div>
+</div><h2>引用语义与 impl_utils：句柄怎么和 impl 互相转换</h2>
+<p>第 13 章说这些类是引用语义句柄——<code>operator==</code> 直接比较 <code>impl</code> 指针（如 <code>queue.hpp:381</code> 的 <code>return impl == RHS.impl;</code>）。运行时内部经常要在&quot;公开句柄&quot;和&quot;impl 指针&quot;之间来回转换，这套工具在 <code>sycl/include/sycl/detail/impl_utils.hpp</code>：</p>
+<ul>
+<li><code>detail::getSyclObjImpl(obj)</code> —— 从公开对象取出它的 <code>impl</code>。它被特意做成一个<strong>函数对象</strong>（而非普通自由函数），目的是把它挡在 ADL（参数依赖查找）之外，防止这个内部 API 泄漏到用户命名空间（这是为修 intel/llvm issue #20820 加的防线）。</li>
+<li><code>detail::createSyclObjFromImpl&lt;T&gt;(impl)</code> —— 反向：从一个 impl 造出公开对象。若目标的 <code>impl</code> 是 <code>shared_ptr</code>，它用 <code>shared_from_this()</code> 构造；若是裸指针（<code>device</code> 那种），直接转发。</li>
+</ul>
+<p>这就是为什么每个公开类都要 <code>friend sycl::detail::ImplUtils;</code>——让这套工具能碰到私有的 <code>impl</code> 成员。你读运行时源码时会反复看到 <code>getSyclObjImpl(q)</code>，意思就是&quot;把这个 <code>queue</code> 句柄拆成它的 <code>queue_impl</code>&quot;。</p>
+<h2>核心路径：q.submit 一路走到发起启动</h2>
+<p>现在走通那条脊柱。用户写：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">q.submit([&amp;](sycl::handler &amp;h) {
+  sycl::accessor a{buf, h};
+  h.parallel_for&lt;class VecAdd&gt;(range&lt;1&gt;{N}, [=](id&lt;1&gt; i){ a[i] += 1; });
+});</code></pre>
+</div><p>它在运行时里的旅程（每一跳都标了源码位置）：</p>
+<ol>
+<li><strong><code>queue::submit</code></strong>（<code>queue.hpp:433</code>）—— 公开模板入口。它把你的 command-group 函数（CGF）<strong>类型擦除</strong>成 <code>detail::type_erased_cgfo_ty</code>，转发到 <code>submit_with_event</code>。</li>
+<li><strong><code>queue::submit_with_event_impl</code></strong>（<code>queue.cpp:172</code>）—— 公开壳的薄转发层，调 <code>impl-&gt;submit_with_event(...)</code>。这就是第 13 章那条&quot;头→source→detail/impl&quot;三跳的中间站。</li>
+<li><strong><code>queue_impl::submit_impl</code></strong>（<code>queue_impl.cpp:310</code>）—— 真正干活的地方：<ul>
+<li>在<strong>栈上</strong>建一个 <code>handler_impl HandlerImplVal(*this, ...)</code> 和 <code>handler Handler(HandlerImplVal)</code>（这就是前面说的&quot;handler 是临时的命令组构建器&quot;）。</li>
+<li><strong>执行你的 CGF</strong>：<code>CGF(Handler)</code>——你的 lambda 在这里被调用，<code>h.parallel_for&lt;VecAdd&gt;(...)</code> 把 kernel 信息记录进 handler。</li>
+<li>读出 <code>handler_impl</code> 里记录的命令组类型 <code>MCGType</code>，按队列是否 in-order 分派到不同的 finalize helper。</li>
+</ul>
+</li>
+<li><strong><code>handler::parallel_for</code></strong>（<code>handler.hpp:1294</code>）—— 在 CGF 执行期间被调用，最终经 <code>StoreLambda</code> 把你的 kernel 函子捕获下来、<code>setType(CGType::Kernel)</code> 标记这是个 kernel 命令组，把 NDRange、参数等记进 <code>handler_impl-&gt;MKernelData</code>。</li>
+<li><strong><code>handler::finalize</code></strong>（<code>handler.cpp:444</code>）—— 提交的终点：把记录的信息打包成一个具体的<strong>命令组对象</strong> <code>detail::CGExecKernel</code>（<code>cg.hpp:144</code>，装着 NDRange、host kernel、参数列表、kernel 名等），然后交给调度器：<code>Scheduler::getInstance().addCG(std::move(CommandGroup), *Queue, ...)</code>（<code>handler.cpp:845</code>）。</li>
+</ol>
+<p>第 17 章从 <code>addCG</code> 接着讲（调度器怎么把这个 CG 挂进依赖图）；第 18 章讲最终 <code>urEnqueueKernelLaunchWithArgsExp</code> 那一下真正的 UR 调用。这一章你只要记住这条脊柱的<strong>形状</strong>：<code>submit</code> → <code>queue_impl::submit_impl</code> →（建 handler、跑你的 CGF）→ <code>handler::finalize</code> →（打包成 CG）→ <code>Scheduler::addCG</code>。</p>
+<div class="keypoint">
+<strong>submit 的脊柱：queue 壳转发 → queue_impl 建 handler 跑 CGF → finalize 打包 CG → 交调度器</strong>
+<strong><code>q.submit(CGF)</code>（<code>queue.hpp:433</code>）→ <code>queue::submit_with_event_impl</code>（<code>queue.cpp:172</code>，壳转发）→ <code>queue_impl::submit_impl</code>（<code>queue_impl.cpp:310</code>）在栈上建 <code>handler</code>、执行你的 CGF；你的 <code>h.parallel_for</code>（<code>handler.hpp:1294</code>）把 kernel 记进 <code>handler_impl</code>；<code>handler::finalize</code>（<code>handler.cpp:444</code>）打包成 <code>CGExecKernel</code>（<code>cg.hpp:144</code>）交给 <code>Scheduler::addCG</code>（<code>handler.cpp:845</code>）。</strong>handler 是"每次提交临时建的命令组构建器"——这是理解 SYCL 提交模型的关键。
+</div><h2>in-order vs out-of-order：一个 property 决定排序</h2>
+<p><code>queue_impl::submit_impl</code> 里那个&quot;按是否 in-order 分派&quot;的分支，背后是 SYCL 的队列排序语义。<code>queue::is_in_order()</code>（<code>queue.cpp:242</code>）的实现极简单：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">bool queue::is_in_order() const {
+  return has_property&lt;property::queue::in_order&gt;();
+}</code></pre>
+</div><p>也就是说，<strong>队列是否顺序执行，完全由构造时传入的 <code>property_list</code> 里有没有 <code>property::queue::in_order</code> 决定</strong>。所有 queue 构造函数都接受一个尾随的 <code>const property_list &amp;PropList = {}</code>，<code>queue_impl</code> 把它存成 <code>MPropList</code>，创建 UR 队列时翻译成 UR 的队列标志。</p>
+<p>这个区别对第 17 章很重要：<strong>out-of-order 队列</strong>里，两个提交之间要不要排序，取决于它们有没有数据依赖（调度器算依赖图）；<strong>in-order 队列</strong>则强制每个提交依赖前一个，<code>queue_impl</code> 用它的依赖追踪状态（<code>MDefaultGraphDeps.LastEventPtr</code> 之类）把它们串成一条链。同一套 <code>submit_impl</code>，靠这个 property 走出两种排序行为。</p>
+<h2>每个 impl 都通向 UR：adapter.call</h2>
+<p>这一章反复出现的 <code>ur_*_handle_t</code> 不是摆设——impl 类通过一个**适配器（adapter）**把这些句柄驱动起来。模式统一是：从 impl 拿到 <code>adapter_impl</code>（<code>getAdapter()</code>），调用模板方法 <code>Adapter.call&lt;UrApiKind::xxx&gt;(...)</code>。几个确凿的调用点：</p>
+<ul>
+<li>建队列：<code>queue_impl</code> 里 <code>getAdapter().call&lt;UrApiKind::urQueueCreate&gt;(Context, Device, &amp;Properties, ...)</code>（<code>queue_impl.hpp:543</code>）。</li>
+<li>建上下文：<code>context_impl.cpp:55</code> 的 <code>getAdapter().call&lt;UrApiKind::urContextCreate&gt;(...)</code>。</li>
+<li>查设备信息：<code>device_impl</code> 里遍地是 <code>call&lt;UrApiKind::urDeviceGetInfo&gt;</code>。</li>
+</ul>
+<p>这就是运行时对象模型和第 18 章的接缝：<strong>每个 SYCL 运行时对象，本质是一个 UR 句柄 + 一层 C++ 生命周期/缓存管理</strong>。<code>queue</code>/<code>context</code>/<code>device</code> 的&quot;创建&quot;最终都落成一次 <code>urXxxCreate</code>。第 18 章会把 UR 这层单独展开——它对接 Level Zero / CUDA / OpenCL 的方式，正是第 10 章&quot;接口 + 插件&quot;母题的又一次化身。</p>
+<h2>亲手翻对象模型</h2>
+<p>不用编译，直接在源码里确认这一章的关系：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># queue_impl 持有的 UR 句柄和它引用的 context/device
+grep -n 'ur_queue_handle_t\|context_impl\|device_impl' sycl/source/detail/queue_impl.hpp | head
+
+# platform 拥有 device（unique_ptr），所以 device 句柄是裸指针
+grep -n 'unique_ptr&lt;device_impl&gt;' sycl/source/detail/platform_impl.hpp
+grep -n 'device_impl \*impl' sycl/include/sycl/device.hpp
+
+# submit 的脊柱：从公开壳到 impl 到 finalize
+grep -n 'submit_with_event_impl' sycl/source/queue.cpp
+grep -n 'addCG' sycl/source/handler.cpp</code></pre>
+</div><p>把 <code>queue_impl.hpp</code> 和 <code>handler.cpp:444</code> 的 <code>finalize</code> 打开对读，你能亲眼追出本章那条脊柱。调试运行时问题（比如&quot;提交没排上序&quot;&quot;kernel 没启动&quot;）时，这条从 <code>submit</code> 到 <code>addCG</code> 的路径就是你的断点地图。</p>
+<h2>动手：模拟 submit 的脊柱与 in-order 排序</h2>
+<p>把这一章的核心——「submit 建 handler 跑 CGF、finalize 打包成 CG 交调度器，in-order 与否决定排序」——用一个浏览器里能跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20SYCL%20submit%20%E8%84%8A%E6%9F%B1%EF%BC%9Aqueue%20%E2%86%92%20handler(%E5%91%BD%E4%BB%A4%E7%BB%84%E6%9E%84%E5%BB%BA%E5%99%A8)%20%E2%86%92%20finalize%20%E6%89%93%E5%8C%85%20CG%20%E2%86%92%20%E8%B0%83%E5%BA%A6%E5%99%A8%0A%0Aclass%20CG%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%91%BD%E4%BB%A4%E7%BB%84%EF%BC%9Afinalize%20%E7%9A%84%E4%BA%A7%E7%89%A9%0A%20%20%20%20def%20__init__(self%2C%20kind%2C%20kernel%2C%20ndrange%2C%20deps)%3A%0A%20%20%20%20%20%20%20%20self.kind%2C%20self.kernel%2C%20self.ndrange%2C%20self.deps%20%3D%20kind%2C%20kernel%2C%20ndrange%2C%20deps%0A%20%20%20%20def%20__repr__(self)%3A%0A%20%20%20%20%20%20%20%20return%20f%22CG(kernel%3D%7Bself.kernel%7D%2C%20nd%3D%7Bself.ndrange%7D%2C%20deps%3D%7Bself.deps%7D)%22%0A%0Aclass%20Handler%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E6%AC%A1%20submit%20%E4%B8%B4%E6%97%B6%E5%BB%BA%E7%9A%84%E5%91%BD%E4%BB%A4%E7%BB%84%E6%9E%84%E5%BB%BA%E5%99%A8%EF%BC%88%E6%A0%88%E4%B8%8A%EF%BC%89%0A%20%20%20%20def%20__init__(self)%3A%0A%20%20%20%20%20%20%20%20self.cgtype%20%3D%20None%3B%20self.kernel%20%3D%20None%3B%20self.ndrange%20%3D%20None%0A%20%20%20%20def%20parallel_for(self%2C%20kernel_name%2C%20ndrange)%3A%0A%20%20%20%20%20%20%20%20self.cgtype%20%3D%20%22Kernel%22%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20setType(CGType%3A%3AKernel)%0A%20%20%20%20%20%20%20%20self.kernel%20%3D%20kernel_name%3B%20self.ndrange%20%3D%20ndrange%20%20%20%23%20%E8%AE%B0%E8%BF%9B%20MKernelData%0A%20%20%20%20def%20finalize(self%2C%20deps)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%89%93%E5%8C%85%E6%88%90%20CGExecKernel%0A%20%20%20%20%20%20%20%20return%20CG(self.cgtype%2C%20self.kernel%2C%20self.ndrange%2C%20deps)%0A%0Aclass%20Scheduler%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%AC%AC%2017%20%E7%AB%A0%E7%9A%84%E4%B8%BB%E8%A7%92%EF%BC%8C%E8%BF%99%E9%87%8C%E5%8F%AA%E6%94%B6%20CG%0A%20%20%20%20def%20__init__(self)%3A%20self.graph%20%3D%20%5B%5D%0A%20%20%20%20def%20addCG(self%2C%20cg)%3A%0A%20%20%20%20%20%20%20%20self.graph.append(cg)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5B%E8%B0%83%E5%BA%A6%E5%99%A8%5D%20addCG%20%E2%86%92%20%7Bcg%7D%22)%0A%20%20%20%20%20%20%20%20return%20f%22event%23%7Blen(self.graph)%7D%22%0A%0Aclass%20Queue%3A%0A%20%20%20%20def%20__init__(self%2C%20in_order)%3A%0A%20%20%20%20%20%20%20%20self.in_order%20%3D%20in_order%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%94%B1%20property%3A%3Aqueue%3A%3Ain_order%20%E5%86%B3%E5%AE%9A%0A%20%20%20%20%20%20%20%20self.sched%20%3D%20Scheduler()%0A%20%20%20%20%20%20%20%20self.last_event%20%3D%20None%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20in-order%20%E7%9A%84%E4%BE%9D%E8%B5%96%E8%BF%BD%E8%B8%AA%0A%20%20%20%20def%20submit(self%2C%20cgf)%3A%0A%20%20%20%20%20%20%20%20h%20%3D%20Handler()%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20queue_impl%3A%3Asubmit_impl%20%E5%BB%BA%20handler%0A%20%20%20%20%20%20%20%20cgf(h)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%89%A7%E8%A1%8C%E7%94%A8%E6%88%B7%20CGF%EF%BC%9Ah.parallel_for(...)%0A%20%20%20%20%20%20%20%20%23%20in-order%EF%BC%9A%E5%BC%BA%E5%88%B6%E4%BE%9D%E8%B5%96%E4%B8%8A%E4%B8%80%E4%B8%AA%E6%8F%90%E4%BA%A4%EF%BC%9Bout-of-order%EF%BC%9A%E4%BA%A4%E7%BB%99%E8%B0%83%E5%BA%A6%E5%99%A8%E7%AE%97%E6%95%B0%E6%8D%AE%E4%BE%9D%E8%B5%96%EF%BC%88%E8%BF%99%E9%87%8C%E7%95%99%E7%A9%BA%EF%BC%89%0A%20%20%20%20%20%20%20%20deps%20%3D%20%5Bself.last_event%5D%20if%20(self.in_order%20and%20self.last_event)%20else%20%5B%5D%0A%20%20%20%20%20%20%20%20cg%20%3D%20h.finalize(deps)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20handler%3A%3Afinalize%0A%20%20%20%20%20%20%20%20ev%20%3D%20self.sched.addCG(cg)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E2%86%92%20Scheduler%3A%3AaddCG%0A%20%20%20%20%20%20%20%20self.last_event%20%3D%20ev%0A%20%20%20%20%20%20%20%20return%20ev%0A%0Afor%20mode%20in%20%5BTrue%2C%20False%5D%3A%0A%20%20%20%20print(f%22%3D%3D%3D%20%7B'in-order'%20if%20mode%20else%20'out-of-order'%7D%20%E9%98%9F%E5%88%97%20%3D%3D%3D%22)%0A%20%20%20%20q%20%3D%20Queue(in_order%3Dmode)%0A%20%20%20%20q.submit(lambda%20h%3A%20h.parallel_for(%22VecAdd%22%2C%20(1024%2C)))%0A%20%20%20%20q.submit(lambda%20h%3A%20h.parallel_for(%22VecMul%22%2C%20(1024%2C)))%0A%20%20%20%20print()"># 模拟 SYCL submit 脊柱：queue → handler(命令组构建器) → finalize 打包 CG → 调度器
+
+class CG:                       # 命令组：finalize 的产物
+    def __init__(self, kind, kernel, ndrange, deps):
+        self.kind, self.kernel, self.ndrange, self.deps = kind, kernel, ndrange, deps
+    def __repr__(self):
+        return f"CG(kernel={self.kernel}, nd={self.ndrange}, deps={self.deps})"
+
+class Handler:                  # 每次 submit 临时建的命令组构建器（栈上）
+    def __init__(self):
+        self.cgtype = None; self.kernel = None; self.ndrange = None
+    def parallel_for(self, kernel_name, ndrange):
+        self.cgtype = "Kernel"                    # setType(CGType::Kernel)
+        self.kernel = kernel_name; self.ndrange = ndrange   # 记进 MKernelData
+    def finalize(self, deps):                     # 打包成 CGExecKernel
+        return CG(self.cgtype, self.kernel, self.ndrange, deps)
+
+class Scheduler:                # 第 17 章的主角，这里只收 CG
+    def __init__(self): self.graph = []
+    def addCG(self, cg):
+        self.graph.append(cg)
+        print(f"    [调度器] addCG → {cg}")
+        return f"event#{len(self.graph)}"
+
+class Queue:
+    def __init__(self, in_order):
+        self.in_order = in_order                  # 由 property::queue::in_order 决定
+        self.sched = Scheduler()
+        self.last_event = None                    # in-order 的依赖追踪
+    def submit(self, cgf):
+        h = Handler()                             # queue_impl::submit_impl 建 handler
+        cgf(h)                                    # 执行用户 CGF：h.parallel_for(...)
+        # in-order：强制依赖上一个提交；out-of-order：交给调度器算数据依赖（这里留空）
+        deps = [self.last_event] if (self.in_order and self.last_event) else []
+        cg = h.finalize(deps)                     # handler::finalize
+        ev = self.sched.addCG(cg)                 # → Scheduler::addCG
+        self.last_event = ev
+        return ev
+
+for mode in [True, False]:
+    print(f"=== {'in-order' if mode else 'out-of-order'} 队列 ===")
+    q = Queue(in_order=mode)
+    q.submit(lambda h: h.parallel_for("VecAdd", (1024,)))
+    q.submit(lambda h: h.parallel_for("VecMul", (1024,)))
+    print()</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== in-order 队列 ===
+    [调度器] addCG → CG(kernel=VecAdd, nd=(1024,), deps=[])
+    [调度器] addCG → CG(kernel=VecMul, nd=(1024,), deps=['event#1'])
+
+=== out-of-order 队列 ===
+    [调度器] addCG → CG(kernel=VecAdd, nd=(1024,), deps=[])
+    [调度器] addCG → CG(kernel=VecMul, nd=(1024,), deps=[])</code></pre>
+</div><p>看清两件事：① <strong>每次 <code>submit</code> 都新建一个 <code>Handler</code></strong>、跑你的 CGF、<code>finalize</code> 成一个 <code>CG</code> 交给调度器——这就是那条脊柱的形状。② <strong>in-order 队列</strong>里第二个提交自动带上了 <code>deps=[&#39;event#1&#39;]</code>（依赖前一个），<strong>out-of-order</strong> 则两个都 <code>deps=[]</code>（要不要排序留给第 17 章的调度器按数据依赖决定）。一个 <code>in_order</code> 布尔就分出了两种排序行为，正如真实代码里那个 <code>property::queue::in_order</code>。请动手改：把 <code>submit</code> 里 out-of-order 分支也加上依赖（模拟两个 kernel 共享同一 buffer），看它如何变成一条链——这正是第 17 章调度器要自动完成的工作。</p>
+<h2>小结与下一步</h2>
+<p>你现在有了 SYCL 运行时的对象关系图和提交脊柱：</p>
+<ul>
+<li><strong>impl 类</strong>（<code>queue_impl</code>/<code>context_impl</code>/<code>device_impl</code>/<code>platform_impl</code>，都在 <code>sycl/source/detail/</code>）各持有一个 <strong>UR 句柄</strong>（<code>ur_*_handle_t</code>）加对其他 impl 的引用；<code>context_impl</code> 还扛着 <code>KernelProgramCache</code>。</li>
+<li><strong>所有权</strong>：<code>platform_impl</code> 用 <code>unique_ptr</code> <strong>拥有</strong>所有 <code>device_impl</code>——所以公开的 <code>device</code> 句柄是<strong>非拥有裸指针</strong>（pImpl 的合理变体），而 <code>queue</code>/<code>context</code>/<code>platform</code> 是 <code>shared_ptr</code>。<code>handler</code> 的 impl 在热路径上是<strong>栈上</strong>临时对象。</li>
+<li>句柄↔impl 的转换靠 <code>impl_utils.hpp</code> 的 <code>getSyclObjImpl</code>（做成函数对象挡 ADL）/ <code>createSyclObjFromImpl</code>。</li>
+<li><strong>提交脊柱</strong>：<code>queue::submit</code>（<code>queue.hpp:433</code>）→ <code>submit_with_event_impl</code>（<code>queue.cpp:172</code>，壳转发）→ <code>queue_impl::submit_impl</code>（<code>queue_impl.cpp:310</code>，建 handler 跑 CGF）→ <code>handler::parallel_for</code>（<code>handler.hpp:1294</code>，记 kernel）→ <code>handler::finalize</code>（<code>handler.cpp:444</code>，打包成 <code>CGExecKernel</code>）→ <code>Scheduler::addCG</code>（<code>handler.cpp:845</code>）。</li>
+<li><strong>in-order vs out-of-order</strong> 由 <code>property::queue::in_order</code> 决定（<code>queue.cpp:242</code>）：in-order 强制串链，out-of-order 交调度器按数据依赖排。</li>
+<li>每个 impl 经 <code>adapter.call&lt;UrApiKind::xxx&gt;(...)</code> 通向 UR（如 <code>urQueueCreate</code>/<code>urContextCreate</code>）——接缝在第 18 章展开。</li>
+</ul>
+<p>下一章接着 <code>Scheduler::addCG</code> 往下讲：命令组进了调度器之后，<strong>调度器怎么把它挂进依赖图、怎么算出命令之间的读写依赖（RAW/WAR/WAW）、怎么在需要时插入内存拷贝、最后按拓扑序 enqueue 到设备</strong>。第 17 章是 SYCL 运行时最精巧的一块——命令组、调度器与依赖图。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>五个核心 impl 类都在 <code>sycl/source/detail/</code>，各持一个 <code>ur_*_handle_t</code> + 对其他 impl 的引用：<code>queue_impl</code>（<code>queue_impl.hpp:71</code>，UR 队列 + shared context + &amp;device + 依赖追踪）、<code>context_impl</code>（<code>context_impl.hpp:43</code>，UR 上下文 + KernelProgramCache）、<code>device_impl</code>、<code>platform_impl</code>（拥有 <code>unique_ptr&lt;device_impl&gt;</code>）。</li>
+<li>pImpl 有变体：<code>queue</code>/<code>context</code>/<code>platform</code> 持 <code>shared_ptr</code>，<strong><code>device</code> 持裸指针</strong>（<code>device.hpp:414</code>，因 platform 拥有 device_impl），<code>handler_impl</code> 热路径在栈上。</li>
+<li>句柄↔impl：<code>impl_utils.hpp</code> 的 <code>getSyclObjImpl</code>（函数对象挡 ADL，修 #20820）/ <code>createSyclObjFromImpl</code>。</li>
+<li><strong>提交脊柱</strong>：<code>submit</code>（<code>queue.hpp:433</code>）→ <code>submit_with_event_impl</code>（<code>queue.cpp:172</code>）→ <code>queue_impl::submit_impl</code>（<code>queue_impl.cpp:310</code>，栈上建 handler 跑 CGF）→ <code>parallel_for</code>（<code>handler.hpp:1294</code>）→ <code>finalize</code>（<code>handler.cpp:444</code>，打包 <code>CGExecKernel</code>，<code>cg.hpp:144</code>）→ <code>Scheduler::addCG</code>（<code>handler.cpp:845</code>）。</li>
+<li>in-order/out-of-order 由 <code>property::queue::in_order</code> 决定（<code>queue.cpp:242</code>）。</li>
+<li>每个 impl 经 <code>adapter.call&lt;UrApiKind::urQueueCreate/urContextCreate/…&gt;</code> 通向 UR（第 18 章）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch15.html">← 第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a>
+  <a class="nav-next" href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

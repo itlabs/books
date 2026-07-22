@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 21 章 实战：free function kernels 扩展</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li class="active"><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 21 章 实战：free function kernels 扩展</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 20 章讲了「扩展是什么、怎么组织」。这一章拿一个真实、已进主线的扩展当解剖对象，把「实现一个 SYCL 扩展」从抽象变成具体：<strong>sycl_ext_oneapi_free_function_kernels</strong>——它让你把 kernel 写成一个<strong>普通的自由函数（free function）</strong>，加个属性标注一下，而不必包成 lambda 提交给 queue。</p>
+<p>读完你会看清一个扩展从上到下的完整切面：它解决什么痛点、feature-test 宏叫什么、用户 API 长什么样、那个属性宏在头文件里如何展开成一个编译器认识的 IR 属性、以及运行时怎么靠这个属性找到并启动 kernel。你会同时用上前三部分的知识——属性落到 IR（第 15 章）、kernel 命名与集成头文件（第 14 章）、kernel_bundle（第 16 章）。这一章的结构（痛点 → 宏 → API → 编译器 → 运行时）就是你日后读<strong>任何</strong> SYCL 扩展的通用套路。</p>
+</div><h2>痛点：为什么想把 kernel 写成自由函数</h2>
+<p>SYCL 2020 里，kernel 几乎总是以 <strong>lambda</strong> 的形式出现，提交给 queue：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">q.submit([&amp;](sycl::handler&amp; h) {
+    sycl::accessor a(buf, h);
+    h.parallel_for(sycl::range&lt;1&gt;(n), [=](sycl::id&lt;1&gt; i) {
+        a[i] *= 2;                 // kernel 体，藏在一个匿名 lambda 里
+    });
+});</code></pre>
+</div><p>这套写法对「就地提交一个 kernel」很顺手，但有几个场景它很别扭：</p>
+<ul>
+<li><strong>kernel 想被单独声明、单独引用</strong>：比如你想把 kernel 声明在一个头文件里、在别处定义，或者想按「函数地址」去引用一个 kernel。lambda 是匿名的、就地的，做不到。</li>
+<li><strong>运行时编译 / 互操作</strong>：把一段单独的 kernel 交给运行时编译（第 23 章的 kernel_compiler），或和别的语言/工具产生的 kernel 对接时，一个有名字的普通函数比一个埋在提交调用里的 lambda 好处理得多。</li>
+<li><strong>就是想要「一个 kernel 就是一个函数」的朴素心智模型</strong>：像写 CUDA 的 <code>__global__ void k(...)</code> 那样。</li>
+</ul>
+<p>于是有了 <strong>free function kernels</strong> 扩展：把 kernel 写成一个<strong>具名的、命名空间作用域（或静态成员）的普通函数</strong>，用一个编译期属性标注「这是个 kernel」。它的规范文档在：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">sycl/doc/extensions/experimental/sycl_ext_oneapi_free_function_kernels.asciidoc</code></pre>
+</div><p>（注意它在 <code>experimental/</code> 目录下——第 20 章讲过扩展按成熟度分 <code>experimental</code> / <code>supported</code> / <code>proposed</code> 等目录。）它的 feature-test 宏是 <strong><code>SYCL_EXT_ONEAPI_FREE_FUNCTION_KERNELS</code></strong>（实验阶段，值为 <code>1</code>）。</p>
+<div class="warn">
+<strong>别和「free function queries」搞混</strong>
+扩展目录里还有一个名字很像的 <code>sycl_ext_oneapi_free_function_queries</code>（成熟度更高，在 <code>supported/</code>；本章的 kernels 扩展在 <code>experimental/</code>）。两者名字像、目的完全不同：<strong>queries</strong> 是「在 kernel 内部不通过 <code>nd_item</code> 参数、而用自由函数查询自己的全局 id」；<strong>kernels</strong>（本章）是「把 kernel 本身定义成一个自由函数」。读扩展时先看清 doc 全名——顺带也印证了第 20 章"目录即成熟度"：名字相近的两个扩展可以处在不同的成熟度阶段。
+</div><h2>用户 API：一个函数 + 一个属性</h2>
+<p>先看这个扩展给用户的样子。一个 free function kernel 就是这样一个函数：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">namespace syclexp = sycl::ext::oneapi::experimental;
+
+// 用属性标注：这是一个 3 维的 nd-range kernel
+SYCL_EXT_ONEAPI_FUNCTION_PROPERTY((syclexp::nd_range_kernel&lt;3&gt;))
+void scale(float* data, float factor) {
+    // 函数体就是 kernel 体。用 free function queries 拿到自己的全局 id
+    size_t i = syclexp::this_nd_item&lt;3&gt;().get_global_id(0);
+    data[i] *= factor;
+}</code></pre>
+</div><p>对比第一节那个 lambda 版本，差别一目了然：kernel 现在是一个<strong>有名字、能被单独声明、参数显式</strong>的普通函数 <code>scale</code>。规范对它有几条硬性要求（都写在 doc 里，编译器会检查）：</p>
+<ul>
+<li>用且仅用 <code>nd_range_kernel&lt;Dims&gt;</code> 或 <code>single_task_kernel</code> 之一标注。</li>
+<li>声明在命名空间作用域，或作为 <code>static</code> 成员函数。</li>
+<li>返回类型必须是 <code>void</code>；不能有可变参数；不能有默认参数值。</li>
+<li>参数必须是合法的 kernel 参数类型；不允许 <code>reducer</code> 和 <code>kernel_handler</code>。</li>
+</ul>
+<p>启动它不再是「提交一个 lambda」，而是<strong>按函数引用它、再启动</strong>（扩展提供的 <code>nd_launch</code> / <code>single_task</code> 等辅助 + <code>kernel_function</code> 把函数地址作为模板参数捕获）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">SYCL / DPC++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">namespace syclexp = sycl::ext::oneapi::experimental;
+// 拿到这个 free function kernel 对应的 kernel_id / kernel_bundle
+sycl::kernel_id id = syclexp::get_kernel_id&lt;scale&gt;();
+auto bundle = syclexp::get_kernel_bundle&lt;sycl::bundle_state::executable&gt;(ctx);
+// 或直接按函数启动
+syclexp::nd_launch&lt;scale&gt;(q, launch_config, data, 2.0f);</code></pre>
+</div><p>这里 <code>get_kernel_id&lt;scale&gt;()</code>、<code>get_kernel_bundle&lt;...&gt;()</code>（都在 <code>sycl::ext::oneapi::experimental</code> 命名空间）就是把「一个函数」接回 SYCL 2020 那套 <code>kernel_id</code> / <code>kernel_bundle</code>（第 16 章）体系的桥。</p>
+<h2>关键机制：属性宏如何变成一个 IR 属性</h2>
+<p>这是整章的技术核心，也是「实现一个扩展」最典型的手法：<strong>一个面向用户的漂亮宏，在设备编译时展开成一个编译器前端认识的 IR 属性</strong>。</p>
+<p>那个宏 <code>SYCL_EXT_ONEAPI_FUNCTION_PROPERTY</code> 定义在：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">sycl/include/sycl/ext/oneapi/free_function_kernel_properties.hpp</code></pre>
+</div><p>它的定义是<strong>条件编译</strong>的——设备端和主机端展开成完全不同的东西：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// sycl/include/sycl/ext/oneapi/free_function_kernel_properties.hpp（示意）
+#ifdef __SYCL_DEVICE_ONLY__
+// 设备编译趟：展开成一个 clang 属性，把属性名/值作为 IR 元数据附到函数上
+#define SYCL_EXT_ONEAPI_FUNCTION_PROPERTY(PROP)                          \
+  [[__sycl_detail__::add_ir_attributes_function(                         \
+      /* name  */ FunctionPropertyMetaInfo&lt;decltype(PROP)&gt;::name,        \
+      /* value */ FunctionPropertyMetaInfo&lt;decltype(PROP)&gt;::value)]]
+#else
+// 主机编译趟：什么都不展开（主机代码里这个属性无意义）
+#define SYCL_EXT_ONEAPI_FUNCTION_PROPERTY(PROP)
+#endif</code></pre>
+</div><p>看这里就把第 12 章「两趟编译」和第 15 章「属性落到 IR」全串起来了：</p>
+<ul>
+<li><strong>主机趟</strong>：宏展开成空，<code>scale</code> 就是个普通函数。</li>
+<li><strong>设备趟</strong>（<code>__SYCL_DEVICE_ONLY__</code>）：宏展开成 <code>[[__sycl_detail__::add_ir_attributes_function(...)]]</code>——这是 DPC++ 前端专用的一个属性，作用是<strong>把一对「名字 + 值」的字符串作为 IR 属性附着到这个函数上</strong>。</li>
+</ul>
+<p>对两个属性，附上的名字/值分别是：</p>
+<table>
+<thead>
+<tr>
+<th>用户写的</th>
+<th>附到 IR 上的属性名</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nd_range_kernel&lt;Dims&gt;</code></td>
+<td><code>&quot;sycl-nd-range-kernel&quot;</code></td>
+<td><code>Dims</code>（1/2/3）</td>
+</tr>
+<tr>
+<td><code>single_task_kernel</code></td>
+<td><code>&quot;sycl-single-task-kernel&quot;</code></td>
+<td><code>0</code></td>
+</tr>
+</tbody></table>
+<p>于是 <code>scale</code> 编成的设备 IR 上就带着一条 <code>&quot;sycl-nd-range-kernel&quot; = 3</code> 的属性。这条属性就是编译器后续识别「这个函数是个 kernel」的唯一依据。</p>
+<div class="concept">
+<svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一个属性宏，贯穿「用户源码 → IR → 编译器识别 → 运行时」</text>
+  <!-- user code -->
+  <rect x="30" y="44" width="200" height="56" rx="8" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="130" y="66" text-anchor="middle" font-size="11" font-weight="bold" fill="#374151">用户源码</text>
+  <text x="130" y="84" text-anchor="middle" font-size="9" fill="#6b7280">SYCL_EXT_..._PROPERTY</text>
+  <text x="130" y="96" text-anchor="middle" font-size="9" fill="#6b7280">((nd_range_kernel&lt;3&gt;)) void scale(...)</text>
+  <!-- macro expand -->
+  <path d="M230 72 L268 72" stroke="#6b7280" stroke-width="1.4" marker-end="url(#e21)"/>
+  <text x="249" y="64" text-anchor="middle" font-size="8" fill="#6b7280">设备趟展开</text>
+  <rect x="268" y="44" width="210" height="56" rx="8" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="373" y="66" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">clang 属性</text>
+  <text x="373" y="84" text-anchor="middle" font-size="8.5" fill="#6b7280">add_ir_attributes_function(</text>
+  <text x="373" y="96" text-anchor="middle" font-size="8.5" fill="#6b7280">"sycl-nd-range-kernel", 3)</text>
+  <!-- IR -->
+  <path d="M373 100 L373 128" stroke="#6b7280" stroke-width="1.4" marker-end="url(#e21)"/>
+  <rect x="248" y="130" width="250" height="46" rx="8" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="373" y="150" text-anchor="middle" font-size="10" font-weight="bold" fill="#2f7a45">设备 LLVM IR</text>
+  <text x="373" y="167" text-anchor="middle" font-size="9" fill="#6b7280">define void @scale(...) "sycl-nd-range-kernel"="3"</text>
+  <!-- sema recognize -->
+  <path d="M248 153 L120 153 L120 130" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#e21b)"/>
+  <rect x="30" y="130" width="180" height="76" rx="8" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="120" y="150" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">SemaSYCL.cpp</text>
+  <text x="120" y="168" text-anchor="middle" font-size="9" fill="#6b7280">isFreeFunction() 扫描属性</text>
+  <text x="120" y="182" text-anchor="middle" font-size="9" fill="#6b7280">→ 生成 kernel 入口</text>
+  <text x="120" y="196" text-anchor="middle" font-size="9" fill="#6b7280">→ 写进集成头文件</text>
+  <!-- runtime -->
+  <path d="M373 176 L373 210" stroke="#6b7280" stroke-width="1.4" marker-end="url(#e21)"/>
+  <rect x="228" y="212" width="290" height="52" rx="8" fill="#e5edf5" stroke="#2b6cb0"/>
+  <text x="373" y="232" text-anchor="middle" font-size="10" font-weight="bold" fill="#2b6cb0">运行时</text>
+  <text x="373" y="250" text-anchor="middle" font-size="9" fill="#6b7280">get_kernel_id&lt;scale&gt;() / nd_launch&lt;scale&gt;() 找到并启动</text>
+  <text x="320" y="286" text-anchor="middle" font-size="11" fill="#2d2a26">一条 IR 属性把「用户意图」从<tspan font-weight="bold">头文件</tspan>一路传到<tspan font-weight="bold">编译器</tspan>再到<tspan font-weight="bold">运行时</tspan></text>
+  <defs>
+    <marker id="e21" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="e21b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#2b6cb0"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 21-1　free function kernels 的完整切面。用户写的属性宏在设备趟展开成 <code>add_ir_attributes_function</code>，把 <code>"sycl-nd-range-kernel"=3</code> 附到函数 IR 上；前端 <code>SemaSYCL.cpp</code> 扫到它就把这个函数当 kernel 处理（生成入口、写集成头文件）；运行时再靠它找到并启动。这条「头文件宏 → IR 属性 → 编译器识别 → 运行时」的链路，是几乎所有需要编译器配合的 SYCL 扩展的共同骨架</div>
+</div><h2>编译器一侧：SemaSYCL 如何认出它</h2>
+<p>属性附到 IR 上只是「留了个记号」。真正把带记号的函数<strong>当作 kernel</strong> 处理的，是 DPC++ 前端的 SYCL 语义分析，代码在 <code>clang/lib/Sema/SemaSYCL.cpp</code>。几个关键函数（第 22 章会细讲前端支持，这里先建立印象）：</p>
+<ul>
+<li><code>SemaSYCL::isFreeFunction(const FunctionDecl *FD)</code> —— 判断一个函数是不是 free function kernel：它扫描该函数上的 <code>SYCLAddIRAttributesFunctionAttr</code> 属性，找有没有 <code>&quot;sycl-nd-range-kernel&quot;</code> / <code>&quot;sycl-single-task-kernel&quot;</code> 这对名字/值。</li>
+<li><code>getFreeFunctionRangeDim(...)</code> —— 从属性里取出维数（1/2/3）。</li>
+<li><code>constructFreeFunctionKernelName(...)</code> —— 为它构造要写进集成头文件的 kernel 名字。</li>
+</ul>
+<p>也就是说，那个属性宏和前端的 <code>isFreeFunction</code> 是<strong>约定好的一对暗号</strong>：头文件负责「贴记号」，前端负责「认记号并据此干活」。前端认出后，做的事情和第 12、14 章讲的普通 kernel 一样——生成 kernel 入口函数、把名字和参数信息写进集成头文件，好让主机端和运行时能对上号。</p>
+<p>这条属性还会被前端校验：如果属性没写在函数的<strong>第一个声明</strong>上，会报 <code>err_free_function_first_occurrence_missing_attr</code>；参数类型不合法（比如用了 <code>reducer</code>）也会被 <code>unsupportedFreeFunctionParamType()</code> 挡下。这些诊断也在 <code>SemaSYCL.cpp</code> 附近。</p>
+<div class="keypoint">
+<strong>「头文件贴记号，编译器认记号」是扩展的通用套路</strong>
+free function kernels 不是特例。大量需要编译器配合的 SYCL 扩展都走这个模式：<strong>在头文件里用一个宏/属性把用户意图编码成一条 IR 属性（<code>add_ir_attributes_function</code> / <code>...global_variable</code> 等），编译器前端和后续 Pass 再去识别这条属性并生成对应代码。</strong>学会读这一条链，你就能自己看懂 device_global、compile-time properties 等一大批扩展——它们共用 <code>__sycl_detail__</code> 这套 IR 属性机制（设计文档 <code>sycl/doc/design/CompileTimeProperties.md</code>）。
+</div><h2>运行时一侧：从函数到 kernel_bundle</h2>
+<p>设备镜像里现在有了一个带 <code>&quot;sycl-nd-range-kernel&quot;</code> 属性、名字确定的 kernel。运行时怎么把用户的 <code>get_kernel_id&lt;scale&gt;()</code> 接上它？</p>
+<p>思路和第 12 章那个「按修饰名对号」的模型完全一致，只是键从「lambda 的 kernel-name 类型」换成了「函数 <code>scale</code> 本身」：</p>
+<ul>
+<li><code>get_kernel_id&lt;scale&gt;()</code> —— 编译期把函数 <code>scale</code> 映射到一个稳定的名字（同样走名字修饰），运行时拿它当键去程序管理器（<code>sycl/source/detail/program_manager/</code>）里查设备镜像中的对应 kernel，返回一个 <code>kernel_id</code>。</li>
+<li><code>get_kernel_bundle&lt;bundle_state::executable&gt;(ctx)</code> —— 拿到包含该 kernel、可执行状态的 kernel_bundle（第 16 章的 kernel_bundle 体系）。</li>
+<li><code>bundle.ext_oneapi_get_kernel&lt;scale&gt;()</code> —— 从 bundle 里取出真正的 <code>sycl::kernel</code> 对象，可用来查询信息或启动。</li>
+</ul>
+<p>所以「实现这个扩展」的运行时工作量其实不大——因为它<strong>复用</strong>了 SYCL 2020 已有的 kernel_bundle / program_manager 基础设施，只是新增了「用函数（而非 lambda 类型）作为查找键」的入口。这也是好扩展的特征：尽量搭在既有机制上，而不是另起一套。</p>
+<h2>动手：模拟属性驱动的 kernel 识别</h2>
+<p>把这一章的核心机制——「设备趟给函数贴 IR 属性 → 前端扫描属性、认出 kernel → 运行时按名字启动」——浓缩成一个能在浏览器里跑的小模型。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20free%20function%20kernels%EF%BC%9A%E5%B1%9E%E6%80%A7%E5%AE%8F%E8%B4%B4%E8%AE%B0%E5%8F%B7%20%E2%86%92%20%E5%89%8D%E7%AB%AF%E8%AE%A4%E8%AE%B0%E5%8F%B7%20%E2%86%92%20%E8%BF%90%E8%A1%8C%E6%97%B6%E5%90%AF%E5%8A%A8%0A%0A%23%20----%20%E5%A4%B4%E6%96%87%E4%BB%B6%E9%87%8C%E7%9A%84%E5%AE%8F%EF%BC%9A%E8%AE%BE%E5%A4%87%E8%B6%9F%E7%BB%99%E5%87%BD%E6%95%B0%22%E8%B4%B4%E4%B8%80%E6%9D%A1%20IR%20%E5%B1%9E%E6%80%A7%22%20----%0Adef%20function_property(kind%2C%20dims%3D0)%3A%0A%20%20%20%20%23%20%E8%BF%94%E5%9B%9E%E4%B8%80%E4%B8%AA%22IR%20%E5%B1%9E%E6%80%A7%22%EF%BC%88%E5%90%8D%E5%AD%97%2C%20%E5%80%BC%EF%BC%89%EF%BC%8C%E6%A8%A1%E6%8B%9F%20add_ir_attributes_function%20%E7%9A%84%E6%95%88%E6%9E%9C%0A%20%20%20%20if%20kind%20%3D%3D%20%22nd_range%22%3A%0A%20%20%20%20%20%20%20%20return%20(%22sycl-nd-range-kernel%22%2C%20dims)%0A%20%20%20%20elif%20kind%20%3D%3D%20%22single_task%22%3A%0A%20%20%20%20%20%20%20%20return%20(%22sycl-single-task-kernel%22%2C%200)%0A%0A%23%20----%20%E7%94%A8%E6%88%B7%E6%BA%90%E7%A0%81%EF%BC%9A%E4%B8%89%E4%B8%AA%E5%87%BD%E6%95%B0%EF%BC%8C%E5%8F%AA%E6%9C%89%E5%89%8D%E4%B8%A4%E4%B8%AA%E8%B4%B4%E4%BA%86%20kernel%20%E5%B1%9E%E6%80%A7%20----%0Afunctions%20%3D%20%7B%0A%20%20%20%20%22scale%22%3A%20%20%7B%22attr%22%3A%20function_property(%22nd_range%22%2C%203)%2C%20%22params%22%3A%20%5B%22float*%20data%22%2C%20%22float%20factor%22%5D%7D%2C%0A%20%20%20%20%22init%22%3A%20%20%20%7B%22attr%22%3A%20function_property(%22single_task%22)%2C%20%22params%22%3A%20%5B%22int*%20buf%22%5D%7D%2C%0A%20%20%20%20%22helper%22%3A%20%7B%22attr%22%3A%20None%2C%20%22params%22%3A%20%5B%22int%20x%22%5D%7D%2C%20%20%20%23%20%E6%99%AE%E9%80%9A%E8%AE%BE%E5%A4%87%E5%87%BD%E6%95%B0%EF%BC%8C%E4%B8%8D%E6%98%AF%20kernel%0A%7D%0A%0A%23%20----%20%E7%BC%96%E8%AF%91%E5%99%A8%E5%89%8D%E7%AB%AF%20SemaSYCL%3A%3AisFreeFunction%20%E7%9A%84%E6%A8%A1%E6%8B%9F%20----%0AKERNEL_ATTRS%20%3D%20%7B%22sycl-nd-range-kernel%22%2C%20%22sycl-single-task-kernel%22%7D%0Adef%20is_free_function_kernel(fn)%3A%0A%20%20%20%20return%20fn%5B%22attr%22%5D%20is%20not%20None%20and%20fn%5B%22attr%22%5D%5B0%5D%20in%20KERNEL_ATTRS%0A%0Adevice_image%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%23%20%E4%BF%AE%E9%A5%B0%E5%90%8D%20-%3E%20kernel%20%E4%BF%A1%E6%81%AF%EF%BC%88%E5%89%8D%E7%AB%AF%E8%AF%86%E5%88%AB%E5%87%BA%E7%9A%84%20kernel%20%E6%89%8D%E8%BF%9B%E6%9D%A5%EF%BC%89%0Afor%20name%2C%20fn%20in%20functions.items()%3A%0A%20%20%20%20if%20is_free_function_kernel(fn)%3A%0A%20%20%20%20%20%20%20%20attr_name%2C%20attr_val%20%3D%20fn%5B%22attr%22%5D%0A%20%20%20%20%20%20%20%20mangled%20%3D%20f%22_ZTS%7Blen(name)%7D%7Bname%7D%22%0A%20%20%20%20%20%20%20%20kind%20%3D%20%22nd-range%22%20if%20attr_name.endswith(%22nd-range-kernel%22)%20else%20%22single-task%22%0A%20%20%20%20%20%20%20%20device_image%5Bmangled%5D%20%3D%20%7B%22kind%22%3A%20kind%2C%20%22dims%22%3A%20attr_val%2C%20%22params%22%3A%20fn%5B%22params%22%5D%7D%0A%20%20%20%20%20%20%20%20print(f%22%5B%E5%89%8D%E7%AB%AF%5D%20%7Bname%7D%3A%20%E6%89%AB%E5%88%B0%E5%B1%9E%E6%80%A7%20%7Bfn%5B'attr'%5D%7D%20%E2%86%92%20%E8%AE%A4%E5%AE%9A%E4%B8%BA%20%7Bkind%7D%20kernel%EF%BC%8C%E5%86%99%E5%85%A5%E9%9B%86%E6%88%90%E5%A4%B4%E6%96%87%E4%BB%B6%EF%BC%88%7Bmangled%7D%EF%BC%89%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E5%89%8D%E7%AB%AF%5D%20%7Bname%7D%3A%20%E6%97%A0%20kernel%20%E5%B1%9E%E6%80%A7%20%E2%86%92%20%E5%BD%93%E4%BD%9C%E6%99%AE%E9%80%9A%E8%AE%BE%E5%A4%87%E5%87%BD%E6%95%B0%EF%BC%8C%E4%B8%8D%E7%94%9F%E6%88%90%20kernel%20%E5%85%A5%E5%8F%A3%22)%0A%0Aprint()%0A%0A%23%20----%20%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%9Aget_kernel_id%3CFunc%3E()%20%2F%20nd_launch%3CFunc%3E()%20----%0Adef%20launch(func_name)%3A%0A%20%20%20%20mangled%20%3D%20f%22_ZTS%7Blen(func_name)%7D%7Bfunc_name%7D%22%0A%20%20%20%20if%20mangled%20not%20in%20device_image%3A%0A%20%20%20%20%20%20%20%20print(f%22%5B%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20launch%3C%7Bfunc_name%7D%3E%EF%BC%9A%E5%A4%B1%E8%B4%A5%E2%80%94%E2%80%94%E5%AE%83%E4%B8%8D%E6%98%AF%E4%B8%80%E4%B8%AA%20free%20function%20kernel%22)%0A%20%20%20%20%20%20%20%20return%0A%20%20%20%20k%20%3D%20device_image%5Bmangled%5D%0A%20%20%20%20print(f%22%5B%E8%BF%90%E8%A1%8C%E6%97%B6%5D%20launch%3C%7Bfunc_name%7D%3E%EF%BC%9A%E6%89%BE%E5%88%B0%20%7Bk%5B'kind'%5D%7D%20kernel%EF%BC%8C%E5%8F%82%E6%95%B0%20%7Bk%5B'params'%5D%7D%EF%BC%8C%E5%90%AF%E5%8A%A8%22)%0A%0Alaunch(%22scale%22)%0Alaunch(%22init%22)%0Alaunch(%22helper%22)%20%20%20%20%20%23%20%E4%BC%9A%E5%A4%B1%E8%B4%A5%EF%BC%9Ahelper%20%E6%B2%A1%E8%A2%AB%E8%AE%A4%E5%AE%9A%E4%B8%BA%20kernel"># 模拟 free function kernels：属性宏贴记号 → 前端认记号 → 运行时启动
+
+# ---- 头文件里的宏：设备趟给函数"贴一条 IR 属性" ----
+def function_property(kind, dims=0):
+    # 返回一个"IR 属性"（名字, 值），模拟 add_ir_attributes_function 的效果
+    if kind == "nd_range":
+        return ("sycl-nd-range-kernel", dims)
+    elif kind == "single_task":
+        return ("sycl-single-task-kernel", 0)
+
+# ---- 用户源码：三个函数，只有前两个贴了 kernel 属性 ----
+functions = {
+    "scale":  {"attr": function_property("nd_range", 3), "params": ["float* data", "float factor"]},
+    "init":   {"attr": function_property("single_task"), "params": ["int* buf"]},
+    "helper": {"attr": None, "params": ["int x"]},   # 普通设备函数，不是 kernel
+}
+
+# ---- 编译器前端 SemaSYCL::isFreeFunction 的模拟 ----
+KERNEL_ATTRS = {"sycl-nd-range-kernel", "sycl-single-task-kernel"}
+def is_free_function_kernel(fn):
+    return fn["attr"] is not None and fn["attr"][0] in KERNEL_ATTRS
+
+device_image = {}         # 修饰名 -&gt; kernel 信息（前端识别出的 kernel 才进来）
+for name, fn in functions.items():
+    if is_free_function_kernel(fn):
+        attr_name, attr_val = fn["attr"]
+        mangled = f"_ZTS{len(name)}{name}"
+        kind = "nd-range" if attr_name.endswith("nd-range-kernel") else "single-task"
+        device_image[mangled] = {"kind": kind, "dims": attr_val, "params": fn["params"]}
+        print(f"[前端] {name}: 扫到属性 {fn['attr']} → 认定为 {kind} kernel，写入集成头文件（{mangled}）")
+    else:
+        print(f"[前端] {name}: 无 kernel 属性 → 当作普通设备函数，不生成 kernel 入口")
+
+print()
+
+# ---- 运行时：get_kernel_id&lt;Func&gt;() / nd_launch&lt;Func&gt;() ----
+def launch(func_name):
+    mangled = f"_ZTS{len(func_name)}{func_name}"
+    if mangled not in device_image:
+        print(f"[运行时] launch&lt;{func_name}&gt;：失败——它不是一个 free function kernel")
+        return
+    k = device_image[mangled]
+    print(f"[运行时] launch&lt;{func_name}&gt;：找到 {k['kind']} kernel，参数 {k['params']}，启动")
+
+launch("scale")
+launch("init")
+launch("helper")     # 会失败：helper 没被认定为 kernel</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[前端] scale: 扫到属性 ('sycl-nd-range-kernel', 3) → 认定为 nd-range kernel，写入集成头文件（_ZTS5scale）
+[前端] init: 扫到属性 ('sycl-single-task-kernel', 0) → 认定为 single-task kernel，写入集成头文件（_ZTS4init）
+[前端] helper: 无 kernel 属性 → 当作普通设备函数，不生成 kernel 入口
+
+[运行时] launch&lt;scale&gt;：找到 nd-range kernel，参数 ['float* data', 'float factor']，启动
+[运行时] launch&lt;init&gt;：找到 single-task kernel，参数 ['int* buf']，启动
+[运行时] launch&lt;helper&gt;：失败——它不是一个 free function kernel</code></pre>
+</div><p>这个模型把整条链演完了：<strong>属性是唯一的暗号</strong>。<code>scale</code> 和 <code>init</code> 因为贴了 <code>sycl-*-kernel</code> 属性被前端认定为 kernel、写进镜像；<code>helper</code> 没贴，就只是个普通设备函数、启动不了。运行时完全不看函数体，只看「前端有没有据属性给它建 kernel 入口」。请动手改：给 <code>helper</code> 也加上 <code>function_property(&quot;nd_range&quot;, 1)</code>，你会看到它立刻被认定为 kernel、<code>launch(&quot;helper&quot;)</code> 也成功了——这正是「加一个属性就把一个普通函数变成 kernel」的本质。</p>
+<h2>小结与下一步</h2>
+<p>你完整解剖了一个真实扩展：</p>
+<ul>
+<li><strong>痛点</strong>：SYCL 2020 的 kernel 只能是匿名 lambda，不利于「单独声明/引用 kernel」「运行时编译」「一个 kernel 就是一个函数」的场景。</li>
+<li><strong>API</strong>：<code>SYCL_EXT_ONEAPI_FUNCTION_PROPERTY((nd_range_kernel&lt;Dims&gt;))</code> / <code>(single_task_kernel)</code> 标注一个具名自由函数；用 <code>get_kernel_id&lt;Func&gt;()</code> / <code>nd_launch&lt;Func&gt;()</code> 引用和启动。feature-test 宏 <code>SYCL_EXT_ONEAPI_FREE_FUNCTION_KERNELS</code>。</li>
+<li><strong>核心机制</strong>：属性宏在<strong>设备趟</strong>展开成 <code>[[__sycl_detail__::add_ir_attributes_function(&quot;sycl-nd-range-kernel&quot;, Dims)]]</code>，把一条属性附到函数 IR 上；主机趟展开成空。</li>
+<li><strong>编译器</strong>：<code>SemaSYCL.cpp</code> 的 <code>isFreeFunction()</code> 扫描该属性、认出 kernel，走和普通 kernel 一样的入口生成 + 集成头文件流程。</li>
+<li><strong>运行时</strong>：复用既有 kernel_bundle / program_manager，只新增「用函数作查找键」的入口。</li>
+<li>记住那条通用套路：<strong>头文件贴 IR 属性 → 编译器认属性并生成代码 → 运行时按名字对号</strong>。</li>
+</ul>
+<p>下一章我们把镜头对准这条链里<strong>最难的一环——编译器前端支持</strong>：<code>SemaSYCL</code> 到底怎么改、一个新属性怎么在 <code>clang/include/clang/Basic/Attr.td</code> 里定义、诊断信息怎么加。free function kernels 需要的前端配合相对轻（复用了通用 IR 属性机制），但有些扩展要动更深的前端逻辑，第 22 章带你看清「什么时候必须改编译器、怎么改」。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>free function kernels</strong>（<code>sycl_ext_oneapi_free_function_kernels</code>，实验阶段，宏 <code>SYCL_EXT_ONEAPI_FREE_FUNCTION_KERNELS</code>）让 kernel 写成具名自由函数，而非匿名 lambda。</li>
+<li>用户 API：<code>SYCL_EXT_ONEAPI_FUNCTION_PROPERTY((nd_range_kernel&lt;Dims&gt;))</code> 或 <code>(single_task_kernel)</code> 标注函数；<code>get_kernel_id&lt;Func&gt;()</code> / <code>get_kernel_bundle&lt;...&gt;()</code> / <code>nd_launch&lt;Func&gt;()</code> 引用启动。头文件 <code>sycl/include/sycl/ext/oneapi/free_function_kernel_properties.hpp</code>。</li>
+<li>核心机制：属性宏<strong>设备趟</strong>展开成 <code>add_ir_attributes_function</code>，把 <code>&quot;sycl-nd-range-kernel&quot;=Dims</code>（或 <code>&quot;sycl-single-task-kernel&quot;=0</code>）附到函数 IR；<strong>主机趟</strong>展开为空。</li>
+<li>编译器：<code>clang/lib/Sema/SemaSYCL.cpp</code> 的 <code>isFreeFunction()</code> / <code>getFreeFunctionRangeDim()</code> / <code>constructFreeFunctionKernelName()</code> 认出并处理；属性须在首个声明上，否则 <code>err_free_function_first_occurrence_missing_attr</code>。</li>
+<li>运行时<strong>复用</strong> SYCL 2020 的 kernel_bundle / program_manager，只加「按函数查找」的入口——好扩展搭在既有机制上。</li>
+<li>通用套路：<strong>头文件贴 IR 属性 → 编译器认属性生成代码 → 运行时按名字对号</strong>，适用于一大批 <code>__sycl_detail__</code> 系扩展（见 <code>CompileTimeProperties.md</code>）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch20.html">← 第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a>
+  <a class="nav-next" href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

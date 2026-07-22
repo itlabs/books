@@ -131,6 +131,10 @@ renderer.code = function (token) {
     "sycl-norun":   { prism: "language-cpp", tag: "SYCL / DPC++" },
     "triton-norun": { prism: "language-python", tag: "Triton (Python)" },
     "cutedsl-norun":{ prism: "language-python", tag: "CuTe DSL (Python)" },
+    // inside-llvm-sycl 书用：LLVM IR / SPIR-V 文本片段，只高亮、不给按钮
+    "llvm":         { prism: "language-llvm", tag: "LLVM IR" },
+    "llvm-norun":   { prism: "language-llvm", tag: "LLVM IR" },
+    "spirv-norun":  { prism: "language-llvm", tag: "SPIR-V" },
   };
   const langClass = norun[lang]
     ? norun[lang].prism
@@ -286,12 +290,14 @@ function buildBook(book) {
 function buildShelf(books) {
   const cards = books
     .map((b) => {
+      const en = b.titleEn ? `<p class="shelf-en">${b.titleEn}</p>` : "";
       const sub = b.subtitle ? `<p class="shelf-sub">${b.subtitle}</p>` : "";
       const desc = b.description
         ? `<p class="shelf-desc">${b.description}</p>`
         : "";
       return `<a class="shelf-card" href="${b.slug}/index.html">
   <h2>${b.title}</h2>
+  ${en}
   ${sub}
   ${desc}
 </a>`;
@@ -316,7 +322,9 @@ function buildShelf(books) {
     border: 1px solid #d0d7de; text-decoration: none; color: inherit;
     transition: box-shadow .15s, transform .15s; }
   .shelf-card:hover { box-shadow: 0 6px 20px rgba(0,0,0,.1); transform: translateY(-2px); }
-  .shelf-card h2 { margin: 0 0 6px; font-size: 20px; color: #0969da; }
+  .shelf-card h2 { margin: 0 0 2px; font-size: 20px; color: #0969da; }
+  .shelf-en { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em;
+    text-transform: uppercase; color: #8b949e; font-weight: 600; }
   .shelf-sub { margin: 0 0 10px; font-weight: 600; color: #24292f; }
   .shelf-desc { margin: 0; color: #656d76; font-size: 14px; }
 </style>

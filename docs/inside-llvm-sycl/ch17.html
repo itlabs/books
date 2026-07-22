@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 章 运行时（二）：命令组、调度器与依赖图</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li class="active"><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 17 章 运行时（二）：命令组、调度器与依赖图</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 16 章那条脊柱停在了 <code>Scheduler::addCG</code>——一个命令组（command group, CG）交给了调度器。这一章接着往下：调度器拿到 CG 之后，怎么把它挂进一张<strong>命令依赖图</strong>、怎么<strong>自动算出命令之间的读写依赖</strong>（RAW / WAR / WAW）、在数据不在目标设备时怎么<strong>插入内存拷贝</strong>、最后怎么按拓扑序把命令 <strong>enqueue</strong> 到设备。</p>
+<p>这是 SYCL 运行时最精巧的一块——也是 SYCL "你只描述数据依赖、运行时自动排出正确执行顺序"这一承诺的兑现处。读完你会看清：一个 buffer 的每次访问如何变成图里的一个节点、accessor 的访问模式（读/写）如何决定要不要连一条依赖边、以及为什么 out-of-order 队列能自动并行无关的 kernel、串行有依赖的 kernel。理解这张图，你就理解了 SYCL 内存模型的运行时内核。</p>
+</div><h2>命令组：一次提交打包成的那个对象</h2>
+<p>先把&quot;命令组&quot;这个词钉死。你在 <code>q.submit</code> 里那个 lambda 做的所有事（选一个 kernel、绑定几个 accessor、给出 NDRange），被第 16 章的 <code>handler::finalize</code> 打包成一个 <strong><code>CG</code> 对象</strong>（基类 <code>detail::CG</code>，<code>sycl/source/detail/cg.hpp:55</code>）。CG 有很多子类对应不同操作，最重要的是执行 kernel 的 <strong><code>CGExecKernel</code></strong>（<code>cg.hpp:144</code>），其他还有 <code>CGCopy</code>（拷贝）、<code>CGFill</code>（填充）、<code>CGHostTask</code>（主机任务）、<code>CGBarrier</code>（屏障）等，用一个枚举 <code>CGType</code>（<code>sycl/include/sycl/detail/cg_types.hpp:26</code>：<code>Kernel</code>、<code>CopyUSM</code>、<code>Fill</code>、<code>CodeplayHostTask</code>…）区分。</p>
+<p>每个 CG 都携带一样至关重要的东西——<strong>requirements（需求）</strong>：它要读写哪些内存。这存在 CG 的 <code>MRequirements</code> 里（<code>std::vector&lt;AccessorImplHost *&gt;</code>）。这里有个关键的类型别名（<code>accessor_impl.hpp:184</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">using Requirement = AccessorImplHost;   // 一个"需求"就是一个 accessor 的实现对象</code></pre>
+</div><p>也就是说，<strong>每个绑定到命令组的 accessor，就是一条 requirement</strong>。它记录了访问哪个内存对象（<code>MSYCLMemObj</code>）、以什么模式（<code>MAccessMode</code>：read / write / read_write…）、访问范围/偏移。accessor 变成 requirement 的地方在 <code>handler::associateWithHandlerCommon</code>（<code>handler.cpp:855</code>）：它把 accessor 的 impl 指针 push 进 CG 的 <code>MRequirements</code>。<strong>这些 requirement 就是调度器算依赖的全部输入</strong>——SYCL 的整个自动依赖机制，就建立在&quot;每个 CG 声明了它读写哪些内存、怎么读写&quot;之上。</p>
+<h2>调度器：一张图，两个半区</h2>
+<p>调度器是个单例（<code>Scheduler::getInstance()</code>，<code>sycl/source/detail/scheduler/scheduler.hpp:369</code>）。它维护一张<strong>无环的命令依赖图</strong>，图里的节点是各种&quot;命令&quot;（<code>Command</code>），表示四类底层动作：分配内存、释放内存、执行命令组、拷贝内存。</p>
+<p>调度器在设计上被切成<strong>两个半区</strong>，各用不同的锁，这个划分很重要：</p>
+<ul>
+<li><strong>GraphBuilder（图构建器）</strong> —— <strong>修改</strong>图：加节点、连依赖边。它要拿<strong>写锁</strong>。</li>
+<li><strong>GraphProcessor（图处理器）</strong> —— <strong>enqueue</strong>：把命令推到设备执行。它只拿<strong>读锁</strong>。</li>
+</ul>
+<p><code>Scheduler::addCG</code>（<code>scheduler.cpp:105</code>）就体现了这个两阶段：① 先拿写锁，调 <code>MGraphBuilder.addCG(...)</code> 把 CG 包成一个 <code>ExecCGCommand</code> 节点、连好依赖边；② 放写锁，再拿读锁调 <code>enqueueCommandForCG</code>（<code>GraphProcessor::enqueueCommand</code>）把新命令及其依赖 enqueue。<strong>图构建和图执行分离、用不同锁模式</strong>——这让多线程提交时构建互斥、而执行可并发。</p>
+<div class="note">
+<strong>两个"图"别搞混</strong>
+<code>sycl/source/detail/scheduler/</code> 里这张<strong>核心调度依赖图</strong>，和 <code>sycl/source/detail/graph/</code> 那个 <strong><code>ext_oneapi_graph</code> 扩展</strong>（用户显式录制的命令图，<code>exec_graph_impl</code>/<code>node_impl</code>）是<strong>两回事</strong>。本章讲的是前者——每次 <code>submit</code> 都在用、你看不见但一直在跑的那张运行时依赖图。后者是第四部分扩展话题里用户主动构建的图，二者通过 <code>addCommandGraphUpdate</code> 等接口衔接，但概念上要分开。
+</div><h2>命令与依赖边：节点怎么连起来</h2>
+<p>图的节点基类是 <code>Command</code>（<code>commands.hpp:109</code>）。它的 <code>enum CommandType</code> 列出了所有节点种类：<code>RUN_CG</code>（执行命令组）、<code>ALLOCA</code>（分配）、<code>RELEASE</code>（释放）、<code>COPY_MEMORY</code>、<code>MAP_MEM_OBJ</code> / <code>UNMAP_MEM_OBJ</code>、<code>EMPTY_TASK</code>、<code>HOST_TASK</code> 等。执行你 kernel 的那个节点是 <code>ExecCGCommand</code>（<code>commands.hpp:628</code>），它裹着第 16 章打包的那个 <code>CG</code>。</p>
+<p>节点之间的边是<strong>双向</strong>记录的：</p>
+<ul>
+<li><code>std::vector&lt;DepDesc&gt; MDeps</code>（<code>commands.hpp:309</code>）—— 出边：我依赖谁。</li>
+<li><code>std::unordered_set&lt;Command *&gt; MUsers</code>（<code>commands.hpp:311</code>）—— 反向边：谁依赖我。</li>
+</ul>
+<p>边的结构 <code>DepDesc</code>（<code>commands.hpp:83</code>）记三样：<code>MDepCommand</code>（被依赖的命令）、<code>MDepRequirement</code>（是哪条 requirement 导致了这条依赖）、<code>MAllocaCmd</code>（对应内存对象的分配命令）。连边靠 <code>Command::addDep</code>（<code>commands.cpp:786</code>）：它把 <code>DepDesc</code> 推进 <code>MDeps</code>，同时调被依赖命令的 <code>addUser(this)</code>——一次调用建好双向边。</p>
+<p>每个节点还绑着一个 <strong>event</strong>：<code>Command</code> 构造时创建 <code>MEvent</code> 并 <code>MEvent-&gt;setCommand(this)</code>（<code>commands.cpp:534</code>），event 反过来存 <code>Command *MCommand</code>。这就是为什么用户拿到的 <code>sycl::event</code> 能映射回图里的节点——第 16 章 <code>addCG</code> 返回的那个 event，正是这个 <code>ExecCGCommand</code> 的 event。</p>
+<h2>依赖是怎么算出来的：RAW / WAR / WAW</h2>
+<p>这是全章的核心。每个内存对象（buffer/image）在调度器里有一条 <strong><code>MemObjRecord</code></strong>（<code>scheduler.hpp:200</code>），记录着&quot;这个内存对象当前的最新状态&quot;——特别是两组<strong>叶子（leaves）</strong>：</p>
+<ul>
+<li><code>MWriteLeaves</code> —— 最近的<strong>写</strong>命令。</li>
+<li><code>MReadLeaves</code> —— 最近的<strong>只读</strong>命令。</li>
+</ul>
+<p>当一个新 CG 带着对某内存对象的 requirement 进来，<code>GraphBuilder::findDepsForReq</code>（<code>graph_builder.cpp:575</code>）算它该依赖谁，规则就是经典的三种数据冒险：</p>
+<ul>
+<li>新 requirement 是<strong>只读</strong>（<code>read</code>）：只需依赖 <code>MWriteLeaves</code>（前面的写者）——这是 <strong>RAW（read-after-write，读后写）</strong>。读之间不互相依赖（两个读可以并行）。</li>
+<li>新 requirement 是<strong>写</strong>（write/read_write/…）：既要依赖 <code>MWriteLeaves</code>（<strong>WAW</strong>，write-after-write），也要依赖 <code>MReadLeaves</code>（<strong>WAR</strong>，write-after-read，得等前面的读完成才能覆盖）。</li>
+</ul>
+<p>代码里这个&quot;只读只看写叶子、写要看读写两组叶子&quot;的逻辑一目了然（<code>graph_builder.cpp:581-587</code>）。另外有个<strong>旁路优化</strong>（<code>CanBypassDep</code>，<code>graph_builder.cpp:599</code>）：若两条 requirement 都是只读、或它们的访问范围<strong>不重叠</strong>（<code>doOverlap</code> 比较偏移和大小，<code>graph_builder.cpp:43</code>），就不必连边——两个写不同区域的 kernel 依然能并行。</p>
+<p>算完依赖，新命令通过 <code>addDep</code> 连边，然后 <code>addNodeToLeaves</code> 把自己装成这个内存对象的新叶子（写命令进 <code>MWriteLeaves</code>，读命令进 <code>MReadLeaves</code>），供后续的 CG 继续算依赖。整张图就这样一次提交一次提交地长出来。</p>
+<div class="keypoint">
+<strong>SYCL 自动依赖 = 每个内存对象维护读/写叶子，按 RAW/WAR/WAW 连边</strong>
+<strong>每个 buffer 有一条 <code>MemObjRecord</code>（<code>scheduler.hpp:200</code>），维护 <code>MWriteLeaves</code>/<code>MReadLeaves</code>。新 CG 的每条 requirement 经 <code>findDepsForReq</code>（<code>graph_builder.cpp:575</code>）算依赖：只读 → 依赖写叶子（RAW）；写 → 依赖写叶子（WAW）+ 读叶子（WAR）。两个只读、或访问范围不重叠（<code>doOverlap</code>）则旁路不连边。</strong>你只在 accessor 上声明读/写，运行时据此自动排出正确顺序——无关的并行、有依赖的串行。这就是 SYCL 内存模型的运行时内核。
+</div><div class="concept">
+<svg viewBox="0 0 660 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">依赖图如何按 accessor 读/写模式自动连边</text>
+  <text x="330" y="40" text-anchor="middle" font-size="9" fill="#6b7280">三个命令组访问同一个 buffer B：CG1 写、CG2 读、CG3 写</text>
+  <!-- CG1 -->
+  <rect x="60" y="70" width="130" height="56" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="125" y="90" text-anchor="middle" font-size="11" font-weight="bold" fill="#a53f1c">CG1: 写 B</text>
+  <text x="125" y="107" text-anchor="middle" font-size="8" fill="#6b7280">access::mode::write</text>
+  <text x="125" y="119" text-anchor="middle" font-size="8" fill="#6b7280">进 MWriteLeaves</text>
+  <!-- CG2 -->
+  <rect x="265" y="70" width="130" height="56" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="330" y="90" text-anchor="middle" font-size="11" font-weight="bold" fill="#2b6cb0">CG2: 读 B</text>
+  <text x="330" y="107" text-anchor="middle" font-size="8" fill="#6b7280">access::mode::read</text>
+  <text x="330" y="119" text-anchor="middle" font-size="8" fill="#6b7280">进 MReadLeaves</text>
+  <!-- CG3 -->
+  <rect x="470" y="70" width="130" height="56" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="535" y="90" text-anchor="middle" font-size="11" font-weight="bold" fill="#a53f1c">CG3: 写 B</text>
+  <text x="535" y="107" text-anchor="middle" font-size="8" fill="#6b7280">access::mode::write</text>
+  <text x="535" y="119" text-anchor="middle" font-size="8" fill="#6b7280">进 MWriteLeaves</text>
+  <!-- edges -->
+  <path d="M190 98 L265 98" stroke="#3f9b5c" stroke-width="1.6" marker-end="url(#c17)"/>
+  <text x="227" y="90" text-anchor="middle" font-size="8" fill="#2f7a45">RAW</text>
+  <text x="227" y="112" text-anchor="middle" font-size="7" fill="#6b7280">读依赖写</text>
+  <path d="M395 98 L470 98" stroke="#e06a3b" stroke-width="1.6" marker-end="url(#c17b)"/>
+  <text x="432" y="90" text-anchor="middle" font-size="8" fill="#a53f1c">WAR</text>
+  <text x="432" y="112" text-anchor="middle" font-size="7" fill="#6b7280">写等读完</text>
+  <path d="M180 70 Q330 20 480 70" stroke="#a53f1c" stroke-width="1.4" fill="none" stroke-dasharray="5 3" marker-end="url(#c17b)"/>
+  <text x="330" y="60" text-anchor="middle" font-size="8" fill="#a53f1c">WAW（CG3 也依赖 CG1 这个写叶子）</text>
+  <!-- record -->
+  <rect x="150" y="175" width="360" height="60" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.5"/>
+  <text x="330" y="195" text-anchor="middle" font-size="10" font-weight="bold" fill="#2f7a45">MemObjRecord（buffer B 的当前状态）</text>
+  <text x="330" y="212" text-anchor="middle" font-size="8" fill="#6b7280">MWriteLeaves = {最近的写命令}    MReadLeaves = {最近的读命令}</text>
+  <text x="330" y="226" text-anchor="middle" font-size="8" fill="#6b7280">每来一个 CG：先按 leaves 算依赖，再把自己设为新叶子</text>
+  <path d="M125 126 L280 175" stroke="#6b7280" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <path d="M330 126 L330 175" stroke="#6b7280" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <path d="M535 126 L380 175" stroke="#6b7280" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <!-- bottom notes -->
+  <text x="330" y="268" text-anchor="middle" font-size="10" fill="#2d2a26">只读之间不连边（可并行）；访问范围不重叠也旁路（doOverlap 判定）</text>
+  <text x="330" y="290" text-anchor="middle" font-size="9" fill="#6b7280">GraphBuilder 连边（写锁）→ GraphProcessor 按拓扑序递归 enqueue 依赖（读锁）</text>
+  <text x="330" y="312" text-anchor="middle" font-size="9" fill="#6b7280">数据不在目标 context → 自动插入 MemCpy/Map 命令，再更新 record 的当前 context</text>
+  <defs>
+    <marker id="c17" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="c17b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 17-1　依赖图按 accessor 读/写模式自动连边。CG1 写 B → CG2 读 B 连 RAW 边；CG2 读 → CG3 写连 WAR 边；CG3 写还依赖 CG1 这个写叶子（WAW）。每个 buffer 的 <code>MemObjRecord</code> 维护读/写叶子，新命令算完依赖后把自己设为新叶子。只读之间、访问不重叠则旁路不连边</div>
+</div><h2>数据搬运：不在目标设备就自动拷</h2>
+<p>依赖图不只排顺序，还管<strong>数据在哪</strong>。<code>MemObjRecord</code> 有个 <code>MCurContext</code>——记录这个内存对象的最新数据当前在哪个 context（设备）。当新 CG 要在另一个 context 上访问它，<code>GraphBuilder::addCG</code>（<code>graph_builder.cpp:922</code>）就得<strong>插入内存搬运命令</strong>：</p>
+<ul>
+<li>若目标 context 和 <code>MCurContext</code> 一致 → 无需拷贝（顶多做个 remap）。</li>
+<li>若不一致 → 调 <code>insertMemoryMove</code>（<code>graph_builder.cpp:329</code>）。因为很多后端不能设备直连设备拷贝，运行时可能先拷回主机、再拷到目标设备（两次 <code>MemCpyCommand</code>）。若 src/dst 分配是&quot;链接&quot;的，则用 <code>MapMemObject</code>/<code>UnMapMemObject</code> 一对映射命令。搬完更新 <code>Record-&gt;setCurContext(目标)</code>。</li>
+</ul>
+<p>一个小而美的优化：若访问模式是 <code>discard_write</code>/<code>discard_read_write</code>（丢弃原有内容），就<strong>跳过拷贝</strong>，直接切 context——反正旧数据不要了。这些搬运命令和 kernel 命令一样是图里的节点，一样参与依赖排序。所以 SYCL 里你从不手写&quot;把 buffer 拷到 GPU&quot;——你只声明访问，调度器根据数据当前位置自动插入拷贝节点。</p>
+<h2>enqueue：按拓扑序推上设备</h2>
+<p>图建好后，<code>GraphProcessor</code>（<code>scheduler.hpp:815</code>）负责把命令 enqueue 到设备。核心是 <code>enqueueCommand</code>（<code>graph_processor.cpp:68</code>）——它<strong>先递归 enqueue 所有依赖</strong>（遍历命令的 <code>MPreparedDepsEvents</code>），再 enqueue 命令自己。这个&quot;先依赖后自己&quot;的递归，正是<strong>拓扑排序</strong>：保证一个命令被推上设备时，它依赖的命令都已经在跑或已完成。</p>
+<p>等待也走这里：<code>GraphProcessor::waitForEvent</code>（<code>graph_processor.cpp:20</code>）拿到 event 对应的命令，以阻塞模式 enqueue 它（连同依赖），然后放锁、调 <code>Event.waitInternal()</code> 真正等硬件完成。这就是你 <code>q.wait()</code> 或 <code>event.wait()</code> 背后发生的事。</p>
+<div class="note">
+<strong>host task 是"阻塞型"节点</strong>
+普通 kernel 命令 enqueue 后就交给设备异步跑了。但 <strong>host task</strong>（<code>CGHostTask</code>，你用 <code>h.host_task(...)</code> 提交的、在主机上跑的一段代码）不同——它对它的后继是<strong>阻塞</strong>的：<code>Command::isBlocking()</code> = <code>isHostTask() &amp;&amp; !MEvent-&gt;isCompleted()</code>（<code>commands.hpp:171</code>）。调度器用 <code>handleBlockingCmd</code> 把依赖它的命令记进 <code>MBlockedUsers</code>，等 host task 在主机线程上跑完（<code>DispatchHostTask</code>）再放行。这是"设备命令 + 主机命令"混在一张图里必须处理的细节——主机任务没有设备 event 可等，只能靠这套阻塞/解阻塞机制。
+</div><h2>亲手翻调度器</h2>
+<p>在源码里确认这一章的骨架：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 依赖计算的核心：只读看写叶子、写看读写叶子
+grep -n 'MWriteLeaves\|MReadLeaves\|ReadOnlyReq' sycl/source/detail/scheduler/graph_builder.cpp | head
+
+# 两阶段：addCG 先建图（写锁）再 enqueue（读锁）
+grep -n 'acquireWriteLock\|enqueueCommandForCG' sycl/source/detail/scheduler/scheduler.cpp
+
+# 拓扑序 enqueue：先递归依赖再 enqueue 自己
+grep -n 'enqueueCommand' sycl/source/detail/scheduler/graph_processor.cpp
+
+# requirement 就是 accessor 的 impl
+grep -n 'using Requirement' sycl/source/detail/accessor_impl.hpp</code></pre>
+</div><p>调度器还能把整张图导成 Graphviz dot（<code>printGraphAsDot</code>，<code>graph_builder.cpp:155</code>）——调试&quot;为什么这两个 kernel 没并行/没排序&quot;时，把图画出来看是最直接的手段。运行时的很多&quot;诡异排序&quot;问题，根子都在这张图的连边上。</p>
+<h2>动手：模拟依赖图的自动连边</h2>
+<p>把这一章的核心——「每个 buffer 维护读/写叶子，按 RAW/WAR/WAW 给新命令连边」——用一个浏览器里能跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20SYCL%20%E8%B0%83%E5%BA%A6%E5%99%A8%EF%BC%9A%E6%8C%89%20accessor%20%E8%AF%BB%2F%E5%86%99%E6%A8%A1%E5%BC%8F%EF%BC%8C%E7%94%A8%E8%AF%BB%2F%E5%86%99%E5%8F%B6%E5%AD%90%E8%87%AA%E5%8A%A8%E7%AE%97%E4%BE%9D%E8%B5%96%0A%0Aclass%20MemObjRecord%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%20buffer%20%E4%B8%80%E6%9D%A1%EF%BC%9A%E7%BB%B4%E6%8A%A4%E8%AF%BB%E5%8F%B6%E5%AD%90%E5%92%8C%E5%86%99%E5%8F%B6%E5%AD%90%0A%20%20%20%20def%20__init__(self)%3A%0A%20%20%20%20%20%20%20%20self.write_leaves%20%3D%20%5B%5D%20%20%20%20%20%20%23%20%E6%9C%80%E8%BF%91%E7%9A%84%E5%86%99%E5%91%BD%E4%BB%A4%0A%20%20%20%20%20%20%20%20self.read_leaves%20%3D%20%5B%5D%20%20%20%20%20%20%20%23%20%E6%9C%80%E8%BF%91%E7%9A%84%E8%AF%BB%E5%91%BD%E4%BB%A4%0A%0Aclass%20Scheduler%3A%0A%20%20%20%20def%20__init__(self)%3A%0A%20%20%20%20%20%20%20%20self.records%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%20%23%20buffer%20%E5%90%8D%20-%3E%20MemObjRecord%0A%20%20%20%20%20%20%20%20self.n%20%3D%200%0A%20%20%20%20def%20add_cg(self%2C%20name%2C%20reqs)%3A%0A%20%20%20%20%20%20%20%20%23%20reqs%3A%20%5B(buffer%2C%20mode)%5D%EF%BC%8Cmode%20%E6%98%AF%20'read'%20%E6%88%96%20'write'%0A%20%20%20%20%20%20%20%20self.n%20%2B%3D%201%0A%20%20%20%20%20%20%20%20cmd%20%3D%20f%22%7Bname%7D%23%7Bself.n%7D%22%0A%20%20%20%20%20%20%20%20deps%20%3D%20set()%0A%20%20%20%20%20%20%20%20for%20buf%2C%20mode%20in%20reqs%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20rec%20%3D%20self.records.setdefault(buf%2C%20MemObjRecord())%0A%20%20%20%20%20%20%20%20%20%20%20%20read_only%20%3D%20(mode%20%3D%3D%20%22read%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8F%AA%E8%AF%BB%EF%BC%9A%E5%8F%AA%E4%BE%9D%E8%B5%96%E5%86%99%E5%8F%B6%E5%AD%90(RAW)%EF%BC%9B%E5%86%99%EF%BC%9A%E4%BE%9D%E8%B5%96%E5%86%99%E5%8F%B6%E5%AD%90(WAW)%2B%E8%AF%BB%E5%8F%B6%E5%AD%90(WAR)%0A%20%20%20%20%20%20%20%20%20%20%20%20deps.update(rec.write_leaves)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20RAW%20%2F%20WAW%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20not%20read_only%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20deps.update(rec.read_leaves)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20WAR%0A%20%20%20%20%20%20%20%20%23%20%E8%BF%9E%E8%BE%B9%E5%90%8E%EF%BC%8C%E6%8A%8A%E8%87%AA%E5%B7%B1%E8%AE%BE%E4%B8%BA%E5%AF%B9%E5%BA%94%E5%8F%B6%E5%AD%90%0A%20%20%20%20%20%20%20%20for%20buf%2C%20mode%20in%20reqs%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20rec%20%3D%20self.records%5Bbuf%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20mode%20%3D%3D%20%22read%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20rec.read_leaves.append(cmd)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%AF%BB%E5%91%BD%E4%BB%A4%E4%B8%8D%E6%B8%85%E7%A9%BA%E5%86%99%E5%8F%B6%E5%AD%90%E7%9A%84%E5%8E%86%E5%8F%B2%E2%80%A6%E2%80%A6%0A%20%20%20%20%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20rec.write_leaves%20%3D%20%5Bcmd%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%96%B0%E5%86%99%E6%88%90%E4%B8%BA%E5%94%AF%E4%B8%80%E5%86%99%E5%8F%B6%E5%AD%90%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20rec.read_leaves%20%3D%20%5B%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%86%99%E4%B9%8B%E5%90%8E%E6%B8%85%E7%A9%BA%E8%AF%BB%E5%8F%B6%E5%AD%90%0A%20%20%20%20%20%20%20%20why%20%3D%20%22%E6%97%A0%E4%BE%9D%E8%B5%96(%E5%8F%AF%E5%B9%B6%E8%A1%8C)%22%20if%20not%20deps%20else%20%22%E4%BE%9D%E8%B5%96%20%22%20%2B%20%22%2C%20%22.join(sorted(deps))%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bcmd%3A%3C10%7D%20reqs%3D%7Breqs%7D%22)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%20%20%20%20%20%20%20%E2%86%92%20%7Bwhy%7D%22)%0A%20%20%20%20%20%20%20%20return%20cmd%0A%0As%20%3D%20Scheduler()%0Aprint(%22%E5%9C%BA%E6%99%AF%EF%BC%9ACG1%20%E5%86%99B%EF%BC%8CCG2%20%E8%AF%BBB%EF%BC%8CCG3%20%E8%AF%BBB%EF%BC%8CCG4%20%E5%86%99B%EF%BC%8C%E5%8F%A6%E6%9C%89%20CG5%20%E5%86%99C%EF%BC%88%E6%97%A0%E5%85%B3%EF%BC%89%22)%0As.add_cg(%22writeB%22%2C%20%20%5B(%22B%22%2C%20%22write%22)%5D)%20%20%20%23%20%E6%97%A0%E4%BE%9D%E8%B5%96%0As.add_cg(%22readB%22%2C%20%20%20%5B(%22B%22%2C%20%22read%22)%5D)%20%20%20%20%23%20RAW%3A%20%E4%BE%9D%E8%B5%96%20writeB%0As.add_cg(%22readB2%22%2C%20%20%5B(%22B%22%2C%20%22read%22)%5D)%20%20%20%20%23%20%E5%8F%AA%E8%AF%BB%EF%BC%8C%E5%92%8C%20readB%20%E5%B9%B6%E8%A1%8C%EF%BC%9B%E4%BB%8D%20RAW%20%E4%BE%9D%E8%B5%96%20writeB%0As.add_cg(%22writeB2%22%2C%20%5B(%22B%22%2C%20%22write%22)%5D)%20%20%20%23%20WAW%2BWAR%3A%20%E4%BE%9D%E8%B5%96%20writeB%20%E4%B9%8B%E5%90%8E%E7%9A%84%E4%B8%A4%E4%B8%AA%E8%AF%BB%0As.add_cg(%22writeC%22%2C%20%20%5B(%22C%22%2C%20%22write%22)%5D)%20%20%20%23%20%E8%AE%BF%E9%97%AE%E4%B8%8D%E5%90%8C%20buffer%20C%EF%BC%8C%E5%AE%8C%E5%85%A8%E6%97%A0%E5%85%B3%20%E2%86%92%20%E5%8F%AF%E5%B9%B6%E8%A1%8C"># 模拟 SYCL 调度器：按 accessor 读/写模式，用读/写叶子自动算依赖
+
+class MemObjRecord:                 # 每个 buffer 一条：维护读叶子和写叶子
+    def __init__(self):
+        self.write_leaves = []      # 最近的写命令
+        self.read_leaves = []       # 最近的读命令
+
+class Scheduler:
+    def __init__(self):
+        self.records = {}           # buffer 名 -&gt; MemObjRecord
+        self.n = 0
+    def add_cg(self, name, reqs):
+        # reqs: [(buffer, mode)]，mode 是 'read' 或 'write'
+        self.n += 1
+        cmd = f"{name}#{self.n}"
+        deps = set()
+        for buf, mode in reqs:
+            rec = self.records.setdefault(buf, MemObjRecord())
+            read_only = (mode == "read")
+            # 只读：只依赖写叶子(RAW)；写：依赖写叶子(WAW)+读叶子(WAR)
+            deps.update(rec.write_leaves)                 # RAW / WAW
+            if not read_only:
+                deps.update(rec.read_leaves)              # WAR
+        # 连边后，把自己设为对应叶子
+        for buf, mode in reqs:
+            rec = self.records[buf]
+            if mode == "read":
+                rec.read_leaves.append(cmd)               # 读命令不清空写叶子的历史……
+            else:
+                rec.write_leaves = [cmd]                  # 新写成为唯一写叶子
+                rec.read_leaves = []                      # 写之后清空读叶子
+        why = "无依赖(可并行)" if not deps else "依赖 " + ", ".join(sorted(deps))
+        print(f"  {cmd:&lt;10} reqs={reqs}")
+        print(f"             → {why}")
+        return cmd
+
+s = Scheduler()
+print("场景：CG1 写B，CG2 读B，CG3 读B，CG4 写B，另有 CG5 写C（无关）")
+s.add_cg("writeB",  [("B", "write")])   # 无依赖
+s.add_cg("readB",   [("B", "read")])    # RAW: 依赖 writeB
+s.add_cg("readB2",  [("B", "read")])    # 只读，和 readB 并行；仍 RAW 依赖 writeB
+s.add_cg("writeB2", [("B", "write")])   # WAW+WAR: 依赖 writeB 之后的两个读
+s.add_cg("writeC",  [("C", "write")])   # 访问不同 buffer C，完全无关 → 可并行</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">场景：CG1 写B，CG2 读B，CG3 读B，CG4 写B，另有 CG5 写C（无关）
+  writeB#1   reqs=[('B', 'write')]
+             → 无依赖(可并行)
+  readB#2    reqs=[('B', 'read')]
+             → 依赖 writeB#1
+  readB2#3   reqs=[('B', 'read')]
+             → 依赖 writeB#1
+  writeB2#4  reqs=[('B', 'write')]
+             → 依赖 readB#2, readB2#3
+  writeC#5   reqs=[('C', 'write')]
+             → 无依赖(可并行)</code></pre>
+</div><p>看清调度器的自动排序：<code>writeB</code> 无依赖先跑；两个读 <code>readB</code>/<code>readB2</code> 都只 RAW 依赖 <code>writeB</code>、<strong>彼此不依赖</strong>（可并行）；<code>writeB2</code> 要覆盖 B，得等两个读都完成（<strong>WAR</strong>，所以依赖 <code>readB</code> 和 <code>readB2</code>）；而 <code>writeC</code> 访问的是另一个 buffer，<strong>完全无关，可以和上面任何命令并行</strong>。你全程只声明了每个命令读还是写哪个 buffer，正确的执行顺序是运行时算出来的——这正是 <code>findDepsForReq</code> 在真实调度器里做的事。请动手改：把 <code>writeC</code> 改成也访问 B（<code>[(&quot;B&quot;,&quot;read&quot;)]</code>），重新运行——你会看到它立刻长出对 <code>writeB2</code> 的依赖，从&quot;可并行&quot;变成&quot;要排队&quot;。</p>
+<h2>小结与下一步</h2>
+<p>你现在看清了 SYCL 运行时自动排序的内核：</p>
+<ul>
+<li><strong>命令组（CG）</strong>（<code>cg.hpp:55</code>，kernel 是 <code>CGExecKernel</code>）携带 <strong>requirements</strong>（<code>Requirement = AccessorImplHost</code>，<code>accessor_impl.hpp:184</code>）——每个绑定的 accessor 就是一条 requirement，声明读写哪个内存、什么模式。这是调度器算依赖的全部输入。</li>
+<li><strong>调度器</strong>（单例，<code>scheduler.hpp:369</code>）维护一张无环依赖图，切成 <strong>GraphBuilder</strong>（改图，写锁）和 <strong>GraphProcessor</strong>（enqueue，读锁）；<code>addCG</code>（<code>scheduler.cpp:105</code>）先建图节点 <code>ExecCGCommand</code>、连边，再 enqueue。</li>
+<li><strong>依赖计算</strong>（<code>findDepsForReq</code>，<code>graph_builder.cpp:575</code>）：每个内存对象一条 <code>MemObjRecord</code>（<code>scheduler.hpp:200</code>）维护 <code>MWriteLeaves</code>/<code>MReadLeaves</code>；只读依赖写叶子（<strong>RAW</strong>），写依赖写叶子（<strong>WAW</strong>）+读叶子（<strong>WAR</strong>）；只读之间、访问不重叠（<code>doOverlap</code>）旁路不连边。</li>
+<li><strong>数据搬运</strong>：<code>MemObjRecord::MCurContext</code> 记数据在哪；跨 context 访问时 <code>insertMemoryMove</code>（<code>graph_builder.cpp:329</code>）自动插 <code>MemCpy</code>/<code>Map</code> 命令，<code>discard_*</code> 模式跳过拷贝。</li>
+<li><strong>enqueue</strong>：<code>GraphProcessor::enqueueCommand</code>（<code>graph_processor.cpp:68</code>）先递归 enqueue 依赖再 enqueue 自己（拓扑序）；<code>waitForEvent</code> 支撑 <code>q.wait()</code>。host task 是阻塞型节点，靠 <code>MBlockedUsers</code> 解阻塞。</li>
+</ul>
+<p>下一章补上第 16、17 章反复出现却一直没展开的那层——<strong>Unified Runtime（UR）</strong>。每个 impl 握着的 <code>ur_*_handle_t</code>、每次 <code>adapter.call&lt;UrApiKind::…&gt;</code>、以及最终把命令推上设备的 <code>urEnqueueKernelLaunchWithArgsExp</code>，都在 UR 这层。第 18 章讲 SYCL 如何通过 UR 对接 Level Zero / CUDA / OpenCL——你会认出它正是第 10 章&quot;接口 + 插件&quot;母题在 SYCL 侧的化身。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>命令组 CG</strong>（<code>cg.hpp:55</code>；kernel=<code>CGExecKernel</code> <code>cg.hpp:144</code>；类型枚举 <code>cg_types.hpp:26</code>）带 <strong>requirements</strong>（<code>Requirement = AccessorImplHost</code>，<code>accessor_impl.hpp:184</code>），每个 accessor 一条，声明读写哪个内存对象及模式——调度器算依赖的唯一输入。</li>
+<li>调度器单例（<code>scheduler.hpp:369</code>）分 <strong>GraphBuilder（改图/写锁）+ GraphProcessor（enqueue/读锁）</strong>；<code>addCG</code>（<code>scheduler.cpp:105</code>）两阶段：建图 <code>ExecCGCommand</code>（<code>commands.hpp:628</code>）连双向边（<code>MDeps</code>/<code>MUsers</code>，<code>addDep</code> <code>commands.cpp:786</code>）→ enqueue。</li>
+<li><strong>RAW/WAR/WAW</strong>：<code>MemObjRecord</code>（<code>scheduler.hpp:200</code>）维护 <code>MWriteLeaves</code>/<code>MReadLeaves</code>；<code>findDepsForReq</code>（<code>graph_builder.cpp:575</code>）只读依赖写叶子、写依赖读写两组叶子；只读之间/访问不重叠（<code>doOverlap</code> <code>graph_builder.cpp:43</code>）旁路。</li>
+<li><strong>自动数据搬运</strong>：<code>MCurContext</code> 记数据位置，跨 context 时 <code>insertMemoryMove</code>（<code>graph_builder.cpp:329</code>）插 <code>MemCpy</code>/<code>Map</code>；<code>discard_*</code> 跳过拷贝。</li>
+<li><strong>enqueue 拓扑序</strong>：<code>GraphProcessor::enqueueCommand</code>（<code>graph_processor.cpp:68</code>）先递归依赖后自己；<code>waitForEvent</code>（<code>graph_processor.cpp:20</code>）支撑 <code>wait()</code>。host task 阻塞型（<code>isBlocking</code> <code>commands.hpp:171</code>，<code>MBlockedUsers</code>）。</li>
+<li>每个命令绑一个 event（<code>MEvent-&gt;setCommand</code>，<code>commands.cpp:534</code>），故 <code>sycl::event</code> 能映射回图节点。调度图（<code>scheduler/</code>）≠ <code>ext_oneapi_graph</code> 扩展（<code>graph/</code>）。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch16.html">← 第 16 章 运行时（一）：queue / context / device / handler 对象模型</a>
+  <a class="nav-next" href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

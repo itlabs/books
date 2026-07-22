@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li class="active"><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你在 SYCL kernel 上写过 <code>[[sycl::reqd_work_group_size(16, 16)]]</code> 或 <code>[[intel::reqd_sub_group_size(32)]]</code> 吗？这些方括号里的标注，是你向编译器和硬件传达"这个 kernel 必须用这样的执行配置"的方式。这一章追踪它们的完整旅程：从源码里的 <code>[[sycl::…]]</code> 标注，经前端属性系统的<strong>定义</strong>（<code>Attr.td</code>）与<strong>语义检查</strong>（<code>SemaSYCLDeclAttr.cpp</code>），最后在 CodeGen 里落成 kernel 函数上的 <strong>LLVM metadata</strong>（<code>!reqd_work_group_size</code> 等）。</p>
+<p>读完你会看清一条贯穿前端的通路：<strong>属性 = 声明式描述 → TableGen 生成解析代码 → Sema 检查合法性并挂到 AST → CodeGen 翻成 IR metadata → 后端/驱动读 metadata 定制代码生成</strong>。这既是理解 SYCL 性能调优标注如何真正生效的钥匙，也是第 22 章"需要编译器配合的扩展"的直接预演——很多扩展做的第一件事，就是加一个新属性。</p>
+</div><h2>属性是什么：一条从源码到硬件的旁路信息</h2>
+<p>先厘清 attribute 在编译里扮演的角色。普通代码告诉编译器&quot;算什么&quot;；属性告诉编译器&quot;<strong>怎么算</strong>&quot;——一些无法从代码逻辑本身推导、但影响代码生成或运行配置的<strong>元信息</strong>。SYCL/DPC++ 里最常见的几个：</p>
+<table>
+<thead>
+<tr>
+<th>属性</th>
+<th>含义</th>
+<th>影响</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>[[sycl::reqd_work_group_size(x,y,z)]]</code></td>
+<td>kernel <strong>必须</strong>用这个 work-group 大小</td>
+<td>后端据此定制寄存器分配/局部内存布局</td>
+</tr>
+<tr>
+<td><code>[[sycl::work_group_size_hint(x,y,z)]]</code></td>
+<td>建议的 work-group 大小（非强制）</td>
+<td>优化提示</td>
+</tr>
+<tr>
+<td><code>[[intel::reqd_sub_group_size(n)]]</code></td>
+<td>kernel <strong>必须</strong>用这个 sub-group 大小</td>
+<td>影响 SIMD 宽度选择</td>
+</tr>
+<tr>
+<td><code>[[intel::kernel_args_restrict]]</code></td>
+<td>kernel 参数指针互不别名（restrict）</td>
+<td>允许更激进的优化</td>
+</tr>
+<tr>
+<td><code>[[sycl::device_has(aspect…)]]</code></td>
+<td>kernel 依赖某些设备特性（aspect）</td>
+<td>编译期/运行期能力检查</td>
+</tr>
+</tbody></table>
+<p>关键在于：这些信息<strong>必须一路穿过整个前端</strong>，最终以某种后端能读的形式附到 kernel 上。SYCL 走的形式是 <strong>LLVM IR 上的 metadata</strong>——一种挂在函数/指令上的、不影响语义但携带额外信息的注解（第 2、3 章你见过 IR 的结构，metadata 就是挂在上面的&quot;便签&quot;）。</p>
+<h2>第一站：Attr.td —— 用 TableGen 声明一个属性</h2>
+<p>和第 7 章的后端描述、第 10 章的 liboffload API 一样，clang 的属性也是<strong>声明式描述 + TableGen 生成代码</strong>。所有属性定义在 <code>clang/include/clang/Basic/Attr.td</code>。每个属性是一条记录，声明它的拼写（spelling）、能作用在什么实体上（函数？变量？）、带几个参数。本章相关的记录：</p>
+<table>
+<thead>
+<tr>
+<th>属性</th>
+<th><code>Attr.td</code> 记录</th>
+<th>行号</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>reqd_work_group_size</code></td>
+<td><code>SYCLReqdWorkGroupSize</code></td>
+<td>3927</td>
+</tr>
+<tr>
+<td><code>work_group_size_hint</code></td>
+<td><code>SYCLWorkGroupSizeHint</code></td>
+<td>3974</td>
+</tr>
+<tr>
+<td><code>reqd_sub_group_size</code></td>
+<td><code>IntelReqdSubGroupSize</code></td>
+<td>2373</td>
+</tr>
+<tr>
+<td><code>kernel_args_restrict</code></td>
+<td><code>SYCLIntelKernelArgsRestrict</code></td>
+<td>1966</td>
+</tr>
+<tr>
+<td><code>device_has</code></td>
+<td><code>SYCLDeviceHas</code></td>
+<td>1839</td>
+</tr>
+<tr>
+<td>（内部）<code>sycl_kernel</code></td>
+<td><code>SYCLKernel</code></td>
+<td>1738</td>
+</tr>
+</tbody></table>
+<p>TableGen 在构建时把每条记录生成成一堆 C++：属性类（存参数）、解析器钩子、诊断信息等。所以你在源码树里搜 <code>class SYCLReqdWorkGroupSizeAttr</code> 找不到手写定义——它是从这条 <code>.td</code> 记录生成的。<strong>加一个新属性的第一步，永远是往 <code>Attr.td</code> 加一条记录</strong>（第 22 章会真的做一次）。</p>
+<div class="note">
+<strong>拼写前缀 <code>sycl::</code> vs <code>intel::</code> 只是命名空间</strong>
+你会注意到有的属性是 <code>[[sycl::…]]</code>、有的是 <code>[[intel::…]]</code>。这只是属性拼写所在的<strong>命名空间</strong>不同——<code>sycl::</code> 是 SYCL 标准/oneAPI 通用的，<code>intel::</code> 是 Intel 扩展的。在 <code>Attr.td</code> 里，一个属性记录可以声明<strong>多个拼写</strong>（比如同时接受 <code>[[intel::reqd_sub_group_size]]</code> 和别的形式）。记录名（如 <code>IntelReqdSubGroupSize</code>）是编译器内部用的，和你写的拼写不必字面一致。
+</div><div class="warn">
+<strong>FPGA 属性已从这条分支移除——别照旧资料抄</strong>
+不少 SYCL 老资料会列 <code>[[intel::num_simd_work_items]]</code>、<code>[[intel::max_work_group_size]]</code> 之类的 <strong>FPGA 专属属性</strong>。在本书对应的 <code>intel/llvm</code> <code>sycl</code> 分支上，随着 FPGA 支持的下线，这些属性<strong>已经被删除</strong>——你在当前 <code>Attr.td</code> 里搜不到它们。本章只讲这条分支上<strong>确实存在</strong>的属性（上表那几个）。这也是"源码为锚"的意义：以你手上这棵树的实际代码为准，而不是过时文档。
+</div><h2>第二站：SemaSYCLDeclAttr.cpp —— 语义检查与挂到 AST</h2>
+<p>TableGen 生成了属性的&quot;骨架&quot;，但<strong>属性用得对不对</strong>要靠语义分析（Sema）来判断，这些手写的检查逻辑集中在 <code>clang/lib/Sema/SemaSYCLDeclAttr.cpp</code>。它做的事：</p>
+<ul>
+<li><strong>参数合法性</strong>：<code>reqd_work_group_size</code> 的三个维度必须是正整数常量；<code>reqd_sub_group_size</code> 的值得是设备支持的 SIMD 宽度之一。</li>
+<li><strong>实体合法性</strong>：这个属性只能贴在 kernel/函数上，贴到别处要报错。</li>
+<li><strong>冲突检测</strong>：同一个 kernel 上 <code>reqd_work_group_size</code> 和 <code>work_group_size_hint</code> 若矛盾要诊断；重复标注要合并或报错。</li>
+<li><strong>挂到 AST</strong>：检查通过后，构造出对应的 <code>*Attr</code> 对象、挂到该函数声明（<code>FunctionDecl</code>）的属性列表上。</li>
+</ul>
+<p>这一步之后，属性就成了 AST 的一部分——后续的 CodeGen 遍历到这个函数时，能从它的 AST 节点上读到这些属性。这就是前端&quot;检查 + 记录&quot;的经典分工：<strong>Sema 负责判断合法并挂到 AST，CodeGen 负责把 AST 翻成 IR</strong>。</p>
+<h2>第三站：CodeGen —— 属性落成 IR metadata</h2>
+<p>真正把属性&quot;变成 IR&quot;的是 CodeGen。当 CodeGen 为一个 kernel 函数生成 LLVM IR 时，会检查它 AST 上挂的属性，翻成对应的 <strong>metadata</strong> 挂到 IR 函数上。核心入口是 <code>clang/lib/CodeGen/CodeGenFunction.cpp:649</code> 的 <code>EmitKernelMetadata</code>。对应关系：</p>
+<table>
+<thead>
+<tr>
+<th>属性</th>
+<th>生成的 IR metadata</th>
+<th>来源</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>reqd_work_group_size</code></td>
+<td><code>!reqd_work_group_size</code></td>
+<td><code>EmitKernelMetadata</code></td>
+</tr>
+<tr>
+<td><code>work_group_size_hint</code></td>
+<td><code>!work_group_size_hint</code></td>
+<td><code>EmitKernelMetadata</code></td>
+</tr>
+<tr>
+<td><code>reqd_sub_group_size</code></td>
+<td><code>!intel_reqd_sub_group_size</code></td>
+<td><code>EmitKernelMetadata</code></td>
+</tr>
+<tr>
+<td>（ESIMD kernel）</td>
+<td><code>!sycl_explicit_simd</code></td>
+<td><code>EmitKernelMetadata</code></td>
+</tr>
+<tr>
+<td><code>device_has</code> 相关</td>
+<td><code>!sycl_declared_aspects</code> / <code>!sycl_used_aspects</code></td>
+<td><code>CodeGenModule.cpp</code> 的 <code>applySYCLAspectsMD</code></td>
+</tr>
+</tbody></table>
+<p>比如 <code>[[sycl::reqd_work_group_size(16, 16)]]</code> 会让 kernel 函数带上：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">define spir_kernel void @_ZTS8MyKernel(...) !reqd_work_group_size !5 {
+  ; …
+}
+!5 = !{i32 16, i32 16, i32 1}   ; 三个维度</code></pre>
+</div><p>后端（或 <code>llvm-spirv</code> 翻译成 SPIR-V 的执行模式 <code>LocalSize</code>）读这条 metadata，就知道要为这个 work-group 大小定制代码。</p>
+<h3>两个特别的属性</h3>
+<p>两个属性的落地方式和上面略有不同，值得单独看：</p>
+<p><strong><code>kernel_args_restrict</code> → <code>noalias</code></strong>：它不是变成一条 kernel metadata，而是在生成 kernel 函数<strong>参数</strong>时，给那些指针参数加上 LLVM 的 <code>noalias</code> 属性（逻辑在 <code>clang/lib/CodeGen/CGCall.cpp:3720</code>）。<code>noalias</code> 是 LLVM 优化器认得的标准指针属性，告诉优化器&quot;这些指针不会互相别名&quot;，从而允许更激进的重排和向量化。这是一个漂亮的例子：<strong>SYCL 层的 restrict 语义，直接映射到 LLVM 已有的优化基础设施</strong>，不用发明新东西。</p>
+<p><strong><code>device_has</code> → aspect metadata</strong>：<code>device_has</code> 声明 kernel 用到哪些设备 aspect（如 <code>fp64</code>、<code>atomic64</code>）。它经 <code>CodeGenModule.cpp</code> 的 <code>applySYCLAspectsMD</code> 落成 <code>!sycl_declared_aspects</code>（显式声明的）和 <code>!sycl_used_aspects</code>（编译器推断出用到的）。运行时/编译期据此做<strong>能力检查</strong>：把 kernel 派到不支持该 aspect 的设备上就能提前报错，而不是运行时崩溃。</p>
+<div class="keypoint">
+<strong>属性的四段旅程：定义 → 检查 → 落 IR → 后端读</strong>
+<strong>① <code>Attr.td</code> 用 TableGen <strong>声明</strong>属性（拼写、作用实体、参数），生成解析骨架；② <code>SemaSYCLDeclAttr.cpp</code> <strong>检查</strong>合法性并把 <code>*Attr</code> 挂到 <code>FunctionDecl</code>；③ CodeGen 的 <code>EmitKernelMetadata</code>（<code>CodeGenFunction.cpp:649</code>）把属性<strong>翻成 IR metadata</strong>（<code>!reqd_work_group_size</code> 等）；④ 后端 / <code>llvm-spirv</code> 读 metadata 定制代码生成。</strong>特例：<code>kernel_args_restrict</code> → 参数上的 <code>noalias</code>（<code>CGCall.cpp:3720</code>）；<code>device_has</code> → <code>!sycl_used_aspects</code>（<code>applySYCLAspectsMD</code>）做能力检查。
+</div><h2>spir_kernel：kernel 函数的调用约定</h2>
+<p>顺带认识一个反复出现的标记：上面 IR 里那个 <code>spir_kernel</code>。SYCL 的 kernel 入口函数用一个特殊的<strong>调用约定（calling convention）</strong> <code>SPIR_KERNEL</code>（设置逻辑在 <code>clang/lib/CodeGen/Targets/SPIR.cpp:594</code>）。它区别于普通函数的 <code>spir_func</code>：<code>spir_kernel</code> 标记的是&quot;可以从主机端 enqueue 的设备入口点&quot;，<code>llvm-spirv</code> 会把它翻成 SPIR-V 里的 <code>OpEntryPoint</code>。这呼应了第 14 章——<code>ConstructOpenCLKernel</code> 生成的那个 kernel 函数，正是带 <code>spir_kernel</code> 约定、并挂着本章这些 metadata 的函数。<strong>调用约定 + metadata</strong>，共同定义了&quot;一个 SYCL kernel 在 IR 层长什么样&quot;。</p>
+<h2>亲手看属性变成 metadata</h2>
+<p>这条通路完全可观察——让 clang 停在 IR 这一层，直接看属性落成了什么：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 只编设备端、输出 LLVM IR，观察 kernel 上的 metadata
+clang++ -fsycl -fsycl-device-only -S -emit-llvm kernel.cpp -o kernel.ll
+
+# 找 kernel 函数上的 metadata 与参数属性
+grep -n 'reqd_work_group_size\|intel_reqd_sub_group_size\|noalias\|sycl_used_aspects\|spir_kernel' kernel.ll</code></pre>
+</div><p>给 kernel 加上 <code>[[sycl::reqd_work_group_size(16,16,1)]]</code> 前后各编一次、对照 <code>kernel.ll</code>，你能亲眼看到多出来的 <code>!reqd_work_group_size !N</code> 和末尾的 <code>!N = !{i32 16, i32 16, i32 1}</code>。这是&quot;属性真的生效了&quot;的最直接证据，也是调优时确认&quot;我的标注有没有被编译器吃进去&quot;的手段。</p>
+<h2>动手：模拟属性从源码到 IR metadata 的四段旅程</h2>
+<p>把这一章的核心——「属性经定义→检查→落 IR→后端读四段变成 metadata」——用一个浏览器里能跑的小模型演出来。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%20SYCL%20%E5%B1%9E%E6%80%A7%E7%9A%84%E6%97%85%E7%A8%8B%EF%BC%9AAttr.td%20%E5%AE%9A%E4%B9%89%20%E2%86%92%20Sema%20%E6%A3%80%E6%9F%A5%20%E2%86%92%20CodeGen%20%E8%90%BD%20metadata%20%E2%86%92%20%E5%90%8E%E7%AB%AF%E8%AF%BB%0A%0A%23%20----%20%E2%91%A0%20Attr.td%EF%BC%9A%E5%A3%B0%E6%98%8E%E5%B1%9E%E6%80%A7%EF%BC%88%E6%8B%BC%E5%86%99%E3%80%81%E4%BD%9C%E7%94%A8%E5%AE%9E%E4%BD%93%E3%80%81%E5%8F%82%E6%95%B0%E4%B8%AA%E6%95%B0%E3%80%81%E8%90%BD%E6%88%90%E7%9A%84%20metadata%20%E5%90%8D%EF%BC%89----%0AATTR_DEFS%20%3D%20%7B%0A%20%20%20%20%22reqd_work_group_size%22%3A%20%20%7B%22applies%22%3A%20%22kernel%22%2C%20%22nargs%22%3A%203%2C%20%22md%22%3A%20%22!reqd_work_group_size%22%7D%2C%0A%20%20%20%20%22reqd_sub_group_size%22%3A%20%20%20%7B%22applies%22%3A%20%22kernel%22%2C%20%22nargs%22%3A%201%2C%20%22md%22%3A%20%22!intel_reqd_sub_group_size%22%7D%2C%0A%20%20%20%20%22kernel_args_restrict%22%3A%20%20%7B%22applies%22%3A%20%22kernel%22%2C%20%22nargs%22%3A%200%2C%20%22md%22%3A%20%22(%E5%8F%82%E6%95%B0%20noalias)%22%7D%2C%0A%7D%0A%0A%23%20----%20%E2%91%A1%20Sema%EF%BC%9A%E6%A3%80%E6%9F%A5%E5%90%88%E6%B3%95%E6%80%A7%EF%BC%8C%E9%80%9A%E8%BF%87%E5%88%99%22%E6%8C%82%E5%88%B0%20AST%22%20----%0Adef%20sema_check(attr%2C%20args)%3A%0A%20%20%20%20d%20%3D%20ATTR_DEFS.get(attr)%0A%20%20%20%20if%20not%20d%3A%0A%20%20%20%20%20%20%20%20return%20None%2C%20f%22%E6%9C%AA%E7%9F%A5%E5%B1%9E%E6%80%A7%20%5B%5Bsycl%3A%3A%7Battr%7D%5D%5D%22%0A%20%20%20%20if%20len(args)%20!%3D%20d%5B%22nargs%22%5D%3A%0A%20%20%20%20%20%20%20%20return%20None%2C%20f%22%5B%5Bsycl%3A%3A%7Battr%7D%5D%5D%20%E9%9C%80%E8%A6%81%20%7Bd%5B'nargs'%5D%7D%20%E4%B8%AA%E5%8F%82%E6%95%B0%EF%BC%8C%E7%BB%99%E4%BA%86%20%7Blen(args)%7D%22%0A%20%20%20%20if%20any((not%20isinstance(a%2C%20int))%20or%20a%20%3C%3D%200%20for%20a%20in%20args)%3A%0A%20%20%20%20%20%20%20%20return%20None%2C%20f%22%5B%5Bsycl%3A%3A%7Battr%7D%5D%5D%20%E5%8F%82%E6%95%B0%E5%BF%85%E9%A1%BB%E6%98%AF%E6%AD%A3%E6%95%B4%E6%95%B0%E5%B8%B8%E9%87%8F%22%0A%20%20%20%20return%20%7B%22attr%22%3A%20attr%2C%20%22args%22%3A%20args%7D%2C%20None%20%20%20%20%20%20%23%20%E5%90%88%E6%B3%95%EF%BC%9A%E6%8C%82%E5%88%B0%20FunctionDecl%0A%0A%23%20----%20%E2%91%A2%20CodeGen%EF%BC%9A%E6%8A%8A%E6%8C%82%E5%9C%A8%20AST%20%E4%B8%8A%E7%9A%84%E5%B1%9E%E6%80%A7%E7%BF%BB%E6%88%90%20IR%20metadata%20----%0Adef%20codegen(kernel_name%2C%20ast_attrs)%3A%0A%20%20%20%20print(f%22define%20spir_kernel%20void%20%40%7Bkernel_name%7D(...)%20%22%2C%20end%3D%22%22)%0A%20%20%20%20md_lines%20%3D%20%5B%5D%0A%20%20%20%20for%20i%2C%20a%20in%20enumerate(ast_attrs)%3A%0A%20%20%20%20%20%20%20%20d%20%3D%20ATTR_DEFS%5Ba%5B%22attr%22%5D%5D%0A%20%20%20%20%20%20%20%20if%20a%5B%22attr%22%5D%20%3D%3D%20%22kernel_args_restrict%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20%3B%20%E5%8F%82%E6%95%B0%E6%8C%87%E9%92%88%E5%8A%A0%20noalias%22%2C%20end%3D%22%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20vals%20%3D%20a%5B%22args%22%5D%20%2B%20%5B1%5D%20*%20(3%20-%20len(a%5B%22args%22%5D))%20if%20a%5B%22attr%22%5D%20%3D%3D%20%22reqd_work_group_size%22%20else%20a%5B%22args%22%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%7Bd%5B'md'%5D%7D%20!%7Bi%7D%20%22%2C%20end%3D%22%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20md_lines.append(f%22!%7Bi%7D%20%3D%20!%7B%7B%7B'%2C%20'.join('i32%20'%2Bstr(v)%20for%20v%20in%20vals)%7D%7D%7D%22)%0A%20%20%20%20print(%22%7B%20...%20%7D%22)%0A%20%20%20%20for%20m%20in%20md_lines%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%22%20%2B%20m)%0A%0A%23%20----%20%E2%91%A3%20%E5%90%8E%E7%AB%AF%20%2F%20llvm-spirv%EF%BC%9A%E8%AF%BB%20metadata%20%E5%AE%9A%E5%88%B6%E4%BB%A3%E7%A0%81%E7%94%9F%E6%88%90%20----%0Adef%20backend_read(ast_attrs)%3A%0A%20%20%20%20for%20a%20in%20ast_attrs%3A%0A%20%20%20%20%20%20%20%20if%20a%5B%22attr%22%5D%20%3D%3D%20%22reqd_work_group_size%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%5B%E5%90%8E%E7%AB%AF%5D%20%E8%AF%BB%E5%88%B0%20!reqd_work_group_size%20%E2%86%92%20%E9%94%81%E5%AE%9A%20work-group%20%3D%20%7Ba%5B'args'%5D%7D%22)%0A%20%20%20%20%20%20%20%20elif%20a%5B%22attr%22%5D%20%3D%3D%20%22reqd_sub_group_size%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%5B%E5%90%8E%E7%AB%AF%5D%20%E8%AF%BB%E5%88%B0%20!intel_reqd_sub_group_size%20%E2%86%92%20SIMD%20%E5%AE%BD%E5%BA%A6%20%3D%20%7Ba%5B'args'%5D%5B0%5D%7D%22)%0A%20%20%20%20%20%20%20%20elif%20a%5B%22attr%22%5D%20%3D%3D%20%22kernel_args_restrict%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%5B%E4%BC%98%E5%8C%96%E5%99%A8%5D%20%E5%8F%82%E6%95%B0%20noalias%20%E2%86%92%20%E5%85%81%E8%AE%B8%E6%9B%B4%E6%BF%80%E8%BF%9B%E7%9A%84%E5%90%91%E9%87%8F%E5%8C%96%2F%E9%87%8D%E6%8E%92%22)%0A%0A%23%20%E6%BA%90%E7%A0%81%E9%87%8C%E5%86%99%E7%9A%84%E5%B1%9E%E6%80%A7%E6%A0%87%E6%B3%A8%EF%BC%88%E5%B1%9E%E6%80%A7%E5%90%8D%2C%20%E5%8F%82%E6%95%B0%EF%BC%89%0Asource_attrs%20%3D%20%5B(%22reqd_work_group_size%22%2C%20%5B16%2C%2016%5D)%2C%20(%22kernel_args_restrict%22%2C%20%5B%5D)%5D%0A%0Aast%20%3D%20%5B%5D%0Aprint(%22%3D%3D%3D%20%E2%91%A1%20Sema%20%E6%A3%80%E6%9F%A5%20%3D%3D%3D%22)%0Afor%20name%2C%20args%20in%20source_attrs%3A%0A%20%20%20%20node%2C%20err%20%3D%20sema_check(name%2C%20args)%0A%20%20%20%20if%20err%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E2%9C%97%20%7Berr%7D%22)%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E2%9C%93%20%5B%5Bsycl%3A%3A%7Bname%7D(%7B'%2C%20'.join(map(str%2Cargs))%7D)%5D%5D%20%E5%90%88%E6%B3%95%20%E2%86%92%20%E6%8C%82%E5%88%B0%20AST%22)%0A%20%20%20%20%20%20%20%20ast.append(node)%0Aprint(%22%5Cn%3D%3D%3D%20%E2%91%A2%20CodeGen%20%E8%90%BD%E6%88%90%20IR%20%3D%3D%3D%22)%0Acodegen(%22_ZTS8MyKernel%22%2C%20ast)%0Aprint(%22%5Cn%3D%3D%3D%20%E2%91%A3%20%E5%90%8E%E7%AB%AF%E8%AF%BB%20metadata%20%3D%3D%3D%22)%0Abackend_read(ast)"># 模拟 SYCL 属性的旅程：Attr.td 定义 → Sema 检查 → CodeGen 落 metadata → 后端读
+
+# ---- ① Attr.td：声明属性（拼写、作用实体、参数个数、落成的 metadata 名）----
+ATTR_DEFS = {
+    "reqd_work_group_size":  {"applies": "kernel", "nargs": 3, "md": "!reqd_work_group_size"},
+    "reqd_sub_group_size":   {"applies": "kernel", "nargs": 1, "md": "!intel_reqd_sub_group_size"},
+    "kernel_args_restrict":  {"applies": "kernel", "nargs": 0, "md": "(参数 noalias)"},
+}
+
+# ---- ② Sema：检查合法性，通过则"挂到 AST" ----
+def sema_check(attr, args):
+    d = ATTR_DEFS.get(attr)
+    if not d:
+        return None, f"未知属性 [[sycl::{attr}]]"
+    if len(args) != d["nargs"]:
+        return None, f"[[sycl::{attr}]] 需要 {d['nargs']} 个参数，给了 {len(args)}"
+    if any((not isinstance(a, int)) or a &lt;= 0 for a in args):
+        return None, f"[[sycl::{attr}]] 参数必须是正整数常量"
+    return {"attr": attr, "args": args}, None      # 合法：挂到 FunctionDecl
+
+# ---- ③ CodeGen：把挂在 AST 上的属性翻成 IR metadata ----
+def codegen(kernel_name, ast_attrs):
+    print(f"define spir_kernel void @{kernel_name}(...) ", end="")
+    md_lines = []
+    for i, a in enumerate(ast_attrs):
+        d = ATTR_DEFS[a["attr"]]
+        if a["attr"] == "kernel_args_restrict":
+            print("  ; 参数指针加 noalias", end="")
+        else:
+            vals = a["args"] + [1] * (3 - len(a["args"])) if a["attr"] == "reqd_work_group_size" else a["args"]
+            print(f"{d['md']} !{i} ", end="")
+            md_lines.append(f"!{i} = !{{{', '.join('i32 '+str(v) for v in vals)}}}")
+    print("{ ... }")
+    for m in md_lines:
+        print("  " + m)
+
+# ---- ④ 后端 / llvm-spirv：读 metadata 定制代码生成 ----
+def backend_read(ast_attrs):
+    for a in ast_attrs:
+        if a["attr"] == "reqd_work_group_size":
+            print(f"  [后端] 读到 !reqd_work_group_size → 锁定 work-group = {a['args']}")
+        elif a["attr"] == "reqd_sub_group_size":
+            print(f"  [后端] 读到 !intel_reqd_sub_group_size → SIMD 宽度 = {a['args'][0]}")
+        elif a["attr"] == "kernel_args_restrict":
+            print(f"  [优化器] 参数 noalias → 允许更激进的向量化/重排")
+
+# 源码里写的属性标注（属性名, 参数）
+source_attrs = [("reqd_work_group_size", [16, 16]), ("kernel_args_restrict", [])]
+
+ast = []
+print("=== ② Sema 检查 ===")
+for name, args in source_attrs:
+    node, err = sema_check(name, args)
+    if err:
+        print(f"  ✗ {err}")
+    else:
+        print(f"  ✓ [[sycl::{name}({', '.join(map(str,args))})]] 合法 → 挂到 AST")
+        ast.append(node)
+print("\n=== ③ CodeGen 落成 IR ===")
+codegen("_ZTS8MyKernel", ast)
+print("\n=== ④ 后端读 metadata ===")
+backend_read(ast)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== ② Sema 检查 ===
+  ✓ [[sycl::reqd_work_group_size(16, 16)]] 合法 → 挂到 AST
+  ✓ [[sycl::kernel_args_restrict()]] 合法 → 挂到 AST
+
+=== ③ CodeGen 落成 IR ===
+define spir_kernel void @_ZTS8MyKernel(...) !reqd_work_group_size !0   ; 参数指针加 noalias { ... }
+  !0 = !{i32 16, i32 16, i32 1}
+
+=== ④ 后端读 metadata ===
+  [后端] 读到 !reqd_work_group_size → 锁定 work-group = [16, 16]
+  [优化器] 参数 noalias → 允许更激进的向量化/重排</code></pre>
+</div><p>看清这条流水线：源码里的 <code>[[sycl::reqd_work_group_size(16,16)]]</code> 先过 <strong>Sema 检查</strong>（参数个数、是否正整数）→ 合法后挂到 AST → <strong>CodeGen</strong> 把它翻成 <code>!reqd_work_group_size !0</code> 和末尾的 <code>!0 = !{i32 16, i32 16, i32 1}</code>（注意第三维被自动补成 <code>1</code>）→ <strong>后端</strong>读这条 metadata 锁定 work-group 大小。而 <code>kernel_args_restrict</code> 走的是另一条路——变成参数上的 <code>noalias</code>。请动手改：把 <code>source_attrs</code> 里的 <code>reqd_work_group_size</code> 参数改成 <code>[16, 0]</code>（含非正数），重新运行——你会看到 Sema 在第二段就<strong>拒绝</strong>它、根本走不到 CodeGen。这正是&quot;属性合法性由 Sema 把关&quot;的意义。</p>
+<h2>小结与下一步</h2>
+<p>这一章把 SYCL 属性的完整通路走通了：</p>
+<ul>
+<li>属性是<strong>从源码到硬件的旁路元信息</strong>——告诉编译器&quot;怎么算&quot;（执行配置、别名、能力依赖），最终以 <strong>IR metadata</strong> 的形式附到 kernel 上。</li>
+<li><strong>四段旅程</strong>：① <code>Attr.td</code>（<code>clang/include/clang/Basic/Attr.td</code>）用 TableGen <strong>声明</strong>属性，生成解析骨架；② <code>SemaSYCLDeclAttr.cpp</code> <strong>检查</strong>合法性并把 <code>*Attr</code> 挂到 <code>FunctionDecl</code>；③ CodeGen 的 <code>EmitKernelMetadata</code>（<code>CodeGenFunction.cpp:649</code>）<strong>落成 metadata</strong>；④ 后端 / <code>llvm-spirv</code> 读 metadata。</li>
+<li>对应表：<code>reqd_work_group_size</code>→<code>!reqd_work_group_size</code>、<code>reqd_sub_group_size</code>→<code>!intel_reqd_sub_group_size</code>、ESIMD→<code>!sycl_explicit_simd</code>。<strong>特例</strong>：<code>kernel_args_restrict</code>→参数 <code>noalias</code>（<code>CGCall.cpp:3720</code>，复用 LLVM 优化基础设施）；<code>device_has</code>→<code>!sycl_used_aspects</code>/<code>!sycl_declared_aspects</code>（<code>applySYCLAspectsMD</code>）做能力检查。</li>
+<li>kernel 函数用 <strong><code>spir_kernel</code> 调用约定</strong>（<code>SPIR.cpp:594</code>）标记设备入口点，<code>llvm-spirv</code> 翻成 <code>OpEntryPoint</code>；调用约定 + metadata 共同定义&quot;IR 层的一个 SYCL kernel&quot;。</li>
+<li><strong>注意</strong>：FPGA 专属属性（<code>num_simd_work_items</code> 等）已从这条分支移除，别照旧资料抄。</li>
+</ul>
+<p><strong>第三部分的&quot;设备端编译&quot;两章（14、15）到此完成</strong>——你已经看清一份 <code>.cpp</code> 的设备侧如何被前端识别、命名、标注并落成带 metadata 的 IR。下一章转向<strong>运行时</strong>：<code>queue</code>/<code>context</code>/<code>device</code>/<code>handler</code> 这些第 13 章见过的 pImpl 句柄，在运行时到底是怎样的对象模型、<code>q.submit(...)</code> 一路怎么走到向设备发起启动。第三部分的重心从&quot;编译期&quot;转到&quot;运行期&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>SYCL 属性（<code>[[sycl::reqd_work_group_size]]</code>/<code>[[intel::reqd_sub_group_size]]</code>/<code>[[intel::kernel_args_restrict]]</code>/<code>[[sycl::device_has]]</code> 等）是影响代码生成/执行配置的<strong>元信息</strong>，最终落成 kernel 上的 <strong>IR metadata</strong>。</li>
+<li><strong>四段旅程</strong>：<code>Attr.td</code> 定义（TableGen）→ <code>SemaSYCLDeclAttr.cpp</code> 检查并挂 AST → <code>EmitKernelMetadata</code>（<code>CodeGenFunction.cpp:649</code>）落 metadata → 后端/<code>llvm-spirv</code> 读。</li>
+<li>对应：<code>reqd_work_group_size</code>→<code>!reqd_work_group_size</code>、<code>work_group_size_hint</code>→<code>!work_group_size_hint</code>、<code>reqd_sub_group_size</code>→<code>!intel_reqd_sub_group_size</code>。</li>
+<li><strong>特例</strong>：<code>kernel_args_restrict</code>→参数 <code>noalias</code>（<code>CGCall.cpp:3720</code>）；<code>device_has</code>→<code>!sycl_used_aspects</code>/<code>!sycl_declared_aspects</code>（<code>CodeGenModule.cpp</code> 的 <code>applySYCLAspectsMD</code>）能力检查。</li>
+<li>kernel 入口用 <code>spir_kernel</code> 调用约定（<code>SPIR.cpp:594</code>）→ <code>llvm-spirv</code> 的 <code>OpEntryPoint</code>。</li>
+<li><code>Attr.td</code> 记录：<code>SYCLReqdWorkGroupSize</code>(3927)/<code>SYCLWorkGroupSizeHint</code>(3974)/<code>IntelReqdSubGroupSize</code>(2373)/<code>SYCLIntelKernelArgsRestrict</code>(1966)/<code>SYCLDeviceHas</code>(1839)。<strong>FPGA 属性已从本分支移除</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch14.html">← 第 14 章 设备端编译：integration header/footer 与 kernel 命名</a>
+  <a class="nav-next" href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li class="active"><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 4 章讲了 Pass 框架的设计、第 5 章你亲手写了一个 Pass 挂进 <code>opt</code>。但 <code>-O2</code> 背后不是一个 Pass，而是<strong>上百个 Pass 按精心设计的顺序、层层嵌套</strong>组成的一条流水线。这一章回答：<strong>这条流水线是谁、按什么逻辑搭出来的？</strong>答案是 <code>PassBuilder</code>（<code>llvm/lib/Passes/PassBuilder.cpp</code> 与 <code>PassBuilderPipelines.cpp</code>）。</p>
+<p>你会看清三件事：<code>-O0</code> 到 <code>-O3</code>（还有 <code>-Os</code>/<code>-Oz</code>）到底差在哪；<code>PassBuilder</code> 如何用第 4 章的<strong>适配器</strong>把 Module/CGSCC/Function/Loop 四层嵌套成一棵管线树；以及为什么 Pass 的<strong>顺序</strong>如此关键（简化为别的 Pass 创造机会、清理收拾别的 Pass 留下的烂摊子）。这一章让你能读懂 <code>opt -passes='default&lt;O2&gt;' -print-pipeline-passes</code> 打印出来的那一长串，也理解 SYCL/设备端编译为什么要在标准管线里插自己的 Pass。</p>
+</div><h2>从 -O2 说起：一个开关，一整条流水线</h2>
+<p>你敲 <code>clang -O2</code> 时，到底发生了什么？<code>-O2</code> 不是&quot;某一个优化&quot;，而是一个<strong>优化级别（optimization level）</strong>——它选定一整套 Pass 和它们的排列。级别有六档：</p>
+<table>
+<thead>
+<tr>
+<th>级别</th>
+<th>取向</th>
+<th>大致特征</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>O0</strong></td>
+<td>不优化</td>
+<td>几乎不跑优化 Pass，编译最快、调试最友好</td>
+</tr>
+<tr>
+<td><strong>O1</strong></td>
+<td>轻度</td>
+<td>便宜、收益高的优化</td>
+</tr>
+<tr>
+<td><strong>O2</strong></td>
+<td>标准</td>
+<td>生产默认档，激进但稳妥的全套优化</td>
+</tr>
+<tr>
+<td><strong>O3</strong></td>
+<td>激进</td>
+<td>在 O2 基础上更aggressive（更多内联/向量化，可能增大体积）</td>
+</tr>
+<tr>
+<td><strong>Os</strong></td>
+<td>优化体积</td>
+<td>像 O2 但避免增大代码尺寸的变换</td>
+</tr>
+<tr>
+<td><strong>Oz</strong></td>
+<td>极限压体积</td>
+<td>比 Os 更进一步，牺牲速度换最小体积</td>
+</tr>
+</tbody></table>
+<p>选定级别后，真正把「这个级别该跑哪些 Pass、什么顺序」翻译成一条具体管线的，是 <strong><code>PassBuilder</code></strong>。<code>clang</code>、<code>opt</code> 都通过它来构建管线——所以 <code>clang -O2</code> 和 <code>opt -passes=&#39;default&lt;O2&gt;&#39;</code> 得到的是同一条流水线。</p>
+<div class="note">
+<strong>O0 也不是「什么都不做」</strong>
+即使 <code>-O0</code>，管线里也有<strong>少量必须跑的 Pass</strong>——比如 <code>always_inline</code>（处理 <code>__attribute__((always_inline))</code>）、以及把 <code>alloca</code> 相关内建、协程等降级的强制变换。这正是第 4 章 <code>RequiredPassInfoMixin</code>（不可跳过）与 <code>OptionalPassInfoMixin</code>（O0/调试时可跳过）区分的用武之地：O0 下 Optional 的 Pass 被跳过，Required 的照跑。所以 O0 IR 依然是「能正确运行」的，只是没被优化。
+</div><h2>PassBuilder：把级别翻译成管线树</h2>
+<p><code>PassBuilder</code> 的核心职责是提供一族 <code>build...Pipeline</code> 方法，输入一个优化级别，输出一个装好 Pass 的 <code>ModulePassManager</code>。最常用的入口是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// PassBuilder 构建一条完整的 module 级优化管线（简化签名）
+ModulePassManager
+PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level);</code></pre>
+</div><p>它内部（实现在 <code>llvm/lib/Passes/PassBuilderPipelines.cpp</code>）把管线拆成几个阶段，一层层调更小的构建函数：</p>
+<ul>
+<li><code>buildModuleSimplificationPipeline</code> —— <strong>简化</strong>阶段：内联、把代码整理成利于后续优化的形状。</li>
+<li><code>buildModuleOptimizationPipeline</code> —— <strong>优化</strong>阶段：向量化、循环优化等更重的变换。</li>
+<li>其下又有 <code>buildFunctionSimplificationPipeline</code>（函数级简化：InstCombine、GVN、SimplifyCFG…）、循环管线等。</li>
+</ul>
+<p>而把这些不同 <strong>IR 层级</strong> 的管线拼到一起，靠的正是第 4 章那套<strong>适配器</strong>——因为「PassManager / Adaptor 本身也是 Pass」，四层可以像积木一样嵌套：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// PassBuilderPipelines.cpp 里的典型嵌套（示意）
+ModulePassManager MPM;
+// Module 层：先跑一些全局 Pass……
+// 然后用适配器下潜到 CGSCC 层做内联，CGSCC 里再下潜到 Function 层
+MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(   // Module → CGSCC
+    createCGSCCToFunctionPassAdaptor(                  // CGSCC → Function
+        std::move(FunctionSimplificationPM))));        // 一整条 Function 简化管线
+// Function 管线内部又可能用 createFunctionToLoopPassAdaptor 下潜到 Loop 层</code></pre>
+</div><p>于是整条 <code>-O2</code> 管线在结构上是一棵<strong>嵌套树</strong>，形如 <code>module(..., cgscc(inline, function(instcombine, ..., loop(licm, ...))), ...)</code>。每一层用它自己的 PassManager 装本层的 Pass，用适配器接到下一层。第 4 章那句「你写 Pass 只管作用在哪一层，跨层驱动交给适配器」，在 <code>PassBuilder</code> 这里被用到极致。</p>
+<div class="concept">
+<svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">-O2 管线是一棵嵌套树，用适配器层层下潜</text>
+  <!-- Module -->
+  <rect x="40" y="40" width="560" height="240" rx="10" fill="#f7f8fa" stroke="#9ca3af"/>
+  <text x="60" y="62" font-size="12" font-weight="bold" fill="#374151">Module 层　ModulePassManager</text>
+  <text x="60" y="80" font-size="9" fill="#6b7280">全局 Pass：GlobalOpt、IPSCCP……</text>
+  <!-- CGSCC -->
+  <rect x="70" y="92" width="500" height="176" rx="8" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="88" y="112" font-size="11" font-weight="bold" fill="#a53f1c">CGSCC 层（createModuleToPostOrderCGSCCPassAdaptor）</text>
+  <text x="88" y="128" font-size="9" fill="#6b7280">Inliner（函数内联在调用图强连通分量上做）</text>
+  <!-- Function -->
+  <rect x="100" y="138" width="440" height="120" rx="8" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="118" y="158" font-size="11" font-weight="bold" fill="#2b6cb0">Function 层（createCGSCCToFunctionPassAdaptor）</text>
+  <text x="118" y="174" font-size="9" fill="#6b7280">SimplifyCFG · InstCombine · GVN · SROA · EarlyCSE……</text>
+  <!-- Loop -->
+  <rect x="130" y="184" width="380" height="64" rx="8" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="148" y="204" font-size="11" font-weight="bold" fill="#2f7a45">Loop 层（createFunctionToLoopPassAdaptor）</text>
+  <text x="148" y="220" font-size="9" fill="#6b7280">LICM（循环不变量外提）· LoopRotate · LoopUnroll……</text>
+  <text x="148" y="236" font-size="9" fill="#6b7280">对每个函数里的每个循环各跑一遍</text>
+  <defs></defs>
+</svg>
+<div class="caption">图 6-1　<code>-O2</code> 管线的嵌套结构。外层 Module 管线用适配器下潜到 CGSCC 层（做内联），CGSCC 再下潜到 Function 层（InstCombine/GVN 等），Function 再下潜到 Loop 层（LICM/展开）。每层管理自己的 Pass，适配器负责「对上层的每个单位，把下层管线跑一遍」——这就是 <code>PassBuilder</code> 搭出来的东西</div>
+</div><h2>顺序为什么是命根子</h2>
+<p>一条优化管线里，<strong>Pass 的顺序和选择本身就是最难的工程</strong>。同样一批 Pass，排列不同，效果可能天差地别。背后有两条反复出现的模式：</p>
+<p><strong>① 简化为别的 Pass「创造机会」。</strong> 很多强力优化只有在 IR 被整理成特定形状后才能触发。例子：<code>mem2reg</code>（把栈上的 <code>alloca</code> 提升成 SSA 寄存器值，插入必要的 <code>phi</code>）几乎是<strong>所有后续优化的前提</strong>——只有变量成了 SSA 值，常量传播、GVN 才认得出「这两处是同一个值」。所以简化管线里它排得很靠前。类似地，内联把被调函数的函数体展开到调用处，<strong>为调用处的常量折叠、死代码消除创造了大量新机会</strong>——这就是为什么内联之后总要再跑一轮 InstCombine/SimplifyCFG。</p>
+<p><strong>② 清理别的 Pass「留下的烂摊子」。</strong> 变换 Pass 常常在简化的同时制造出新的冗余：内联后会留下一批可以合并的指令、可以删的死代码；循环展开后会有重复的计算。所以像 <code>InstCombine</code>（指令组合）、<code>SimplifyCFG</code>（控制流图简化）、<code>DCE</code> 这类&quot;清理工&quot;会在管线里<strong>反复出现多次</strong>，穿插在重型变换之间收拾残局。你打印 <code>-O2</code> 管线会看到 <code>instcombine</code> 出现好几次，不是 bug，是设计。</p>
+<p>这两条结合，就是为什么 <code>PassBuilder</code> 的管线是「<strong>简化 → 重型变换 → 清理 → 再简化 → 再变换……</strong>」的多轮交替，而不是每个 Pass 各跑一次了事。管线的具体顺序是 LLVM 社区多年调优、用大量 benchmark 喂出来的经验结晶——<code>PassBuilderPipelines.cpp</code> 里那些看似随意的排列，几乎每一处都有历史原因。</p>
+<div class="warn">
+<strong>别自己拍脑袋重排管线</strong>
+既然顺序这么关键，一个常见的坑是：新手为了"多优化一点"往 <code>-passes</code> 里手动堆一堆 Pass，或调换顺序，结果反而更慢、甚至触发本不会出现的 bug（比如把某个依赖 SSA 形态的 Pass 放到了 <code>mem2reg</code> 之前）。<strong>默认管线是经过海量测试的；要加自定义 Pass，正确姿势是用扩展点插入，而不是重写整条管线。</strong>见下一节。
+</div><h2>扩展点：往标准管线里「插」自己的 Pass</h2>
+<p>真实需求里，你常常想在<strong>标准 O2 管线的某个位置</strong>插入自己的 Pass，而不破坏其余部分——这正是 SYCL、各种 sanitizer、插桩工具要做的事。<code>PassBuilder</code> 为此提供**扩展点（extension point）**注册接口：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 在管线的特定位置注册回调，插入自己的 Pass
+PB.registerPipelineStartEPCallback(          // 管线最开始
+    [](ModulePassManager &amp;MPM, OptimizationLevel Level) {
+      MPM.addPass(MyEarlyPass());
+    });
+PB.registerOptimizerLastEPCallback(          // 优化管线最末尾
+    [](ModulePassManager &amp;MPM, OptimizationLevel Level) {
+      MPM.addPass(MyCleanupPass());
+    });</code></pre>
+</div><p>常见扩展点有 <code>PipelineStartEP</code>（最前）、<code>PeepholeEP</code>（每轮 peephole 清理处）、<code>ScalarOptimizerLateEP</code>、<code>OptimizerLastEP</code>（最后）等。回调还能拿到当前 <code>OptimizationLevel</code>，让你按级别决定插不插、插什么。第 5 章那个插件的 <code>registerCB</code> 里，除了用 <code>registerPipelineParsingCallback</code> 认领 <code>-passes</code> 名字，也可以用这些 EP 回调把 Pass 自动插进 <code>default&lt;O2&gt;</code>——这就是 sanitizer 插件&quot;开了 <code>-O2</code> 也能自动生效&quot;的机制。</p>
+<div class="keypoint">
+<strong>PassBuilder = 优化级别 → 管线树的编译器</strong>
+把这一章浓缩成一句：<strong><code>PassBuilder</code> 是一台"元编译器"——输入优化级别（O0–O3/Os/Oz），用第 4 章的适配器把上百个 Pass 编译成一棵 Module/CGSCC/Function/Loop 嵌套的管线树，顺序经过精心调优（简化创造机会、清理收拾残局，多轮交替）。</strong>你既能用 <code>opt -passes='default&lt;O2&gt;'</code> 复用它，也能通过<strong>扩展点</strong>往里插自己的 Pass 而不动其余——SYCL 的设备端 Pass 就是这么进管线的。
+</div><h2>打印真实管线看一眼</h2>
+<p><code>opt</code> 能把某个级别的管线<strong>展开成扁平的 Pass 名字串</strong>打印出来，这是理解和调试管线最好的工具：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 把 default&lt;O2&gt; 这条管线里所有 Pass 按顺序、按嵌套打印出来
+opt -passes='default&lt;O2&gt;' -print-pipeline-passes in.ll -disable-output</code></pre>
+</div><p>输出是一长串（截取示意），你能一眼认出这一章讲的嵌套和交替：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">annotation2metadata,forceattrs,inferattrs,...,
+cgscc(devirt&lt;4&gt;(inline,function(sroa,early-cse,...,instcombine,...))),
+...,function(...,loop(licm,...),instcombine,...),...</code></pre>
+</div><p>看这几个特征：<code>cgscc(...)</code> 里套着 <code>inline</code> 和 <code>function(...)</code>——正是图 6-1 的嵌套；<code>function(...)</code> 里套着 <code>loop(...)</code>；<code>instcombine</code>、<code>sroa</code>、<code>simplifycfg</code> 在不同位置<strong>反复出现</strong>——正是&quot;清理工穿插在变换之间&quot;。这一串就是 <code>PassBuilder::buildPerModuleDefaultPipeline(O2)</code> 在内存里搭出来那棵树的文本投影。你甚至可以把这串复制出来、手动改几个 Pass、再用 <code>-passes=&#39;&lt;改过的串&gt;&#39;</code> 喂回 <code>opt</code>，做管线实验。</p>
+<h2>动手：模拟「简化—变换—清理」的多轮管线</h2>
+<p>用一个浏览器里能跑的小模型演示管线为什么要多轮交替：一段代码里，内联会<strong>暴露</strong>出新的死代码和可折叠常量，需要后续的清理 Pass 才能收割。我们跑两种管线——「只跑一遍每个 Pass」vs「变换后接清理、多轮」——对比最终剩下多少条指令。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E6%A8%A1%E6%8B%9F%E4%BC%98%E5%8C%96%E7%AE%A1%E7%BA%BF%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%22%E7%AE%80%E5%8C%96%E2%80%94%E9%87%8D%E5%9E%8B%E5%8F%98%E6%8D%A2%E2%80%94%E6%B8%85%E7%90%86%22%E5%A4%9A%E8%BD%AE%E4%BA%A4%E6%9B%BF%0A%0A%23%20%E4%B8%80%E6%AE%B5%E4%BB%A3%E7%A0%81%EF%BC%8C%E7%94%A8%E6%8C%87%E4%BB%A4%E6%9D%A1%E6%95%B0%20%2B%20%E9%9A%90%E8%97%8F%E7%9A%84%22%E5%8F%AF%E4%BC%98%E5%8C%96%E6%9C%BA%E4%BC%9A%22%E8%A1%A8%E7%A4%BA%0A%23%20opportunities%20%E8%A1%A8%E7%A4%BA%22%E5%86%85%E8%81%94%E5%90%8E%E6%89%8D%E4%BC%9A%E6%9A%B4%E9%9C%B2%E5%87%BA%E6%9D%A5%E3%80%81%E9%9C%80%E8%A6%81%E6%B8%85%E7%90%86%E6%89%8D%E8%83%BD%E5%88%A0%E6%8E%89%22%E7%9A%84%E5%86%97%E4%BD%99%E6%8C%87%E4%BB%A4%E6%95%B0%0Adef%20make_code()%3A%0A%20%20%20%20return%20%7B%22instrs%22%3A%2020%2C%20%22inlined%22%3A%20False%2C%20%22hidden_dead%22%3A%200%7D%0A%0Adef%20inline(code)%3A%0A%20%20%20%20%23%20%E5%86%85%E8%81%94%EF%BC%9A%E6%8A%8A%E8%A2%AB%E8%B0%83%E5%87%BD%E6%95%B0%E5%B1%95%E5%BC%80%E8%BF%9B%E6%9D%A5%EF%BC%8C%E6%8C%87%E4%BB%A4%E5%8F%98%E5%A4%9A%EF%BC%8C%E4%BD%86%E4%B9%9F%22%E6%9A%B4%E9%9C%B2%22%E5%87%BA%E4%B8%80%E6%89%B9%E6%96%B0%E7%9A%84%E6%AD%BB%E4%BB%A3%E7%A0%81%E6%9C%BA%E4%BC%9A%0A%20%20%20%20if%20not%20code%5B%22inlined%22%5D%3A%0A%20%20%20%20%20%20%20%20code%5B%22instrs%22%5D%20%2B%3D%2012%20%20%20%20%20%20%20%20%20%20%23%20%E5%B1%95%E5%BC%80%E5%B8%A6%E6%9D%A5%E6%9B%B4%E5%A4%9A%E6%8C%87%E4%BB%A4%0A%20%20%20%20%20%20%20%20code%5B%22hidden_dead%22%5D%20%2B%3D%208%20%20%20%20%20%20%23%20%E5%85%B6%E4%B8%AD%208%20%E6%9D%A1%E5%86%85%E8%81%94%E5%90%8E%E5%85%B6%E5%AE%9E%E6%98%AF%E6%AD%BB%E7%9A%84%EF%BC%88%E6%9A%B4%E9%9C%B2%E5%87%BA%E6%9C%BA%E4%BC%9A%EF%BC%89%0A%20%20%20%20%20%20%20%20code%5B%22inlined%22%5D%20%3D%20True%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5Binline%5D%20%E5%B1%95%E5%BC%80%E8%A2%AB%E8%B0%83%E5%87%BD%E6%95%B0%EF%BC%9A%2B12%20%E6%8C%87%E4%BB%A4%EF%BC%8C%E6%9A%B4%E9%9C%B2%208%20%E6%9D%A1%E6%BD%9C%E5%9C%A8%E6%AD%BB%E4%BB%A3%E7%A0%81%22)%0A%20%20%20%20return%20code%0A%0Adef%20instcombine_dce(code)%3A%0A%20%20%20%20%23%20%E6%B8%85%E7%90%86%E5%B7%A5%EF%BC%9A%E6%8A%8A%E5%B7%B2%E6%9A%B4%E9%9C%B2%E7%9A%84%E6%AD%BB%E4%BB%A3%E7%A0%81%2F%E5%8F%AF%E6%8A%98%E5%8F%A0%E6%8C%87%E4%BB%A4%E6%94%B6%E5%89%B2%E6%8E%89%0A%20%20%20%20if%20code%5B%22hidden_dead%22%5D%20%3E%200%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5Binstcombine%2Bdce%5D%20%E6%94%B6%E5%89%B2%20%7Bcode%5B'hidden_dead'%5D%7D%20%E6%9D%A1%E5%B7%B2%E6%9A%B4%E9%9C%B2%E7%9A%84%E5%86%97%E4%BD%99%22)%0A%20%20%20%20%20%20%20%20code%5B%22instrs%22%5D%20-%3D%20code%5B%22hidden_dead%22%5D%0A%20%20%20%20%20%20%20%20code%5B%22hidden_dead%22%5D%20%3D%200%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5Binstcombine%2Bdce%5D%20%E6%B2%A1%E6%9C%89%E5%8F%AF%E6%94%B6%E5%89%B2%E7%9A%84%E5%86%97%E4%BD%99%22)%0A%20%20%20%20return%20code%0A%0Aprint(%22%3D%3D%3D%20%E7%AE%A1%E7%BA%BF%20A%EF%BC%9A%E5%8F%AA%E5%86%85%E8%81%94%EF%BC%8C%E4%B8%8D%E6%B8%85%E7%90%86%EF%BC%88%E9%A1%BA%E5%BA%8F%E6%B2%A1%E5%AE%89%E6%8E%92%E5%A5%BD%EF%BC%89%3D%3D%3D%22)%0Aa%20%3D%20make_code()%0Ainline(a)%0Aprint(f%22%E6%9C%80%E7%BB%88%E6%8C%87%E4%BB%A4%E6%95%B0%EF%BC%9A%7Ba%5B'instrs'%5D%7D%EF%BC%888%20%E6%9D%A1%E6%AD%BB%E4%BB%A3%E7%A0%81%E6%B2%A1%E4%BA%BA%E6%94%B6%E5%89%B2%EF%BC%8C%E7%99%BD%E7%99%BD%E7%95%99%E7%9D%80%EF%BC%89%5Cn%22)%0A%0Aprint(%22%3D%3D%3D%20%E7%AE%A1%E7%BA%BF%20B%EF%BC%9A%E5%86%85%E8%81%94%E5%90%8E%E6%8E%A5%E6%B8%85%E7%90%86%EF%BC%88PassBuilder%20%E7%9A%84%E5%81%9A%E6%B3%95%EF%BC%89%3D%3D%3D%22)%0Ab%20%3D%20make_code()%0Apipeline%20%3D%20%5B(%22inline%22%2C%20inline)%2C%20(%22instcombine%2Bdce%22%2C%20instcombine_dce)%5D%0Afor%20name%2C%20fn%20in%20pipeline%3A%0A%20%20%20%20print(f%22%20%20%E8%BF%90%E8%A1%8C%20%7Bname%7D%3A%22)%0A%20%20%20%20fn(b)%0Aprint(f%22%E6%9C%80%E7%BB%88%E6%8C%87%E4%BB%A4%E6%95%B0%EF%BC%9A%7Bb%5B'instrs'%5D%7D%EF%BC%88%E5%86%85%E8%81%94%E5%88%9B%E9%80%A0%E7%9A%84%E6%9C%BA%E4%BC%9A%E8%A2%AB%E6%B8%85%E7%90%86%E5%B7%A5%E6%94%B6%E5%89%B2%E4%BA%86%EF%BC%89%22)"># 模拟优化管线：为什么要"简化—重型变换—清理"多轮交替
+
+# 一段代码，用指令条数 + 隐藏的"可优化机会"表示
+# opportunities 表示"内联后才会暴露出来、需要清理才能删掉"的冗余指令数
+def make_code():
+    return {"instrs": 20, "inlined": False, "hidden_dead": 0}
+
+def inline(code):
+    # 内联：把被调函数展开进来，指令变多，但也"暴露"出一批新的死代码机会
+    if not code["inlined"]:
+        code["instrs"] += 12          # 展开带来更多指令
+        code["hidden_dead"] += 8      # 其中 8 条内联后其实是死的（暴露出机会）
+        code["inlined"] = True
+        print(f"    [inline] 展开被调函数：+12 指令，暴露 8 条潜在死代码")
+    return code
+
+def instcombine_dce(code):
+    # 清理工：把已暴露的死代码/可折叠指令收割掉
+    if code["hidden_dead"] &gt; 0:
+        print(f"    [instcombine+dce] 收割 {code['hidden_dead']} 条已暴露的冗余")
+        code["instrs"] -= code["hidden_dead"]
+        code["hidden_dead"] = 0
+    else:
+        print(f"    [instcombine+dce] 没有可收割的冗余")
+    return code
+
+print("=== 管线 A：只内联，不清理（顺序没安排好）===")
+a = make_code()
+inline(a)
+print(f"最终指令数：{a['instrs']}（8 条死代码没人收割，白白留着）\n")
+
+print("=== 管线 B：内联后接清理（PassBuilder 的做法）===")
+b = make_code()
+pipeline = [("inline", inline), ("instcombine+dce", instcombine_dce)]
+for name, fn in pipeline:
+    print(f"  运行 {name}:")
+    fn(b)
+print(f"最终指令数：{b['instrs']}（内联创造的机会被清理工收割了）")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 管线 A：只内联，不清理（顺序没安排好）===
+    [inline] 展开被调函数：+12 指令，暴露 8 条潜在死代码
+最终指令数：32（8 条死代码没人收割，白白留着）
+
+=== 管线 B：内联后接清理（PassBuilder 的做法）===
+  运行 inline:
+    [inline] 展开被调函数：+12 指令，暴露 8 条潜在死代码
+  运行 instcombine+dce:
+    [instcombine+dce] 收割 8 条已暴露的冗余
+最终指令数：24（内联创造的机会被清理工收割了）</code></pre>
+</div><p>这就是「顺序是命根子」的可运行版：内联本身<strong>先让代码变大</strong>（32 条），它的价值一部分要靠<strong>后续的清理 Pass</strong> 才能兑现（收割到 24 条）。如果管线里内联后不接 InstCombine/DCE，那 8 条被暴露出来的死代码就白白留着——这正是 <code>PassBuilder</code> 要把清理工穿插在重型变换之后、并多轮交替的原因。请动手改：给管线 B 再加一个 <code>(&quot;inline&quot;, inline)</code> 放在最后（模拟对新函数再内联一轮），你会看到它因为 <code>inlined</code> 已为真而不再展开——真实管线里对&quot;是否还有新机会&quot;的判断，正是决定要不要再来一轮的依据。</p>
+<h2>小结与下一步</h2>
+<p>你现在理解了 <code>-O2</code> 背后那条流水线是怎么来的：</p>
+<ul>
+<li><strong>优化级别</strong>（O0–O3、Os、Oz）是一个开关，选定一整套 Pass 及其顺序；O0 也仍跑少量 <strong>Required</strong> Pass。</li>
+<li><strong><code>PassBuilder</code></strong>（<code>PassBuilder.cpp</code> / <code>PassBuilderPipelines.cpp</code>）把级别翻译成管线：<code>buildPerModuleDefaultPipeline</code> → 简化管线 + 优化管线 → 函数/循环子管线。</li>
+<li>管线是一棵 <strong>Module/CGSCC/Function/Loop 嵌套树</strong>，靠第 4 章的<strong>适配器</strong>拼接（<code>createModuleToPostOrderCGSCCPassAdaptor</code> 等）。</li>
+<li><strong>顺序是命根子</strong>：简化为后续 Pass <strong>创造机会</strong>（<code>mem2reg</code>、内联在前），清理工（<code>InstCombine</code>/<code>SimplifyCFG</code>/<code>DCE</code>）<strong>反复穿插</strong>收拾残局——所以管线是多轮交替，不是各跑一次。</li>
+<li>加自定义 Pass 用<strong>扩展点</strong>（<code>registerPipelineStartEPCallback</code> / <code>OptimizerLastEP</code> 等），别手动重排默认管线。</li>
+<li>用 <code>opt -passes=&#39;default&lt;O2&gt;&#39; -print-pipeline-passes</code> 打印真实管线来学习和调试。</li>
+</ul>
+<p>第 4–6 章合起来，你已经把 LLVM 中端（Pass 框架 + 管线）从设计到动手到组织全部走通。下一章是第一部分的收尾——<strong>后端与代码生成</strong>：优化好的 IR 如何经过指令选择、寄存器分配、指令调度，变成某款具体芯片（<code>llvm/lib/Target/&lt;芯片&gt;/</code>）的机器码。这一步之后，我们就带着完整的 LLVM 心智模型进入第二部分的异构世界（SPIR-V、offload、PTX）。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>优化级别</strong> O0–O3/Os/Oz 选定一整套 Pass 与顺序；<code>clang -O2</code> 与 <code>opt -passes=&#39;default&lt;O2&gt;&#39;</code> 得到同一条管线。O0 仍跑 Required Pass（如 <code>always_inline</code>）。</li>
+<li><strong><code>PassBuilder</code></strong>（<code>llvm/lib/Passes/PassBuilder.cpp</code>、<code>PassBuilderPipelines.cpp</code>）用 <code>buildPerModuleDefaultPipeline</code> 等构建管线，分<strong>简化</strong>（内联、整形）与<strong>优化</strong>（向量化、循环）阶段。</li>
+<li>管线是 <strong>Module/CGSCC/Function/Loop 嵌套树</strong>，靠<strong>适配器</strong>拼接；<code>cgscc(inline, function(instcombine, loop(licm)))</code> 是典型形状。</li>
+<li><strong>顺序关键</strong>：简化<strong>创造机会</strong>（<code>mem2reg</code>、内联靠前），<code>InstCombine</code>/<code>SimplifyCFG</code>/<code>DCE</code> 等清理工<strong>反复出现</strong>收拾残局；管线多轮交替。</li>
+<li>加 Pass 用<strong>扩展点</strong>（<code>registerPipelineStartEPCallback</code>、<code>OptimizerLastEP</code> 等），SYCL/sanitizer 靠它进管线；勿手改默认顺序。</li>
+<li>调试利器：<code>opt -passes=&#39;default&lt;O2&gt;&#39; -print-pipeline-passes</code> 打印展开后的完整管线。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch05.html">← 第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a>
+  <a class="nav-next" href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

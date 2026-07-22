@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li class="active"><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</h1>
+<h2>这份附录怎么用</h2>
+<div class="goal-box">
+<p>正文教你"为什么"，这份附录帮你"上手做"。全书的每一个源码锚点（<code>SemaSYCL.cpp:1174</code>、<code>feature_test.hpp.in</code>、<code>getDeviceLibNames()</code>……）都指向 <strong>intel/llvm 的 <code>sycl</code> 分支</strong>。要真正把它们打开、改一改、编出一个自己的 <code>clang++</code>，你需要能<strong>配置 → 构建 → 运行</strong>这套工具链。这份附录把这条路走一遍：拉代码、<code>configure.py</code> 配置、<code>compile.py</code> 构建、用编出来的编译器跑一个 SYCL 程序，以及日常最常用的命令速查。</p>
+<p>它<strong>不是</strong> intel/llvm 官方文档的替代（官方 <code>sycl/doc/GetStartedGuide.md</code> 永远是权威），而是一份"够用就走"的实操清单，配合本书的例子。命令里的绝对路径和版本号取自本书写作时的一台开发机，<strong>请以你自己的环境为准</strong>。</p>
+</div><h2>0. 前置：拿到源码</h2>
+<p>intel/llvm 是一个巨型 monorepo（第 1 章讲过 LLVM 的单仓结构）。SYCL/DPC++ 活在它的 <code>sycl</code> 分支：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">git clone https://github.com/intel/llvm.git
+cd llvm
+git checkout sycl        # DPC++/SYCL 开发分支</code></pre>
+</div><p>它顶层就有 <code>clang/</code>、<code>llvm/</code>、<code>sycl/</code>、<code>libdevice/</code>、<code>libclc/</code>、<code>sycl-jit/</code>、<code>unified-runtime/</code> 等（附录 C 有完整地图）。构建脚本都在 <code>llvm/buildbot/</code> 下——<code>configure.py</code> 和 <code>compile.py</code> 是官方推荐的入口，比手写 CMake 命令省心。</p>
+<h2>1. 配置（configure.py）</h2>
+<p>DPC++ 的构建不直接 <code>cmake</code>，而是走 <code>llvm/buildbot/configure.py</code>——它把 SYCL 需要的一大堆 CMake 变量（启用哪些子项目、SPIR-V 翻译器、UR 后端……）打包好。最小配置：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 从 workspace 根目录（llvm/ 的父目录）
+CXX=/usr/bin/clang++ CC=/usr/bin/clang \
+python llvm/buildbot/configure.py \
+    --build-type=Release \
+    --llvm-external-projects="clang-tools-extra;compiler-rt"</code></pre>
+</div><p>几个要点：</p>
+<ul>
+<li><strong><code>--build-type=Release</code></strong>：日常开发用 Release（快、省内存）。要调试编译器本身、下断点，用 <code>--build-type=Debug</code>（慢很多、二进制巨大）或 <code>RelWithDebInfo</code>（折中，推荐调试用）。</li>
+<li><strong><code>--llvm-external-projects=&quot;clang-tools-extra;compiler-rt&quot;</code></strong>：把 <code>clang-tools-extra</code>（含 <code>clangd</code>、<code>clang-tidy</code>）和 <code>compiler-rt</code>（sanitizer 运行时）一起编。想用 clangd 跳转源码、或用第 19 章的设备端 sanitizer，就需要它们。</li>
+<li><strong>用系统 clang 自举</strong>：<code>CXX=/usr/bin/clang++</code> 让你用现成的 clang 编译 LLVM 自身，比 gcc 快且兼容性好。</li>
+<li>配置只需跑一次；<strong>改了配置标志才需要重跑</strong>。它会在 <code>llvm/build/</code> 下生成 CMake 缓存。</li>
+</ul>
+<div class="note">
+<strong>常用的额外配置标志</strong>
+<code>configure.py</code> 支持一批开关，按需加：<code>--cuda</code> / <code>--hip</code> 启用 NVIDIA/AMD 后端（第 11、19 章那两条 libclc/devicelib 路）；<code>--shared-libs</code> 编成动态库（增量链接快）；<code>--cmake-opt=-DXXX=YYY</code> 透传任意 CMake 变量。<code>python llvm/buildbot/configure.py --help</code> 看全部。不确定就用最小配置——SPIR-V（Intel GPU/CPU 经 Level Zero/OpenCL）默认就开。
+</div><h2>2. 构建（compile.py）</h2>
+<p>配置好后用 <code>llvm/buildbot/compile.py</code> 构建。默认目标是 <code>deploy-sycl-toolchain</code>——编出一套完整可用的 DPC++ 工具链：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">python llvm/buildbot/compile.py -j64                 # 主工具链（deploy-sycl-toolchain）
+python llvm/buildbot/compile.py -j64 -t clang-format # clang-format（不在主目标里）
+python llvm/buildbot/compile.py -j64 -t clangd       # clangd（不在主目标里）</code></pre>
+</div><ul>
+<li><strong><code>-j64</code></strong>：并行度，设成你机器的核数（或略高）。LLVM 首次全量构建很重，几十分钟到几小时不等，取决于机器。</li>
+<li><strong><code>-t &lt;target&gt;</code></strong>：单独构建某个目标。<code>clang-format</code> 和 <code>clangd</code> <strong>不属于</strong> <code>deploy-sycl-toolchain</code>，要单独 <code>-t</code> 编。</li>
+<li><strong>增量构建</strong>：改了几个 <code>.cpp</code> 再跑一次 <code>compile.py</code>，只重编受影响的部分，快得多。改了头文件可能触发大范围重编。</li>
+</ul>
+<p>构建产物在 <strong><code>llvm/build/bin/</code></strong>（可执行：<code>clang++</code>、<code>llvm-spirv</code>、<code>sycl-ls</code>……）和 <strong><code>llvm/build/lib/</code></strong>（运行时库）。</p>
+<h2>3. 运行环境（PATH / LD_LIBRARY_PATH）</h2>
+<p>编出来的 <code>clang++</code> 要能找到运行时库（OpenCL/Level Zero loader、TBB、UMF……）才能编译和运行 SYCL 程序。开发机上这些运行时的路径通常集中在一个 <code>env.sh</code> 里 <code>source</code>。核心是把构建产物的 <code>bin</code>/<code>lib</code> 放进 <code>PATH</code>/<code>LD_LIBRARY_PATH</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 让 shell 找到你刚编出来的工具链
+export PATH=/path/to/llvm/build/bin:$PATH
+export LD_LIBRARY_PATH=/path/to/llvm/build/lib:$LD_LIBRARY_PATH
+# 再 source 一份提供 OpenCL/L0/TBB 等运行时路径的 env.sh
+source env.sh</code></pre>
+</div><div class="warn">
+<strong>构建目录和 <code>env.sh</code> 里的路径可能不一致——以实际构建位置为准</strong>
+一个常见的坑：<code>env.sh</code> 里写死的 <code>PATH</code>/<code>LD_LIBRARY_PATH</code> 指向的构建目录，可能<strong>不是</strong>你这次真正构建的目录（比如 <code>env.sh</code> 指向 <code>/iusers/.../llvm/build</code>，而你实际编在 <code>/localdisk2/.../llvm/build</code>）。<strong>先 <code>source env.sh</code>，再用 <code>export</code> 把这两个变量覆盖成你实际的构建路径</strong>——顺序反了就会跑到旧二进制。运行前 <code>which clang++</code> 确认一下指向的是你刚编的那个。
+</div><p>验证工具链能看到设备：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">sycl-ls        # 列出所有可用的 SYCL 设备（GPU/CPU/...）；空了说明运行时没配好</code></pre>
+</div><h2>4. 编译并运行一个 SYCL 程序</h2>
+<p>拿全书最小的例子验证整条链通了：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cat &gt; hello.cpp &lt;&lt;'EOF'
+#include &lt;sycl/sycl.hpp&gt;
+#include &lt;cstdio&gt;
+int main() {
+  sycl::queue q;
+  std::printf("Running on: %s\n",
+      q.get_device().get_info&lt;sycl::info::device::name&gt;().c_str());
+  int n = 8; sycl::buffer&lt;int,1&gt; buf(n);
+  q.submit([&amp;](sycl::handler&amp; h){
+    sycl::accessor a(buf, h, sycl::write_only);
+    h.parallel_for(sycl::range&lt;1&gt;(n), [=](sycl::id&lt;1&gt; i){ a[i] = i[0]*i[0]; });
+  });
+  sycl::host_accessor a(buf, sycl::read_only);
+  for (int i=0;i&lt;n;i++) std::printf("%d ", a[i]); std::printf("\n");
+}
+EOF
+
+clang++ -fsycl hello.cpp -o hello    # -fsycl 触发第 12 章那套两趟编译
+./hello</code></pre>
+</div><p>跑通了，说明你的工具链**编译期（<code>-fsycl</code>）+ 运行期（找到设备并执行）**两头都对了。想看中间产物，把正文各章的诊断标志加上（下节）。</p>
+<h2>5. 常用命令速查</h2>
+<p>把全书用到的&quot;看内部&quot;的命令汇总成一张表——它们是你验证正文每个论断的手术刀：</p>
+<table>
+<thead>
+<tr>
+<th>目的</th>
+<th>命令</th>
+<th>正文对应</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>只编设备端、出 LLVM IR</td>
+<td><code>clang++ -fsycl -fsycl-device-only -S -emit-llvm x.cpp -o -</code></td>
+<td>第 14、15、21、22 章</td>
+</tr>
+<tr>
+<td>看集成头文件</td>
+<td><code>clang++ -fsycl -fsycl-device-only ... -Xclang -fsycl-int-header=x.h</code></td>
+<td>第 14 章</td>
+</tr>
+<tr>
+<td>列出设备</td>
+<td><code>sycl-ls</code>（<code>sycl-ls --verbose</code> 更详细）</td>
+<td>第 16 章</td>
+</tr>
+<tr>
+<td>SPIR-V ↔ LLVM 互转</td>
+<td><code>llvm-spirv x.bc -o x.spv</code> / <code>llvm-spirv -r x.spv</code></td>
+<td>第 9 章</td>
+</tr>
+<tr>
+<td>反汇编 bitcode</td>
+<td><code>llvm-dis x.bc -o -</code></td>
+<td>第 4 章</td>
+</tr>
+<tr>
+<td>单跑一个 LLVM Pass</td>
+<td><code>opt -passes=&lt;pass&gt; x.ll -S -o -</code></td>
+<td>第 6、7 章</td>
+</tr>
+<tr>
+<td>追设备库链接决策</td>
+<td>在编译命令加 <code>-###</code>（打印实际子命令）</td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>运行时 UR 调用跟踪</td>
+<td><code>SYCL_UR_TRACE=1 ./prog</code></td>
+<td>第 18 章</td>
+</tr>
+<tr>
+<td>打开设备代码 sanitizer</td>
+<td><code>-fsanitize=address</code>（配 compiler-rt）</td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>跑 LIT 测试</td>
+<td><code>llvm-lit sycl/test/path/to/test.cpp</code></td>
+<td>第 24 章</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>三步走：configure.py → compile.py → 覆盖 PATH/LD_LIBRARY_PATH</strong>
+<strong>构建 DPC++ 不手写 CMake，走 <code>llvm/buildbot/</code> 的两个脚本：<code>configure.py</code>（<code>--build-type=Release --llvm-external-projects="clang-tools-extra;compiler-rt"</code>，只跑一次/改标志才重跑）→ <code>compile.py -j64</code>（默认 <code>deploy-sycl-toolchain</code>；<code>clang-format</code>/<code>clangd</code> 要单独 <code>-t</code>）。</strong>运行前 <code>source env.sh</code> 后用 <code>export</code> 把 <code>PATH</code>/<code>LD_LIBRARY_PATH</code> 覆盖成<strong>实际构建目录</strong>（<code>which clang++</code> 确认），再 <code>sycl-ls</code> 看到设备就绪。验证正文论断的手术刀是 <code>-fsycl-device-only -S -emit-llvm</code>（看 IR）、<code>llvm-spirv</code>（看 SPIR-V）、<code>SYCL_UR_TRACE=1</code>（看运行时调用）。
+</div><h2>常见问题排查</h2>
+<ul>
+<li><strong><code>sycl-ls</code> 什么都不列</strong>：运行时库没配好。检查 <code>LD_LIBRARY_PATH</code> 有没有 OpenCL/Level Zero loader；<code>OCL_ICD_FILENAMES</code> 指向的 <code>libigdrcl.so</code> 存不存在。</li>
+<li><strong><code>clang++</code> 找不到或跑的是系统的</strong>：<code>PATH</code> 里构建目录没排在前面，或被 <code>env.sh</code> 覆盖回旧路径。<code>which clang++</code> 确认。</li>
+<li><strong>链接期 <code>undefined reference</code> 到 SYCL 运行时</strong>：<code>LD_LIBRARY_PATH</code> 里的 <code>libsycl.so</code> 和你编 <code>clang++</code> 的构建不是同一个。保持 <code>bin</code> 和 <code>lib</code> 来自同一次构建。</li>
+<li><strong>构建 OOM/太慢</strong>：降 <code>-j</code>（链接阶段很吃内存），或配置时加 <code>--shared-libs</code> 让链接更轻。</li>
+<li><strong>改了源码没生效</strong>：确认重跑了 <code>compile.py</code>，且跑的是新 <code>bin/clang++</code>（时间戳/<code>which</code>）。</li>
+</ul>
+<h2>小结</h2>
+<ul>
+<li>intel/llvm 的 <code>sycl</code> 分支是全书源码锚点的家；构建走 <strong><code>llvm/buildbot/configure.py</code> + <code>compile.py</code></strong>，不手写 CMake。</li>
+<li>配置：<code>--build-type=Release --llvm-external-projects=&quot;clang-tools-extra;compiler-rt&quot;</code>，一次即可；构建：<code>compile.py -j64</code>（<code>clang-format</code>/<code>clangd</code> 另 <code>-t</code>）。</li>
+<li>运行：<code>source env.sh</code> 后 <strong><code>export</code> 覆盖 <code>PATH</code>/<code>LD_LIBRARY_PATH</code> 到实际构建目录</strong>，<code>sycl-ls</code> 验证设备，<code>clang++ -fsycl</code> 编 SYCL 程序。</li>
+<li>看内部的常用工具：<code>-fsycl-device-only -S -emit-llvm</code>、<code>llvm-spirv</code>、<code>opt</code>、<code>sycl-ls</code>、<code>SYCL_UR_TRACE=1</code>、<code>llvm-lit</code>——正文每章论断都能用它们复现。</li>
+<li>权威文档：<code>sycl/doc/GetStartedGuide.md</code>（构建/使用）、各子项目的 <code>CLAUDE.md</code>/README。这份附录只是&quot;够用就走&quot;的清单。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch24.html">← 第 24 章 从提案到落地：写扩展的完整流程与测试</a>
+  <a class="nav-next" href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

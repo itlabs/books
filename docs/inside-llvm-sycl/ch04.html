@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 Pass 框架（一）：新 PassManager 的设计</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li class="active"><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 4 章 Pass 框架（一）：新 PassManager 的设计</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章说过，中端优化是一次次「IR → 更好的 IR」的变换，每个变换叫一个 <strong>Pass</strong>。这一章我们打开 LLVM 组织这些 Pass 的框架——<strong>新 PassManager（new PM）</strong>。它有三个让老手都觉得优雅的设计：Pass <strong>不靠继承</strong>（没有 <code>Pass</code> 基类，任何有 <code>run()</code> 方法的类都能当 Pass）；分析结果由 <strong>AnalysisManager 按需计算、缓存、失效</strong>；Pass 用 <strong><code>PreservedAnalyses</code></strong> 精确声明「我动了什么、没动什么」，框架据此决定哪些缓存要作废。</p>
+<p>读完你能对着 <code>llvm/include/llvm/IR/PassManager.h</code> 把这套机制讲清楚：一个 Pass 到底要满足什么「契约」、四层 IR 单位（Module/CGSCC/Function/Loop）如何用适配器嵌套、分析缓存怎么失效。这是第 5 章「亲手写一个 Pass 并挂进 <code>opt</code>」的理论基础。</p>
+</div><h2>一个 Pass 长什么样：没有基类，只有「契约」</h2>
+<p>先破除一个来自教科书的直觉：在新 PM 里，<strong>没有一个叫 <code>Pass</code> 的基类要你去继承</strong>。<code>llvm/include/llvm/IR/PassManager.h</code> 开头就写着这句设计宣言（原话大意）：</p>
+<blockquote>
+<p>LLVM 里没有所谓「pass 接口」。任何一个类，只要它支持一个方法，能把自己「跑」在某个 IR 单位上，就能当一个 pass 用。</p>
+</blockquote>
+<p>这里的「某个方法」是一个固定签名的 <code>run</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 一个作用在 Function 上的 Pass 必须提供的方法——这就是全部契约
+PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;AM);</code></pre>
+</div><p>只要你的类有这么一个 <code>run</code>，它就是一个 Function Pass。作用在 Module 上就把 <code>Function</code>/<code>FunctionAnalysisManager</code> 换成 <code>Module</code>/<code>ModuleAnalysisManager</code>。<strong>没有虚函数、没有继承、没有注册宏是必需的</strong>——框架靠 C++ 模板做「基于概念的多态」（type erasure），把各种不同的 Pass 类型统一擦除成一个内部接口。这套擦除机制藏在 <code>llvm/include/llvm/IR/PassManagerInternal.h</code> 里的 <code>PassConcept</code> / <code>PassModel</code>，你平时写 Pass 完全不用碰它。</p>
+<p>那 Pass 之间的共性代码（比如打印名字）怎么办？用一个 <strong>CRTP 混入类</strong>，而不是基类：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// DCE（死代码消除）Pass 的真实声明
+//   —— llvm/include/llvm/Transforms/Scalar/DCE.h
+class DCEPass : public OptionalPassInfoMixin&lt;DCEPass&gt; {
+public:
+  PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;AM);
+};</code></pre>
+</div><p><code>OptionalPassInfoMixin&lt;DCEPass&gt;</code>（还有 <code>PassInfoMixin</code>、<code>RequiredPassInfoMixin</code>）只提供 <code>name()</code>、<code>printPipeline()</code> 这类样板，<strong>不提供 <code>run</code></strong>。<code>run</code> 完全由你自己写。<code>Required</code> 和 <code>Optional</code> 的区别只有一个：<code>-O0</code> 或 opt-bisect 调试时，<code>Optional</code> 的 Pass 可以被跳过，<code>Required</code> 的不能。</p>
+<div class="note">
+<strong>为什么不用继承？</strong>
+新 PM 的注释直接引用了 Sean Parent 的名言「继承是万恶之源（Inheritance Is The Base Class of Evil）」。用「有 <code>run</code> 方法就行」的鸭子类型 + 模板擦除，好处是 Pass 变成<strong>值语义</strong>的普通对象：能栈上创建、能拷贝进管线、能内联，没有虚表开销，也不必被单一继承层级绑死在某一个 IR 层级上。这是新旧 PM 最根本的分野。
+</div><h2>三个词就能概括：变换、分析、保留集</h2>
+<p>新 PM 的运转围绕三个概念。理解了它们的关系，整个框架就通了。</p>
+<ul>
+<li><strong>变换 Pass（transform）</strong>：真正改 IR 的家伙。DCE、内联、常量折叠都是。它的 <code>run</code> 返回一个 <code>PreservedAnalyses</code>。</li>
+<li><strong>分析 Pass（analysis）</strong>：不改 IR，只<strong>计算关于 IR 的情报</strong>并缓存起来，供变换 Pass 查询。比如支配树（Dominator Tree）、循环信息（LoopInfo）、别名分析。分析的结果由 <strong>AnalysisManager</strong> 管理。</li>
+<li><strong>保留集 <code>PreservedAnalyses</code>（PA）</strong>：变换 Pass 跑完后交回的一张「收据」，声明「哪些分析结果我没破坏、还能接着用；哪些我动了、请作废」。</li>
+</ul>
+<p>三者的协作是这样一个循环：变换 Pass 需要情报 → 找 AnalysisManager 要（要不到就现算并缓存）→ 变换 Pass 改 IR、返回 PA → 框架拿 PA 去让<strong>过时的</strong>分析缓存失效。下面逐个拆开。</p>
+<div class="concept">
+<svg viewBox="0 0 620 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="310" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">变换 · 分析 · 保留集：一次 run 的循环</text>
+  <!-- transform pass -->
+  <rect x="40" y="50" width="150" height="54" rx="8" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.5"/>
+  <text x="115" y="74" text-anchor="middle" font-size="13" font-weight="bold" fill="#a53f1c">变换 Pass</text>
+  <text x="115" y="92" text-anchor="middle" font-size="10" fill="#6b7280">改 IR（如 DCE）</text>
+  <!-- analysis manager -->
+  <rect x="235" y="40" width="150" height="74" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="1.5"/>
+  <text x="310" y="66" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f7a45">AnalysisManager</text>
+  <text x="310" y="84" text-anchor="middle" font-size="10" fill="#6b7280">按需计算 + 缓存</text>
+  <text x="310" y="100" text-anchor="middle" font-size="10" fill="#6b7280">分析结果</text>
+  <!-- cache -->
+  <rect x="430" y="50" width="150" height="54" rx="8" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.5"/>
+  <text x="505" y="72" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">缓存的分析结果</text>
+  <text x="505" y="90" text-anchor="middle" font-size="10" fill="#6b7280">DomTree / LoopInfo…</text>
+  <!-- arrows -->
+  <path d="M190 68 L233 68" stroke="#6b7280" stroke-width="1.4" marker-end="url(#p4)"/>
+  <text x="212" y="60" text-anchor="middle" font-size="9" fill="#6b7280">要情报</text>
+  <path d="M385 78 L428 78" stroke="#6b7280" stroke-width="1.4" marker-end="url(#p4)"/>
+  <text x="407" y="70" text-anchor="middle" font-size="9" fill="#6b7280">存/取</text>
+  <path d="M233 92 L192 92" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#p4g)"/>
+  <text x="212" y="106" text-anchor="middle" font-size="9" fill="#2f7a45">给结果</text>
+  <!-- PA feedback -->
+  <path d="M115 104 L115 175 L505 175 L505 106" stroke="#e06a3b" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#p4o)"/>
+  <rect x="210" y="160" width="200" height="30" rx="6" fill="#fff7ed" stroke="#f97316"/>
+  <text x="310" y="180" text-anchor="middle" font-size="11" fill="#a53f1c">返回 PreservedAnalyses（收据）</text>
+  <text x="310" y="220" text-anchor="middle" font-size="11" fill="#2d2a26">PA 说「我改了 CFG」→ 框架把依赖 CFG 的缓存作废，其余保留</text>
+  <text x="310" y="242" text-anchor="middle" font-size="10" fill="#6b7280">没被破坏的分析不必重算，这是新 PM 快的关键</text>
+  <defs>
+    <marker id="p4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="p4g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="p4o" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f97316"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 4-1　变换 Pass 向 AnalysisManager 索取情报（拿不到就现算并缓存），改完 IR 后返回一张 <code>PreservedAnalyses</code> 收据；框架据此只作废被破坏的缓存，保留其余。「按需计算 + 精确失效」是新 PM 相对旧 PM 最大的性能优势</div>
+</div><h2>PassManager：一串 Pass，本身也是一个 Pass</h2>
+<p><code>PassManager</code> 就是「按顺序装一串 Pass 并挨个跑」的容器。它是个模板，按作用的 IR 单位实例化（<code>PassManager.h</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">template &lt;typename IRUnitT,
+          typename AnalysisManagerT = AnalysisManager&lt;IRUnitT&gt;,
+          typename... ExtraArgTs&gt;
+class PassManager : public RequiredPassInfoMixin&lt;PassManager&lt;...&gt;&gt; {
+  PreservedAnalyses run(IRUnitT &amp;IR, AnalysisManagerT &amp;AM, ExtraArgTs...);
+  template &lt;typename PassT&gt; void addPass(PassT &amp;&amp;Pass);
+  std::vector&lt;std::unique_ptr&lt;PassConceptT&gt;&gt; Passes;   // 有序的 Pass 列表
+};
+
+using ModulePassManager   = PassManager&lt;Module&gt;;    // 常用别名
+using FunctionPassManager = PassManager&lt;Function&gt;;</code></pre>
+</div><p>注意它自己也继承了 <code>RequiredPassInfoMixin</code>——换句话说，<strong>PassManager 本身就是一个合法的 Pass</strong>。这不是巧合，而是刻意的：正因为「一串 Function Pass 打包起来还是个 Function Pass」，我们才能把它整个塞进更上层的容器里嵌套（下一节的适配器就靠这个）。</p>
+<p>它的 <code>run()</code> 循环是整套机制的心脏，实现在 <code>llvm/include/llvm/IR/PassManagerImpl.h</code>。剥掉仪表化（instrumentation）代码后，逻辑是这样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// PassManager::run 的核心逻辑（简化）
+PreservedAnalyses PA = PreservedAnalyses::all();   // 先乐观假设"什么都没坏"
+for (auto &amp;Pass : Passes) {
+    PreservedAnalyses PassPA = Pass-&gt;run(IR, AM);  // 跑这个 Pass，拿到它的收据
+    AM.invalidate(IR, PassPA);                     // 立刻按收据作废过时缓存
+    PA.intersect(std::move(PassPA));               // 汇总：取所有收据的"交集"
+}
+return PA;</code></pre>
+</div><p>三个细节值得记住：</p>
+<ol>
+<li><strong>起点是 <code>PreservedAnalyses::all()</code></strong>——乐观假设没有任何分析被破坏，让后续的 Pass 去「打破」它。</li>
+<li><strong>失效是逐个 Pass 立刻做的</strong>（<code>AM.invalidate</code> 在循环内）。这样下一个 Pass 看到的缓存已经是干净的。</li>
+<li><strong>汇总用 <code>intersect</code>（交集）</strong>——只有<strong>所有</strong> Pass 都保留的分析，整个 PassManager 才算保留。任何一个 Pass 破坏了某分析，对外就得算破坏。</li>
+</ol>
+<h2>PreservedAnalyses：那张收据怎么写</h2>
+<p><code>PreservedAnalyses</code>（定义在 <code>llvm/include/llvm/IR/Analysis.h</code>）是变换 Pass 和框架之间的合同。它有几种典型写法：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 情况一：我压根没改 IR（比如分析发现无事可做）
+return PreservedAnalyses::all();     // 一切照旧，所有缓存继续有效
+
+// 情况二：我大改了 IR，谁也别信了
+return PreservedAnalyses::none();    // 全部作废，后续要用的分析统统重算
+
+// 情况三（最常见）：我改了指令，但没动控制流图的形状
+PreservedAnalyses PA;
+PA.preserveSet&lt;CFGAnalyses&gt;();       // 声明"CFG 类的分析我没破坏"
+return PA;</code></pre>
+</div><p>第三种是精髓。像 DCE 这样的 Pass 只删除无用指令、不改变基本块之间的跳转关系，所以它可以诚实地说「CFG 我没动」，那些建立在 CFG 之上的分析（支配树等）就<strong>不必重算</strong>。看 DCE 的真实实现（<code>llvm/lib/Transforms/Scalar/DCE.cpp</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">PreservedAnalyses DCEPass::run(Function &amp;F, FunctionAnalysisManager &amp;AM) {
+  if (!eliminateDeadCode(F, &amp;AM.getResult&lt;TargetLibraryAnalysis&gt;(F)))
+    return PreservedAnalyses::all();   // 没删掉任何东西 → 什么都没坏
+  PreservedAnalyses PA;
+  PA.preserveSet&lt;CFGAnalyses&gt;();       // 删了死代码，但 CFG 形状不变
+  return PA;
+}</code></pre>
+</div><p>短短几行，把这一章的要点全演示了：<code>OptionalPassInfoMixin</code>、固定签名的 <code>run</code>、用 <code>AM.getResult&lt;...&gt;(F)</code> 向 AnalysisManager 要情报、返回一张诚实的 <code>PreservedAnalyses</code>。第 5 章你写的第一个 Pass 就长这样。</p>
+<div class="warn">
+<strong>收据写错了会怎样？</strong>
+<code>PreservedAnalyses</code> 是<strong>你对框架的承诺</strong>，框架完全相信它、不会去核对。如果你的 Pass 明明改了控制流，却返回 <code>preserveSet&lt;CFGAnalyses&gt;()</code>，框架就不会作废支配树缓存，后续 Pass 会拿着一棵<strong>过时的、和当前 IR 不符的</strong>支配树去做变换——这类 bug 极其隐蔽，往往表现为「某个优化组合下偶发崩溃或生成错误代码」。写 Pass 时，返回的保留集必须<strong>严格不超过</strong>你真正保留的东西；拿不准就返回 <code>none()</code>，慢一点但绝不会错。
+</div><h2>AnalysisManager：按需计算、缓存、失效</h2>
+<p>分析结果由 <code>AnalysisManager&lt;IRUnitT&gt;</code> 掌管（<code>PassManager.h</code>）。它对变换 Pass 暴露两个主要方法：</p>
+<ul>
+<li><code>getResult&lt;AnalysisT&gt;(IR)</code>：要某个分析的结果。<strong>没缓存就现算一遍</strong>（惰性），算完存下来再返回。</li>
+<li><code>getCachedResult&lt;AnalysisT&gt;(IR)</code>：只查缓存，<strong>从不触发计算</strong>，没有就返回空指针。</li>
+</ul>
+<p>缓存怎么存的？每种分析类型有一个全局唯一的 <code>AnalysisKey*</code> 作为身份（来自 <code>AnalysisInfoMixin::ID()</code>，返回 <code>&amp;DerivedT::Key</code>）。AnalysisManager 内部用两张表：<code>AnalysisResultLists</code> 把「IR 单位指针」映射到该单位上所有分析结果的链表，<code>AnalysisResults</code> 把「(分析 Key, IR 单位) 对」映射到链表里的具体位置。惰性计算的实现（<code>getResultImpl</code>）很直白：缓存未命中，就找到注册的分析 Pass、调它的 <code>run</code> 算出结果、存进表、返回。</p>
+<p>失效（<code>invalidate</code>）就是把 <code>PreservedAnalyses</code> 兑现的地方。它的逻辑：</p>
+<ol>
+<li>如果收据说「和本层所有分析相关的都保留了」（<code>allAnalysesInSetPreserved</code>），直接返回，一个都不动——<strong>最快路径</strong>。</li>
+<li>否则遍历本单位上每个缓存的分析结果，问它「按这张收据，你还有效吗？」（<code>Result.invalidate(IR, PA, Inv)</code>），失效的就删掉。</li>
+</ol>
+<p>第 2 步里那个「问它还有效吗」很关键：<strong>是每个分析结果自己判断</strong>的，而不是框架硬删。因为分析之间会互相依赖（比如 A 分析内部持有 B 分析的结果），框架提供一个 <code>Invalidator</code> 做深度优先的传递失效——B 失效了，依赖 B 的 A 也跟着失效。这套精细的失效，正是新 PM 能安全地「只重算该重算的」的底气。</p>
+<h2>四层 IR 单位与「适配器」</h2>
+<p>第 2 章讲过 IR 的层级：Module ⊃ Function ⊃ BasicBlock。优化也按层级组织，新 PM 有<strong>四种</strong> IR 单位，各有自己的 PassManager 和 AnalysisManager：</p>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>PassManager 别名</th>
+<th>作用对象</th>
+<th>典型优化</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Module</strong></td>
+<td><code>ModulePassManager</code></td>
+<td>整个模块</td>
+<td>全局优化、跨函数决策</td>
+</tr>
+<tr>
+<td><strong>CGSCC</strong></td>
+<td><code>CGSCCPassManager</code></td>
+<td>调用图的强连通分量</td>
+<td><strong>函数内联</strong></td>
+</tr>
+<tr>
+<td><strong>Function</strong></td>
+<td><code>FunctionPassManager</code></td>
+<td>单个函数</td>
+<td>InstCombine、GVN、DCE</td>
+</tr>
+<tr>
+<td><strong>Loop</strong></td>
+<td><code>LoopPassManager</code></td>
+<td>单个循环</td>
+<td>循环不变量外提、展开</td>
+</tr>
+</tbody></table>
+<p>（CGSCC = Call Graph Strongly Connected Component，调用图强连通分量，是做内联这类过程间优化的天然单位——一组互相递归调用的函数会落在同一个 SCC 里。）</p>
+<p>问题来了：一个 <code>FunctionPass</code> 只会处理「一个函数」，但优化的入口是整个 <code>Module</code>。怎么让一个 Module 级的管线去驱动一个 Function Pass 跑遍每个函数？答案是<strong>适配器（adaptor）</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 把一个 Function Pass 包装成一个 Module Pass：
+//   它会遍历 Module 里每个 Function，各跑一遍内层的 Function Pass
+ModulePassManager MPM;
+MPM.addPass(createModuleToFunctionPassAdaptor(DCEPass()));
+//          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  适配器：Module → Function</code></pre>
+</div><p><code>createModuleToFunctionPassAdaptor</code>（<code>PassManager.h</code>）返回的 <code>ModuleToFunctionPassAdaptor</code> 本身是个合法的 Module Pass（又是「PassManager/Adaptor 也是 Pass」的好处），它的 <code>run(Module&amp;, ...)</code> 内部就是一个 for 循环，对模块里每个函数调用内层 Function Pass 的 <code>run</code>。同族的适配器还有：</p>
+<ul>
+<li><code>createModuleToPostOrderCGSCCPassAdaptor</code> —— Module → CGSCC。</li>
+<li><code>createCGSCCToFunctionPassAdaptor</code> —— CGSCC → Function。</li>
+<li><code>createFunctionToLoopPassAdaptor</code> —— Function → Loop。</li>
+</ul>
+<p>一层层套起来，就构成了真实优化管线的嵌套结构，比如 <code>module(cgscc(inline, function(instcombine, loop(licm))))</code>。第 6 章会看到 <code>PassBuilder</code> 正是这样用适配器把 O2 管线搭出来的。</p>
+<div class="keypoint">
+<strong>适配器让「层级」和「Pass 复用」两不误</strong>
+因为「PassManager 和 Adaptor 本身都是 Pass」，四个层级能像积木一样任意嵌套：一个 Function Pass 写一次，既能被 Module 管线通过适配器驱动、也能嵌在 CGSCC 内联管线里复用。<strong>你写 Pass 时只需关心「我作用在哪一层」，跨层的驱动交给适配器</strong>——这正是新 PM 用组合（composition）取代继承（inheritance）换来的灵活性。
+</div><h2>动手：一个新 PM 的极简模拟器</h2>
+<p>把上面的机制浓缩成一个能在浏览器里跑的小模型：一个 <code>AnalysisManager</code> 负责惰性计算 + 缓存 + 按 <code>PreservedAnalyses</code> 失效；两个变换 Pass，一个诚实保留 CFG、一个大改一切。点 <strong>▶ 运行</strong>，看缓存何时命中、何时被作废重算。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%E6%9E%81%E7%AE%80%E7%9A%84%22%E6%96%B0%20PassManager%22%E6%A8%A1%E5%9E%8B%EF%BC%9A%E6%83%B0%E6%80%A7%E5%88%86%E6%9E%90%E7%BC%93%E5%AD%98%20%2B%20%E6%8C%89%E4%BF%9D%E7%95%99%E9%9B%86%E5%A4%B1%E6%95%88%0A%0Aclass%20AnalysisManager%3A%0A%20%20%20%20def%20__init__(self)%3A%0A%20%20%20%20%20%20%20%20self.cache%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%23%20%E5%88%86%E6%9E%90%E5%90%8D%20-%3E%20%E7%BB%93%E6%9E%9C%0A%20%20%20%20%20%20%20%20self.compute_count%20%3D%20%7B%7D%20%20%23%20%E7%BB%9F%E8%AE%A1%E6%AF%8F%E4%B8%AA%E5%88%86%E6%9E%90%E8%A2%AB%22%E7%8E%B0%E7%AE%97%22%E4%BA%86%E5%87%A0%E6%AC%A1%0A%0A%20%20%20%20def%20get_result(self%2C%20name)%3A%0A%20%20%20%20%20%20%20%20%23%20%E6%83%B0%E6%80%A7%EF%BC%9A%E7%BC%93%E5%AD%98%E6%B2%A1%E6%9C%89%E6%89%8D%E7%8E%B0%E7%AE%97%EF%BC%88%E5%AF%B9%E5%BA%94%20getResult%20%E7%9A%84%20cache-miss%20%E5%88%86%E6%94%AF%EF%BC%89%0A%20%20%20%20%20%20%20%20if%20name%20not%20in%20self.cache%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20self.compute_count%5Bname%5D%20%3D%20self.compute_count.get(name%2C%200)%20%2B%201%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5B%E7%8E%B0%E7%AE%97%5D%20%7Bname%7D%EF%BC%88%E7%BC%93%E5%AD%98%E6%9C%AA%E5%91%BD%E4%B8%AD%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20self.cache%5Bname%5D%20%3D%20f%22%7Bname%7D-result%22%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5B%E5%91%BD%E4%B8%AD%5D%20%7Bname%7D%EF%BC%88%E7%94%A8%E7%BC%93%E5%AD%98%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20return%20self.cache%5Bname%5D%0A%0A%20%20%20%20def%20invalidate(self%2C%20preserved)%3A%0A%20%20%20%20%20%20%20%20%23%20preserved%20%E6%98%AF%22%E4%BF%9D%E7%95%99%E9%9B%86%22%EF%BC%9A%E4%B8%8D%E5%9C%A8%E9%87%8C%E9%9D%A2%E7%9A%84%E5%88%86%E6%9E%90%E7%BB%9F%E7%BB%9F%E4%BD%9C%E5%BA%9F%0A%20%20%20%20%20%20%20%20if%20preserved%20%3D%3D%20%22all%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%0A%20%20%20%20%20%20%20%20for%20name%20in%20list(self.cache)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20name%20not%20in%20preserved%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5B%E5%A4%B1%E6%95%88%5D%20%7Bname%7D%EF%BC%88%E4%B8%8D%E5%9C%A8%E4%BF%9D%E7%95%99%E9%9B%86%E9%87%8C%EF%BC%8C%E5%88%A0%E9%99%A4%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20del%20self.cache%5Bname%5D%0A%0Adef%20instcombine(am)%3A%0A%20%20%20%20%23%20%E5%8F%98%E6%8D%A2%20Pass%EF%BC%9A%E6%9F%A5%E8%AF%A2%E6%94%AF%E9%85%8D%E6%A0%91%E5%81%9A%E4%BC%98%E5%8C%96%EF%BC%8C%E6%94%B9%E4%BA%86%E6%8C%87%E4%BB%A4%E4%BD%86%E6%B2%A1%E5%8A%A8%20CFG%0A%20%20%20%20print(%22%20%20%E8%BF%90%E8%A1%8C%20InstCombine%EF%BC%9A%22)%0A%20%20%20%20am.get_result(%22DominatorTree%22)%0A%20%20%20%20return%20%7B%22DominatorTree%22%2C%20%22LoopInfo%22%7D%20%20%20%23%20%E6%94%B6%E6%8D%AE%EF%BC%9ACFG%20%E7%9B%B8%E5%85%B3%E7%9A%84%E9%83%BD%E4%BF%9D%E7%95%99%0A%0Adef%20dce(am)%3A%0A%20%20%20%20print(%22%20%20%E8%BF%90%E8%A1%8C%20DCE%EF%BC%9A%22)%0A%20%20%20%20am.get_result(%22DominatorTree%22)%0A%20%20%20%20return%20%7B%22DominatorTree%22%2C%20%22LoopInfo%22%7D%20%20%20%23%20%E5%90%8C%E6%A0%B7%E4%BF%9D%E7%95%99%20CFG%0A%0Adef%20simplifycfg(am)%3A%0A%20%20%20%20%23%20%E5%8F%98%E6%8D%A2%20Pass%EF%BC%9A%E5%90%88%E5%B9%B6%2F%E5%88%A0%E9%99%A4%E5%9F%BA%E6%9C%AC%E5%9D%97%EF%BC%8CCFG%20%E5%8F%98%E4%BA%86%EF%BC%81%0A%20%20%20%20print(%22%20%20%E8%BF%90%E8%A1%8C%20SimplifyCFG%EF%BC%9A%22)%0A%20%20%20%20am.get_result(%22DominatorTree%22)%0A%20%20%20%20return%20%22none%22%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%94%B6%E6%8D%AE%EF%BC%9A%E5%85%A8%E4%BD%9C%E5%BA%9F%0A%0Aam%20%3D%20AnalysisManager()%0Apipeline%20%3D%20%5B(%22InstCombine%22%2C%20instcombine)%2C%20(%22DCE%22%2C%20dce)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20(%22SimplifyCFG%22%2C%20simplifycfg)%2C%20(%22InstCombine%22%2C%20instcombine)%5D%0A%0Afor%20i%2C%20(name%2C%20fn)%20in%20enumerate(pipeline%2C%201)%3A%0A%20%20%20%20print(f%22%5B%7Bi%7D%5D%20%7Bname%7D%22)%0A%20%20%20%20preserved%20%3D%20fn(am)%0A%20%20%20%20am.invalidate(preserved)%0A%0Aprint(%22%5Cn%E5%90%84%E5%88%86%E6%9E%90%E8%A2%AB%E7%8E%B0%E7%AE%97%E7%9A%84%E6%AC%A1%E6%95%B0%EF%BC%9A%22%2C%20am.compute_count)"># 一个极简的"新 PassManager"模型：惰性分析缓存 + 按保留集失效
+
+class AnalysisManager:
+    def __init__(self):
+        self.cache = {}          # 分析名 -&gt; 结果
+        self.compute_count = {}  # 统计每个分析被"现算"了几次
+
+    def get_result(self, name):
+        # 惰性：缓存没有才现算（对应 getResult 的 cache-miss 分支）
+        if name not in self.cache:
+            self.compute_count[name] = self.compute_count.get(name, 0) + 1
+            print(f"    [现算] {name}（缓存未命中）")
+            self.cache[name] = f"{name}-result"
+        else:
+            print(f"    [命中] {name}（用缓存）")
+        return self.cache[name]
+
+    def invalidate(self, preserved):
+        # preserved 是"保留集"：不在里面的分析统统作废
+        if preserved == "all":
+            return
+        for name in list(self.cache):
+            if name not in preserved:
+                print(f"    [失效] {name}（不在保留集里，删除）")
+                del self.cache[name]
+
+def instcombine(am):
+    # 变换 Pass：查询支配树做优化，改了指令但没动 CFG
+    print("  运行 InstCombine：")
+    am.get_result("DominatorTree")
+    return {"DominatorTree", "LoopInfo"}   # 收据：CFG 相关的都保留
+
+def dce(am):
+    print("  运行 DCE：")
+    am.get_result("DominatorTree")
+    return {"DominatorTree", "LoopInfo"}   # 同样保留 CFG
+
+def simplifycfg(am):
+    # 变换 Pass：合并/删除基本块，CFG 变了！
+    print("  运行 SimplifyCFG：")
+    am.get_result("DominatorTree")
+    return "none"                          # 收据：全作废
+
+am = AnalysisManager()
+pipeline = [("InstCombine", instcombine), ("DCE", dce),
+            ("SimplifyCFG", simplifycfg), ("InstCombine", instcombine)]
+
+for i, (name, fn) in enumerate(pipeline, 1):
+    print(f"[{i}] {name}")
+    preserved = fn(am)
+    am.invalidate(preserved)
+
+print("\n各分析被现算的次数：", am.compute_count)</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[1] InstCombine
+  运行 InstCombine：
+    [现算] DominatorTree（缓存未命中）
+[2] DCE
+  运行 DCE：
+    [命中] DominatorTree（用缓存）
+[3] SimplifyCFG
+  运行 SimplifyCFG：
+    [命中] DominatorTree（用缓存）
+    [失效] DominatorTree（不在保留集里，删除）
+[4] InstCombine
+  运行 InstCombine：
+    [现算] DominatorTree（缓存未命中）
+
+各分析被现算的次数： {'DominatorTree': 2}</code></pre>
+</div><p>看清楚这条时间线：<code>DominatorTree</code> 第 1 步现算一次，第 2、3 步都命中缓存<strong>不重算</strong>——因为 InstCombine 和 DCE 都诚实地保留了 CFG；直到第 3 步 SimplifyCFG 返回 <code>none()</code> 把它作废，第 4 步才不得不重算。整份管线里支配树只算了 <strong>2 次</strong>而不是 4 次。请动手改：把 <code>simplifycfg</code> 的收据从 <code>&quot;none&quot;</code> 改成 <code>{&quot;DominatorTree&quot;, &quot;LoopInfo&quot;}</code>（谎称保留了 CFG），你会看到第 4 步变成缓存命中、<code>DominatorTree</code> 只算 1 次——<strong>但这在真实编译器里就是那个隐蔽 bug</strong>：后续 Pass 拿到的是一棵和已被改动的 CFG 不符的支配树。这就是上面「收据写错了会怎样」那段的可运行版。</p>
+<h2>小结与下一步</h2>
+<p>你现在理解了新 PassManager 的设计哲学：</p>
+<ul>
+<li>Pass <strong>没有基类</strong>，只有一个「有 <code>PreservedAnalyses run(IRUnit&amp;, AnalysisManager&amp;)</code> 方法」的契约；共性代码靠 <code>PassInfoMixin</code> 这类 <strong>CRTP 混入</strong>提供，框架用模板做类型擦除。用组合与值语义取代继承。</li>
+<li>三个核心概念：<strong>变换 Pass</strong>（改 IR）、<strong>分析 Pass</strong>（算情报、由 AnalysisManager 缓存）、<strong><code>PreservedAnalyses</code></strong>（变换跑完交回的收据，声明保留了什么）。</li>
+<li><code>PassManager::run</code> 从 <code>PreservedAnalyses::all()</code> 出发，逐个 Pass 跑、逐个立即 <code>invalidate</code>、用 <code>intersect</code> 汇总。</li>
+<li><code>AnalysisManager</code> <strong>惰性计算 + 缓存 + 精确失效</strong>（每个分析自己判断是否还有效，依赖靠 <code>Invalidator</code> 传递）——这是新 PM 比旧 PM 快的根源。</li>
+<li>四层 IR 单位（Module / CGSCC / Function / Loop）用<strong>适配器</strong>（<code>createModuleToFunctionPassAdaptor</code> 等）任意嵌套，因为「PassManager / Adaptor 本身也是 Pass」。</li>
+</ul>
+<p>下一章我们从「读框架」转到「用框架」：亲手写一个 Function Pass，编译成一个<strong>插件</strong>（<code>llvmGetPassPluginInfo</code> + <code>registerPipelineParsingCallback</code>），用 <code>opt -load-pass-plugin=... -passes=你的pass</code> 挂进管线跑起来——把这一章的每个抽象概念落到能编译、能运行的代码上。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>新 PM 里 Pass <strong>无基类</strong>：任何有 <code>PreservedAnalyses run(IRUnitT&amp;, AnalysisManager&lt;IRUnitT&gt;&amp;)</code> 的类都是 Pass；<code>PassInfoMixin</code> / <code>RequiredPassInfoMixin</code> / <code>OptionalPassInfoMixin</code> 只是 CRTP 混入的样板。核心头文件 <code>llvm/include/llvm/IR/PassManager.h</code>。</li>
+<li><strong><code>PreservedAnalyses</code></strong> 是变换 Pass 交回的收据：<code>all()</code>（啥都没坏）/ <code>none()</code>（全作废）/ <code>preserveSet&lt;CFGAnalyses&gt;()</code>（保留某类）。它是承诺，框架不核对，写错会导致隐蔽 bug。</li>
+<li><strong><code>AnalysisManager</code></strong> 惰性算分析（<code>getResult</code> 未命中即计算）、按 <code>AnalysisKey</code> 缓存、按收据精确失效（<code>invalidate</code>，含依赖传递）。</li>
+<li><code>PassManager::run</code> 逐 Pass 跑 → 立即 <code>invalidate</code> → <code>intersect</code> 汇总；起点是 <code>all()</code>。</li>
+<li>四层单位 <strong>Module / CGSCC / Function / Loop</strong>，靠 <code>createXToYPassAdaptor</code> 适配器嵌套；<code>ModuleToFunctionPassAdaptor</code> 等本身都是 Pass。</li>
+<li>最小真实范例：<code>DCEPass</code>（<code>llvm/lib/Transforms/Scalar/DCE.cpp</code>），一屏代码演示了全部要点。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch03.html">← 第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a>
+  <a class="nav-next" href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
