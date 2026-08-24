@@ -103,6 +103,7 @@ int warpId = threadIdx.x / 32;   // 我属于 block 里的第几个 warp</code><
 <p>warp 遇到 <code>if</code> 分歧时，硬件先用&quot;满足条件的 lane&quot;这套掩码跑 if 分支，再用&quot;取反的掩码&quot;跑 else 分支——两趟，串行。掩码就是&quot;关灯/开灯&quot;的物理实现。第 8 章你会看到，很多 warp 级原语（如 <code>__ballot_sync</code> 返回的正是一个投票掩码）直接把这个 mask 交到你手里用。</p>
 <h2>换到 SYCL：sub-group</h2>
 <p>warp 是 NVIDIA 的叫法，也写死了 32 这个数。可移植的 <strong>SYCL/OpenCL</strong> 里，同一个概念叫 <strong>sub-group（子组）</strong>，而且<strong>它的大小不保证是 32</strong>：在 NVIDIA 卡上通常是 32，在某些 AMD 卡上是 64，在 Intel GPU 上可能是 8/16/32。所以在 SYCL 里，你<strong>不能把 32 写死</strong>，必须在运行时查询。</p>
+<p>为什么偏偏 Intel 这边是三个值？因为在 Xe 架构上<strong>执行宽度是指令里的一个字段</strong>，编译器会按寄存器压力替你在 8/16/32 里挑一个——第 2 章最后一节《一个反转：Intel GPU 的 SIMT，底下是明写的 SIMD》把这个权衡拆开讲过。这也意味着：同一份 kernel 换台机器、甚至只是改改寄存器用量，宽度就可能变——<strong>查询，或者用 <code>reqd_sub_group_size</code> 钉死</strong>。</p>
 <div class="compare">
 <div class="known">
 <div class="compare-head">CUDA：warp 与 lane（32 写死）</div><div class="code-block">
