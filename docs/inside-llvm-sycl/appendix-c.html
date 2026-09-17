@@ -36,6 +36,9 @@
 <li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
 <li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
 <li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="ch25.html">第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</a></li>
+<li><a href="ch26.html">第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</a></li>
+<li><a href="ch27.html">第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</a></li>
 <li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
 <li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
 <li class="active"><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
@@ -331,6 +334,110 @@
 <td>第 23 章</td>
 </tr>
 </tbody></table>
+<h2>ClangIR（第五部分）</h2>
+<div class="warn">
+<strong>这一节换了代码库</strong>
+上面所有路径都相对 <code>intel/llvm</code>。下面这一节的路径相对<strong>上游 <code>llvm/llvm-project</code></strong>（孵化器是 <code>llvm/clangir</code>）——ClangIR 是正在上游进行中的工作，<code>intel/llvm</code> 里未必有对应内容，也未必同步。
+</div><p>CIR 的家在 <code>clang/</code> 下一个独立的 <code>CIR/</code> 子树，和经典 CodeGen 平级共存：</p>
+<table>
+<thead>
+<tr>
+<th>想看什么</th>
+<th>去哪</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>AST → <code>cir</code> 方言（对应经典 <code>clang/lib/CodeGen/CG*.cpp</code>）</td>
+<td><code>clang/lib/CIR/CodeGen/CIRGen*.cpp</code></td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td>方言本身的定义 + 模块级属性名（<code>cir.offload.kind</code> 等）</td>
+<td><code>clang/include/clang/CIR/Dialect/IR/CIRDialect.td</code></td>
+<td>第 25、27 章</td>
+</tr>
+<tr>
+<td>所有 <code>cir.*</code> 操作的 TableGen 定义</td>
+<td><code>.../CIR/Dialect/IR/CIROps.td</code></td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td>所有 <code>!cir.*</code> 类型（<code>!cir.struct</code> / <code>!cir.vptr</code> / <code>!cir.method</code>……）</td>
+<td><code>.../CIR/Dialect/IR/CIRTypes.td</code></td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td>属性（含 <code>lang_address_space</code> / <code>target_address_space</code>）</td>
+<td><code>.../CIR/Dialect/IR/CIRAttrs.td</code></td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td>CUDA/HIP 专用属性（<code>cu.kernel_name</code> / <code>cu.var_registration</code>……）</td>
+<td><code>.../CIR/Dialect/IR/CIRCUDAAttrs.td</code>（<strong>独立文件，不在 <code>CIRAttrs.td</code> 里</strong>）</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td>OpenCL 专用属性</td>
+<td><code>.../CIR/Dialect/IR/CIROpenCLAttrs.td</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>12 个 CIR pass 的实现（一个 pass 一个文件）</td>
+<td><code>clang/lib/CIR/Dialect/Transforms/</code>（<code>FlattenCFG.cpp</code> <code>CXXABILowering.cpp</code> <code>TargetLowering.cpp</code> <code>EHABILowering.cpp</code> <code>LoweringPrepare.cpp</code>……）</td>
+<td>第 26、27 章</td>
+</tr>
+<tr>
+<td>pass 管线怎么装配、顺序契约写在哪</td>
+<td><code>clang/lib/CIR/Lowering/CIRPasses.cpp</code>（<code>runCIRToCIRPasses</code> / <code>populateCIRPreLoweringPasses</code>）</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><code>cir</code> 方言 → MLIR 的 LLVM 方言</td>
+<td><code>clang/lib/CIR/Lowering/DirectToLLVM/</code></td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td>CIR 上的数据流分析</td>
+<td><code>clang/lib/CIR/Dialect/Analysis/</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>cir-opt</code> / <code>cir-translate</code> / <code>cir-lsp-server</code></td>
+<td><code>clang/tools/cir-opt/</code> <code>cir-translate/</code> <code>cir-lsp-server/</code></td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td>测试总入口（按领域分子目录）</td>
+<td><code>clang/test/CIR/</code></td>
+<td>第 25–27 章</td>
+</tr>
+<tr>
+<td>C/C++ 发射测试（含 <code>OGCG</code> 前缀的三条 RUN 线）</td>
+<td><code>clang/test/CIR/CodeGen/</code> <code>CodeGenCXX/</code></td>
+<td>第 25、26 章</td>
+</tr>
+<tr>
+<td>pass 测试（手写 <code>.cir</code> + <code>cir-opt</code>）</td>
+<td><code>clang/test/CIR/Transforms/</code>（如 <code>if.cir</code>）</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td>CUDA / HIP offloading 测试</td>
+<td><code>clang/test/CIR/CodeGenCUDA/</code> <code>CodeGenHIP/</code></td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td>SYCL 在 CIR 上的起步</td>
+<td><code>clang/lib/CIR/CodeGen/CIRGenSYCL.cpp</code>、<code>clang/test/CIR/CodeGenSYCL/</code></td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><code>ThroughMLIR</code>（先降到 <code>scf</code>/<code>memref</code> 再往下）——<strong>只在孵化器里</strong></td>
+<td><code>llvm/clangir</code> 仓库的 <code>clang/lib/CIR/Lowering/ThroughMLIR/</code></td>
+<td>第 25 章</td>
+</tr>
+</tbody></table>
 <h2>一个实用工作流：从&quot;现象&quot;倒查到&quot;源码&quot;</h2>
 <p>合上书真动手时，最常见的不是&quot;我知道去哪个文件&quot;，而是&quot;我看到某个行为/字符串，想找它从哪来&quot;。推荐的倒查流程：</p>
 <div class="code-block">
@@ -348,15 +455,22 @@ grep -n 'SYCL_EXT_ONEAPI_XXX' sycl/source/feature_test.hpp.in
 grep -rl 'feature_you_want' sycl/test/ sycl/test-e2e/
 
 # 5. 想找一个 clang 属性的全链（定义→检查→codegen）
-grep -rn 'SYCLReqdWorkGroupSize' clang/include clang/lib</code></pre>
+grep -rn 'SYCLReqdWorkGroupSize' clang/include clang/lib
+
+# 6.（ClangIR，在 llvm-project 树里）想知道一个 cir 操作/类型/属性在哪定义
+grep -rn 'cir.vtable.address_point' clang/include/clang/CIR/
+
+# 7. 想知道某个 C++/CUDA 特性 CIR 支持到什么程度——去数测试
+ls clang/test/CIR/CodeGenCXX/ clang/test/CIR/CodeGenCUDA/
+grep -rl 'OGCG' clang/test/CIR/ | wc -l    # 有多少测试在和经典路径逐行对齐</code></pre>
 </div><div class="keypoint">
 <strong>定位三问：哪一层？哪个顶层目录？哪个文件？</strong>
 <strong>找任何功能先答三个问题：① 它属于哪一层（附录 B 的 LLVM/SYCL/SPIR-V/UR 四层坐标系）；② 对应哪个顶层目录（编译器→<code>clang/</code>，运行时→<code>sycl/source/</code>，设备库→<code>libdevice/</code>/<code>libclc/</code>，翻译→<code>llvm-spirv/</code>，适配→<code>unified-runtime/</code>）；③ 具体文件（查本附录的功能索引表）。</strong>找不准就用"倒查工作流"——从你看到的字符串/符号 <code>grep -rn</code> 反向定位，比记路径更可靠。行号一定以你手上的树为准，先搜再引。
 </div><h2>小结</h2>
 <ul>
-<li>本附录把全书源码锚点倒过来组织成地图：<strong>顶层目录总览 + 按功能索引（clang / sycl / 设备库+SPIR-V / UR）</strong>。</li>
+<li>本附录把全书源码锚点倒过来组织成地图：<strong>顶层目录总览 + 按功能索引（clang / sycl / 设备库+SPIR-V / UR / ClangIR）</strong>。注意最后一节的锚点是上游 <code>llvm/llvm-project</code>，不是 <code>intel/llvm</code>。</li>
 <li>找功能的顺序：先定层（附录 B 四层）→ 定顶层目录 → 查功能表定文件；记不住路径就用 <code>grep -rn</code> 从现象倒查。</li>
-<li>高频落点：编译器前端 <code>clang/lib/Sema/SemaSYCL*.cpp</code> + <code>clang/include/clang/Basic/Attr.td</code>；运行时 <code>sycl/source/detail/</code>；扩展文档 <code>sycl/doc/extensions/</code>；设备库 <code>libdevice/</code>+<code>libclc/</code>；翻译 <code>llvm-spirv/</code>；适配 <code>unified-runtime/</code>。</li>
+<li>高频落点：编译器前端 <code>clang/lib/Sema/SemaSYCL*.cpp</code> + <code>clang/include/clang/Basic/Attr.td</code>；运行时 <code>sycl/source/detail/</code>；扩展文档 <code>sycl/doc/extensions/</code>；设备库 <code>libdevice/</code>+<code>libclc/</code>；翻译 <code>llvm-spirv/</code>；适配 <code>unified-runtime/</code>；ClangIR <code>clang/lib/CIR/</code> + <code>clang/include/clang/CIR/Dialect/IR/*.td</code> + <code>clang/test/CIR/</code>。</li>
 <li>铁律：<strong>行号会漂移，路径可能搬家（如 <code>Options.td</code> 从 <code>Driver/</code> 到 <code>Options/</code>）——永远先在你手上的树里搜一遍再引用</strong>。这也是全书&quot;源码为锚&quot;精神的收尾。</li>
 </ul>
 

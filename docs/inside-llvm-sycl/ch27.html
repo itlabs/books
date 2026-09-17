@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="ch25.html">第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</a></li>
+<li><a href="ch26.html">第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</a></li>
+<li class="active"><a href="ch27.html">第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前两章讲的是「同一门语言，换一种中间表示」。这一章要看的是<strong>异构</strong>：CUDA 和 HIP 这种「一份源码、主机和设备各编一趟」的模型，在 CIR 这一层里长成了什么样。你会看到第 26 章那个套式（<strong>高层构造记录事实 → 专门的 pass 降级</strong>）被原封不动地搬到 offloading 上：<code>&lt;&lt;&lt;&gt;&gt;&gt;</code>、<code>__device__</code> 变量、fatbin 注册，全都先变成 CIR 上的一条属性，再由 pass 展开成 <code>cudaLaunchKernel</code> / <code>__cudaRegisterVar</code> 这些运行时调用。</p>
+<p>三个具体收获：一是 <code>cu.kernel_name</code> / <code>cu.var_registration</code> / <code>cu.binary_handle</code> 这套「记账属性」，它们让主机端 IR 变成可读、可 <code>grep</code>、可写测试的；二是双地址空间设计——<code>lang_address_space(offload_global)</code> 和 <code>target_address_space(1)</code> 为什么要分成两个属性，中间那个 <code>cir-target-lowering</code> 又在做什么；三是这一层带来的一个新可能：主机端和设备端的表示<strong>在同一层里共存</strong>，于是「跨越主机—设备边界的优化」第一次有了落脚点。最后我们看一眼 PolyBench/GPU 的完整体检数据——它是「这条路走通了没有」的当前答案。</p>
+</div><h2>先接上第 12 章那条线</h2>
+<p>第 12 章讲 SYCL 的时候，你已经建立过「一份 <code>.cpp</code> 编两趟」的模型：主机端一趟、设备端一趟，各有各的 <code>clang -cc1</code> 调用，最后由 offload 工具链（第 9 章）把设备端产物塞进主机端目标文件。CUDA/HIP 是同一个模型的另一种语法——<code>__global__</code> / <code>__device__</code> / <code>__constant__</code> 关键字加上 <code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 启动语法。</p>
+<p>CIR 不改这个模型。它改的是<strong>每一趟里 AST → LLVM IR 那一段</strong>（第 25 章的图 25-1）。所以这一章的所有内容都发生在一趟编译的内部，而「两趟」这个骨架、<code>clang-offload-bundler</code> 那套工具、CUDA 运行时的行为，一个字都不动。</p>
+<div class="note">
+<strong>这一章的源码锚点</strong>
+CIR 侧：<code>clang/lib/CIR/CodeGen/CIRGenCUDANV.cpp</code>、<code>CIRGenCUDARuntime.{h,cpp}</code>；属性定义在 <code>clang/include/clang/CIR/Dialect/IR/CIRCUDAAttrs.td</code>（注意——不在 <code>CIRAttrs.td</code> 里，这是一个独立文件，我第一次 <code>grep</code> 就找错了地方）；测试在 <code>clang/test/CIR/CodeGenCUDA/</code>（21 个 <code>.cu</code>）和 <code>clang/test/CIR/CodeGenHIP/</code>（29 个 <code>.hip</code>）。经典侧的对应物是 <code>clang/lib/CodeGen/CGCUDANV.cpp</code> 和 <code>CGCUDARuntime.{h,cpp}</code>。
+</div><h2>第一件事：发射过滤</h2>
+<p>两趟编译的第一个问题是「这一趟该发射哪些函数」。设备端那趟带 <code>-fcuda-is-device</code>，主机端那趟不带；同一份 AST，两趟要产出<strong>不同的函数集合</strong>。</p>
+<p><code>clang/test/CIR/CodeGenCUDA/filter-decl.cu</code> 把这件事做成了一个四前缀矩阵——一份源码，四条 RUN 线，<code>CIR-HOST</code> / <code>CIR-DEVICE</code> / <code>OGCG-HOST</code> / <code>OGCG-DEVICE</code>，每个函数在四个前缀下各自被 <code>CHECK</code> 或 <code>CHECK-NOT</code>。结论是这张表：</p>
+<table>
+<thead>
+<tr>
+<th>源码里的声明</th>
+<th>主机端这一趟</th>
+<th>设备端这一趟</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>void hostfunc()</code>（隐式 <code>__host__</code>）</td>
+<td>发射</td>
+<td>不发射</td>
+</tr>
+<tr>
+<td><code>__host__ void hostfunc()</code></td>
+<td>发射</td>
+<td>不发射</td>
+</tr>
+<tr>
+<td><code>__device__ void devicefunc()</code></td>
+<td>不发射</td>
+<td>发射</td>
+</tr>
+<tr>
+<td><code>__host__ __device__ void hdfunc()</code></td>
+<td>发射</td>
+<td>发射（两份独立的实体）</td>
+</tr>
+<tr>
+<td><code>__global__ void globalfunc()</code></td>
+<td>发射 <code>@_Z25__device_stub__globalfuncv</code></td>
+<td>发射 <code>@_Z10globalfuncv</code></td>
+</tr>
+</tbody></table>
+<p>最后一行是全章的枢纽。<code>__global__</code> 函数在两趟里<strong>名字都不一样</strong>：设备端是它自己的 mangled name，主机端是一个前缀了 <code>__device_stub__</code> 的存根函数（stub）。你在主机端 <code>kernel&lt;&lt;&lt;...&gt;&gt;&gt;(...)</code> 写下的那次「调用」，调的是这个 stub；stub 的职责是把参数打包好、把配置取回来，然后交给运行时。</p>
+<p>于是一个信息断链出现了：主机端的 stub 需要知道<strong>设备端那个 kernel 叫什么名字</strong>，才能在注册时把两者对上。经典 CodeGen 靠 IRGen 内部的数据结构记住这件事。CIR 的做法是——把它写在 IR 上。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def CIR_CUDAKernelNameAttr : CIR_Attr&lt;"CUDAKernelName", "cu.kernel_name"&gt; {
+  let summary = "Device-side function name for this stub.";
+  let description =
+  [{
+    This attribute is attached to function definitions and records the
+    mangled name of the kernel function used on the device.
+    ...
+    Preserving the device-side kernel name is crucial for performing its
+    respective function runtime registration on the host.
+  }];
+
+  let parameters = (ins "mlir::StringAttr":$kernel_name);
+  let assemblyFormat = "`&lt;` $kernel_name `&gt;`";
+}</code></pre>
+</div><p>这是本章的第一条属性，也是整套设计的样板：<strong>一个前端知道、后端不需要、但降级过程中要用到的事实，被记成 IR 上的一条属性。</strong></p>
+<h2><code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 展开成了什么</h2>
+<p><code>clang/test/CIR/CodeGenCUDA/kernel-call.cu</code> 的源码只有两行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">CUDA C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">__global__ void kernel(int x, float y) {}
+int main(void) { kernel&lt;&lt;&lt;1, 1&gt;&gt;&gt;(42, 1.0f); }</code></pre>
+</div><p>五条 RUN 线覆盖 CUDA/HIP × 新旧驱动路径。我们只看主机端 CIR。调用点被展开成这样（CHECK 行原文，<code>{{.*}}</code> 是 FileCheck 的通配）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.alloca {{.*}} ["agg.tmp0"] : !cir.ptr&lt;!rec_dim3&gt;
+cir.alloca {{.*}} ["agg.tmp1"] : !cir.ptr&lt;!rec_dim3&gt;
+cir.call @_ZN4dim3C1Ejjj(...) {uniform_work_group_size}     // grid  = dim3(1,1,1)
+cir.call @_ZN4dim3C1Ejjj(...) {uniform_work_group_size}     // block = dim3(1,1,1)
+%shmem  = cir.const #cir.int&lt;0&gt; : !u64i
+%stream = cir.const #cir.ptr&lt;null&gt; : !cir.ptr&lt;!rec_cudaStream&gt;
+%r = cir.call @__cudaPushCallConfiguration(...) -&gt; !s32i
+%b = cir.cast int_to_bool %r : !s32i -&gt; !cir.bool
+cir.if %b {
+} else {
+  %x = cir.const #cir.int&lt;42&gt; : !s32i
+  %y = cir.const #cir.fp&lt;1.000000e+00&gt; : !cir.float
+  cir.call @_Z21__device_stub__kernelif(%x, %y)
+      {cu.kernel_name = #cir.cu.kernel_name&lt;"_Z6kernelif"&gt;,
+       uniform_work_group_size}
+}</code></pre>
+</div><p>读一遍就能看懂 <code>&lt;&lt;&lt;1, 1&gt;&gt;&gt;</code> 到底是什么：<strong>两个 <code>dim3</code> 临时对象 + 一次 <code>__cudaPushCallConfiguration</code> + 一个「推成功了才真调 stub」的 <code>if</code></strong>。注意 <code>cir.if</code> 的 then 分支是空的——push 返回非 0（真）表示失败，什么都不做；返回 0 才走 else 去调 stub。这个「空的 then」在 LLVM IR 里会变成一个跳到 continuation 的空块，读起来完全不知道它想干什么；在 CIR 里它就是一个 <code>cir.if</code>，第 26 章讲的结构化控制流在这里直接兑现成了可读性。</p>
+<p>stub 内部是配置的另一半：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.func {{.*}} @_Z21__device_stub__kernelif(%arg0: !s32i, %arg1: !cir.float) {
+  cir.alloca {{.*}} ["x", init]
+  cir.alloca {{.*}} ["y", init]
+  cir.alloca {{.*}} ["kernel_args"] : !cir.ptr&lt;!cir.array&lt;!cir.ptr&lt;!void&gt; x 2&gt;&gt;
+  cir.alloca {{.*}} ["grid_dim"]   : !cir.ptr&lt;!rec_dim3&gt;
+  cir.alloca {{.*}} ["block_dim"]  : !cir.ptr&lt;!rec_dim3&gt;
+  cir.alloca {{.*}} ["shared_mem"] : !cir.ptr&lt;!u64i&gt;
+  cir.alloca {{.*}} ["stream"]     : !cir.ptr&lt;!cir.ptr&lt;!rec_cudaStream&gt;&gt;
+  // 把两个参数的地址塞进 kernel_args 数组
+  %p = cir.cast array_to_ptrdecay {{.*}}
+  cir.ptr_stride {{.*}}
+  cir.cast bitcast {{.*}} -&gt; !cir.ptr&lt;!void&gt;
+  // 取回刚才 push 进去的配置
+  cir.call @__cudaPopCallConfiguration(%grid, %block, %shmem, %stream)
+      : (!cir.ptr&lt;!rec_dim3&gt;, !cir.ptr&lt;!rec_dim3&gt;, !cir.ptr&lt;!u64i&gt;,
+         !cir.ptr&lt;!cir.ptr&lt;!rec_cudaStream&gt;&gt;) -&gt; !s32i
+  cir.call @cudaLaunchKernel(...) -&gt; (!u32i {llvm.noundef})
+}</code></pre>
+</div><p><code>kernel_args</code> 就是那个「函数指针数组」——CUDA 运行时的 <code>cudaLaunchKernel</code> 接受的是 <code>void **</code>，每个元素指向一个实参的<strong>地址</strong>。整条链是：<em>调用点把配置 push 到一个线程局部的栈 → 调 stub → stub 把配置 pop 回来、把实参地址打包成数组 → 一次 <code>cudaLaunchKernel</code></em>。</p>
+<div class="concept">
+<svg viewBox="0 0 680 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="340" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一行 kernel&lt;&lt;&lt;1,1&gt;&gt;&gt;(42, 1.0f) 在主机端 CIR 里的全貌</text>
+  <!-- 左列：调用点 -->
+  <text x="24" y="46" font-size="11" font-weight="bold" fill="#2b6cb0">main 里的调用点</text>
+  <rect x="24" y="54" width="278" height="238" rx="8" fill="#eff6ff" stroke="#2b6cb0" stroke-width="1.6"/>
+  <g font-size="9.5" fill="#1e4e8c">
+    <rect x="38" y="66" width="250" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/><text x="48" y="82">dim3 grid, block  ← 两个 agg.tmp + ctor 调用</text>
+    <rect x="38" y="98" width="250" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/><text x="48" y="114">shmem = 0u64, stream = null</text>
+    <rect x="38" y="130" width="250" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="48" y="146" fill="#a53f1c">__cudaPushCallConfiguration(…) → !s32i</text>
+    <rect x="38" y="162" width="250" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/><text x="48" y="178">cir.cast int_to_bool  → !cir.bool</text>
+    <rect x="38" y="194" width="250" height="90" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/>
+    <text x="48" y="210" fill="#2f7a45">cir.if %b {  } else {</text>
+    <text x="58" y="226" fill="#2f7a45">42 : !s32i,  1.0 : !cir.float</text>
+    <text x="58" y="242" fill="#2f7a45">cir.call @…__device_stub__kernelif</text>
+    <text x="66" y="257" font-size="9" fill="#a53f1c">{cu.kernel_name = &lt;"_Z6kernelif"&gt;}</text>
+    <text x="48" y="275" fill="#2f7a45">}</text>
+  </g>
+  <!-- 箭头 -->
+  <path d="M302 232 L378 232" stroke="#e06a3b" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="340" y="225" text-anchor="middle" font-size="9" font-weight="bold" fill="#a53f1c">调 stub</text>
+  <!-- 右列：stub -->
+  <text x="392" y="46" font-size="11" font-weight="bold" fill="#2b6cb0">device stub 内部</text>
+  <rect x="392" y="54" width="264" height="238" rx="8" fill="#eff6ff" stroke="#2b6cb0" stroke-width="1.6"/>
+  <g font-size="9.5" fill="#1e4e8c">
+    <rect x="404" y="66" width="238" height="38" rx="4" fill="#ffffff" stroke="#93c5fd"/><text x="414" y="82">alloca x, y</text><text x="414" y="96">alloca kernel_args : array&lt;ptr&lt;void&gt; x 2&gt;</text>
+    <rect x="404" y="112" width="238" height="38" rx="4" fill="#ffffff" stroke="#93c5fd"/><text x="414" y="128">array_to_ptrdecay / ptr_stride / bitcast</text><text x="414" y="142" font-size="9" fill="#6b7280">把每个实参的地址写进数组</text>
+    <rect x="404" y="158" width="238" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="414" y="174" fill="#a53f1c">__cudaPopCallConfiguration(…)</text>
+    <rect x="404" y="190" width="238" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/><text x="414" y="206">grid_dim / block_dim / shared_mem / stream</text>
+    <rect x="404" y="222" width="238" height="26" rx="4" fill="#fff4ec" stroke="#e06a3b" stroke-width="1.6"/><text x="414" y="239" fill="#a53f1c" font-weight="bold">cudaLaunchKernel(…) → !u32i</text>
+    <text x="414" y="272" font-size="9" fill="#6b7280">HIP 走 __hipPop… / hipLaunchKernel；</text>
+    <text x="414" y="284" font-size="9" fill="#6b7280">per-thread 流走 …_ptsz / …_spt 变体</text>
+  </g>
+  <text x="340" y="316" text-anchor="middle" font-size="11" fill="#2d2a26">配置从调用点 <tspan font-weight="bold">push</tspan> 进线程局部栈，到 stub 里 <tspan font-weight="bold">pop</tspan> 出来——两端在 IR 上是分开的两次调用</text>
+  <text x="340" y="332" text-anchor="middle" font-size="10" fill="#a53f1c">橙色框是运行时调用；<tspan font-weight="bold">cu.kernel_name</tspan> 是唯一一处「记账」，它要等到注册代码生成时才被消费</text>
+  <defs>
+    <marker id="c1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 27-1　<code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 的展开：调用点与 stub 各占一半。HIP 只是把橙色框里的符号换成 <code>__hipPopCallConfiguration</code> / <code>hipLaunchKernel</code>，骨架完全相同——这正是这套设计能一份代码支两个运行时的原因</div>
+</div><p>设备端那一趟就朴素得多。<code>ptx-kernels.cu</code> 里，<code>__global__</code> 函数只是多了一个调用约定：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.func {{.*}} @global_function() cc(ptx_kernel)
+// 降到 LLVM IR：
+// define ptx_kernel void @global_function()</code></pre>
+</div><p><code>cuda-builtin-vars.cu</code> 显示 <code>threadIdx.x</code> 这类内建变量走的是通用的内建函数机制：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.call_llvm_intrinsic "nvvm.read.ptx.sreg.tid.x" : () -&gt; !u32i
+// → call i32 @llvm.nvvm.read.ptx.sreg.tid.x()</code></pre>
+</div><p>也就是说 CIR 并不为 NVPTX 造新概念，它借道 <code>cir.call_llvm_intrinsic</code> 直通 LLVM 的 intrinsic。这是一个刻意的选择：<strong>只在「前端知道的事实会丢」的地方加抽象，其它地方老老实实转发。</strong></p>
+<h2>双地址空间：一个变量的两种身份</h2>
+<p>现在来看这一章最值得学的一处设计。</p>
+<p>CUDA 里 <code>__device__</code> / <code>__constant__</code> / <code>__shared__</code> 三个限定符，最终会变成 LLVM IR 上的 <code>addrspace(1)</code> / <code>addrspace(4)</code> / <code>addrspace(3)</code>——这三个数字是 <strong>NVPTX 后端的约定</strong>，换成 AMDGCN 就是另一套数字。经典 CodeGen 的做法是在 IRGen 里直接查表、直接写下数字。</p>
+<p>CIR 把这一步<strong>拆成了两个属性</strong>。<code>clang/include/clang/CIR/Dialect/IR/CIRAttrs.td</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def CIR_LangAddressSpaceAttr : CIR_Attr&lt;"LangAddressSpace", "lang_address_space", [
+    DeclareAttrInterfaceMethods&lt;MemorySpaceAttrInterface&gt;]&gt; {
+  // 例：!cir.ptr&lt;!s32i, lang_address_space(offload_local)&gt;
+  //   取值：Default / offload_global / offload_constant / offload_local /
+  //         offload_private / offload_generic ...
+}
+
+def CIR_TargetAddressSpaceAttr : CIR_Attr&lt;"TargetAddressSpace", "target_address_space", [
+    DeclareAttrInterfaceMethods&lt;MemorySpaceAttrInterface&gt;]&gt; {
+  let parameters = (ins "unsigned":$value);
+  let assemblyFormat = "`&lt;` `target` `&lt;` $value `&gt;` `&gt;`";
+  // "A value of zero represents the default address space"
+}</code></pre>
+</div><p>两者都实现 MLIR 的 <code>MemorySpaceAttrInterface</code>，所以在 <code>!cir.ptr&lt;...&gt;</code> 的语法位置上可以互换。区别是<strong>语义层级</strong>：前者说的是「这是 CUDA 语言意义上的 global 内存」，后者说的是「这是目标机器的第 1 号地址空间」。中间的翻译由一个 pass 完成，它的名字你在第 26 章的 12 个 pass 列表里见过：<strong><code>cir-target-lowering</code></strong>。</p>
+<p><code>clang/test/CIR/CodeGenCUDA/address-spaces.cu</code> 把这件事测得极其到位——它有<strong>九条 RUN 线</strong>，其中两条专门用来在同一个测试里同时看到 pass 前和 pass 后：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 看 cir-target-lowering 跑之前的 CIR
+# RUN: %clang_cc1 ... -fcuda-is-device -fclangir -emit-cir \
+# RUN:   -mmlir -mlir-print-ir-before=cir-target-lowering %s -o %t.cir \
+# RUN:   2&gt;&amp;1 | FileCheck %s --check-prefix=CIR-PRE
+# 看跑完之后的 CIR
+# RUN: %clang_cc1 ... -fcuda-is-device -fclangir -emit-cir %s -o %t.cir
+# RUN: FileCheck --input-file=%t.cir %s --check-prefix=CIR-POST</code></pre>
+</div><p><code>-mmlir -mlir-print-ir-before=&lt;pass&gt;</code> 就是第 25 章介绍的那个「在管线中间截一刀」的开关。截出来的两份 IR 摆在一起：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CIR-PRE：语言地址空间</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.global external
+  lang_address_space(offload_global)
+  @i = #cir.int&lt;0&gt;
+
+cir.global external
+  lang_address_space(offload_constant)
+  @j = #cir.int&lt;0&gt;
+
+cir.global external
+  lang_address_space(offload_local)
+  @k = #cir.int&lt;0&gt;
+
+// 函数体里：
+%p = cir.get_global @i
+   : !cir.ptr&lt;!s32i,
+       lang_address_space(offload_global)&gt;</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">CIR-POST：目标地址空间</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.global external
+  target_address_space(1)
+  @i = #cir.int&lt;0&gt;
+
+cir.global external
+  target_address_space(4)
+  @j = #cir.int&lt;0&gt;
+
+cir.global external
+  target_address_space(3)
+  @k = #cir.int&lt;0&gt;
+
+// 函数体里：
+%p = cir.get_global @i
+   : !cir.ptr&lt;!s32i,
+       target_address_space(1)&gt;
+
+// 再降一层 → @i = addrspace(1) global i32 0</code></pre>
+</div></div>
+</div><div class="concept">
+<svg viewBox="0 0 680 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="340" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">三个限定符，三段旅程：语言语义 → 目标编号 → LLVM addrspace</text>
+  <!-- 列标题 -->
+  <text x="80"  y="48" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#2f7a45">源码</text>
+  <text x="248" y="48" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#2f7a45">CIRGen 之后</text>
+  <text x="440" y="48" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#a53f1c">cir-target-lowering 之后</text>
+  <text x="602" y="48" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#6b7280">LLVM IR</text>
+  <g font-size="10">
+    <!-- row 1 -->
+    <rect x="20" y="58" width="120" height="30" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="80" y="77" text-anchor="middle" fill="#2f7a45">__device__ int i</text>
+    <rect x="164" y="58" width="168" height="30" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="248" y="77" text-anchor="middle" font-size="9" fill="#2f7a45">lang_address_space(offload_global)</text>
+    <rect x="360" y="58" width="160" height="30" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="440" y="77" text-anchor="middle" font-size="9" fill="#a53f1c">target_address_space(1)</text>
+    <rect x="546" y="58" width="112" height="30" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="602" y="77" text-anchor="middle" font-size="9" fill="#4b5563">addrspace(1)</text>
+    <!-- row 2 -->
+    <rect x="20" y="98" width="120" height="30" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="80" y="117" text-anchor="middle" font-size="9.5" fill="#2f7a45">__constant__ int j</text>
+    <rect x="164" y="98" width="168" height="30" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="248" y="117" text-anchor="middle" font-size="9" fill="#2f7a45">lang_address_space(offload_constant)</text>
+    <rect x="360" y="98" width="160" height="30" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="440" y="117" text-anchor="middle" font-size="9" fill="#a53f1c">target_address_space(4)</text>
+    <rect x="546" y="98" width="112" height="30" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="602" y="117" text-anchor="middle" font-size="9" fill="#4b5563">addrspace(4)</text>
+    <!-- row 3 -->
+    <rect x="20" y="138" width="120" height="30" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="80" y="157" text-anchor="middle" font-size="9.5" fill="#2f7a45">__shared__ int k</text>
+    <rect x="164" y="138" width="168" height="30" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="248" y="157" text-anchor="middle" font-size="9" fill="#2f7a45">lang_address_space(offload_local)</text>
+    <rect x="360" y="138" width="160" height="30" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="440" y="157" text-anchor="middle" font-size="9" fill="#a53f1c">target_address_space(3)</text>
+    <rect x="546" y="138" width="112" height="30" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="602" y="157" text-anchor="middle" font-size="9" fill="#4b5563">addrspace(3)</text>
+  </g>
+  <g stroke="#9ca3af" stroke-width="1.2" fill="none">
+    <path d="M140 73 L162 73" marker-end="url(#c2)"/><path d="M140 113 L162 113" marker-end="url(#c2)"/><path d="M140 153 L162 153" marker-end="url(#c2)"/>
+    <path d="M332 73 L358 73" marker-end="url(#c2)"/><path d="M332 113 L358 113" marker-end="url(#c2)"/><path d="M332 153 L358 153" marker-end="url(#c2)"/>
+    <path d="M520 73 L544 73" marker-end="url(#c2)"/><path d="M520 113 L544 113" marker-end="url(#c2)"/><path d="M520 153 L544 153" marker-end="url(#c2)"/>
+  </g>
+  <rect x="164" y="182" width="356" height="26" rx="5" fill="#fffbea" stroke="#d9a406"/>
+  <text x="342" y="199" text-anchor="middle" font-size="10" fill="#8a6d00">这一整段翻译就是 cir-target-lowering 一个 pass 的职责</text>
+  <text x="340" y="230" text-anchor="middle" font-size="11" fill="#2d2a26">拆成两层的好处：左半段与目标无关，可以在<tspan font-weight="bold">不知道 1/4/3 是几</tspan>的前提下做分析和优化</text>
+  <defs>
+    <marker id="c2" markerWidth="8" markerHeight="8" refX="6" refY="2.6" orient="auto"><path d="M0,0 L6,2.6 L0,5.2 Z" fill="#9ca3af"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 27-2　双地址空间。CIRGen 只记「语言层面这是什么内存」，目标编号由 <code>cir-target-lowering</code> 填。换后端（NVPTX ↔ AMDGCN）只换最后两段，前半段的 IR 一个字不改</div>
+</div><div class="keypoint">
+<strong>为什么值得拆成两个属性</strong>
+这是「把决策推迟到必要的那一刻」的又一例——第 26 章的 <code>!cir.data_member</code> / <code>!cir.method</code> 把 ABI 决策推迟到 <code>cir-cxxabi-lowering</code>，这里把地址空间编号推迟到 <code>cir-target-lowering</code>。收益是具体的：<code>offload_local</code> 这个信息「这块内存是一个 block 内共享的」是可以用来做优化的（比如证明同步边界），而 <code>addrspace(3)</code> 只是一个数字，任何优化都得先反查目标手册才知道它意味着什么。同一份 CIR 换个 target 就能重新编译——因为编号还没写进去。
+</div><p>顺带一个细节，它是「parity 不是文本相同」的又一个漂亮例证。<code>address-spaces.cu</code> 里有个函数作用域的 <code>__shared__</code> 变量，两条路径产出的 LLVM IR 不一样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">; CIR 路径
+store i32 %val, ptr @_ZZ2fnvE1j
+; 经典路径（OGCG-DEVICE）
+store i32 %val, ptr addrspacecast (ptr addrspace(3) @_ZZ2fnvE1j to ptr)</code></pre>
+</div><p>两者语义等价（NVPTX 后端都能正确处理），但文本不同。测试用两个不同的前缀分别 <code>CHECK</code>，而不是强求一致——这就是第 25 章说的「验收线是语义等价，不是文本相同」在具体现场的样子。</p>
+<h2>属性先记账，pass 再展开</h2>
+<p>现在把这一章最有代表性的机制讲完：<strong>主机端的注册代码</strong>。</p>
+<p>CUDA 的运行模型要求主机端在程序启动时告诉运行时三件事：设备二进制在哪、有哪些 kernel、有哪些 <code>__device__</code>/<code>__constant__</code> 变量。这套「注册基础设施」在经典 CodeGen 里由 <code>CGCUDANV.cpp</code> 的 <code>makeModuleCtorFunction()</code> 在 IRGen 收尾时直接吐成 LLVM IR。</p>
+<p>CIR 换了个顺序：CIRGen 只在 IR 上<strong>挂属性</strong>，展开留给降级阶段。<code>CIRCUDAAttrs.td</code> 里一共四个属性，除了前面见过的 <code>cu.kernel_name</code>，还有：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def CIR_CUDAExternallyInitializedAttr
+    : CIR_Attr&lt;"CUDAExternallyInitialized", "cu.externally_initialized"&gt; {
+  let description = [{
+    CUDA __device__ and __constant__ variables, along with surface and
+    textures, might be initialized by host, hence "externally initialized".
+    Therefore they must be emitted even if they are not referenced.
+  }];
+}
+
+def CIR_CUDABinaryHandleAttr : CIR_Attr&lt;"CUDABinaryHandle", "cu.binary_handle"&gt; {
+  let description = [{
+    This attribute is attached to the ModuleOp and records the binary file
+    name passed to host.
+  }];
+  let parameters = (ins "mlir::StringAttr":$name);
+}
+
+def CIR_CUDAVarRegistrationInfoAttr
+    : CIR_Attr&lt;"CUDAVarRegistrationInfo", "cu.var_registration"&gt; {
+  let summary = "Device variable registration flags.";
+  let parameters = (ins
+    "std::string":$device_side_name,
+    "CUDADeviceVarKind":$kind,        // Variable / Surface / Texture
+    "bool":$isExtern,
+    "bool":$isConstant,
+    "bool":$isManaged
+  );
+  let hasCustomAssemblyFormat = 1;
+}</code></pre>
+</div><p>三个层级的记账都齐了：<strong>函数上</strong>记 kernel 名，<strong>全局变量上</strong>记注册标志，<strong>模块上</strong>记 fatbin 文件名。加上 <code>CIRDialect.td</code> 里的模块级属性 <code>cir.offload.kind</code>（这一趟是 CUDA 还是 HIP）、<code>cir.offload.container</code>、<code>cir.cu.binary_handle</code>，一次 offloading 编译的全部「元信息」都在 IR 上，可打印、可 <code>grep</code>、可写 FileCheck。</p>
+<p>于是 <code>address-spaces.cu</code> 里主机端那一侧看起来是这样——注意主机端的 <code>@i</code> 只是个<strong>影子</strong>（<code>#cir.undef</code>），真正的存储在设备上：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">// CIR-HOST: cir.global {{.*}} @i = #cir.undef : {{.*}}
+// CIR-HOST-SAME: {cu.var_registration = #cir.cu.var_registration&lt;i, Variable&gt;}
+// LLVM-HOST:     @i = internal global i32 undef
+
+// __constant__ int j; 主机端多一个属性：
+// CIR-HOST-SAME: {cu.externally_initialized = #cir.cu.externally_initialized,
+// CIR-HOST-SAME:  cu.var_registration = #cir.cu.var_registration&lt;j, Variable, constant&gt;}</code></pre>
+</div><p><code>device-stub.cu</code> 则给出属性被消费之后的完整形态。<code>__cuda_module_ctor</code> 的骨架（CHECK 行原文，串起来读）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">// 模块级：把 ctor 注册成优先级 65535 的全局构造函数
+cir.global_ctors = [#cir.global_ctor&lt;"__cuda_module_ctor", 65535&gt;]
+
+// 设备二进制本体和它的包装结构（注意 section）
+cir.global "private" constant cir_private @__cuda_fatbin_str
+    = #cir.const_array&lt;"GPU binary would be here." : !cir.array&lt;!u8i x 25&gt;&gt;
+      {alignment = 8 : i64, section = ".nv_fatbin"}
+cir.global constant cir_private @__cuda_fatbin_wrapper
+    = #cir.const_record&lt;{#cir.int&lt;1180844977&gt; : !s32i,     // magic
+                         #cir.int&lt;1&gt; : !s32i,              // version
+                         #cir.global_view&lt;@__cuda_fatbin_str&gt; : !cir.ptr&lt;!void&gt;,
+                         #cir.ptr&lt;null&gt; : !cir.ptr&lt;!void&gt;}&gt;
+      : !rec_anon_struct {section = ".nvFatBinSegment"}
+cir.global "private" internal @__cuda_gpubin_handle = #cir.ptr&lt;null&gt;
+
+// 名字字符串：每个 kernel / 变量一条
+cir.global "private" constant cir_private @".stra"
+    = #cir.const_array&lt;"a" : !cir.array&lt;!u8i x 2&gt;, trailing_zeros&gt;
+cir.global "private" constant cir_private @".str_Z10kernelfunciii" = ...
+
+// 注册函数：属性在这里被消费
+cir.func internal private @__cuda_register_globals(%fatbin: !cir.ptr&lt;!cir.ptr&lt;!void&gt;&gt;)
+cir.func private @__cudaRegisterFunction(...)   -&gt; !s32i     // 10 个参数
+cir.func private @__cudaRegisterVar(!cir.ptr&lt;!cir.ptr&lt;!void&gt;&gt;, !cir.ptr&lt;!void&gt;,
+    !cir.ptr&lt;!void&gt;, !cir.ptr&lt;!void&gt;, !s32i, !u64i, !s32i, !s32i)
+
+// 收尾：注册 + atexit 反注册
+cir.func private @__cudaRegisterFatBinaryEnd(...)
+cir.func private @atexit(!cir.ptr&lt;!cir.func&lt;()&gt;&gt;) -&gt; !s32i
+cir.func internal private @__cuda_module_dtor()               // 调 __cudaUnregisterFatBinary
+cir.func private @__cudaUnregisterFatBinary(!cir.ptr&lt;!cir.ptr&lt;!void&gt;&gt;)</code></pre>
+</div><p>那个 magic number <code>1180844977</code> 是 <code>0x466243B1</code>——CUDA fatbin 的魔数，和经典路径产出的 <code>i32 1180844977, i32 1, ptr @…, ptr null</code> 完全一致。</p>
+<div class="note">
+<strong>没有 fatbin 就一行都不生成</strong>
+<code>device-stub.cu</code> 里有一条 <code>NOGPUBIN</code> 前缀，专门验证「这次编译没拿到设备二进制」时的行为：<code>NOGPUBIN-NOT: fatbin</code> / <code>NOGPUBIN-NOT: gpubin</code>——整套注册基础设施一条不生成。这个行为在属性驱动的设计下几乎是免费的：模块上没有 <code>cu.binary_handle</code>，展开 pass 直接返回。
+</div><h2>与经典路径对照</h2>
+<p>第 25 章立了四层对照的框架（目录、管线、测试、代价）。这一章的内容落在同一个框架里：</p>
+<table>
+<thead>
+<tr>
+<th>关注点</th>
+<th>经典 CodeGen</th>
+<th>CIR</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>运行时抽象基类</td>
+<td><code>clang/lib/CodeGen/CGCUDARuntime.{h,cpp}</code></td>
+<td><code>clang/lib/CIR/CodeGen/CIRGenCUDARuntime.{h,cpp}</code></td>
+</tr>
+<tr>
+<td>NVIDIA / HIP 实现</td>
+<td><code>CGCUDANV.cpp</code></td>
+<td><code>CIRGenCUDANV.cpp</code></td>
+</tr>
+<tr>
+<td>kernel 名怎么从设备端传到主机端 stub</td>
+<td>IRGen 内部数据结构</td>
+<td>IR 上的 <code>cu.kernel_name</code> 属性</td>
+</tr>
+<tr>
+<td>变量注册信息</td>
+<td>生成调用时现算</td>
+<td>IR 上的 <code>cu.var_registration</code> 属性</td>
+</tr>
+<tr>
+<td>地址空间</td>
+<td>IRGen 里直接写 <code>addrspace(N)</code></td>
+<td>两段：<code>lang_address_space</code> → <code>cir-target-lowering</code> → <code>target_address_space(N)</code></td>
+</tr>
+<tr>
+<td>注册代码何时生成</td>
+<td>IRGen 收尾，直接吐 LLVM IR</td>
+<td>降级阶段展开属性</td>
+</tr>
+<tr>
+<td>测试目录</td>
+<td><code>clang/test/CodeGenCUDA/</code></td>
+<td><code>clang/test/CIR/CodeGenCUDA/</code>（21 个 <code>.cu</code>）、<code>clang/test/CIR/CodeGenHIP/</code>（29 个 <code>.hip</code>）</td>
+</tr>
+</tbody></table>
+<p>最能说明「对齐做到了什么程度」的，是 <code>clang/test/CIR/CodeGenHIP/device-var-registration.hip</code>。它有三条 RUN 线，但只有<strong>两个</strong> FileCheck 前缀：一个 <code>CIR</code> 看中间形态，一个 <code>LLVM</code>——而这个 <code>LLVM</code> 前缀的 CHECK 行<strong>同时验证 <code>-fclangir -emit-llvm</code> 和不带 <code>-fclangir</code> 的经典 <code>-emit-llvm</code> 的输出</strong>。同一批 CHECK，两条路径都得过：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">// CIR: cir.func private @__hipRegisterVar(...)
+// CIR: cir.func internal private @__hip_register_globals(...)
+// CIR:   cu.var_registration = #cir.cu.var_registration&lt;device_var, Variable&gt;
+// CIR:   cu.var_registration = #cir.cu.var_registration&lt;constant_var, Variable, constant&gt;
+
+// 下面这两行 CIR 路径和经典路径产出的字节完全相同：
+// LLVM: call void @__hipRegisterVar(ptr %handle, ptr @device_var, ptr @name, ptr @name, i32 0, i64 4, i32 0, i32 0)
+// LLVM: call void @__hipRegisterVar(ptr %handle, ptr @constant_var, ptr @name, ptr @name, i32 0, i64 4, i32 1, i32 0)</code></pre>
+</div><p>一个测试文件里「同一批 CHECK 行验两条管线」，是 parity 最强的一种表达方式——比写两套 CHECK 再靠人眼比对可靠得多。</p>
+<h2>主机与设备表示共存</h2>
+<p>前面所有内容都还只是「把旧路径重做一遍，做对」。这一节讲的是<strong>旧路径做不到的事</strong>。</p>
+<p>注意一件容易被忽略的事：在 CIR 这一层，主机端和设备端的表示是<strong>同一种 IR</strong>。区别只是模块上挂的属性（<code>cir.offload.kind</code>）、函数上的调用约定（<code>cc(ptx_kernel)</code>）、指针上的地址空间。这意味着——原则上你可以把两个模块<strong>放进同一个 MLIR 上下文里</strong>，让一个 pass 同时看到 <code>main</code> 里的 <code>cudaLaunchKernel</code> 调用点和设备端 kernel 的函数体。</p>
+<p>经典管线做不到这件事，因为两趟编译产出的是两份独立的 LLVM Module，彼此之间只有一个不透明的 fatbin 字节块。而 CIR 这一层还留着足够的语言级信息（哪个 stub 对应哪个 kernel——<code>cu.kernel_name</code> 就是那根绳子），把两边接起来是有意义的。</p>
+<p>上游社区把这条方向叫 <strong>host–device co-optimization</strong>，目前处在「先把基础设施搭起来」的阶段：能把主机和设备的表示组合在一起，之后才谈得上在这个组合视图上做优化。可以想象的机会包括：把 <code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 的 grid/block 常量传播进 kernel 里（于是 kernel 内的边界检查可以被消掉）、跨边界的常量与形状信息传播、按调用点特化 kernel。</p>
+<div class="warn">
+<strong>这一节讲的是可能性，不是现状</strong>
+co-optimization 目前是<strong>探索性工作</strong>，不是上游已经落地的优化。写在这里是因为它解释了「为什么值得在 AST 和 LLVM IR 之间加一层」——如果 CIR 的全部价值只是「把旧路径重写一遍」，那它的成本是不划算的。真正的赌注在这类「只有在这一层才可能做」的事情上。这也是为什么第 25 章反复强调：CIR 的意义不在于它更抽象，而在于它<strong>保留了一批前端知道、后端不需要的事实</strong>——这些事实在别处已经丢了。
+</div><h2>PolyBench/GPU：一次完整体检</h2>
+<p>「这条路走通了没有」需要数据回答。2026 年 6 月，上游社区在 LLVM Discourse 上公布了一次 PolyBench/GPU 全套跑分（<code>ClangIR PolyBench GPU results (CUDA/HIP)</code>），把 CIR 路径和经典路径（OG）放在一起比覆盖率、编译时间和运行时性能：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>覆盖率</td>
+<td>21 个 benchmark × 4 个架构 = <strong>84/84 两条路径都编译成功</strong>，无退化</td>
+</tr>
+<tr>
+<td>CUDA 编译时间（sm_80/86/89/90 平均）</td>
+<td>前端 + IRGen：CIR 0.752s vs OG 0.744s（+0.008s）；总计 0.803s vs 0.799s</td>
+</tr>
+<tr>
+<td>HIP 编译时间（gfx906/908/90a/942 平均）</td>
+<td>前端 + IRGen：1.070s vs 1.048s（+0.021s）；总墙钟 10.77s vs 10.22s（+0.55s，方差偏大，待查）</td>
+</tr>
+<tr>
+<td>运行时性能（CIR/OG 比值，PolyBench 自带计时器）</td>
+<td>CUDA sm_86 几何平均 ≈ 1.00；HIP gfx942 ≈ 1.05；长跑 benchmark 分别在 1% / 3% 以内</td>
+</tr>
+</tbody></table>
+<p>三句话读完这张表：<strong>编得出来、编得不慢、跑得不慢</strong>。多一层 IR、多十来个 pass，编译时间的代价在 CUDA 上是 0.4% 量级——这个数字本身就是一个重要结论，因为「加一层会不会太慢」是这类设计最常被质疑的一点。</p>
+<p>同一个帖子里也点出了缺口。上游维护者列出的优先事项是「先补特性覆盖、继续和经典管线对齐」，明确点名的空白包括 <strong>texture memory</strong>（纹理内存）和 <strong>RDC 编译</strong>（relocatable device code，跨翻译单元的设备代码链接）；OpenCL 支持在探索中；<strong>SYCL 支持还基本没开始</strong>——虽然 <code>clang/lib/CIR/CodeGen/</code> 里已经有一个 <code>CIRGenSYCL.cpp</code> 文件。追踪 issue 是 <code>llvm/llvm-project#179278</code>（<code>[CIR][TRACKING] CUDA/HIP Support for ClangIR</code>），里面是一串复选框。</p>
+<div class="note">
+<strong>怎么自己查当前进度</strong>
+和第 26 章一样的方法：<strong>去数测试</strong>。<code>ls clang/test/CIR/CodeGenCUDA/</code> 和 <code>clang/test/CIR/CodeGenHIP/</code>，看有没有你关心的特性对应的文件。写这一章时 HIP 目录下有 <code>hip-cuid.hip</code>、<code>amdgpu-attrs.hip</code>、<code>amdgcnspirv-kernel.hip</code>、<code>cleanup-alloca-addrspace.hip</code>、<code>target-features.hip</code> 和一大堆 <code>builtins-amdgcn-*.hip</code>；CUDA 目录下有 <code>surface.cu</code> 和 <code>texture.cu</code>（说明纹理/表面已经有了初步的类型支持——上游有 <code>!cir.cuda_surface</code> / <code>!cir.cuda_texture</code> 两个类型，降到 NVPTX 时变成 <code>i64</code> 句柄），但离「完整可用」还有距离。测试列表比任何文字说明都新。
+</div><h2>动手：属性记账 → pass 展开</h2>
+<p>下面这个模拟器把这一章的核心机制走一遍。它先摆出「CIRGen 之后的主机端模块」——里面只有 <code>cu.kernel_name</code> 和 <code>cu.var_registration</code> 属性，<strong>一条运行时调用都没有</strong>；然后模拟展开 pass，把属性读出来，生成注册基础设施。跑三遍：CUDA、HIP、以及「没拿到设备二进制」的情形。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20CIR%20%E7%9A%84%E3%80%8C%E5%B1%9E%E6%80%A7%E5%85%88%E8%AE%B0%E8%B4%A6%EF%BC%8Cpass%20%E5%86%8D%E5%B1%95%E5%BC%80%E3%80%8D%E5%A5%97%E5%BC%8F%EF%BC%8C%E7%94%A8%E4%B8%BB%E6%9C%BA%E7%AB%AF%20CUDA%2FHIP%20%E6%B3%A8%E5%86%8C%E4%BB%A3%E7%A0%81%E5%81%9A%E4%BE%8B%E5%AD%90%E3%80%82%0A%23%20%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%88CIRGen%EF%BC%89%EF%BC%9A%E4%B8%BB%E6%9C%BA%E7%AB%AF%E6%A8%A1%E5%9D%97%E9%87%8C%E5%8F%AA%E6%9C%89%E5%B1%9E%E6%80%A7%EF%BC%8C%E6%B2%A1%E6%9C%89%E4%BB%BB%E4%BD%95%E8%BF%90%E8%A1%8C%E6%97%B6%E8%B0%83%E7%94%A8%E3%80%82%0A%23%20%E7%AC%AC%E4%BA%8C%E6%AD%A5%EF%BC%88lowering%20pass%EF%BC%89%EF%BC%9A%E9%81%8D%E5%8E%86%E6%A8%A1%E5%9D%97%EF%BC%8C%E6%8A%8A%E5%B1%9E%E6%80%A7%E5%B1%95%E5%BC%80%E6%88%90%20__cudaRegister*%20%2F%20__hipRegister*%20%E5%BA%8F%E5%88%97%E3%80%82%0A%0A%23%20----%20%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%9ACIRGen%20%E4%BA%A7%E5%87%BA%E7%9A%84%E4%B8%BB%E6%9C%BA%E7%AB%AF%E6%A8%A1%E5%9D%97%EF%BC%88%E5%8F%AA%E8%AE%B0%E8%B4%A6%EF%BC%8C%E4%B8%8D%E5%B1%95%E5%BC%80%EF%BC%89----%0Amodule_attrs%20%3D%20%7B%0A%20%20%20%20%22cir.offload.kind%22%3A%20%22cuda%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20cuda%20%E8%BF%98%E6%98%AF%20hip%0A%20%20%20%20%22cir.cu.binary_handle%22%3A%20%22a.out-nvptx64-sm_80.fatbin%22%2C%20%20%23%20%E8%AE%BE%E5%A4%87%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%9C%A8%E5%93%AA%0A%7D%0A%0A%23%20%E6%AF%8F%E4%B8%AA%20__global__%20%E5%87%BD%E6%95%B0%E5%9C%A8%E4%B8%BB%E6%9C%BA%E7%AB%AF%E5%8F%98%E6%88%90%E4%B8%80%E4%B8%AA%20stub%EF%BC%8C%E7%94%A8%20cu.kernel_name%20%E8%AE%B0%E4%BD%8F%E8%AE%BE%E5%A4%87%E7%AB%AF%E5%90%8D%E5%AD%97%0Astubs%20%3D%20%5B%0A%20%20%20%20%23%20(%E4%B8%BB%E6%9C%BA%E7%AB%AF%20stub%20%E7%AC%A6%E5%8F%B7%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%E8%AE%BE%E5%A4%87%E7%AB%AF%20mangled%20name)%0A%20%20%20%20(%22_Z21__device_stub__kernelif%22%2C%20%20%20%20%20%20%20%20%22_Z6kernelif%22)%2C%0A%20%20%20%20(%22_Z24__device_stub__reduce_sumPfi%22%2C%20%20%20%22_Z10reduce_sumPfi%22)%2C%0A%5D%0A%0A%23%20%E6%AF%8F%E4%B8%AA%20__device__%20%2F%20__constant__%20%E5%8F%98%E9%87%8F%E5%9C%A8%E4%B8%BB%E6%9C%BA%E7%AB%AF%E5%8F%98%E6%88%90%E4%B8%80%E4%B8%AA%E5%BD%B1%E5%AD%90%E5%85%A8%E5%B1%80%EF%BC%8C%E5%B8%A6%20cu.var_registration%E3%80%82%0A%23%20%E5%AD%97%E6%AE%B5%E9%A1%BA%E5%BA%8F%E7%85%A7%20CIRCUDAAttrs.td%20%E9%87%8C%E7%9A%84%20parameters%20%E6%9D%A5%EF%BC%9A%0A%23%20%20%20device_side_name%2C%20kind%2C%20isExtern%2C%20isConstant%2C%20isManaged%0Adevice_vars%20%3D%20%5B%0A%20%20%20%20%23%20(%E4%B8%BB%E6%9C%BA%E7%AB%AF%E7%AC%A6%E5%8F%B7%2C%20%E8%AE%BE%E5%A4%87%E7%AB%AF%E5%90%8D%2C%20kind%2C%20%20%20%20%20%20%20extern%2C%20constant%2C%20managed%2C%20%E5%AD%97%E8%8A%82%E6%95%B0)%0A%20%20%20%20(%22i%22%2C%20%20%20%20%20%20%20%20%20%22i%22%2C%20%20%20%20%20%20%22Variable%22%2C%20False%2C%20%20False%2C%20%20%20%20False%2C%20%20%204)%2C%20%20%23%20__device__%20int%20i%3B%0A%20%20%20%20(%22j%22%2C%20%20%20%20%20%20%20%20%20%22j%22%2C%20%20%20%20%20%20%22Variable%22%2C%20False%2C%20%20True%2C%20%20%20%20%20False%2C%20%20%204)%2C%20%20%23%20__constant__%20int%20j%3B%0A%20%20%20%20(%22c%22%2C%20%20%20%20%20%20%20%20%20%22c%22%2C%20%20%20%20%20%20%22Variable%22%2C%20False%2C%20%20False%2C%20%20%20%20False%2C%20%20%208)%2C%20%20%23%20__device__%20_BitInt(36)%20c%3B%0A%5D%0A%0Adef%20show_cirgen_module()%3A%0A%20%20%20%20print(%22%3D%3D%3D%20%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%9ACIRGen%20%E4%B9%8B%E5%90%8E%E7%9A%84%E4%B8%BB%E6%9C%BA%E7%AB%AF%20CIR%EF%BC%88%E5%85%A8%E6%98%AF%E5%B1%9E%E6%80%A7%EF%BC%8C%E9%9B%B6%E6%9D%A1%E8%BF%90%E8%A1%8C%E6%97%B6%E8%B0%83%E7%94%A8%EF%BC%89%3D%3D%3D%22)%0A%20%20%20%20print(%22module%20attributes%20%7B%22)%0A%20%20%20%20for%20k%2C%20v%20in%20module_attrs.items()%3A%0A%20%20%20%20%20%20%20%20print('%20%20%25s%20%3D%20%22%25s%22%2C'%20%25%20(k%2C%20v))%0A%20%20%20%20print(%22%7D%20%7B%22)%0A%20%20%20%20for%20host%2C%20dev%20in%20stubs%3A%0A%20%20%20%20%20%20%20%20print('%20%20cir.func%20%40%25s(...)%20%7Bcu.kernel_name%20%3D%20%23cir.cu.kernel_name%3C%22%25s%22%3E%7D'%20%25%20(host%2C%20dev))%0A%20%20%20%20for%20host%2C%20dev%2C%20kind%2C%20ext%2C%20const%2C%20mgd%2C%20_sz%20in%20device_vars%3A%0A%20%20%20%20%20%20%20%20flags%20%3D%20%5Bdev%2C%20kind%5D%0A%20%20%20%20%20%20%20%20if%20ext%3A%20%20%20flags.append(%22extern%22)%0A%20%20%20%20%20%20%20%20if%20const%3A%20flags.append(%22constant%22)%0A%20%20%20%20%20%20%20%20if%20mgd%3A%20%20%20flags.append(%22managed%22)%0A%20%20%20%20%20%20%20%20head%20%3D%20%22cu.externally_initialized%20%3D%20%23cir.cu.externally_initialized%2C%20%22%20if%20const%20else%20%22%22%0A%20%20%20%20%20%20%20%20print(%22%20%20cir.global%20internal%20%40%25s%20%3D%20%23cir.undef%20%7B%25scu.var_registration%20%3D%20%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22%23cir.cu.var_registration%3C%25s%3E%7D%22%20%25%20(host%2C%20head%2C%20%22%2C%20%22.join(flags)))%0A%20%20%20%20print(%22%7D%22)%0A%20%20%20%20print(%22%E2%86%92%20%E4%B8%80%E5%85%B1%20%25d%20%E6%9D%A1%20cu.*%20%E5%B1%9E%E6%80%A7%EF%BC%88%25d%20%E4%B8%AA%20kernel_name%20%2B%20%25d%20%E4%B8%AA%20var_registration%EF%BC%89%22%0A%20%20%20%20%20%20%20%20%20%20%25%20(len(stubs)%20%2B%20len(device_vars)%2C%20len(stubs)%2C%20len(device_vars)))%0A%20%20%20%20print()%0A%0A%23%20----%20%E7%AC%AC%E4%BA%8C%E6%AD%A5%EF%BC%9Alowering%20pass%20%E6%B6%88%E8%B4%B9%E5%B1%9E%E6%80%A7%EF%BC%8C%E7%94%9F%E6%88%90%E6%B3%A8%E5%86%8C%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%20----%0Adef%20lower(offload_kind%2C%20has_binary_handle%3DTrue)%3A%0A%20%20%20%20P%20%3D%20%22__cuda%22%20if%20offload_kind%20%3D%3D%20%22cuda%22%20else%20%22__hip%22%0A%20%20%20%20%23%20%E4%B8%A4%E6%9D%A1%E8%B7%AF%E5%94%AF%E4%B8%80%E7%9A%84%E5%AE%9E%E8%B4%A8%E5%B7%AE%E5%88%AB%EF%BC%9Afatbin%20wrapper%20%E7%9A%84%20magic%2Fsection%EF%BC%8C%E4%BB%A5%E5%8F%8A%20CUDA%20%E5%A4%9A%E4%B8%80%E4%B8%AA%0A%20%20%20%20%23%20RegisterFatBinaryEnd%20%E8%B0%83%E7%94%A8%E3%80%82%E5%85%B6%E4%BD%99%E5%85%A8%E9%9D%A0%E6%8D%A2%E5%89%8D%E7%BC%80%E3%80%82%0A%20%20%20%20wrapper_note%20%3D%20('magic%3D0x466243b1%2C%20section%3D%22.nvFatBinSegment%22'%20if%20offload_kind%20%3D%3D%20%22cuda%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20else%20'magic%2Fsection%20%E7%94%A8%20HIP%20%E8%87%AA%E5%B7%B1%E7%9A%84%E4%B8%80%E5%A5%97')%0A%20%20%20%20needs_end_call%20%3D%20(offload_kind%20%3D%3D%20%22cuda%22)%0A%0A%20%20%20%20print(%22%3D%3D%3D%20%E7%AC%AC%E4%BA%8C%E6%AD%A5%EF%BC%88cir.offload.kind%20%3D%20%25s%EF%BC%89%3D%3D%3D%22%20%25%20offload_kind)%0A%20%20%20%20if%20not%20has_binary_handle%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%E6%A8%A1%E5%9D%97%E4%B8%8A%E6%B2%A1%E6%9C%89%20cir.cu.binary_handle%20%E2%80%94%E2%80%94%20%E8%BF%99%E6%AC%A1%E7%BC%96%E8%AF%91%E6%B2%A1%E6%9C%89%E8%AE%BE%E5%A4%87%E4%BA%8C%E8%BF%9B%E5%88%B6%E3%80%82%22)%0A%20%20%20%20%20%20%20%20print(%22%20%20pass%20%E4%BB%80%E4%B9%88%E9%83%BD%E4%B8%8D%E5%81%9A%EF%BC%9A%E6%B2%A1%E6%9C%89%20fatbin%20%E5%85%A8%E5%B1%80%E3%80%81%E6%B2%A1%E6%9C%89%20register_globals%E3%80%81%22)%0A%20%20%20%20%20%20%20%20print(%22%20%20%E6%B2%A1%E6%9C%89%20module_ctor%2Fdtor%EF%BC%8C%E4%B8%80%E6%9D%A1%E8%BF%90%E8%A1%8C%E6%97%B6%E8%B0%83%E7%94%A8%E9%83%BD%E4%B8%8D%E7%94%9F%E6%88%90%E3%80%82%22)%0A%20%20%20%20%20%20%20%20print(%22%20%20%EF%BC%88%E5%AF%B9%E5%BA%94%20lit%20%E6%B5%8B%E8%AF%95%E9%87%8C%E7%9A%84%20NOGPUBIN-NOT%3A%20fatbin%20%2F%20NOGPUBIN-NOT%3A%20gpubin%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20print()%0A%20%20%20%20%20%20%20%20return%0A%0A%20%20%20%20ops%20%3D%20%5B%5D%0A%20%20%20%20def%20emit(s)%3A%0A%20%20%20%20%20%20%20%20ops.append(s)%0A%0A%20%20%20%20emit(%22cir.global%20constant%20%40%25s_fatbin_str%20%3D%20%3C%E8%AE%BE%E5%A4%87%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AD%97%E8%8A%82%3E%22%20%25%20P)%0A%20%20%20%20emit(%22cir.global%20constant%20%40%25s_fatbin_wrapper%20%3D%20%23cir.const_record%3C%7B...%7D%3E%20%20%20%23%20%25s%22%0A%20%20%20%20%20%20%20%20%20%25%20(P%2C%20wrapper_note))%0A%20%20%20%20emit(%22cir.global%20internal%20%40%25s_gpubin_handle%20%3D%20%23cir.ptr%3Cnull%3E%22%20%25%20P)%0A%20%20%20%20for%20_host%2C%20dev%20in%20stubs%3A%0A%20%20%20%20%20%20%20%20emit('cir.global%20%22private%22%20constant%20%40%22.str%25s%22%20%3D%20%22%25s%5C%5C00%22'%20%25%20(dev%2C%20dev))%0A%20%20%20%20for%20_host%2C%20dev%2C%20_k%2C%20_e%2C%20_c%2C%20_m%2C%20_sz%20in%20device_vars%3A%0A%20%20%20%20%20%20%20%20emit('cir.global%20%22private%22%20constant%20%40%22.str%25s%22%20%3D%20%22%25s%5C%5C00%22'%20%25%20(dev%2C%20dev))%0A%0A%20%20%20%20emit(%22cir.func%20internal%20%40%25s_register_globals(%25%25fatbin)%20%7B%22%20%25%20P)%0A%20%20%20%20for%20host%2C%20dev%20in%20stubs%3A%0A%20%20%20%20%20%20%20%20emit('%20%20cir.call%20%40%25sRegisterFunction(%25%25fatbin%2C%20%40%25s%2C%20%40%22.str%25s%22%2C%20%40%22.str%25s%22%2C%20'%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%22-1%2C%20null%2C%20null%2C%20null%2C%20null%2C%20null)%22%20%25%20(P%2C%20host%2C%20dev%2C%20dev))%0A%20%20%20%20for%20host%2C%20dev%2C%20_k%2C%20ext%2C%20const%2C%20mgd%2C%20sz%20in%20device_vars%3A%0A%20%20%20%20%20%20%20%20emit('%20%20cir.call%20%40%25sRegisterVar(%25%25fatbin%2C%20%40%25s%2C%20%40%22.str%25s%22%2C%20%40%22.str%25s%22%2C%20%25d%2C%20%25d%2C%20%25d%2C%20%25d)'%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%25%20(P%2C%20host%2C%20dev%2C%20dev%2C%20int(ext)%2C%20sz%2C%20int(const)%2C%20int(mgd)))%0A%20%20%20%20emit(%22%7D%22)%0A%0A%20%20%20%20emit(%22cir.func%20internal%20%40%25s_module_ctor()%20%7B%22%20%25%20P)%0A%20%20%20%20emit(%22%20%20%25%25h%20%3D%20cir.call%20%40%25sRegisterFatBinary(%40%25s_fatbin_wrapper)%22%20%25%20(P%2C%20P))%0A%20%20%20%20emit(%22%20%20cir.store%20%25%25h%2C%20%40%25s_gpubin_handle%22%20%25%20P)%0A%20%20%20%20emit(%22%20%20cir.call%20%40%25s_register_globals(%25%25h)%22%20%25%20P)%0A%20%20%20%20if%20needs_end_call%3A%0A%20%20%20%20%20%20%20%20emit(%22%20%20cir.call%20%40%25sRegisterFatBinaryEnd(%25%25h)%22%20%25%20P)%0A%20%20%20%20emit(%22%20%20cir.call%20%40atexit(%40%25s_module_dtor)%22%20%25%20P)%0A%20%20%20%20emit(%22%7D%22)%0A%20%20%20%20emit(%22cir.func%20internal%20%40%25s_module_dtor()%20%7B%20cir.call%20%40%25sUnregisterFatBinary(%22%0A%20%20%20%20%20%20%20%20%20%22load%20%40%25s_gpubin_handle)%20%7D%22%20%25%20(P%2C%20P%2C%20P))%0A%20%20%20%20emit('%E6%A8%A1%E5%9D%97%E5%B1%9E%E6%80%A7%20cir.global_ctors%20%3D%20%5B%23cir.global_ctor%3C%22%25s_module_ctor%22%2C%2065535%3E%5D'%20%25%20P)%0A%0A%20%20%20%20for%20i%2C%20s%20in%20enumerate(ops%2C%201)%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%252d.%20%25s%22%20%25%20(i%2C%20s))%0A%20%20%20%20print(%22%E2%86%92%20%25d%20%E6%9D%A1%E5%B1%9E%E6%80%A7%E9%A9%B1%E5%8A%A8%E5%87%BA%20%25d%20%E8%A1%8C%20IR%22%20%25%20(len(stubs)%20%2B%20len(device_vars)%2C%20len(ops)))%0A%20%20%20%20print()%0A%0Ashow_cirgen_module()%0Alower(%22cuda%22)%0Alower(%22hip%22)%0Alower(%22cuda%22%2C%20has_binary_handle%3DFalse)%0A%0Aprint(%22%3D%3D%3D%20%E4%B8%89%E6%AC%A1%E8%BF%90%E8%A1%8C%E6%94%BE%E5%9C%A8%E4%B8%80%E8%B5%B7%E7%9C%8B%20%3D%3D%3D%22)%0Aprint(%22%E5%B1%9E%E6%80%A7%E4%B8%80%E4%B8%AA%E5%AD%97%E6%B2%A1%E6%94%B9%E3%80%82%E6%8D%A2%20cir.offload.kind%EF%BC%8C%E6%95%B4%E5%A5%97%E8%BF%90%E8%A1%8C%E6%97%B6%E7%AC%A6%E5%8F%B7%E8%B7%9F%E7%9D%80%E6%8D%A2%EF%BC%9B%22)%0Aprint(%22%E6%8B%BF%E6%8E%89%20cir.cu.binary_handle%EF%BC%8C%E6%95%B4%E5%A5%97%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E4%B8%80%E8%A1%8C%E4%B8%8D%E7%94%9F%E6%88%90%E3%80%82%22)%0Aprint(%22CIRGen%20%E5%8F%AA%E8%B4%9F%E8%B4%A3%E8%AE%B0%E4%B8%8B%E3%80%8C%E8%BF%99%E4%B8%AA%20stub%20%E5%AF%B9%E5%BA%94%E5%93%AA%E4%B8%AA%20kernel%E3%80%8D%E3%80%8C%E8%BF%99%E4%B8%AA%E5%8F%98%E9%87%8F%E8%A6%81%E6%B3%A8%E5%86%8C%E3%80%81%E6%98%AF%E4%B8%8D%E6%98%AF%E5%B8%B8%E9%87%8F%E3%80%81%E5%A4%9A%E5%A4%A7%E3%80%8D%EF%BC%9B%22)%0Aprint(%22%E3%80%8C%E8%90%BD%E6%88%90%E4%BB%80%E4%B9%88%E6%A0%B7%E7%9A%84%E8%BF%90%E8%A1%8C%E6%97%B6%E8%B0%83%E7%94%A8%E3%80%8D%E6%98%AF%20pass%20%E7%9A%84%E4%BA%8B%E2%80%94%E2%80%94%E8%BF%99%E5%B0%B1%E6%98%AF%E7%AC%AC%2026%20%E7%AB%A0%E9%82%A3%E4%B8%AA%E5%A5%97%E5%BC%8F%E5%9C%A8%20offloading%20%E4%B8%8A%E7%9A%84%E5%A4%8D%E7%94%A8%E3%80%82%22)"># CIR 的「属性先记账，pass 再展开」套式，用主机端 CUDA/HIP 注册代码做例子。
+# 第一步（CIRGen）：主机端模块里只有属性，没有任何运行时调用。
+# 第二步（lowering pass）：遍历模块，把属性展开成 __cudaRegister* / __hipRegister* 序列。
+
+# ---- 第一步：CIRGen 产出的主机端模块（只记账，不展开）----
+module_attrs = {
+    "cir.offload.kind": "cuda",                            # cuda 还是 hip
+    "cir.cu.binary_handle": "a.out-nvptx64-sm_80.fatbin",  # 设备二进制在哪
+}
+
+# 每个 __global__ 函数在主机端变成一个 stub，用 cu.kernel_name 记住设备端名字
+stubs = [
+    # (主机端 stub 符号,                    设备端 mangled name)
+    ("_Z21__device_stub__kernelif",        "_Z6kernelif"),
+    ("_Z24__device_stub__reduce_sumPfi",   "_Z10reduce_sumPfi"),
+]
+
+# 每个 __device__ / __constant__ 变量在主机端变成一个影子全局，带 cu.var_registration。
+# 字段顺序照 CIRCUDAAttrs.td 里的 parameters 来：
+#   device_side_name, kind, isExtern, isConstant, isManaged
+device_vars = [
+    # (主机端符号, 设备端名, kind,       extern, constant, managed, 字节数)
+    ("i",         "i",      "Variable", False,  False,    False,   4),  # __device__ int i;
+    ("j",         "j",      "Variable", False,  True,     False,   4),  # __constant__ int j;
+    ("c",         "c",      "Variable", False,  False,    False,   8),  # __device__ _BitInt(36) c;
+]
+
+def show_cirgen_module():
+    print("=== 第一步：CIRGen 之后的主机端 CIR（全是属性，零条运行时调用）===")
+    print("module attributes {")
+    for k, v in module_attrs.items():
+        print('  %s = "%s",' % (k, v))
+    print("} {")
+    for host, dev in stubs:
+        print('  cir.func @%s(...) {cu.kernel_name = #cir.cu.kernel_name&lt;"%s"&gt;}' % (host, dev))
+    for host, dev, kind, ext, const, mgd, _sz in device_vars:
+        flags = [dev, kind]
+        if ext:   flags.append("extern")
+        if const: flags.append("constant")
+        if mgd:   flags.append("managed")
+        head = "cu.externally_initialized = #cir.cu.externally_initialized, " if const else ""
+        print("  cir.global internal @%s = #cir.undef {%scu.var_registration = "
+              "#cir.cu.var_registration&lt;%s&gt;}" % (host, head, ", ".join(flags)))
+    print("}")
+    print("→ 一共 %d 条 cu.* 属性（%d 个 kernel_name + %d 个 var_registration）"
+          % (len(stubs) + len(device_vars), len(stubs), len(device_vars)))
+    print()
+
+# ---- 第二步：lowering pass 消费属性，生成注册基础设施 ----
+def lower(offload_kind, has_binary_handle=True):
+    P = "__cuda" if offload_kind == "cuda" else "__hip"
+    # 两条路唯一的实质差别：fatbin wrapper 的 magic/section，以及 CUDA 多一个
+    # RegisterFatBinaryEnd 调用。其余全靠换前缀。
+    wrapper_note = ('magic=0x466243b1, section=".nvFatBinSegment"' if offload_kind == "cuda"
+                    else 'magic/section 用 HIP 自己的一套')
+    needs_end_call = (offload_kind == "cuda")
+
+    print("=== 第二步（cir.offload.kind = %s）===" % offload_kind)
+    if not has_binary_handle:
+        print("  模块上没有 cir.cu.binary_handle —— 这次编译没有设备二进制。")
+        print("  pass 什么都不做：没有 fatbin 全局、没有 register_globals、")
+        print("  没有 module_ctor/dtor，一条运行时调用都不生成。")
+        print("  （对应 lit 测试里的 NOGPUBIN-NOT: fatbin / NOGPUBIN-NOT: gpubin）")
+        print()
+        return
+
+    ops = []
+    def emit(s):
+        ops.append(s)
+
+    emit("cir.global constant @%s_fatbin_str = &lt;设备二进制字节&gt;" % P)
+    emit("cir.global constant @%s_fatbin_wrapper = #cir.const_record&lt;{...}&gt;   # %s"
+         % (P, wrapper_note))
+    emit("cir.global internal @%s_gpubin_handle = #cir.ptr&lt;null&gt;" % P)
+    for _host, dev in stubs:
+        emit('cir.global "private" constant @".str%s" = "%s\\00"' % (dev, dev))
+    for _host, dev, _k, _e, _c, _m, _sz in device_vars:
+        emit('cir.global "private" constant @".str%s" = "%s\\00"' % (dev, dev))
+
+    emit("cir.func internal @%s_register_globals(%%fatbin) {" % P)
+    for host, dev in stubs:
+        emit('  cir.call @%sRegisterFunction(%%fatbin, @%s, @".str%s", @".str%s", '
+             "-1, null, null, null, null, null)" % (P, host, dev, dev))
+    for host, dev, _k, ext, const, mgd, sz in device_vars:
+        emit('  cir.call @%sRegisterVar(%%fatbin, @%s, @".str%s", @".str%s", %d, %d, %d, %d)'
+             % (P, host, dev, dev, int(ext), sz, int(const), int(mgd)))
+    emit("}")
+
+    emit("cir.func internal @%s_module_ctor() {" % P)
+    emit("  %%h = cir.call @%sRegisterFatBinary(@%s_fatbin_wrapper)" % (P, P))
+    emit("  cir.store %%h, @%s_gpubin_handle" % P)
+    emit("  cir.call @%s_register_globals(%%h)" % P)
+    if needs_end_call:
+        emit("  cir.call @%sRegisterFatBinaryEnd(%%h)" % P)
+    emit("  cir.call @atexit(@%s_module_dtor)" % P)
+    emit("}")
+    emit("cir.func internal @%s_module_dtor() { cir.call @%sUnregisterFatBinary("
+         "load @%s_gpubin_handle) }" % (P, P, P))
+    emit('模块属性 cir.global_ctors = [#cir.global_ctor&lt;"%s_module_ctor", 65535&gt;]' % P)
+
+    for i, s in enumerate(ops, 1):
+        print("  %2d. %s" % (i, s))
+    print("→ %d 条属性驱动出 %d 行 IR" % (len(stubs) + len(device_vars), len(ops)))
+    print()
+
+show_cirgen_module()
+lower("cuda")
+lower("hip")
+lower("cuda", has_binary_handle=False)
+
+print("=== 三次运行放在一起看 ===")
+print("属性一个字没改。换 cir.offload.kind，整套运行时符号跟着换；")
+print("拿掉 cir.cu.binary_handle，整套基础设施一行不生成。")
+print("CIRGen 只负责记下「这个 stub 对应哪个 kernel」「这个变量要注册、是不是常量、多大」；")
+print("「落成什么样的运行时调用」是 pass 的事——这就是第 26 章那个套式在 offloading 上的复用。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果（第一步的模块，以及 CUDA 那次展开）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 第一步：CIRGen 之后的主机端 CIR（全是属性，零条运行时调用）===
+module attributes {
+  cir.offload.kind = "cuda",
+  cir.cu.binary_handle = "a.out-nvptx64-sm_80.fatbin",
+} {
+  cir.func @_Z21__device_stub__kernelif(...) {cu.kernel_name = #cir.cu.kernel_name&lt;"_Z6kernelif"&gt;}
+  cir.func @_Z24__device_stub__reduce_sumPfi(...) {cu.kernel_name = #cir.cu.kernel_name&lt;"_Z10reduce_sumPfi"&gt;}
+  cir.global internal @i = #cir.undef {cu.var_registration = #cir.cu.var_registration&lt;i, Variable&gt;}
+  cir.global internal @j = #cir.undef {cu.externally_initialized = #cir.cu.externally_initialized, cu.var_registration = #cir.cu.var_registration&lt;j, Variable, constant&gt;}
+  cir.global internal @c = #cir.undef {cu.var_registration = #cir.cu.var_registration&lt;c, Variable&gt;}
+}
+→ 一共 5 条 cu.* 属性（2 个 kernel_name + 3 个 var_registration）
+
+=== 第二步（cir.offload.kind = cuda）===
+   1. cir.global constant @__cuda_fatbin_str = &lt;设备二进制字节&gt;
+   2. cir.global constant @__cuda_fatbin_wrapper = #cir.const_record&lt;{...}&gt;   # magic=0x466243b1, section=".nvFatBinSegment"
+   3. cir.global internal @__cuda_gpubin_handle = #cir.ptr&lt;null&gt;
+   4. cir.global "private" constant @".str_Z6kernelif" = "_Z6kernelif\00"
+   5. cir.global "private" constant @".str_Z10reduce_sumPfi" = "_Z10reduce_sumPfi\00"
+   6. cir.global "private" constant @".stri" = "i\00"
+   7. cir.global "private" constant @".strj" = "j\00"
+   8. cir.global "private" constant @".strc" = "c\00"
+   9. cir.func internal @__cuda_register_globals(%fatbin) {
+  10.   cir.call @__cudaRegisterFunction(%fatbin, @_Z21__device_stub__kernelif, @".str_Z6kernelif", @".str_Z6kernelif", -1, null, null, null, null, null)
+  11.   cir.call @__cudaRegisterFunction(%fatbin, @_Z24__device_stub__reduce_sumPfi, @".str_Z10reduce_sumPfi", @".str_Z10reduce_sumPfi", -1, null, null, null, null, null)
+  12.   cir.call @__cudaRegisterVar(%fatbin, @i, @".stri", @".stri", 0, 4, 0, 0)
+  13.   cir.call @__cudaRegisterVar(%fatbin, @j, @".strj", @".strj", 0, 4, 1, 0)
+  14.   cir.call @__cudaRegisterVar(%fatbin, @c, @".strc", @".strc", 0, 8, 0, 0)
+  15. }
+  16. cir.func internal @__cuda_module_ctor() {
+  17.   %h = cir.call @__cudaRegisterFatBinary(@__cuda_fatbin_wrapper)
+  18.   cir.store %h, @__cuda_gpubin_handle
+  19.   cir.call @__cuda_register_globals(%h)
+  20.   cir.call @__cudaRegisterFatBinaryEnd(%h)
+  21.   cir.call @atexit(@__cuda_module_dtor)
+  22. }
+  23. cir.func internal @__cuda_module_dtor() { cir.call @__cudaUnregisterFatBinary(load @__cuda_gpubin_handle) }
+  24. 模块属性 cir.global_ctors = [#cir.global_ctor&lt;"__cuda_module_ctor", 65535&gt;]
+→ 5 条属性驱动出 24 行 IR</code></pre>
+</div><p>后两次运行的关键差异：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 第二步（cir.offload.kind = hip）===
+   1. cir.global constant @__hip_fatbin_str = &lt;设备二进制字节&gt;
+   ...
+   9. cir.func internal @__hip_register_globals(%fatbin) {
+  10.   cir.call @__hipRegisterFunction(%fatbin, @_Z21__device_stub__kernelif, @".str_Z6kernelif", @".str_Z6kernelif", -1, null, null, null, null, null)
+  ...
+  15. }
+  16. cir.func internal @__hip_module_ctor() {
+  ...                      ← 这里少了 RegisterFatBinaryEnd 那一行
+  20.   cir.call @atexit(@__hip_module_dtor)
+  21. }
+→ 5 条属性驱动出 23 行 IR
+
+=== 第二步（cir.offload.kind = cuda）===
+  模块上没有 cir.cu.binary_handle —— 这次编译没有设备二进制。
+  pass 什么都不做：没有 fatbin 全局、没有 register_globals、
+  没有 module_ctor/dtor，一条运行时调用都不生成。
+  （对应 lit 测试里的 NOGPUBIN-NOT: fatbin / NOGPUBIN-NOT: gpubin）</code></pre>
+</div><p>对着三次输出体会那个套式：<strong>5 条属性 → 24 行 IR</strong>，而属性一个字没改，仅靠模块级的 <code>cir.offload.kind</code> 就切换了整套运行时符号。请动手改两处：一是往 <code>device_vars</code> 里加一个 <code>(&quot;mp&quot;, &quot;mp&quot;, &quot;Variable&quot;, False, False, True, 8)</code>（managed 变量），看最后一个参数怎么变、看真实实现里为什么 <code>isExtern</code> 那一行注释说它「只有等 HIP managed 变量支持落地后才可能为真」；二是给 <code>stubs</code> 加一个 kernel，数一下 IR 行数增加了多少——你会发现每个 kernel 带来两行（名字字符串 + RegisterFunction 调用），这个「线性展开」的性质正是把它做成 pass 而不是散在 IRGen 各处的好处。</p>
+<h2>小结与下一步</h2>
+<ul>
+<li>CUDA/HIP 的<strong>两趟编译骨架不变</strong>，CIR 换掉的只是每一趟里 AST → LLVM IR 那一段。发射过滤（哪一趟发射哪些函数）在 <code>filter-decl.cu</code> 里被做成一个四前缀矩阵，<code>__global__</code> 函数在两趟里名字不同——主机端是 <code>__device_stub__</code> 前缀的存根。</li>
+<li><code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 展开成<strong>调用点 + stub 两半</strong>：<code>__cudaPushCallConfiguration</code> → <code>cir.if</code>（推失败就不启动）→ 调 stub → <code>__cudaPopCallConfiguration</code> → <code>kernel_args</code> 数组 → <code>cudaLaunchKernel</code>。HIP 只换符号，不换骨架。</li>
+<li><strong>双地址空间</strong>是这一章最值得学的设计：<code>lang_address_space(offload_global/constant/local)</code> 说语言语义，<code>target_address_space(N)</code> 说目标编号，两者都实现 <code>MemorySpaceAttrInterface</code>，中间由 <code>cir-target-lowering</code> 翻译。好处是前半段的 IR 与目标无关。</li>
+<li><strong>属性先记账，pass 再展开</strong>：<code>cu.kernel_name</code>（函数上）、<code>cu.var_registration</code> / <code>cu.externally_initialized</code>（全局上）、<code>cu.binary_handle</code> / <code>cir.offload.kind</code>（模块上）。这些属性可打印、可 <code>grep</code>、可写 FileCheck——这是相对经典路径最直接的可观察性收益。</li>
+<li>parity 用测试制度化到了极致：<code>device-var-registration.hip</code> 里<strong>同一批 <code>LLVM</code> CHECK 行同时验证两条管线</strong>。</li>
+<li>PolyBench/GPU 全套体检：<strong>84/84 覆盖，CUDA 编译时间 +0.4%，运行时几何平均 ≈ 1.00</strong>。缺口是 texture memory、RDC，以及基本还没开始的 SYCL 支持。</li>
+<li>主机与设备表示在同一层共存，为 <strong>host–device co-optimization</strong> 留出了落点——这是探索性工作，也是「为什么值得加一层」最有说服力的那个答案。</li>
+</ul>
+<p>这一部分到这里结束，整本书也到这里结束。回头看，你走过了三段路：LLVM 的 IR 中心哲学与 Pass 框架（第一部分）、异构世界里 IR 怎么跨设备走（第二部分）、SYCL 在 <code>intel/llvm</code> 里的真实实现与怎么给它加扩展（第三、四部分）。第五部分是一次视角切换——不是「已经这样了」，而是「有人正在改」。ClangIR 这条路会不会最终成为 Clang 的默认路径，写这本书的时候还没有答案；但你现在有了读懂它的全部工具：一个 MLIR 方言长什么样、怎么用 <code>-emit-cir</code> / <code>cir-opt</code> 观察它、怎么去 <code>clang/test/CIR/</code> 里查一个特性支持到什么程度。</p>
+<p>看编译器最好的方式，从来都是打开它。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>发射过滤</strong>：<code>-fcuda-is-device</code> 决定这一趟发射哪些函数。<code>__host__ __device__</code> 两趟各发一份；<code>__global__</code> 在主机端是 <code>@_Z25__device_stub__globalfuncv</code>，在设备端是 <code>@_Z10globalfuncv</code>。测试用 <code>CIR-HOST</code> / <code>CIR-DEVICE</code> / <code>OGCG-HOST</code> / <code>OGCG-DEVICE</code> 四个前缀交叉验证。</li>
+<li><strong><code>cu.kernel_name</code></strong> 把「主机端 stub ↔ 设备端 kernel」这根绳子写在 IR 上，供后续注册代码消费。</li>
+<li><strong><code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 的形状</strong>：<code>dim3</code> 临时对象 + <code>__cudaPushCallConfiguration</code> + <code>cir.cast int_to_bool</code> + <code>cir.if</code>（then 空、else 调 stub）；stub 里 <code>__cudaPopCallConfiguration</code> + <code>kernel_args : !cir.array&lt;!cir.ptr&lt;!void&gt; x N&gt;</code> + <code>cudaLaunchKernel</code>。per-thread 流走 <code>cudaLaunchKernel_ptsz</code> / <code>hipLaunchKernel_spt</code>。</li>
+<li><strong>双地址空间</strong>：<code>CIR_LangAddressSpaceAttr</code>（<code>offload_global</code> / <code>offload_constant</code> / <code>offload_local</code> …）与 <code>CIR_TargetAddressSpaceAttr</code>（<code>target_address_space(N)</code>，0 表示默认），都实现 <code>MemorySpaceAttrInterface</code>，由 <strong><code>cir-target-lowering</code></strong> 转换。<code>__device__</code>→1、<code>__constant__</code>→4、<code>__shared__</code>→3（NVPTX）。用 <code>-mmlir -mlir-print-ir-before=cir-target-lowering</code> 可以在同一个测试里看到转换前后。</li>
+<li><strong>注册基础设施</strong>：<code>cu.var_registration&lt;name, Variable[, constant][, managed]&gt;</code> → <code>__cudaRegisterVar</code> / <code>__hipRegisterVar</code>；<code>cu.binary_handle</code> → fatbin 全局 + wrapper（magic <code>1180844977</code>，section <code>.nv_fatbin</code> / <code>.nvFatBinSegment</code>）+ <code>__cuda_module_ctor</code>（<code>cir.global_ctors</code> 优先级 65535）+ <code>atexit(@__cuda_module_dtor)</code>。没有 <code>cu.binary_handle</code> 就一行都不生成。</li>
+<li><strong>源码位置</strong>：<code>CIRGenCUDANV.cpp</code> / <code>CIRGenCUDARuntime.{h,cpp}</code>（对应经典的 <code>CGCUDANV.cpp</code> / <code>CGCUDARuntime.{h,cpp}</code>），属性定义在 <code>CIRCUDAAttrs.td</code>（不是 <code>CIRAttrs.td</code>），测试在 <code>clang/test/CIR/CodeGenCUDA/</code> 与 <code>clang/test/CIR/CodeGenHIP/</code>。</li>
+<li><strong>现状</strong>：PolyBench/GPU 84/84 编译通过，编译时间开销 CUDA 约 +0.4%、HIP 略高，运行时性能与经典路径持平。缺口：texture memory、RDC、OpenCL（进行中）、SYCL（基本未开始，但已有 <code>CIRGenSYCL.cpp</code>）。追踪 issue：<code>llvm/llvm-project#179278</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch26.html">← 第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</a>
+  <a class="nav-next" href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

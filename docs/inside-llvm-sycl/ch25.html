@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li class="active"><a href="ch25.html">第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</a></li>
+<li><a href="ch26.html">第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</a></li>
+<li><a href="ch27.html">第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章立起的那条链是「源码 → IR →（优化）→ IR → 机器码」，并且给了 IR 三条硬指标：能落盘、有独立命令行工具、能人肉审查。这一章要指出这条链上一处一直没被满足的断崖：<strong>从 Clang AST 到 LLVM IR 的那一步</strong>。它是一个几万行的单体翻译过程，中间没有任何可观察、可落盘、可用工具处理的形态。<strong>ClangIR（简称 CIR）</strong>就是社区正在往这个断崖里填的一层。</p>
+<p>读完你会知道：<code>cir</code> 是一个 <strong>MLIR 方言</strong>，它和 MLIR、LLVM IR 是三层「基础设施 / 客户 / 目标」的关系，谁也不替代谁；<code>-fclangir</code> 和 <code>-emit-cir</code> 怎么用；<code>cir-opt</code> / <code>cir-translate</code> 如何把第 1 章图 1-2 那套 <code>opt</code> / <code>llc</code> 的对称性复制到新一层上。而贯穿整章的主线是一个对照：<strong>CIR 路径和经典 CodeGen 路径的差别到底在哪，社区又用什么标准判定新路径是对的</strong>。这条主线会在目录、管线、测试、代价四个层面各走一遍。</p>
+</div><h2>先说清楚：这一部分的源码锚点变了</h2>
+<p>前面 24 章的每条路径都能在 <code>intel/llvm</code> 里 <code>cd</code> 进去。这一部分不行——你要换一个仓库。</p>
+<p>ClangIR 是<strong>上游 LLVM 正在进行中的工作</strong>，代码在 <code>llvm/llvm-project</code> 的主干上，主要落在 <code>clang/lib/CIR/</code>、<code>clang/include/clang/CIR/</code> 和 <code>clang/test/CIR/</code>。另有一个孵化器仓库 <code>llvm/clangir</code>，里面是尚未上游化的部分（比如后面会提到的 <code>ThroughMLIR/</code> 路径）。<code>intel/llvm</code> 会周期性地从上游拉取，所以这些目录在 DPC++ 树里也可能出现，但<strong>它不是 DPC++ 的功能</strong>，别把两者的进度混在一起看。</p>
+<div class="warn">
+<strong>这一部分讲的是活的靶子</strong>
+ClangIR 每周都在变：操作会改名（孵化器里叫 <code>!cir.record</code> 的类型，上游是 <code>!cir.struct</code>）、pass 会增删、追踪 issue 里的复选框会更新。本章给出的每个名字都取自写作时的上游源码与 lit 测试，但你读到时最可靠的做法是：以你手上那份 <code>llvm-project</code> 为准，用 <code>grep</code> 复核一遍。方法比清单更耐用——本章重点是让你会自己去 <code>clang/test/CIR/</code> 里找答案。
+</div><h2>第 1 章那条链上的一处断崖</h2>
+<p>回到第 1 章的三段式。你会说：前端是 Clang，输入源码、输出 LLVM IR，清楚得很。</p>
+<p>但把镜头推近到「前端」这个盒子内部，它自己也是分段的：源码 →（词法/语法分析）→ <strong>AST</strong> →（Sema 语义检查）→ AST →（CodeGen）→ <strong>LLVM IR</strong>。前两步之间的产物 AST 是一等公民：你能用 <code>clang -Xclang -ast-dump</code> 把它打印出来看，clang-tidy、clangd 这些工具就活在 AST 上。</p>
+<p>问题出在最后一步。<code>clang/lib/CodeGen/</code> 那几万行代码（社区管它叫 <strong>OG</strong>，original CodeGen 的意思）做的事是：一边遍历 AST，一边<strong>直接</strong>往 <code>llvm::IRBuilder</code> 里吐指令。C++ 的 <code>for</code> 循环、虚函数调用、异常处理、构造函数——所有这些高层结构，在一次遍历里就被同时降级成了基本块 + <code>br</code> + <code>getelementptr</code>。中间<strong>没有任何形态</strong>。你没法说「给我看看降级到一半的样子」，因为不存在这样的东西。</p>
+<p>对着第 1 章那三条指标一条条比：能落盘？不能。有独立工具？没有——你不能像 <code>opt</code> 那样把 AST→IR 这一段单独拎出来跑。能人肉审查？只能读 C++ 源码，不能读数据。</p>
+<div class="concept">
+<svg viewBox="0 0 660 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">前端内部：一处没有中间形态的断崖，和往里填的那一层</text>
+  <!-- 经典路径 -->
+  <text x="20" y="56" font-size="11" font-weight="bold" fill="#6b7280">经典路径（OG，clang/lib/CodeGen/）</text>
+  <rect x="20" y="66" width="80" height="34" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="60" y="87" text-anchor="middle" font-size="11" fill="#374151">源码</text>
+  <path d="M100 83 L128 83" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c1)"/>
+  <rect x="128" y="66" width="80" height="34" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="168" y="87" text-anchor="middle" font-size="11" fill="#2b6cb0">AST</text>
+  <!-- 断崖 -->
+  <path d="M208 83 L392 83" stroke="#e06a3b" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#c2)"/>
+  <rect x="232" y="60" width="136" height="26" rx="5" fill="#fff4ec" stroke="#e06a3b"/>
+  <text x="300" y="77" text-anchor="middle" font-size="10" fill="#a53f1c">CodeGen（单体、一次遍历）</text>
+  <text x="300" y="103" text-anchor="middle" font-size="10" fill="#a53f1c">中间没有任何可落盘的形态</text>
+  <rect x="392" y="66" width="92" height="34" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="438" y="87" text-anchor="middle" font-size="11" fill="#2f7a45">LLVM IR</text>
+  <path d="M484 83 L512 83" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c1)"/>
+  <rect x="512" y="66" width="126" height="34" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="575" y="87" text-anchor="middle" font-size="11" fill="#374151">中端 + 后端（不变）</text>
+  <!-- 分隔 -->
+  <line x1="20" y1="128" x2="640" y2="128" stroke="#e5e7eb"/>
+  <!-- CIR 路径 -->
+  <text x="20" y="152" font-size="11" font-weight="bold" fill="#2b6cb0">CIR 路径（-fclangir，clang/lib/CIR/）</text>
+  <rect x="20" y="162" width="80" height="34" rx="6" fill="#f3f4f6" stroke="#9ca3af"/>
+  <text x="60" y="183" text-anchor="middle" font-size="11" fill="#374151">源码</text>
+  <path d="M100 179 L128 179" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c1)"/>
+  <rect x="128" y="162" width="80" height="34" rx="6" fill="#eef6ff" stroke="#2b6cb0"/>
+  <text x="168" y="183" text-anchor="middle" font-size="11" fill="#2b6cb0">AST</text>
+  <path d="M208 179 L236 179" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c3)"/>
+  <text x="222" y="172" text-anchor="middle" font-size="8" fill="#2f7a45">CIRGen</text>
+  <!-- cir -->
+  <rect x="236" y="158" width="86" height="42" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="279" y="176" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f7a45">cir 方言</text>
+  <text x="279" y="192" text-anchor="middle" font-size="9" fill="#6b7280">.cir 可落盘</text>
+  <!-- 自环 pass -->
+  <path d="M258 158 C 250 132, 308 132, 300 158" stroke="#3f9b5c" stroke-width="1.2" fill="none" marker-end="url(#c3)"/>
+  <text x="279" y="140" text-anchor="middle" font-size="9" fill="#2f7a45">CIR passes</text>
+  <path d="M322 179 L360 179" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c3)"/>
+  <rect x="360" y="158" width="86" height="42" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="403" y="176" text-anchor="middle" font-size="10" fill="#2f7a45">LLVM 方言</text>
+  <text x="403" y="192" text-anchor="middle" font-size="9" fill="#6b7280">（MLIR 里的）</text>
+  <path d="M446 179 L474 179" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c3)"/>
+  <rect x="474" y="162" width="80" height="34" rx="6" fill="#f0fdf4" stroke="#3f9b5c"/>
+  <text x="514" y="183" text-anchor="middle" font-size="11" fill="#2f7a45">LLVM IR</text>
+  <path d="M554 179 L582 179" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c1)"/>
+  <text x="612" y="183" text-anchor="middle" font-size="10" fill="#374151">中端+后端</text>
+  <text x="330" y="232" text-anchor="middle" font-size="11" fill="#2d2a26">两条路径<tspan font-weight="bold">终点相同</tspan>：都汇回同一份 LLVM IR，再交给同一套中端和后端</text>
+  <text x="330" y="254" text-anchor="middle" font-size="11" fill="#6b7280">CIR 不碰 LLVM IR 之后的任何东西——它只把上半段那一步拆成了「一层 + 若干 pass」</text>
+  <text x="330" y="278" text-anchor="middle" font-size="11" fill="#a53f1c">判定新路径正确的标准，就是它产出的 LLVM IR 与经典路径语义等价</text>
+  <defs>
+    <marker id="c1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+    <marker id="c3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f9b5c"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 25-1　上半段是经典路径：AST 到 LLVM IR 之间是一段没有中间形态的单体翻译。下半段是 CIR 路径：中间多出一层可落盘的 <code>cir</code> 方言，以及一串跑在它上面的 pass。注意两条路径在 LLVM IR 处汇合——第 1 章之后的所有内容都不受影响</div>
+</div><h2><code>cir</code> 是一个 MLIR 方言</h2>
+<p>「ClangIR 和 MLIR、LLVM IR 是什么关系」是最容易搞混的一点。直接看方言定义文件的开头（<code>clang/include/clang/CIR/Dialect/IR/CIRDialect.td</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">include "mlir/IR/OpBase.td"
+
+def CIR_Dialect : Dialect {
+  let name = "cir";
+  let summary = "A high-level dialect for analyzing and optimizing Clang "
+                "supported languages";
+  let cppNamespace = "::cir";
+  let hasConstantMaterializer = 1;
+  // ...
+}</code></pre>
+</div><p>第一行就说明了一切：它 <code>include</code> 的是 MLIR 的 <code>OpBase.td</code>。<strong>MLIR 不是一种 IR，而是一套「造 IR」的框架</strong>——它提供操作/类型/属性的声明式定义（TableGen）、通用的 pass 管理器、通用的文本格式解析与打印、通用的验证器。任何人都能用它定义自己的一套操作，这套操作叫一个<strong>方言（dialect）</strong>。<code>cir</code> 就是这样一个方言，<code>name = &quot;cir&quot;</code> 决定了你在文本里看到的所有操作都带 <code>cir.</code> 前缀。</p>
+<p>所以三者是三个不同层次上的东西：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>是什么</th>
+<th>在这条链里的角色</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>MLIR</strong></td>
+<td>造 IR 的框架 / 基础设施</td>
+<td>提供地基：TableGen 定义、pass 管理、文本格式、验证</td>
+</tr>
+<tr>
+<td><strong><code>cir</code> 方言</strong></td>
+<td>用 MLIR 造出来的一种 IR</td>
+<td>新的中间层：贴近 C/C++ 语义，位于 AST 与 LLVM IR 之间</td>
+</tr>
+<tr>
+<td><strong>LLVM IR</strong></td>
+<td>LLVM 原生的低层 IR</td>
+<td>终点：CIR 最后降级到它，之后一切照旧</td>
+</tr>
+</tbody></table>
+<div class="note">
+<strong>CIR 和 Flang 的 FIR 是同一种做法</strong>
+如果你看过 Flang，这个套路会很熟：Flang 也在 AST 和 LLVM IR 之间放了一个 MLIR 方言，叫 <strong>FIR</strong>（Fortran IR），用来表达 Fortran 特有的高层概念（数组描述符、<code>do concurrent</code> 之类）。CIR 之于 Clang，就是 FIR 之于 Flang。这不是某个人的奇思妙想，而是 LLVM 生态里已经被验证过的一条路。
+</div><div class="keypoint">
+<strong>三句话，别再搞混</strong>
+CIR <strong>不是</strong> MLIR 的替代品，它是 MLIR 的<strong>客户</strong>——用 MLIR 的基础设施造出来的一个方言。CIR <strong>不是</strong> LLVM IR 的替代品，LLVM IR 是它的<strong>降级目标</strong>。CIR 也<strong>不改变</strong>第 1 章那条链的下半段：中端的 Pass、后端的 Target、SPIR-V/PTX 的产出路径，一个字都不动。
+</div><h2>看一眼真正的 CIR</h2>
+<p>最快建立直觉的办法是看同一段代码的三种形态。下面这段 C++：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">int *f5() {
+  int *p = nullptr;
+  {
+    int x = 0;
+    p = &amp;x;
+    *p = 42;
+  }
+  *p = 43;
+  return p;
+}</code></pre>
+</div><p>它的 CIR 长这样（取自 <code>clang/test/CIR/CodeGenCXX/basic.cpp</code> 的 CHECK 行，为可读性去掉了 FileCheck 的变量捕获语法）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.func @_Z2f5v() -&gt; (!cir.ptr&lt;!s32i&gt;) {
+  %0 = cir.alloca "__retval" align(8) : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
+  %1 = cir.alloca "p" align(8) init : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
+  %2 = cir.const #cir.ptr&lt;null&gt; : !cir.ptr&lt;!s32i&gt;
+  cir.store %2, %1 : !cir.ptr&lt;!s32i&gt;, !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
+  cir.scope {
+    %3 = cir.alloca "x" align(4) init : !cir.ptr&lt;!s32i&gt;
+    %4 = cir.const #cir.int&lt;0&gt; : !s32i
+    cir.store %4, %3 : !s32i, !cir.ptr&lt;!s32i&gt;
+    cir.store %3, %1 : !cir.ptr&lt;!s32i&gt;, !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
+    %5 = cir.const #cir.int&lt;42&gt; : !s32i
+    %6 = cir.load deref %1 : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;, !cir.ptr&lt;!s32i&gt;
+    cir.store %5, %6 : !s32i, !cir.ptr&lt;!s32i&gt;
+  }
+  %7 = cir.const #cir.int&lt;43&gt; : !s32i
+  %8 = cir.load deref %1 : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;, !cir.ptr&lt;!s32i&gt;
+  cir.store %7, %8 : !s32i, !cir.ptr&lt;!s32i&gt;
+  %9 = cir.load %1 : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;, !cir.ptr&lt;!s32i&gt;
+  cir.store %9, %0 : !cir.ptr&lt;!s32i&gt;, !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
+  %10 = cir.load %0 : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;, !cir.ptr&lt;!s32i&gt;
+  cir.return %10 : !cir.ptr&lt;!s32i&gt;
+}</code></pre>
+</div><p>即使你从没见过 MLIR，也能读出至少四件在 LLVM IR 里看不到的东西：</p>
+<ul>
+<li><strong>变量名还在</strong>。<code>cir.alloca &quot;p&quot;</code>、<code>cir.alloca &quot;x&quot;</code>——源码里的标识符被当作 alloca 的一部分保留了下来。LLVM IR 里 <code>-O0</code> 下你只能靠调试信息把 <code>%1</code> 关联回 <code>p</code>。</li>
+<li><strong>有符号性写在类型里</strong>。<code>!s32i</code> 是「有符号 32 位整数」，对应的还有 <code>!u32i</code>。LLVM IR 的 <code>i32</code> 不带符号信息，符号性藏在指令上（<code>sdiv</code> 还是 <code>udiv</code>）。CIR 把它放回了类型，因为 C 的类型系统本来就有。</li>
+<li><strong>常量是有类型的属性</strong>。<code>#cir.int&lt;0&gt; : !s32i</code>、<code>#cir.ptr&lt;null&gt;</code>——这是 MLIR 的属性系统，不是一串裸位。</li>
+<li><strong>作用域还在</strong>。那对 <code>cir.scope { ... }</code> 花括号就是源码里的那对花括号。它是一个<strong>带 region 的操作</strong>，<code>x</code> 的生命周期显式地被框在里面。到了 LLVM IR，这层结构会消失，<code>x</code> 的 alloca 被提到函数入口块。</li>
+</ul>
+<p>把它和同一个函数在 <code>-O0</code> 下的 LLVM IR 摆在一起对照：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CIR：贴着 C++ 语义</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">%1 = cir.alloca "p" align(8)
+       : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
+cir.scope {
+  %3 = cir.alloca "x" align(4)
+         : !cir.ptr&lt;!s32i&gt;
+  ...
+}
+// 变量名、有符号性、作用域嵌套
+// 都是"读得出来"的</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">LLVM IR：贴着机器</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">%p = alloca ptr, align 8
+%x = alloca i32, align 4
+; 两个 alloca 都在入口块，
+; 作用域嵌套已经没了；
+; i32 不带符号性；
+; -O0 下名字靠调试信息才对得上</code></pre>
+</div></div>
+</div><div class="note">
+<strong>「更高层」的准确含义</strong>
+别把 CIR 想成「更抽象所以更模糊」。它和 LLVM IR 一样是 SSA、一样有显式的 load/store、一样能验证。差别在于它<strong>额外保留了一批前端知道、后端不需要的事实</strong>：作用域、有符号性、变量名、类的继承结构、异常的作用域嵌套（第 26 章）、CUDA 的地址空间语义（第 27 章）。这些事实在降到 LLVM IR 的过程中会被逐步丢弃——但在丢弃之前，它们可以被利用。
+</div><h2>上手：<code>-fclangir</code> 和 <code>-emit-cir</code></h2>
+<p>驱动层的开关定义在 <code>clang/include/clang/Options/Options.td</code>（注意这个文件从 <code>clang/include/clang/Driver/</code> 搬过来了）。核心的两个：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 用 CIR 路径编译（默认关闭；关掉是 -fno-clangir）
+clang -fclangir -c foo.cpp -o foo.o
+
+# 只走到 cir 方言就停下，把 .cir 文本打印出来
+clang -fclangir -Xclang -emit-cir -S foo.cpp -o foo.cir
+
+# cc1 层直接调用（lit 测试里最常见的写法）
+clang -cc1 -triple x86_64-unknown-linux-gnu -fclangir -emit-cir foo.cpp -o -</code></pre>
+</div><p><code>-fclangir</code> 在 Options.td 里是一个 <code>BoolFOption</code>，绑到 <code>FrontendOpts&lt;&quot;UseClangIRPipeline&quot;&gt;</code>，<code>DefaultFalse</code>；它的正向说明是「Use the ClangIR pipeline to compile」，反向是「Use the AST -&gt; LLVM pipeline to compile」——<strong>社区自己就把这两条路径写成了一对开关</strong>。<code>-emit-cir</code> 的帮助文本是「Build ASTs and then lower to ClangIR」。</p>
+<p>除此之外还有一组调试与实验用的开关，值得记住，因为它们直接对应「CIR 是可观察的」这个卖点：</p>
+<table>
+<thead>
+<tr>
+<th>开关</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>-fclangir-disable-passes</code></td>
+<td>跳过所有 CIR → CIR pass，看最原始的 CIRGen 输出</td>
+</tr>
+<tr>
+<td><code>-fclangir-disable-verifier</code></td>
+<td>关掉 MLIR 验证器（调试半成品 pass 时用）</td>
+</tr>
+<tr>
+<td><code>-fclangir-enable-idiom-recognizer</code></td>
+<td>打开惯用法识别 pass</td>
+</tr>
+<tr>
+<td><code>-fclangir-lib-opt[=all]</code></td>
+<td>打开库感知优化 pass</td>
+</tr>
+<tr>
+<td><code>-fno-clangir-call-conv-lowering</code></td>
+<td>关掉调用约定降级（目前只实现了 x86_64）</td>
+</tr>
+<tr>
+<td><code>-mmlir -mlir-print-ir-before=&lt;pass&gt;</code></td>
+<td>借 MLIR 的通用能力，打印某个 pass 前的 IR</td>
+</tr>
+</tbody></table>
+<p>最后那一行尤其值得注意：<code>-mmlir</code> 后面跟的是 <strong>MLIR 自己的命令行选项</strong>。因为 CIR 是个 MLIR 方言，它免费继承了 MLIR 那套 pass 插桩设施——打印每个 pass 前后的 IR、统计、计时、崩溃复现。这是「当客户而不是自己造框架」的直接回报。第 27 章会用 <code>-mlir-print-ir-before=cir-target-lowering</code> 来观察地址空间是怎么变的。</p>
+<h2>对照第一层：两棵目录树是一一对应的</h2>
+<p>现在进入本章的主线。CIR 和经典路径的第一层对照，是<strong>文件级的</strong>。列一下两个目录，规律一眼就能看出来：</p>
+<table>
+<thead>
+<tr>
+<th>经典 <code>clang/lib/CodeGen/</code></th>
+<th>CIR <code>clang/lib/CIR/CodeGen/</code></th>
+<th>管什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CodeGenModule.cpp</code></td>
+<td><code>CIRGenModule.cpp</code></td>
+<td>翻译单元级别：全局变量、函数声明</td>
+</tr>
+<tr>
+<td><code>CodeGenFunction.cpp</code></td>
+<td><code>CIRGenFunction.cpp</code></td>
+<td>单个函数的生成状态</td>
+</tr>
+<tr>
+<td><code>CGStmt.cpp</code></td>
+<td><code>CIRGenStmt.cpp</code></td>
+<td>语句（<code>if</code>/<code>for</code>/<code>return</code>…）</td>
+</tr>
+<tr>
+<td><code>CGExpr*.cpp</code></td>
+<td><code>CIRGenExpr*.cpp</code></td>
+<td>表达式（标量、聚合、常量…）</td>
+</tr>
+<tr>
+<td><code>CGClass.cpp</code></td>
+<td><code>CIRGenClass.cpp</code></td>
+<td>类：构造/析构、基类布局</td>
+</tr>
+<tr>
+<td><code>CGVTables.cpp</code></td>
+<td><code>CIRGenVTables.cpp</code></td>
+<td>虚表</td>
+</tr>
+<tr>
+<td><code>CGException.cpp</code> / <code>CGCleanup.cpp</code></td>
+<td><code>CIRGenException.cpp</code> / <code>CIRGenCleanup.cpp</code></td>
+<td>异常与清理</td>
+</tr>
+<tr>
+<td><code>CGCXXABI.cpp</code> / <code>CGItaniumCXXABI.cpp</code></td>
+<td><code>CIRGenCXXABI.cpp</code> / <code>CIRGenItaniumCXXABI.cpp</code></td>
+<td>C++ ABI</td>
+</tr>
+<tr>
+<td><code>CGCall.cpp</code> / <code>ABIInfo.h</code> / <code>TargetInfo.cpp</code></td>
+<td><code>CIRGenCall.cpp</code> / <code>ABIInfo.h</code> / <code>TargetInfo.cpp</code></td>
+<td>调用约定与目标 ABI</td>
+</tr>
+<tr>
+<td><code>CGCUDANV.cpp</code> / <code>CGCUDARuntime.cpp</code></td>
+<td><code>CIRGenCUDANV.cpp</code> / <code>CIRGenCUDARuntime.cpp</code></td>
+<td>CUDA/HIP（第 27 章）</td>
+</tr>
+</tbody></table>
+<p>这个 <code>CG*</code> → <code>CIRGen*</code> 的机械命名不是巧合，是<strong>有意的工程决策</strong>：让每一个新文件都有一个明确的「对照物」。做 CIR 的人写 <code>CIRGenClass.cpp</code> 时，手边打开的就是 <code>CGClass.cpp</code>；评审的人也知道该拿哪个文件比。这把一个庞大的重写工程切成了几十个可以独立推进、独立评审的小工程。</p>
+<p>有几个文件只在 CIR 一侧存在，它们标出了这条新路径想吃下的新东西：</p>
+<ul>
+<li><code>CIRGenSYCL.cpp</code> —— 是的，SYCL。里面有 <code>CIRGenFunction::emitSYCLKernelCallStmt</code> 和 <code>emitSYCLKernelCaller</code>，处理 <code>SYCLKernelCallStmt</code> 与 outlined kernel。对读这本书的你来说，这是第五部分和前面 12 章真正接起来的地方。</li>
+<li>六个 <code>CIRGenOpenACC*</code> 文件 —— OpenACC 在 CIR 上的支持面积相当大，<code>clang/test/CIR/CodeGenOpenACC/</code> 有 85 个测试文件。</li>
+<li><code>CIRGenBuiltinNVPTX.cpp</code> / <code>CIRGenBuiltinAMDGPU.cpp</code> / <code>CIRGenAMDGPU.cpp</code> —— GPU 目标的内建函数。</li>
+</ul>
+<h2>对照第二层：管线</h2>
+<p>经典路径里，「AST → LLVM IR」是一次遍历。CIR 路径里，它变成了<strong>一层 IR + 一串 pass</strong>。这串 pass 的顺序不是猜的，就写在 <code>clang/lib/CIR/Lowering/CIRPasses.cpp</code> 的 <code>runCIRToCIRPasses()</code> 里：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">mlir::PassManager pm(&amp;mlirContext);
+pm.addPass(mlir::createCIRCanonicalizePass());          // 规范化
+if (enableCIRSimplify)
+  pm.addPass(mlir::createCIRSimplifyPass());            // 化简
+if (enableIdiomRecognizer)
+  pm.addPass(mlir::createIdiomRecognizerPass());        // 惯用法识别（可选）
+if (enableLibOpt)
+  pm.addPass(std::move(libOptPass));                    // 库感知优化（可选）
+pm.addPass(mlir::createTargetLoweringPass());           // 目标相关降级
+pm.addPass(mlir::createCXXABILoweringPass());           // C++ ABI 降级
+pm.addPass(mlir::createLoweringPreparePass(&amp;astContext));// 降级准备
+if (enableCallConvLowering)
+  pm.addPass(mlir::createCallConvLoweringPass(...));    // 调用约定降级（x86_64）</code></pre>
+</div><p>再往下，临降到 LLVM 方言之前还有一组，在同一个文件的 <code>populateCIRPreLoweringPasses()</code> 里：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">void populateCIRPreLoweringPasses(OpPassManager &amp;pm) {
+  pm.addPass(createHoistAllocasPass());     // alloca 提到入口块
+  pm.addPass(createCIRFlattenCFGPass());    // 结构化控制流 → 基本块 + 分支
+  pm.addPass(createCIREHABILoweringPass()); // 异常 ABI 降级
+  pm.addPass(createGotoSolverPass());       // 解决 goto
+}</code></pre>
+</div><p>请留意这两段代码里那些<strong>顺序约束的注释</strong>，它们是这套设计里最有信息量的部分。比如源码里明确写着：<code>LoweringPrepare</code> 必须跑在 <code>CallConvLowering</code> 之前，因为它会合成 <code>__divsc3</code> 这类运行时辅助函数、并把动态全局初始化器外提成函数——如果顺序反了，这些新函数的签名就没被分类过，调用方和被调方对 ABI 的理解会不一致。又比如 <code>CallConvLowering</code> 必须跑在 <code>CXXABILowering</code> 之后，因为分类器只认得已经被降成普通记录类型的东西。</p>
+<p>这些约束在经典路径里也存在，但它们<strong>隐含在 <code>clang/lib/CodeGen/</code> 里几万行代码的调用顺序中</strong>，你只能靠读代码推断。在 CIR 里，它们变成了 pass 之间的显式顺序 + 一句解释顺序理由的注释。这就是「把一段代码拆成一层 IR + 若干 pass」在工程上的实际收益：<strong>隐含的顺序契约变成了显式的、有文档的、可以单独测试的顺序契约</strong>。</p>
+<div class="note">
+<strong>只有一条降级路径上游了</strong>
+<code>clang/lib/CIR/Lowering/</code> 下目前只有 <code>DirectToLLVM/</code>：从 <code>cir</code> 方言直接降到 MLIR 的 LLVM 方言，再出 LLVM IR。孵化器 <code>llvm/clangir</code> 里还有一条 <code>ThroughMLIR/</code>，先降到 MLIR 的通用方言（<code>scf</code>、<code>memref</code>、<code>affine</code> 之类）再往下走——那条路才是「用上 MLIR 生态里现成的循环/多面体优化」的野心所在，但它没有上游，也不是当前的主线。本章讲的一切都走 <code>DirectToLLVM</code>。
+</div><h2>对照第三层：三条 RUN 线把对照制度化</h2>
+<p>前两层对照是「作者写代码时的参照」。第三层最关键：对照被<strong>写进了测试的形状里</strong>，成了制度。</p>
+<p>打开 <code>clang/test/CIR/</code> 下几乎任何一个 CodeGen 测试，开头都是这样三条 RUN 线：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">// RUN: %clang_cc1 ... -fclangir -emit-cir  %s -o %t.cir
+// RUN: FileCheck --input-file=%t.cir %s --check-prefix=CIR
+// RUN: %clang_cc1 ... -fclangir -emit-llvm %s -o %t-cir.ll
+// RUN: FileCheck --input-file=%t-cir.ll %s --check-prefix=LLVM
+// RUN: %clang_cc1 ...           -emit-llvm %s -o %t.ll
+// RUN: FileCheck --input-file=%t.ll %s --check-prefix=OGCG</code></pre>
+</div><p>同一个源文件，编译三遍，三组 CHECK 前缀：</p>
+<ul>
+<li><strong><code>CIR</code></strong> —— CIR 路径停在 <code>cir</code> 方言时的样子。这是「新表示对不对」。</li>
+<li><strong><code>LLVM</code></strong> —— CIR 路径一直走到 LLVM IR 的样子。这是「降级对不对」。</li>
+<li><strong><code>OGCG</code></strong> —— 经典路径产出的 LLVM IR。<strong>OGCG 就是 original CodeGen 的缩写</strong>，社区把「旧路径」这个概念直接做成了一个 FileCheck 前缀。</li>
+</ul>
+<p><code>LLVM</code> 和 <code>OGCG</code> 两组 CHECK 盯着的是同一件事的两种实现，于是每个测试都在回答那个核心问题：<strong>新路径产出的 LLVM IR，和旧路径一样吗？</strong> 这就是 CIR 的正确性定义。有些测试更进一步，让<strong>同一组 CHECK 行</strong>同时校验两个输出文件——两条路径必须产出逐字符相同的那部分，就用这种写法钉住。</p>
+<p>但「一样」不等于「逐字符相同」，这是理解 CIR 的另一个关键点。看一个真实例子：虚函数调用中取虚表地址那一步，两条路径产出的 LLVM IR 是这样的（来自 <code>clang/test/CIR/CodeGenCXX/virtual-function-calls.cpp</code>）：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CIR 路径产出</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">getelementptr inbounds nuw
+  (i8, ptr @_ZTV1A, i64 16)</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">经典路径（OGCG）产出</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">getelementptr inbounds
+  inrange(-16, 8)
+  ({ [3 x ptr] }, ptr @_ZTV1A,
+   i32 0, i32 0, i32 2)</code></pre>
+</div></div>
+</div><p>文本完全不同：一个是按字节偏移的扁平 GEP，一个是按结构层次走下去、还带 <code>inrange</code> 注解的 GEP。测试文件里有一条注释明确说这两者<strong>是等价的</strong>——指向同一个地址。所以判定标准是<strong>语义等价（parity）</strong>，不是文本相同。类似的情况在循环上更明显：<code>-O0</code> 下同一个空 <code>for</code> 循环，CIR 路径产出的 LLVM IR 有 6 个标签，经典路径只有 1 条 <code>br</code>，因为两者对「循环这个结构」的降级策略不同，但优化过后行为一致。</p>
+<div class="warn">
+<strong>parity 是一条极苛刻的验收线</strong>
+「产出等价的 LLVM IR」听起来温和，实际上意味着：CIR 必须把 C++ 的每一个阴暗角落——位域布局、虚基类偏移、异常表、各目标的调用约定分类规则、<code>__attribute__</code> 的语义——全部重新实现一遍，而且结果要和一个演化了二十年、里面塞满了「为了兼容某版 GCC 的某个行为」的实现对齐。这就是为什么进度以「支持了哪些 C++ 特性」为单位缓慢推进，而不是一口气切换。也是为什么 <code>-fclangir</code> 默认是关的。
+</div><h2>对照第四层：代价和收益</h2>
+<p>把上面三层放在一起，你就能自己判断这件事值不值得，而不是听结论。</p>
+<p><strong>代价，很直白。</strong> 一是要重新实现一遍 CodeGen，工作量以人年计；二是编译时间和内存会增加——多了一层 IR、多了一串 pass、多了 MLIR 的验证器；三是维护面变宽，在 <code>-fclangir</code> 默认打开之前，任何 CodeGen 的改动理论上都要考虑两条路径；四是引入了对 MLIR 的依赖，Clang 的构建不再只依赖 LLVM 核心。</p>
+<p><strong>收益，需要分成三类看。</strong></p>
+<p>第一类是<strong>已经拿到的</strong>。<code>.cir</code> 是可落盘、可读、可手写的文本格式，配上 <code>cir-opt</code> 和 <code>cir-translate</code> 两个工具，你可以像调试中端 Pass 一样调试前端降级过程——写一个 <code>.cir</code> 文件，跑单个 pass，看输出。这一点已经改变了开发体验，而且第 1 章那三条指标现在全部满足了。</p>
+<p>第二类是<strong>在做的</strong>：在高层做那些在 LLVM IR 上做不了或做起来很别扭的分析和优化。惯用法识别（把 <code>std::find</code> 这类库调用识别成一个高层操作）、库感知优化，都属于这一类。它们依赖的正是那些 LLVM IR 里已经丢掉的事实。</p>
+<p>第三类是<strong>结构性的</strong>：新增一个「可以挂东西的地方」。这一点在第 27 章会看得最清楚——CUDA/HIP 的主机端和设备端表示可以在同一层里共存，让「主机-设备协同优化」第一次有了一个自然的落点。经典路径里没有这样的地方，因为主机和设备的 LLVM IR 从一开始就是两个独立的 Module。</p>
+<div class="keypoint">
+<strong>一句话总结这四层对照</strong>
+目录上一一对应（<code>CG*</code> → <code>CIRGen*</code>），管线上从「一次遍历」变成「一层 IR + 一串有显式顺序契约的 pass」，测试上用三条 RUN 线和 <code>OGCG</code> 前缀把「和旧路径对齐」做成了制度，代价上换来了一个可观察、可挂载高层信息的中间层。CIR 不是「更好的 LLVM IR」，它是<strong>把前端最不透明的那一段变透明</strong>。
+</div><h2>工具链的对称：<code>cir-opt</code> 与 <code>cir-translate</code></h2>
+<p>第 1 章图 1-2 的核心洞察是：因为 IR 能落盘，三段就能拆成 <code>clang</code> / <code>opt</code> / <code>llc</code> 三个工具。CIR 把这个洞察在新一层上复制了一遍。<code>clang/tools/</code> 下有三个新目录：</p>
+<table>
+<thead>
+<tr>
+<th>LLVM IR 世界</th>
+<th>CIR 世界</th>
+<th>干什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>opt</code></td>
+<td><code>cir-opt</code></td>
+<td>读 <code>.cir</code>，跑指定的 pass，写 <code>.cir</code></td>
+</tr>
+<tr>
+<td><code>llc</code></td>
+<td><code>cir-translate --cir-to-llvmir</code></td>
+<td>读 <code>.cir</code>，翻成 LLVM IR</td>
+</tr>
+<tr>
+<td>（clangd 的一部分）</td>
+<td><code>cir-lsp-server</code></td>
+<td>在编辑器里给 <code>.cir</code> 文件提供跳转/补全</td>
+</tr>
+</tbody></table>
+<p>于是一个 CIR pass 的测试可以完全不碰 C++ 源码，就像这样（<code>clang/test/CIR/Transforms/</code> 下的测试都是这个样子）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">// RUN: cir-opt %s -cir-flatten-cfg -o - | FileCheck %s</code></pre>
+</div><p>输入是手写的 <code>.cir</code>，输出用 FileCheck 校验。你甚至可以手写一个只有几行的模块，把目标三元组和数据布局直接写在模块属性上：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">module attributes {
+  cir.triple = "spirv64-unknown-unknown",
+  dlti.dl_spec = #dlti.dl_spec&lt;...&gt;
+} {
+  cir.func @foo() {
+    cir.return
+  }
+}</code></pre>
+</div><p>然后：<code>cir-translate --cir-to-llvmir --target x86_64-unknown-linux-gnu %s</code>。这种「手写中间表示、单跑一个 pass」的能力，在经典路径上是不存在的——那里唯一的输入是 C++ 源码，唯一的输出是 LLVM IR，中间无法插手。</p>
+<h2>动手：结构化 vs 扁平，同一个函数的两种形态</h2>
+<p>CIR 最核心的一个差别是<strong>控制流是结构化的</strong>：<code>for</code> 就是一个 <code>cir.for</code> 操作，它的循环体是一个 region，嵌在里面。LLVM IR 里没有这种东西，只有基本块和分支。下面这个能在浏览器里跑的小程序，把这件事变成你看得见的数字：它先按 CIR 的样子写一个函数（嵌套的结构化操作），再按经典路径的做法把它扁平化成基本块，然后对比在这两种形态上回答同一个问题各要做多少事。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20CIR%20%E7%9A%84%E7%BB%93%E6%9E%84%E5%8C%96%E5%BD%A2%E6%80%81%20vs%20LLVM%20IR%20%E7%9A%84%E6%89%81%E5%B9%B3%E5%BD%A2%E6%80%81%EF%BC%9A%E5%90%8C%E4%B8%80%E4%B8%AA%E5%87%BD%E6%95%B0%EF%BC%8C%E4%B8%A4%E7%A7%8D%E8%A1%A8%E7%A4%BA%0A%0A%23%20----%20%E5%BD%A2%E6%80%81%E4%B8%80%EF%BC%9A%E7%BB%93%E6%9E%84%E5%8C%96%EF%BC%88CIR%20%E7%9A%84%20region%20%E5%B0%B1%E6%98%AF%E8%BF%99%E4%B8%AA%E5%BD%A2%E7%8A%B6%EF%BC%8C%E5%B5%8C%E5%A5%97%E5%92%8C%E6%BA%90%E7%A0%81%E4%B8%80%E4%B8%80%E5%AF%B9%E5%BA%94%EF%BC%89----%0AFUNC%20%3D%20(%22sum%22%2C%20%5B%0A%20%20%20%20(%22op%22%2C%20%22alloca%20acc%22)%2C%0A%20%20%20%20(%22for%22%2C%20%5B%0A%20%20%20%20%20%20%20%20(%22op%22%2C%20%22add%20acc%22)%2C%0A%20%20%20%20%20%20%20%20(%22for%22%2C%20%5B(%22op%22%2C%20%22add%20acc%22)%5D)%2C%20%20%20%20%20%20%23%20%E5%86%85%E5%B1%82%E5%BE%AA%E7%8E%AF%0A%20%20%20%20%20%20%20%20(%22if%22%2C%20%5B(%22op%22%2C%20%22add%20acc%22)%5D%2C%20%5B%5D)%2C%20%20%20%23%20%E5%8F%AA%E6%9C%89%20then%EF%BC%8C%E6%B2%A1%E6%9C%89%20else%0A%20%20%20%20%5D)%2C%0A%20%20%20%20(%22op%22%2C%20%22return%20acc%22)%2C%0A%5D)%0A%0Adef%20show(body%2C%20depth%3D1)%3A%0A%20%20%20%20pad%20%3D%20%22%20%20%22%20*%20depth%0A%20%20%20%20for%20node%20in%20body%3A%0A%20%20%20%20%20%20%20%20if%20node%5B0%5D%20%3D%3D%20%22op%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(pad%20%2B%20%22cir.%22%20%2B%20node%5B1%5D)%0A%20%20%20%20%20%20%20%20elif%20node%5B0%5D%20%3D%3D%20%22for%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(pad%20%2B%20%22cir.for%20%7B%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20show(node%5B1%5D%2C%20depth%20%2B%201)%0A%20%20%20%20%20%20%20%20%20%20%20%20print(pad%20%2B%20%22%7D%22)%0A%20%20%20%20%20%20%20%20elif%20node%5B0%5D%20%3D%3D%20%22if%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(pad%20%2B%20%22cir.if%20%7B%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20show(node%5B1%5D%2C%20depth%20%2B%201)%0A%20%20%20%20%20%20%20%20%20%20%20%20print(pad%20%2B%20%22%7D%22)%0A%0Aprint(%22%3D%3D%3D%20%E5%BD%A2%E6%80%81%E4%B8%80%EF%BC%9A%E7%BB%93%E6%9E%84%E5%8C%96%EF%BC%88CIR%EF%BC%89%3D%3D%3D%22)%0Aprint(%22cir.func%20%40%25s%20%7B%22%20%25%20FUNC%5B0%5D)%0Ashow(FUNC%5B1%5D)%0Aprint(%22%7D%22)%0A%0A%23%20----%20%E5%BD%A2%E6%80%81%E4%BA%8C%EF%BC%9A%E6%89%81%E5%B9%B3%E5%8C%96%EF%BC%88LLVM%20IR%EF%BC%89%E3%80%82%E8%BF%99%E6%AD%A3%E6%98%AF%20cir-flatten-cfg%20%E5%B9%B2%E7%9A%84%E4%BA%8B%20----%0Ablocks%2C%20edges%2C%20counter%20%3D%20%5B%5D%2C%20%5B%5D%2C%20%5B0%5D%0A%0Adef%20fresh()%3A%0A%20%20%20%20counter%5B0%5D%20%2B%3D%201%0A%20%20%20%20return%20%22bb%25d%22%20%25%20counter%5B0%5D%0A%0Adef%20start(label)%3A%0A%20%20%20%20blocks.append((label%2C%20%5B%5D))%0A%0Adef%20cur()%3A%0A%20%20%20%20return%20blocks%5B-1%5D%5B0%5D%0A%0Adef%20emit(text)%3A%0A%20%20%20%20blocks%5B-1%5D%5B1%5D.append(text)%0A%0Adef%20link(a%2C%20b)%3A%0A%20%20%20%20edges.append((a%2C%20b))%0A%0Adef%20lower(body)%3A%0A%20%20%20%20for%20node%20in%20body%3A%0A%20%20%20%20%20%20%20%20if%20node%5B0%5D%20%3D%3D%20%22op%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(node%5B1%5D)%0A%20%20%20%20%20%20%20%20elif%20node%5B0%5D%20%3D%3D%20%22for%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20cond%2C%20body_l%2C%20done%20%3D%20fresh()%2C%20fresh()%2C%20fresh()%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22br%20%5E%25s%22%20%25%20cond)%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cur()%2C%20cond)%0A%20%20%20%20%20%20%20%20%20%20%20%20start(cond)%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22brcond%20%25%25c%20-%3E%20%5E%25s%2C%20%5E%25s%22%20%25%20(body_l%2C%20done))%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cond%2C%20body_l)%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cond%2C%20done)%0A%20%20%20%20%20%20%20%20%20%20%20%20start(body_l)%0A%20%20%20%20%20%20%20%20%20%20%20%20lower(node%5B1%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22br%20%5E%25s%22%20%25%20cond)%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cur()%2C%20cond)%0A%20%20%20%20%20%20%20%20%20%20%20%20start(done)%0A%20%20%20%20%20%20%20%20elif%20node%5B0%5D%20%3D%3D%20%22if%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20then_l%2C%20join%20%3D%20fresh()%2C%20fresh()%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22brcond%20%25%25c%20-%3E%20%5E%25s%2C%20%5E%25s%22%20%25%20(then_l%2C%20join))%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cur()%2C%20then_l)%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cur()%2C%20join)%0A%20%20%20%20%20%20%20%20%20%20%20%20start(then_l)%0A%20%20%20%20%20%20%20%20%20%20%20%20lower(node%5B1%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22br%20%5E%25s%22%20%25%20join)%0A%20%20%20%20%20%20%20%20%20%20%20%20link(cur()%2C%20join)%0A%20%20%20%20%20%20%20%20%20%20%20%20start(join)%0A%0Astart(%22entry%22)%0Alower(FUNC%5B1%5D)%0A%0Aprint()%0Aprint(%22%3D%3D%3D%20%E5%BD%A2%E6%80%81%E4%BA%8C%EF%BC%9A%E6%89%81%E5%B9%B3%E5%8C%96%EF%BC%88LLVM%20IR%EF%BC%89%3D%3D%3D%22)%0Afor%20label%2C%20instrs%20in%20blocks%3A%0A%20%20%20%20print(%22%5E%25s%3A%22%20%25%20label)%0A%20%20%20%20for%20ins%20in%20instrs%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%22%20%2B%20ins)%0A%0A%23%20----%20%E5%90%8C%E4%B8%80%E4%B8%AA%E9%97%AE%E9%A2%98%EF%BC%8C%E4%B8%A4%E7%A7%8D%E5%BD%A2%E6%80%81%E5%90%84%E8%A6%81%E5%81%9A%E5%A4%9A%E5%B0%91%E4%BA%8B%20----%0Adef%20loop_depth(body)%3A%0A%20%20%20%20best%20%3D%200%0A%20%20%20%20for%20node%20in%20body%3A%0A%20%20%20%20%20%20%20%20if%20node%5B0%5D%20%3D%3D%20%22for%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20best%20%3D%20max(best%2C%201%20%2B%20loop_depth(node%5B1%5D))%0A%20%20%20%20%20%20%20%20elif%20node%5B0%5D%20%3D%3D%20%22if%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20best%20%3D%20max(best%2C%20loop_depth(node%5B1%5D))%0A%20%20%20%20return%20best%0A%0Aorder%20%3D%20%7B%7D%0Afor%20i%2C%20(label%2C%20_)%20in%20enumerate(blocks)%3A%0A%20%20%20%20order%5Blabel%5D%20%3D%20i%0Aback%20%3D%20%5B(a%2C%20b)%20for%20a%2C%20b%20in%20edges%20if%20order%5Bb%5D%20%3C%3D%20order%5Ba%5D%5D%0A%0Aprint()%0Aprint(%22%3D%3D%3D%20%E9%97%AE%E9%A2%98%EF%BC%9A%E8%BF%99%E4%B8%AA%E5%87%BD%E6%95%B0%E9%87%8C%E5%BE%AA%E7%8E%AF%E6%9C%80%E6%B7%B1%E5%A5%97%E4%BA%86%E5%87%A0%E5%B1%82%EF%BC%9F%3D%3D%3D%22)%0Aprint(%22%E7%BB%93%E6%9E%84%E5%8C%96%EF%BC%9A%E4%B8%80%E6%AC%A1%E9%80%92%E5%BD%92%E9%81%8D%E5%8E%86%E5%B0%B1%E8%AF%BB%E5%87%BA%E6%9D%A5%20%3D%20%25d%20%E5%B1%82%22%20%25%20loop_depth(FUNC%5B1%5D))%0Aprint(%22%E6%89%81%E5%B9%B3%E5%8C%96%EF%BC%9A%25d%20%E4%B8%AA%E5%9F%BA%E6%9C%AC%E5%9D%97%20%2B%20%25d%20%E6%9D%A1%E8%BE%B9%EF%BC%8C%E5%85%88%E6%89%BE%E5%9B%9E%E8%BE%B9%EF%BC%88%25d%20%E6%9D%A1%EF%BC%89%EF%BC%8C%22%20%25%20(len(blocks)%2C%20len(edges)%2C%20len(back)))%0Aprint(%22%20%20%20%20%20%20%20%20%E5%86%8D%E7%AE%97%E6%94%AF%E9%85%8D%E5%85%B3%E7%B3%BB%EF%BC%8C%E6%89%8D%E7%9F%A5%E9%81%93%E5%93%AA%E4%B8%AA%E5%BE%AA%E7%8E%AF%E5%A5%97%E5%9C%A8%E5%93%AA%E4%B8%AA%E9%87%8C%E9%9D%A2%22)%0Aprint()%0Aprint(%22%E6%BA%90%E7%A0%81%E9%87%8C%203%20%E4%B8%AA%E6%8E%A7%E5%88%B6%E6%B5%81%E6%9E%84%E9%80%A0%20%E2%86%92%20%E6%89%81%E5%B9%B3%E5%8C%96%E5%90%8E%20%25d%20%E4%B8%AA%E5%9F%BA%E6%9C%AC%E5%9D%97%E3%80%81%25d%20%E6%9D%A1%E8%BE%B9%E3%80%82%22%20%25%20(len(blocks)%2C%20len(edges)))%0Aprint(%22CIR%20%E7%9A%84%E4%BB%B7%E5%80%BC%E4%B8%8D%E6%98%AF%E3%80%8C%E6%89%81%E5%B9%B3%E5%BD%A2%E6%80%81%E4%B8%A2%E4%BA%86%E4%BF%A1%E6%81%AF%E3%80%8D%EF%BC%8C%E8%80%8C%E6%98%AF%EF%BC%9A%E5%9C%A8%E6%89%81%E5%B9%B3%E4%B9%8B%E5%89%8D%EF%BC%8C%22)%0Aprint(%22%E8%BF%99%E4%BA%9B%E9%97%AE%E9%A2%98%E6%98%AF%E3%80%8C%E8%AF%BB%E5%87%BA%E6%9D%A5%E3%80%8D%E7%9A%84%EF%BC%8C%E4%B8%8D%E6%98%AF%E3%80%8C%E7%AE%97%E5%87%BA%E6%9D%A5%E3%80%8D%E7%9A%84%E3%80%82%22)"># CIR 的结构化形态 vs LLVM IR 的扁平形态：同一个函数，两种表示
+
+# ---- 形态一：结构化（CIR 的 region 就是这个形状，嵌套和源码一一对应）----
+FUNC = ("sum", [
+    ("op", "alloca acc"),
+    ("for", [
+        ("op", "add acc"),
+        ("for", [("op", "add acc")]),      # 内层循环
+        ("if", [("op", "add acc")], []),   # 只有 then，没有 else
+    ]),
+    ("op", "return acc"),
+])
+
+def show(body, depth=1):
+    pad = "  " * depth
+    for node in body:
+        if node[0] == "op":
+            print(pad + "cir." + node[1])
+        elif node[0] == "for":
+            print(pad + "cir.for {")
+            show(node[1], depth + 1)
+            print(pad + "}")
+        elif node[0] == "if":
+            print(pad + "cir.if {")
+            show(node[1], depth + 1)
+            print(pad + "}")
+
+print("=== 形态一：结构化（CIR）===")
+print("cir.func @%s {" % FUNC[0])
+show(FUNC[1])
+print("}")
+
+# ---- 形态二：扁平化（LLVM IR）。这正是 cir-flatten-cfg 干的事 ----
+blocks, edges, counter = [], [], [0]
+
+def fresh():
+    counter[0] += 1
+    return "bb%d" % counter[0]
+
+def start(label):
+    blocks.append((label, []))
+
+def cur():
+    return blocks[-1][0]
+
+def emit(text):
+    blocks[-1][1].append(text)
+
+def link(a, b):
+    edges.append((a, b))
+
+def lower(body):
+    for node in body:
+        if node[0] == "op":
+            emit(node[1])
+        elif node[0] == "for":
+            cond, body_l, done = fresh(), fresh(), fresh()
+            emit("br ^%s" % cond)
+            link(cur(), cond)
+            start(cond)
+            emit("brcond %%c -&gt; ^%s, ^%s" % (body_l, done))
+            link(cond, body_l)
+            link(cond, done)
+            start(body_l)
+            lower(node[1])
+            emit("br ^%s" % cond)
+            link(cur(), cond)
+            start(done)
+        elif node[0] == "if":
+            then_l, join = fresh(), fresh()
+            emit("brcond %%c -&gt; ^%s, ^%s" % (then_l, join))
+            link(cur(), then_l)
+            link(cur(), join)
+            start(then_l)
+            lower(node[1])
+            emit("br ^%s" % join)
+            link(cur(), join)
+            start(join)
+
+start("entry")
+lower(FUNC[1])
+
+print()
+print("=== 形态二：扁平化（LLVM IR）===")
+for label, instrs in blocks:
+    print("^%s:" % label)
+    for ins in instrs:
+        print("  " + ins)
+
+# ---- 同一个问题，两种形态各要做多少事 ----
+def loop_depth(body):
+    best = 0
+    for node in body:
+        if node[0] == "for":
+            best = max(best, 1 + loop_depth(node[1]))
+        elif node[0] == "if":
+            best = max(best, loop_depth(node[1]))
+    return best
+
+order = {}
+for i, (label, _) in enumerate(blocks):
+    order[label] = i
+back = [(a, b) for a, b in edges if order[b] &lt;= order[a]]
+
+print()
+print("=== 问题：这个函数里循环最深套了几层？===")
+print("结构化：一次递归遍历就读出来 = %d 层" % loop_depth(FUNC[1]))
+print("扁平化：%d 个基本块 + %d 条边，先找回边（%d 条），" % (len(blocks), len(edges), len(back)))
+print("        再算支配关系，才知道哪个循环套在哪个里面")
+print()
+print("源码里 3 个控制流构造 → 扁平化后 %d 个基本块、%d 条边。" % (len(blocks), len(edges)))
+print("CIR 的价值不是「扁平形态丢了信息」，而是：在扁平之前，")
+print("这些问题是「读出来」的，不是「算出来」的。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 形态一：结构化（CIR）===
+cir.func @sum {
+  cir.alloca acc
+  cir.for {
+    cir.add acc
+    cir.for {
+      cir.add acc
+    }
+    cir.if {
+      cir.add acc
+    }
+  }
+  cir.return acc
+}
+
+=== 形态二：扁平化（LLVM IR）===
+^entry:
+  alloca acc
+  br ^bb1
+^bb1:
+  brcond %c -&gt; ^bb2, ^bb3
+^bb2:
+  add acc
+  br ^bb4
+^bb4:
+  brcond %c -&gt; ^bb5, ^bb6
+^bb5:
+  add acc
+  br ^bb4
+^bb6:
+  brcond %c -&gt; ^bb7, ^bb8
+^bb7:
+  add acc
+  br ^bb8
+^bb8:
+  br ^bb1
+^bb3:
+  return acc
+
+=== 问题：这个函数里循环最深套了几层？===
+结构化：一次递归遍历就读出来 = 2 层
+扁平化：9 个基本块 + 11 条边，先找回边（2 条），
+        再算支配关系，才知道哪个循环套在哪个里面</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">源码里 3 个控制流构造 → 扁平化后 9 个基本块、11 条边。
+CIR 的价值不是「扁平形态丢了信息」，而是：在扁平之前，
+这些问题是「读出来」的，不是「算出来」的。</code></pre>
+</div><p>三个控制流构造，扁平化后是 9 个基本块、11 条边。请动手改：在 <code>FUNC</code> 里再往内层塞一个 <code>(&quot;for&quot;, [...])</code>，看基本块数量涨多少；或者给那个 <code>if</code> 加上 else 分支（把最后一个空列表填上内容），看扁平化输出里多出哪些块。你会直观感受到：<strong>扁平化是一个信息从「结构」搬到「跳转关系」的过程</strong>，搬完之后，原来一眼能看出的事实就得靠分析重建。第 26 章会看到真正的 <code>cir-flatten-cfg</code> pass 做的正是这件事，<code>llvm/lib/Analysis/LoopInfo</code> 做的正是「重建」这件事。</p>
+<h2>小结与下一步</h2>
+<ul>
+<li>第 1 章那条链在前端内部有一处断崖：<strong>AST → LLVM IR</strong> 是一次单体遍历，中间没有可落盘、可用工具处理、可人肉审查的形态。CIR 就是往这里填的一层。</li>
+<li><strong><code>cir</code> 是一个 MLIR 方言</strong>（<code>name = &quot;cir&quot;</code>，<code>cppNamespace = &quot;::cir&quot;</code>）。三层关系是：MLIR 是造 IR 的框架，<code>cir</code> 是用它造出来的一种 IR，LLVM IR 是 <code>cir</code> 的降级目标。谁也不替代谁。这和 Flang 的 FIR 是同一种做法。</li>
+<li>CIR 里额外保留着前端知道、后端不需要的事实：变量名、有符号性（<code>!s32i</code> vs <code>!u32i</code>）、作用域（<code>cir.scope</code>）、结构化控制流。</li>
+<li>与经典路径的对照有四层：<strong>目录</strong>（<code>CG*</code> → <code>CIRGen*</code> 一一对应）、<strong>管线</strong>（<code>CIRPasses.cpp</code> 里显式的 pass 顺序 + 顺序理由的注释）、<strong>测试</strong>（三条 RUN 线，<code>CIR</code> / <code>LLVM</code> / <code>OGCG</code> 三个前缀）、<strong>代价与收益</strong>。</li>
+<li>正确性的定义是 <strong>parity</strong>：产出与经典路径<strong>语义等价</strong>的 LLVM IR，不是文本相同。虚表 GEP 那个例子就是明证。</li>
+</ul>
+<p>下一章我们钻进 <code>cir</code> 方言内部，看 C++ 里最难的那几样东西在这一层长什么样：<code>cir.if</code> / <code>cir.for</code> / <code>cir.try</code> 这些带 region 的结构化操作，<code>cir-flatten-cfg</code> 怎么把它们拍平；<code>!cir.struct</code> / <code>!cir.vptr</code> / <code>!cir.method</code> 怎么承载类和虚表；以及异常处理为什么值得单独一个 pass。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>前端内部 <code>AST → LLVM IR</code> 这一步（<code>clang/lib/CodeGen/</code>，社区叫 <strong>OG</strong>）是单体的、无中间形态的，不满足第 1 章给 IR 立的三条指标。<strong>ClangIR（CIR）</strong> 是往这一段里插入的一层。</li>
+<li><code>cir</code> 是一个 <strong>MLIR 方言</strong>：<code>include &quot;mlir/IR/OpBase.td&quot;</code>、<code>let name = &quot;cir&quot;</code>。<strong>MLIR 是造 IR 的框架，不是一种 IR</strong>；CIR 是它的客户，LLVM IR 是 CIR 的降级目标。</li>
+<li>源码锚点：<code>clang/lib/CIR/</code>（<code>CodeGen/</code> + <code>Lowering/DirectToLLVM/</code>）、<code>clang/include/clang/CIR/Dialect/IR/*.td</code>、<code>clang/test/CIR/</code>、<code>clang/tools/cir-{opt,translate,lsp-server}</code>。仓库是上游 <code>llvm/llvm-project</code>，不是 <code>intel/llvm</code>。</li>
+<li>开关：<code>-fclangir</code> 走新路径（默认关），<code>-emit-cir</code> 停在 <code>cir</code> 方言，<code>-fclangir-disable-passes</code> 看最原始的 CIRGen 输出，<code>-mmlir -mlir-print-ir-before=&lt;pass&gt;</code> 借 MLIR 的插桩能力观察每个 pass。</li>
+<li>与经典路径的四层对照：<strong>目录</strong>一一对应（<code>CGClass.cpp</code> ↔ <code>CIRGenClass.cpp</code>）、<strong>管线</strong>从一次遍历变成显式 pass 序列、<strong>测试</strong>用 <code>CIR</code>/<code>LLVM</code>/<code>OGCG</code> 三前缀制度化、<strong>代价</strong>（重写工作量、编译开销）换<strong>收益</strong>（可观察的中间层、高层优化的落点）。</li>
+<li>正确性标准是 <strong>parity（语义等价）</strong>，不是文本相同——虚表 GEP 的两种写法指向同一地址，测试里专门有注释说明。</li>
+<li>工具链对称复制了第 1 章图 1-2：<code>opt</code> ↔ <code>cir-opt</code>，<code>llc</code> ↔ <code>cir-translate --cir-to-llvmir</code>。<code>.cir</code> 能手写、能落盘、能单跑一个 pass。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch24.html">← 第 24 章 从提案到落地：写扩展的完整流程与测试</a>
+  <a class="nav-next" href="ch26.html">第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
