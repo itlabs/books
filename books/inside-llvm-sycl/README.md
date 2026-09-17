@@ -53,6 +53,13 @@
 - [第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）](chapters/ch23.md)
 - [第 24 章 从提案到落地：写扩展的完整流程与测试](chapters/ch24.md)
 
+### 第五部分 · 正在发生的事：ClangIR
+- [第 25 章 ClangIR：把 AST → LLVM IR 那一段切开](chapters/ch25.md)
+- [第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常](chapters/ch26.md)
+- [第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长](chapters/ch27.md)
+
+> 第五部分的源码锚点从 `intel/llvm` 换成上游 `llvm/llvm-project`（以及孵化器 `llvm/clangir`）——ClangIR 是正在上游进行中的工作，读的时候请以你手上那份 `llvm-project` 为准。
+
 ### 附录
 - [附录 A 搭建与构建 intel/llvm：config、compile 与常用命令](chapters/appendix-a.md)
 - [附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR](chapters/appendix-b.md)

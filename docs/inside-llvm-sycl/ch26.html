@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 LLVM 是什么：三段式架构与「IR 中心」哲学</a></li>
+<li><a href="ch02.html">第 2 章 LLVM IR：Module / Function / BasicBlock / Instruction 与 SSA</a></li>
+<li><a href="ch03.html">第 3 章 IR 的三种形态：内存对象、文本 .ll 与位码 .bc</a></li>
+<li><a href="ch04.html">第 4 章 Pass 框架（一）：新 PassManager 的设计</a></li>
+<li><a href="ch05.html">第 5 章 Pass 框架（二）：写一个 Pass，并用插件挂进 opt</a></li>
+<li><a href="ch06.html">第 6 章 优化管线：PassBuilder 与 O0–O3 默认流水线</a></li>
+<li><a href="ch07.html">第 7 章 后端与代码生成：Target、指令选择到机器码</a></li>
+<li><a href="ch08.html">第 8 章 SPIR-V：异构世界的可移植中间表示与 llvm-spirv</a></li>
+<li><a href="ch09.html">第 9 章 异构 offload：bundler / wrapper / linker-wrapper 工具链</a></li>
+<li><a href="ch10.html">第 10 章 运行时 liboffload 与 plugins-nextgen：kernel 怎么上设备</a></li>
+<li><a href="ch11.html">第 11 章 NVIDIA 支持：从 IR 到 PTX，libclc 与 NVPTX 后端</a></li>
+<li><a href="ch12.html">第 12 章 SYCL 全景：单一源码、两趟编译与规范到实现的映射</a></li>
+<li><a href="ch13.html">第 13 章 头文件地图：sycl.hpp 里到底有什么</a></li>
+<li><a href="ch14.html">第 14 章 设备端编译：integration header/footer 与 kernel 命名</a></li>
+<li><a href="ch15.html">第 15 章 属性与 attributes：[[sycl::…]] 如何落到 IR</a></li>
+<li><a href="ch16.html">第 16 章 运行时（一）：queue / context / device / handler 对象模型</a></li>
+<li><a href="ch17.html">第 17 章 运行时（二）：命令组、调度器与依赖图</a></li>
+<li><a href="ch18.html">第 18 章 Unified Runtime：SYCL 如何对接 Level Zero / CUDA / OpenCL</a></li>
+<li><a href="ch19.html">第 19 章 设备库与 libdevice：数学函数、fallback 与 SPIR-V 内建</a></li>
+<li><a href="ch20.html">第 20 章 扩展的解剖：命名约定、feature-test 宏与 doc/extensions</a></li>
+<li><a href="ch21.html">第 21 章 实战：free function kernels 扩展</a></li>
+<li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
+<li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
+<li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="ch25.html">第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</a></li>
+<li class="active"><a href="ch26.html">第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</a></li>
+<li><a href="ch27.html">第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</a></li>
+<li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 25 章说 CIR「贴近 C++ 语义」，那是一句结论。这一章要把它兑现成具体的操作和类型：C++ 里最难降级的三样东西——<strong>控制流、类与虚表、异常</strong>——在 <code>cir</code> 方言里各自长什么样，为什么这么设计，以及降到 LLVM IR 时它们分别在哪一个 pass 里被拆掉。</p>
+<p>读完你会认得这些名字：带 region 的结构化操作（<code>cir.if</code> / <code>cir.for</code> / <code>cir.scope</code> / <code>cir.try</code>）和它们的 region 终结子（<code>cir.yield</code> / <code>cir.condition</code>）；把布局讲明白的 <code>!cir.struct</code>（连 padding 都是显式的成员种类）；把一次虚调用拆成四步的 <code>cir.vtable.*</code> 系列；用带类型的 token（<code>!cir.eh_token</code> / <code>!cir.catch_token</code>）替代裸 landingpad 值的异常模型。你还会在浏览器里跑一个模拟器，看清「正常退出」和「异常 unwind」这两条清理路径为什么必须分别落地——这正是 <code>cir.cleanup.scope</code> 有两个 region 的原因。</p>
+</div><h2>Region：控制流不用基本块表达</h2>
+<p>MLIR 的核心数据结构比 LLVM IR 多了一层。LLVM IR 是 Module → Function → BasicBlock → Instruction 四级（第 2 章）。MLIR 是 Operation → <strong>Region</strong> → Block → Operation，<strong>可以无限嵌套</strong>：一个操作可以带若干个 region，每个 region 里有若干个 block，每个 block 里又有若干个操作，其中任意一个又可以带 region。</p>
+<p>这一层嵌套就是 CIR 能保留控制流结构的全部本钱。<code>for</code> 循环不必被拆成「条件块 + 循环体块 + 跳转」，它可以就是<strong>一个操作</strong>，循环的各个部分是这个操作的 region。</p>
+<p><code>clang/include/clang/CIR/Dialect/IR/CIROps.td</code> 里，这类操作有一个共同的基类 <code>CIR_RegionBranchOpBase</code>（或它的变体），带 region 的操作主要有：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>region</th>
+<th>对应的 C/C++ 构造</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>cir.if</code></td>
+<td>then、（可选）else</td>
+<td><code>if</code> / <code>else</code></td>
+</tr>
+<tr>
+<td><code>cir.scope</code></td>
+<td>一个</td>
+<td>一对花括号构成的作用域</td>
+</tr>
+<tr>
+<td><code>cir.switch</code> + <code>cir.case</code></td>
+<td>每个 case 一个</td>
+<td><code>switch</code> / <code>case</code> / <code>default</code></td>
+</tr>
+<tr>
+<td><code>cir.while</code> / <code>cir.do</code></td>
+<td>cond、body</td>
+<td><code>while</code> / <code>do-while</code></td>
+</tr>
+<tr>
+<td><code>cir.for</code></td>
+<td>cond、body、step</td>
+<td><code>for</code></td>
+</tr>
+<tr>
+<td><code>cir.ternary</code></td>
+<td>true、false</td>
+<td><code>?:</code></td>
+</tr>
+<tr>
+<td><code>cir.global</code></td>
+<td>一个（可选）</td>
+<td>带动态初始化的全局变量</td>
+</tr>
+<tr>
+<td><code>cir.try</code></td>
+<td>try body + 每个 handler 一个</td>
+<td><code>try</code> / <code>catch</code></td>
+</tr>
+<tr>
+<td><code>cir.cleanup.scope</code></td>
+<td>body、cleanup</td>
+<td>RAII 清理（没有源码对应物）</td>
+</tr>
+<tr>
+<td><code>cir.await</code> / <code>cir.coro.body</code></td>
+<td>多个</td>
+<td>协程</td>
+</tr>
+</tbody></table>
+<p>region 内部需要终结子，CIR 为此定义了一组专门的操作：<code>cir.yield</code>（把控制权交回外层操作，最常见）、<code>cir.condition</code>（在 cond region 末尾给出布尔结果）、<code>cir.break</code> / <code>cir.continue</code>（对应 C++ 的同名语句，直接就是操作，不需要在生成时就算出跳到哪个块）。</p>
+<p>看一眼 <code>cir.for</code> 的实际形状（取自 <code>clang/test/CIR/CodeGen/loop.cpp</code>，一个空的 <code>for (;;) {}</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.for : cond {
+    %true = cir.const #true
+    cir.condition(%true)
+} body {
+    cir.yield
+} step {
+    cir.yield
+}</code></pre>
+</div><p>三个 region 一字排开，各自的角色写在关键字里。这和源码的 <code>for (init; cond; step) body</code> 是一一对应的。</p>
+<div class="concept">
+<svg viewBox="0 0 660 290" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">一个 cir.for 操作，三个 region；扁平化后，五个基本块</text>
+  <!-- 左：cir.for -->
+  <text x="30" y="46" font-size="11" font-weight="bold" fill="#2f7a45">CIR：一个操作 + 三个 region</text>
+  <rect x="30" y="56" width="250" height="186" rx="8" fill="#f0fdf4" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="44" y="76" font-size="12" font-weight="bold" fill="#2f7a45">cir.for</text>
+  <rect x="46" y="86" width="218" height="44" rx="5" fill="#ffffff" stroke="#3f9b5c"/>
+  <text x="56" y="102" font-size="10" fill="#2f7a45">cond {</text>
+  <text x="66" y="116" font-size="9" fill="#6b7280">… cir.condition(%c)</text>
+  <rect x="46" y="136" width="218" height="44" rx="5" fill="#ffffff" stroke="#3f9b5c"/>
+  <text x="56" y="152" font-size="10" fill="#2f7a45">body {</text>
+  <text x="66" y="166" font-size="9" fill="#6b7280">… cir.yield  （或 cir.break）</text>
+  <rect x="46" y="186" width="218" height="44" rx="5" fill="#ffffff" stroke="#3f9b5c"/>
+  <text x="56" y="202" font-size="10" fill="#2f7a45">step {</text>
+  <text x="66" y="216" font-size="9" fill="#6b7280">… cir.yield</text>
+  <!-- 箭头 -->
+  <path d="M292 148 L360 148" stroke="#e06a3b" stroke-width="1.8" marker-end="url(#d1)"/>
+  <text x="326" y="140" text-anchor="middle" font-size="10" font-weight="bold" fill="#a53f1c">cir-flatten-cfg</text>
+  <!-- 右：扁平 -->
+  <text x="376" y="46" font-size="11" font-weight="bold" fill="#a53f1c">扁平化：基本块 + 显式跳转</text>
+  <g font-size="10">
+    <rect x="400" y="56" width="120" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="460" y="72" text-anchor="middle" fill="#a53f1c">^preheader</text>
+    <rect x="400" y="98" width="120" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="460" y="114" text-anchor="middle" fill="#a53f1c">^cond</text>
+    <rect x="400" y="140" width="120" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="460" y="156" text-anchor="middle" fill="#a53f1c">^body</text>
+    <rect x="400" y="182" width="120" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="460" y="198" text-anchor="middle" fill="#a53f1c">^step</text>
+    <rect x="400" y="224" width="120" height="24" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="460" y="240" text-anchor="middle" fill="#a53f1c">^exit</text>
+  </g>
+  <g stroke="#e06a3b" stroke-width="1.2" fill="none">
+    <path d="M460 80 L460 96" marker-end="url(#d1)"/>
+    <path d="M460 122 L460 138" marker-end="url(#d1)"/>
+    <path d="M460 164 L460 180" marker-end="url(#d1)"/>
+    <path d="M400 194 C 372 194, 372 110, 398 110" marker-end="url(#d1)"/>
+    <path d="M520 110 C 556 110, 556 236, 522 236" marker-end="url(#d1)"/>
+  </g>
+  <text x="360" y="196" font-size="8" fill="#a53f1c">回边</text>
+  <text x="566" y="176" font-size="8" fill="#a53f1c">退出边</text>
+  <text x="330" y="272" text-anchor="middle" font-size="11" fill="#2d2a26">左边「哪一段是条件、哪一段是步进」写在<tspan font-weight="bold">语法里</tspan>；右边只剩下跳转关系，得靠分析重建</text>
+  <defs>
+    <marker id="d1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 26-1　<code>cir.for</code> 的三个 region 与扁平化之后的基本块图。region 名（cond / body / step）承载的信息，在右边变成了「哪条边是回边」这种需要计算才能得到的结论</div>
+</div><h2><code>cir-flatten-cfg</code>：结构消失的那一刻</h2>
+<p>结构化控制流迟早要变成基本块，因为 LLVM IR 只认基本块。做这件事的 pass 叫 <strong><code>cir-flatten-cfg</code></strong>，它在第 25 章那个 <code>populateCIRPreLoweringPasses()</code> 列表里排第二。</p>
+<p>因为 <code>.cir</code> 能手写，这个 pass 的测试可以完全不碰 C++。下面是 <code>clang/test/CIR/Transforms/if.cir</code> 的全文（这是一个非常值得精读的文件，它把「一个 pass 做什么」讲得比任何文档都清楚）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">// RUN: cir-opt %s -cir-flatten-cfg -o - | FileCheck %s
+
+!s32i = !cir.int&lt;s, 32&gt;
+module {
+  cir.func @foo(%arg0: !s32i) -&gt; !s32i {
+    %4 = cir.cast int_to_bool %arg0 : !s32i -&gt; !cir.bool
+    cir.if %4 {
+      %5 = cir.const #cir.int&lt;1&gt; : !s32i
+      cir.return %5 : !s32i
+    } else {
+      %5 = cir.const #cir.int&lt;0&gt; : !s32i
+      cir.return %5 : !s32i
+    }
+    cir.return %arg0 : !s32i
+  }
+}</code></pre>
+</div><p>跑完 pass 之后，<code>cir.if</code> 那个带两个 region 的操作消失了，换成了 <code>cir.brcond</code> 和三个基本块：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">//      CHECK: cir.func{{.*}} @foo(%arg0: !s32i) -&gt; !s32i {
+// CHECK-NEXT:   %0 = cir.cast int_to_bool %arg0 : !s32i -&gt; !cir.bool
+// CHECK-NEXT:   cir.brcond %0 ^bb1, ^bb2
+// CHECK-NEXT: ^bb1:  // pred: ^bb0
+// CHECK-NEXT:   %1 = cir.const #cir.int&lt;1&gt; : !s32i
+// CHECK-NEXT:   cir.return %1 : !s32i
+// CHECK-NEXT: ^bb2:  // pred: ^bb0
+// CHECK-NEXT:   %2 = cir.const #cir.int&lt;0&gt; : !s32i
+// CHECK-NEXT:   cir.return %2 : !s32i
+// CHECK-NEXT: ^bb3:  // no predecessors
+// CHECK-NEXT:   cir.return %arg0 : !s32i
+// CHECK-NEXT: }</code></pre>
+</div><p>注意最后那个 <code>^bb3: // no predecessors</code>。原本 <code>cir.if</code> 之后的那条 <code>cir.return %arg0</code> 是<strong>语法上可达</strong>的（它就写在 if 后面），但因为两个分支都 return 了，扁平化之后它成了一个没有前驱的块。这个注释是 MLIR 打印器自动加的——<strong>扁平化前后「可达性」这个概念的含义变了</strong>：之前是嵌套关系，之后是图连通性。同一个 pass 目录下还有 <code>cir.switch</code> → <code>cir.switch.flat</code> 的降级，以及 <code>cir.goto</code> / <code>cir.label</code> 由 <code>cir-goto-solver</code> 单独处理（goto 是唯一无法用嵌套结构表达的控制流，所以它需要自己的 pass）。</p>
+<div class="note">
+<strong>为什么值得单独做成一个 pass</strong>
+在经典路径里，「把 <code>if</code> 变成基本块」和「生成 <code>if</code> 里面的代码」是同一次遍历里交织完成的：<code>CGStmt.cpp</code> 一边创建 <code>llvm::BasicBlock</code>、一边 <code>EmitBlock</code>、一边递归下降。在 CIR 里这两件事被分开：CIRGen 只负责造出结构化的 <code>cir.if</code>，扁平化是后面一个独立、可单独测试、输入输出都能落盘的 pass。代价是多跑一趟 IR；收益是在这两者之间，你有一个「控制流还是结构化的」时刻可以做事。
+</div><h2>类：<code>!cir.struct</code> 把布局讲明白</h2>
+<p>C++ 的类在 LLVM IR 里是 <code>%class.Foo = type { i32, ptr, [3 x i8] }</code>——一串按顺序排列的字段类型，没有名字、没有继承关系、padding 和真实成员长得一样。CIR 的 <code>!cir.struct</code> 保留得多得多。</p>
+<p>它有三种形态（<code>CIRTypes.td</code> 里明确列出）：<strong>具名且完整</strong>、<strong>具名但不完整</strong>、<strong>匿名</strong>。而且每个成员都带一个「种类」标记：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">!rec_complete   = !cir.struct&lt;"complete" {data !u8i}&gt;
+!rec_class      = !cir.struct&lt;class "MyClass" {data !s32i}&gt;
+!rec_incomplete = !cir.struct&lt;"incomplete" incomplete&gt;
+!anonymous      = !cir.struct&lt;{data !u8i}&gt;
+!rec_packed     = !cir.struct&lt;"p1" packed {data !u8i, data !u8i}&gt;
+!rec_pad        = !cir.struct&lt;"p3" {data !u8i, pad !cir.array&lt;!u8i x 3&gt;}&gt;
+!rec_empty      = !cir.struct&lt;"e" {empty !u8i}&gt;
+!recursive      = !cir.struct&lt;"Node" {data !cir.ptr&lt;!cir.struct&lt;"Node"&gt;&gt;}&gt;</code></pre>
+</div><p>四件事值得注意：</p>
+<ul>
+<li><strong><code>class</code> 关键字被保留了</strong>。<code>!cir.struct&lt;class &quot;MyClass&quot; ...&gt;</code> 和 <code>!cir.struct&lt;&quot;MyStruct&quot; ...&gt;</code> 在语义上完全一样（C++ 里 <code>class</code> 和 <code>struct</code> 只差默认访问权限，那是 Sema 的事），但 CIR 仍然记着源码里写的是哪个词。</li>
+<li><strong>padding 是显式的成员种类</strong>。<code>pad !cir.array&lt;!u8i x 3&gt;</code> 明确说「这三字节是填充」。LLVM IR 里它就是普通的 <code>[3 x i8]</code>，你无法区分它和一个真的三字节数组成员。</li>
+<li><strong>不完整类型是一等形态</strong>。<code>!cir.struct&lt;&quot;incomplete&quot; incomplete&gt;</code> 是一个合法的类型。LLVM IR 里没有这个概念——<code>clang/test/CIR/CodeGenCXX/class.cpp</code> 里有一条注释直接指出：对不完整的类，<strong>LLVM 和 OGCG 两边都根本不发射类型</strong>。CIR 却把它记下来了。</li>
+<li><strong>继承关系反映在成员上</strong>。基类作为第一个 <code>data</code> 成员出现。</li>
+</ul>
+<p>看一个具体的继承例子：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">CIR：名字、类别、嵌套结构都在</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">!rec_Base =
+  !cir.struct&lt;class "Base" {data !s32i}&gt;
+
+!rec_Derived =
+  !cir.struct&lt;class "Derived"
+    {data !rec_Base, data !s32i}&gt;
+
+!rec_IncompleteC =
+  !cir.struct&lt;class "IncompleteC" incomplete&gt;</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">LLVM IR：只剩字段序列</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">%class.Base = type { i32 }
+
+%class.Derived = type { %class.Base, i32 }
+
+; IncompleteC 在 LLVM IR 里
+; 完全不出现</code></pre>
+</div></div>
+</div><p>在 CIR 里访问成员用 <code>cir.get_member</code>（取地址）、<code>cir.extract_member</code> / <code>cir.insert_member</code>（按值取/放，用于聚合值），位域用专门的 <code>cir.get_bitfield</code> / <code>cir.set_bitfield</code>——而不是 LLVM IR 里那套「GEP 到字节 + load + 移位 + 掩码」。位域访问单元本身有一个类型 <code>!cir.bitfield</code>，把「这个访问单元里装了哪些位域声明」写在类型上。基类与派生类之间的指针调整也是专门的操作：<code>cir.base_class_addr</code> / <code>cir.derived_class_addr</code>，而不是一个裸的字节偏移 GEP。</p>
+<h2>虚表：一次虚调用被拆成四步</h2>
+<p>虚函数调用是 CIR「高层」体现得最漂亮的地方。CIR 定义了一个专门的类型 <code>!cir.vptr</code>，它不是 <code>ptr</code>，而是「C++ 对象里那个虚表指针成员」的专用类型——<code>CIRTypes.td</code> 里说得很直白，这么做是为了避免用任意指针类型来声明 vptr，从而<strong>能对涉及 vptr 的操作做基于类型的检查</strong>。</p>
+<p>配套的操作有四个（<code>clang/include/clang/CIR/Dialect/IR/CIROps.td</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>干什么</th>
+<th>返回</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>cir.vtable.address_point</code></td>
+<td>取某个虚表全局变量的「地址点」</td>
+<td><code>!cir.vptr</code></td>
+</tr>
+<tr>
+<td><code>cir.vtable.get_vptr</code></td>
+<td>取对象里 vptr 成员的地址</td>
+<td><code>!cir.ptr&lt;!cir.vptr&gt;</code></td>
+</tr>
+<tr>
+<td><code>cir.vtable.get_virtual_fn_addr</code></td>
+<td>从 vptr 里按下标取虚函数指针的地址</td>
+<td>指向函数指针的指针</td>
+</tr>
+<tr>
+<td><code>cir.vtable.get_type_info</code></td>
+<td>取类型信息条目（<code>dynamic_cast</code> / <code>typeid</code> 用）</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<p><code>address_point</code> 那个操作的属性尤其能说明问题。它带的不是一个字节偏移，而是 <code>address_point = &lt;index = 0, offset = 2&gt;</code> ——<strong><code>index</code> 是虚表组里的第几张虚表，<code>offset</code> 是这张虚表里的第几个地址点</strong>，这两个概念直接来自 Itanium ABI 的术语。多重继承下一个类有多张虚表，这个二元组把它讲清楚了；换成一个字节数，信息就压扁了。</p>
+<p>TableGen 文档里给的完整调用序列是这样（<code>!rec_C</code> 是某个带虚函数的类）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">%2 = cir.load %0 : !cir.ptr&lt;!cir.ptr&lt;!rec_C&gt;&gt;, !cir.ptr&lt;!rec_C&gt;
+%3 = cir.vtable.get_vptr %2 : !cir.ptr&lt;!rec_C&gt; -&gt; !cir.ptr&lt;!cir.vptr&gt;
+%4 = cir.load %3 : !cir.ptr&lt;!cir.vptr&gt;, !cir.vptr
+%5 = cir.vtable.get_virtual_fn_addr %4[2] : !cir.vptr
+              -&gt; !cir.ptr&lt;!cir.ptr&lt;!cir.func&lt;(!cir.ptr&lt;!rec_C&gt;) -&gt; !s32i&gt;&gt;&gt;
+%6 = cir.load align(8) %5 : ...
+%7 = cir.call %6(%2) : (..., !cir.ptr&lt;!rec_C&gt;) -&gt; !s32i</code></pre>
+</div><p>读起来像一段说明文：取对象 → 取 vptr 地址 → 载入 vptr → 取第 2 号虚函数的槽位地址 → 载入函数指针 → 调用。而对象内 vptr 的初始化（构造函数里那一步）就是把 <code>cir.vtable.address_point</code> 的结果 store 进 <code>cir.vtable.get_vptr</code> 的结果。</p>
+<p>这里正好接上第 25 章讲 parity 时用的那个例子：这套操作降到 LLVM IR 之后是 <code>getelementptr inbounds nuw (i8, ptr @_ZTV1A, i64 16)</code>，而经典路径产出的是 <code>getelementptr inbounds inrange(-16, 8) ({ [3 x ptr] }, ptr @_ZTV1A, i32 0, i32 0, i32 2)</code>。两者指向同一个地址，测试文件里专门有注释说明它们等价。<strong>为什么会不同，现在你能解释了</strong>：CIR 手里握着的是「index=0, offset=2」这个抽象坐标，它在降级时选择自己算出字节偏移 16；经典路径手里握着的是 IRBuilder 和虚表的 LLVM 结构类型，于是它顺手生成了一个按结构层次走的 GEP。同一个语义，两种表达，因为出发点不同。</p>
+<div class="concept">
+<svg viewBox="0 0 660 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="330" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#2b6cb0">同一次虚调用：CIR 用四个具名操作，LLVM IR 用一串 GEP 和 load</text>
+  <!-- CIR 侧 -->
+  <text x="24" y="48" font-size="11" font-weight="bold" fill="#2f7a45">CIR</text>
+  <g font-size="9.5">
+    <rect x="24" y="58" width="272" height="26" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="34" y="75" fill="#2f7a45">cir.vtable.get_vptr  %obj → !cir.ptr&lt;!cir.vptr&gt;</text>
+    <rect x="24" y="94" width="272" height="26" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="34" y="111" fill="#2f7a45">cir.load             → !cir.vptr</text>
+    <rect x="24" y="130" width="272" height="26" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="34" y="147" fill="#2f7a45">cir.vtable.get_virtual_fn_addr %vptr[2]</text>
+    <rect x="24" y="166" width="272" height="26" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="34" y="183" fill="#2f7a45">cir.load             → 函数指针</text>
+    <rect x="24" y="202" width="272" height="26" rx="4" fill="#f0fdf4" stroke="#3f9b5c"/><text x="34" y="219" fill="#2f7a45">cir.call %fn(%obj)</text>
+  </g>
+  <!-- 箭头 -->
+  <path d="M306 143 L354 143" stroke="#6b7280" stroke-width="1.6" marker-end="url(#e1)"/>
+  <text x="330" y="135" text-anchor="middle" font-size="9" fill="#6b7280">降级</text>
+  <!-- LLVM 侧 -->
+  <text x="364" y="48" font-size="11" font-weight="bold" fill="#a53f1c">LLVM IR</text>
+  <g font-size="9.5">
+    <rect x="364" y="58" width="272" height="26" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="374" y="75" fill="#a53f1c">%vt = load ptr, ptr %obj</text>
+    <rect x="364" y="94" width="272" height="26" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="374" y="111" fill="#a53f1c">%slot = getelementptr ptr, ptr %vt, i64 2</text>
+    <rect x="364" y="130" width="272" height="26" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="374" y="147" fill="#a53f1c">%fn = load ptr, ptr %slot</text>
+    <rect x="364" y="166" width="272" height="26" rx="4" fill="#fff4ec" stroke="#e06a3b"/><text x="374" y="183" fill="#a53f1c">%r = call i32 %fn(ptr %obj)</text>
+    <rect x="364" y="202" width="272" height="26" rx="4" fill="#f9fafb" stroke="#d1d5db" stroke-dasharray="3 2"/><text x="374" y="219" fill="#6b7280">「这是一次虚调用」已经无从辨认</text>
+  </g>
+  <text x="330" y="250" text-anchor="middle" font-size="11" fill="#2d2a26">左边的每一步都有名字，<tspan font-weight="bold">可以被匹配、检查、改写</tspan>；右边是等价的裸指针算术</text>
+  <defs>
+    <marker id="e1" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+</svg>
+<div class="caption">图 26-2　虚调用在两层里的样子。右边的 <code>load</code> + <code>getelementptr</code> + <code>load</code> + <code>call</code> 是正确的，但「这是一次虚函数派发」这个事实只存在于左边</div>
+</div><h2>成员指针：ABI 相关的东西先不落地</h2>
+<p>C++ 的成员指针是一个典型的「ABI 相关」构造：<code>int A::*</code> 在 Itanium ABI 下是一个偏移量，成员函数指针 <code>void (A::*)()</code> 是一个 <code>{ ptr, ptrdiff_t }</code> 结构，而 MSVC ABI 下的表示完全不同。经典路径在生成 IR 时就必须选定一种表示。</p>
+<p>CIR 的做法是先给它们各自一个抽象类型，把 ABI 决策推迟：</p>
+<ul>
+<li><code>!cir.data_member&lt;!s32i in !rec_A&gt;</code> —— 指向数据成员，语义是「<code>A</code> 里某个成员的偏移」。</li>
+<li><code>!cir.method&lt;!cir.func&lt;...&gt; in !rec_A&gt;</code> —— 指向成员函数，<code>CIRTypes.td</code> 直接注明「这个类型的布局是 ABI 相关的」。</li>
+</ul>
+<p>配套操作：<code>cir.get_runtime_member</code>（用成员指针取地址）、<code>cir.get_method</code>（从成员函数指针解出可调用的函数指针和调整后的 this）、<code>cir.base_data_member</code> / <code>cir.derived_data_member</code> / <code>cir.base_method</code> / <code>cir.derived_method</code>（成员指针在继承层次上的上下转换）。</p>
+<p>这些抽象类型和操作在 <strong><code>cir-cxxabi-lowering</code></strong> 这个 pass 里被换成具体 ABI 的表示。于是「C++ ABI 的选择」从「散布在 CodeGen 各处的 <code>CGCXXABI</code> 虚函数调用」变成了「一个显式的 pass 边界」：pass 之前是与 ABI 无关的 CIR，pass 之后是绑定了某个 ABI 的 CIR。这是第 25 章说的「隐含契约变显式契约」的又一例。</p>
+<h2>异常：带类型的 token，和一串 <code>eh.*</code></h2>
+<p>异常是这三样里最复杂的，也是 CIR 设计得最不像 LLVM IR 的地方。</p>
+<p>LLVM IR 的异常模型是：<code>invoke</code> 指令 + <code>landingpad</code> 指令，landingpad 产出一个 <code>{ ptr, i32 }</code> 结构，你得自己知道第一个字段是异常对象、第二个是 selector，然后自己和 <code>llvm.eh.typeid.for</code> 的结果比较来决定进哪个 catch。<strong>结构是扁平的，值是无类型的</strong>。</p>
+<p>CIR 的模型是：<code>cir.try</code> 是一个带 region 的操作，try 体和每个 handler 各占一个 region；handler region 接收一个<strong>类型化的</strong> <code>!cir.eh_token</code> 参数代表在飞的异常。直接看 <code>CIROps.td</code> 里给的例子：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.try {
+  cir.call exception @function() : () -&gt; ()
+  cir.yield
+} catch [type #cir.global_view&lt;@_ZTIPf&gt; : !cir.ptr&lt;!u8i&gt;] (%eh_token : !cir.eh_token) {
+  %catch_token, %exn_ptr = cir.begin_catch %eh_token
+    : !cir.eh_token -&gt; (!cir.catch_token, !cir.ptr&lt;!cir.float&gt;)
+  cir.cleanup.scope {
+    ...
+    cir.yield
+  } cleanup eh {
+    cir.end_catch %catch_token : !cir.catch_token
+    cir.yield
+  }
+  cir.yield
+} unwind (%eh_token : !cir.eh_token) {
+  cir.resume %eh_token : !cir.eh_token
+}</code></pre>
+</div><p>几个设计点：</p>
+<ul>
+<li><strong>调用点上标 <code>exception</code></strong>。<code>cir.call exception @function()</code> 表示这次调用可能抛——对应 LLVM IR 的 <code>invoke</code>，但不需要在这一层就指定 unwind 目标块，因为目标由 region 的嵌套关系决定。另有一个 <code>cir.try_call</code> 操作用于已经扁平化之后的形态。</li>
+<li><strong><code>!cir.eh_token</code> 和 <code>!cir.catch_token</code> 是类型</strong>。异常状态不是一个 <code>{ ptr, i32 }</code>，而是两个各自有含义的 token 类型，验证器能检查你有没有把它们用错。<code>cir.begin_catch</code> 把 <code>eh_token</code> 换成 <code>catch_token</code> <strong>和一个已经带了正确类型的异常对象指针</strong>（例子里是 <code>!cir.ptr&lt;!cir.float&gt;</code>，因为 catch 的是 <code>float*</code>）。</li>
+<li><strong><code>cir.end_catch</code> 必须放在 <code>cir.cleanup.scope</code> 的 cleanup region 里</strong>。文档里明确写了这条规则，理由也写了：「这确保离开 catch handler 的<strong>所有路径</strong>都会执行 end_catch」。这一条约束用结构表达，比用「记得在每个出口都加一句」表达要安全得多。</li>
+<li><strong><code>unwind</code> region</strong> 处理「没有任何 handler 匹配」的情况，里面是 <code>cir.resume</code> 继续向调用者传播。</li>
+</ul>
+<p>更能说明这个模型表达力的是<strong>动态异常规范</strong>（<code>void f() throw(int)</code>）。CIR 不为它新造语法，而是复用 <code>cir.try</code>，换一对 handler：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.try {
+  cir.call exception @function() : () -&gt; ()
+  cir.yield
+} filter [#cir.global_view&lt;@_ZTIi&gt; : !cir.ptr&lt;!u8i&gt;]
+    (%eh_token : !cir.eh_token) {
+  cir.resume %eh_token : !cir.eh_token
+} unexpected (%eh_token.1 : !cir.eh_token) {
+  cir.eh.unexpected %eh_token.1 : !cir.eh_token
+}</code></pre>
+</div><p><code>filter</code> 列出允许的类型、并持有「异常被允许」时走的路（继续向调用者 unwind）；<code>unexpected</code> 持有「违反规范」时走的路。文档还讲清了两个边界情况：<code>throw()</code>（什么都不允许）时 filter region 里放的是 <code>cir.unreachable</code>；而为异常规范生成的这个 <code>cir.try</code> <strong>包住整个函数体</strong>，源码里写的每个 <code>try</code> 语句都成为嵌套在它里面的另一个 <code>cir.try</code>。这种「用嵌套关系表达包含关系」的做法，只有在有 region 的表示里才写得出来。</p>
+<p>围绕异常的操作是这一章里最长的一串，值得列出来感受一下面积：</p>
+<table>
+<thead>
+<tr>
+<th>一组</th>
+<th>操作</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>抛出</td>
+<td><code>cir.throw</code>、<code>cir.try_throw</code>、<code>cir.alloc.exception</code></td>
+</tr>
+<tr>
+<td>在飞的异常</td>
+<td><code>cir.eh.inflight_exception</code>、<code>cir.eh.typeid</code>、<code>cir.eh.dispatch</code>、<code>cir.resume</code>、<code>cir.resume.flat</code></td>
+</tr>
+<tr>
+<td>catch 生命周期</td>
+<td><code>cir.begin_catch</code>、<code>cir.end_catch</code>、<code>cir.catch_param</code>、<code>cir.init_catch_param</code>、<code>cir.construct_catch_param</code></td>
+</tr>
+<tr>
+<td>清理</td>
+<td><code>cir.begin_cleanup</code>、<code>cir.end_cleanup</code>、<code>cir.cleanup.scope</code></td>
+</tr>
+<tr>
+<td>终止路径</td>
+<td><code>cir.eh.terminate</code>、<code>cir.eh.unexpected</code>、<code>cir.eh.initiate</code></td>
+</tr>
+<tr>
+<td>SJLJ</td>
+<td><code>cir.eh.setjmp</code>、<code>cir.eh.longjmp</code></td>
+</tr>
+</tbody></table>
+<p>函数上还带 personality 信息，在文本里直接可见（来自 <code>clang/test/CIR/CodeGenCXX/try-catch.cpp</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-llvm">cir.func @_Z30try_catch_with_empty_catch_allv() personality(@__gxx_personality_v0)</code></pre>
+</div><p>这一整套最后由 <strong><code>cir-eh-abi-lowering</code></strong> 这个 pass 降到目标 ABI 的形态（Itanium 的 <code>invoke</code>/<code>landingpad</code>，或者别的）。它在 <code>populateCIRPreLoweringPasses()</code> 里紧跟着 <code>cir-flatten-cfg</code>——<strong>先把普通控制流拍平，再降异常 ABI</strong>，因为异常的降级需要知道扁平之后的块结构。</p>
+<div class="keypoint">
+<strong>一条贯穿三节的规律</strong>
+控制流、类布局、异常，CIR 的处理方式是同一个套式：<strong>先用一个「说得出名字」的高层构造记下前端知道的事实，再用一个专门的 pass 把它降成低层形态</strong>。<code>cir.if</code>/<code>cir.for</code> → <code>cir-flatten-cfg</code>；<code>!cir.data_member</code>/<code>!cir.method</code> → <code>cir-cxxabi-lowering</code>；<code>cir.try</code>/<code>eh.*</code> → <code>cir-eh-abi-lowering</code>。记住这个套式，你在 CIR 里遇到任何陌生操作都能猜出它归哪个 pass 管。
+</div><h2>与经典路径对照：文件、pass 与 12 个名字</h2>
+<p>把这一章的内容按第 25 章那张对照表重排一遍，就是一份路线图：</p>
+<table>
+<thead>
+<tr>
+<th>主题</th>
+<th>经典路径</th>
+<th>CIR 生成侧</th>
+<th>降级侧的 pass</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>控制流语句</td>
+<td><code>CGStmt.cpp</code></td>
+<td><code>CIRGenStmt.cpp</code></td>
+<td><code>cir-flatten-cfg</code>、<code>cir-goto-solver</code></td>
+</tr>
+<tr>
+<td>类、构造/析构</td>
+<td><code>CGClass.cpp</code></td>
+<td><code>CIRGenClass.cpp</code></td>
+<td><code>cir-lowering-prepare</code></td>
+</tr>
+<tr>
+<td>虚表</td>
+<td><code>CGVTables.cpp</code></td>
+<td><code>CIRGenVTables.cpp</code></td>
+<td><code>cir-cxxabi-lowering</code></td>
+</tr>
+<tr>
+<td>C++ ABI（成员指针等）</td>
+<td><code>CGCXXABI.cpp</code>、<code>CGItaniumCXXABI.cpp</code></td>
+<td><code>CIRGenCXXABI.cpp</code>、<code>CIRGenItaniumCXXABI.cpp</code></td>
+<td><code>cir-cxxabi-lowering</code></td>
+</tr>
+<tr>
+<td>异常</td>
+<td><code>CGException.cpp</code></td>
+<td><code>CIRGenException.cpp</code></td>
+<td><code>cir-eh-abi-lowering</code></td>
+</tr>
+<tr>
+<td>RAII 清理</td>
+<td><code>CGCleanup.cpp</code></td>
+<td><code>CIRGenCleanup.cpp</code></td>
+<td><code>cir-flatten-cfg</code>（配合 <code>cir.cleanup.scope</code>）</td>
+</tr>
+<tr>
+<td>调用约定</td>
+<td><code>CGCall.cpp</code>、<code>TargetInfo.cpp</code></td>
+<td><code>CIRGenCall.cpp</code>、<code>TargetInfo.cpp</code></td>
+<td><code>cir-call-conv-lowering</code></td>
+</tr>
+</tbody></table>
+<p>到目前为止上游一共有 12 个 CIR pass，全都能用 <code>cir-opt -&lt;名字&gt;</code> 单独跑：</p>
+<p><code>cir-canonicalize</code>、<code>cir-simplify</code>、<code>cir-hoist-allocas</code>、<code>cir-flatten-cfg</code>、<code>cir-goto-solver</code>、<code>cir-cxxabi-lowering</code>、<code>cir-target-lowering</code>、<code>cir-eh-abi-lowering</code>、<code>cir-lowering-prepare</code>、<code>cir-idiom-recognizer</code>、<code>cir-lib-opt</code>、<code>cir-call-conv-lowering</code>。</p>
+<div class="warn">
+<strong>别把「有这个 pass」当成「这个特性完全能用」</strong>
+异常、协程、成员指针这些主题在 CIR 里<strong>操作和类型都已经定义好了</strong>，但这不等于任意 C++ 程序加上 <code>-fclangir</code> 就能编过。上游的推进方式是「先立表示，再逐个特性把 CIRGen 补齐并加 parity 测试」，所以你会看到大量 <code>NYI</code>（not yet implemented）的报错。判断某个特性到什么程度了，最可靠的办法是去 <code>clang/test/CIR/</code> 下找对应的测试文件——<strong>有测试就有支持，测试覆盖到哪就支持到哪</strong>。写作时那里的文件数大致是：<code>CodeGen/</code> 489、<code>IR/</code> 141、<code>CodeGenOpenACC/</code> 85、<code>Transforms/</code> 53、<code>Lowering/</code> 45、<code>CodeGenHIP/</code> 29、<code>CodeGenCUDA/</code> 22、<code>CodeGenCXX/</code> 20、<code>CodeGenOpenCL/</code> 11、<code>CodeGenSYCL/</code> 3。
+</div><h2>动手：两条退出路径，为什么清理代码要写两遍</h2>
+<p><code>cir.cleanup.scope</code> 有两个 region：body 和 cleanup；<code>cir.try</code> 有一个 <code>cleanup</code> 属性，文档说它表示「即使异常没被捕获，从 try region 异常退出时也有清理要做」。为什么需要这些？下面这个能在浏览器里跑的小程序把原因摆出来：同一段带 RAII 对象的嵌套代码，正常退出和异常 unwind 走的是<strong>两条不同的清理路径</strong>，析构的对象集合和顺序都不一样。点 <strong>▶ 运行</strong>。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%A4%E6%9D%A1%E9%80%80%E5%87%BA%E8%B7%AF%E5%BE%84%EF%BC%9A%E6%AD%A3%E5%B8%B8%E8%BF%94%E5%9B%9E%20vs%20%E5%BC%82%E5%B8%B8%20unwind%E3%80%82%E5%90%8C%E4%B8%80%E6%AE%B5%E5%B5%8C%E5%A5%97%E4%BD%9C%E7%94%A8%E5%9F%9F%EF%BC%8C%E6%9E%90%E6%9E%84%E9%A1%BA%E5%BA%8F%E5%90%84%E6%98%AF%E4%BB%80%E4%B9%88%0A%0Aclass%20CppThrow(Exception)%3A%0A%20%20%20%20pass%0A%0A%23%20%E4%B8%80%E6%AE%B5%E5%B8%A6%20try%20%2F%20%E5%B5%8C%E5%A5%97%E4%BD%9C%E7%94%A8%E5%9F%9F%20%2F%20%E5%B1%80%E9%83%A8%E5%AF%B9%E8%B1%A1%E7%9A%84%E7%A8%8B%E5%BA%8F%E3%80%82(%22var%22%2C%20%E5%90%8D)%20%E8%A1%A8%E7%A4%BA%E4%B8%80%E4%B8%AA%E6%9C%89%E6%9E%90%E6%9E%84%E5%87%BD%E6%95%B0%E7%9A%84%E5%B1%80%E9%83%A8%E5%AF%B9%E8%B1%A1%0APROGRAM%20%3D%20%5B%0A%20%20%20%20(%22var%22%2C%20%22a%22)%2C%0A%20%20%20%20(%22try%22%2C%0A%20%20%20%20%20%20%20%20%5B(%22var%22%2C%20%22b%22)%2C%0A%20%20%20%20%20%20%20%20%20(%22scope%22%2C%20%5B(%22var%22%2C%20%22c%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22maybe_throw%22%2C%20%22std%3A%3Abad_alloc%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22var%22%2C%20%22d%22)%5D)%2C%20%20%20%20%20%20%20%20%20%20%23%20%E6%8A%9B%E5%87%BA%E5%90%8E%E8%BF%99%E4%B8%80%E8%A1%8C%E4%B8%8D%E4%BC%9A%E6%89%A7%E8%A1%8C%0A%20%20%20%20%20%20%20%20%20(%22var%22%2C%20%22e%22)%5D%2C%0A%20%20%20%20%20%20%20%20%5B(%22var%22%2C%20%22h%22)%5D)%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20catch%20%E4%BD%93%E9%87%8C%E7%9A%84%E5%B1%80%E9%83%A8%E5%AF%B9%E8%B1%A1%0A%20%20%20%20(%22var%22%2C%20%22f%22)%2C%0A%5D%0A%0Aevents%20%3D%20%5B%5D%0A%0Adef%20emit(kind%2C%20name%2C%20note%3D%22%22)%3A%0A%20%20%20%20events.append((kind%2C%20name%2C%20note))%0A%0Adef%20run(body%2C%20throwing)%3A%0A%20%20%20%20live%20%3D%20%5B%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%AC%E4%BD%9C%E7%94%A8%E5%9F%9F%E9%87%8C%E5%B7%B2%E6%9E%84%E9%80%A0%E3%80%81%E8%BF%98%E6%B4%BB%E7%9D%80%E7%9A%84%E5%AF%B9%E8%B1%A1%0A%20%20%20%20try%3A%0A%20%20%20%20%20%20%20%20for%20node%20in%20body%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20kind%20%3D%20node%5B0%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20kind%20%3D%3D%20%22var%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20live.append(node%5B1%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20emit(%22ctor%22%2C%20node%5B1%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20elif%20kind%20%3D%3D%20%22scope%22%3A%20%20%20%20%20%20%20%20%20%20%20%20%23%20cir.scope%20%7B%20...%20%7D%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20run(node%5B1%5D%2C%20throwing)%0A%20%20%20%20%20%20%20%20%20%20%20%20elif%20kind%20%3D%3D%20%22maybe_throw%22%3A%20%20%20%20%20%20%23%20cir.throw%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20throwing%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20emit(%22throw%22%2C%20node%5B1%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20raise%20CppThrow(node%5B1%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20elif%20kind%20%3D%3D%20%22try%22%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20cir.try%20%7B%20...%20%7D%20catch%20%7B%20...%20%7D%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20try%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20run(node%5B1%5D%2C%20throwing)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20except%20CppThrow%20as%20e%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20emit(%22catch%22%2C%20str(e))%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20run(node%5B2%5D%2C%20throwing)%0A%20%20%20%20except%20CppThrow%3A%0A%20%20%20%20%20%20%20%20for%20name%20in%20reversed(live)%3A%20%20%20%20%20%20%20%20%20%20%23%20unwind%20%E8%B7%AF%E5%BE%84%E7%9A%84%E6%B8%85%E7%90%86%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22dtor%22%2C%20name%2C%20%22unwind%22)%0A%20%20%20%20%20%20%20%20raise%0A%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20for%20name%20in%20reversed(live)%3A%20%20%20%20%20%20%20%20%20%20%23%20%E6%AD%A3%E5%B8%B8%E8%B7%AF%E5%BE%84%E7%9A%84%E6%B8%85%E7%90%86%0A%20%20%20%20%20%20%20%20%20%20%20%20emit(%22dtor%22%2C%20name%2C%20%22normal%22)%0A%0Adef%20show(title%2C%20throwing)%3A%0A%20%20%20%20global%20events%0A%20%20%20%20events%20%3D%20%5B%5D%0A%20%20%20%20try%3A%0A%20%20%20%20%20%20%20%20run(PROGRAM%2C%20throwing)%0A%20%20%20%20except%20CppThrow%3A%0A%20%20%20%20%20%20%20%20emit(%22escape%22%2C%20%22%22%2C%20%22%22)%0A%20%20%20%20print(%22%3D%3D%3D%20%25s%20%3D%3D%3D%22%20%25%20title)%0A%20%20%20%20for%20kind%2C%20name%2C%20note%20in%20events%3A%0A%20%20%20%20%20%20%20%20if%20kind%20%3D%3D%20%22ctor%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20ctor%20%25s%22%20%25%20name)%0A%20%20%20%20%20%20%20%20elif%20kind%20%3D%3D%20%22dtor%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20path%20%3D%20%22%E6%AD%A3%E5%B8%B8%E9%80%80%E5%87%BA%22%20if%20note%20%3D%3D%20%22normal%22%20else%20%22unwind%22%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20dtor%20%25s%20%20%20%20%20%20%20%20%20%20%5B%25s%5D%22%20%25%20(name%2C%20path))%0A%20%20%20%20%20%20%20%20elif%20kind%20%3D%3D%20%22throw%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20throw%20%25s%20%20%20%3C--%20%E4%BB%8E%E8%BF%99%E9%87%8C%E5%BC%80%E5%A7%8B%20unwind%22%20%25%20name)%0A%20%20%20%20%20%20%20%20elif%20kind%20%3D%3D%20%22catch%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20catch%20%25s%22%20%25%20name)%0A%20%20%20%20ctors%20%3D%20%5Be%20for%20e%20in%20events%20if%20e%5B0%5D%20%3D%3D%20%22ctor%22%5D%0A%20%20%20%20dtors%20%3D%20%5Be%20for%20e%20in%20events%20if%20e%5B0%5D%20%3D%3D%20%22dtor%22%5D%0A%20%20%20%20unwind%20%3D%20%5Be%20for%20e%20in%20dtors%20if%20e%5B2%5D%20%3D%3D%20%22unwind%22%5D%0A%20%20%20%20print(%22%20%20%E5%B0%8F%E8%AE%A1%EF%BC%9A%25d%20%E6%AC%A1%E6%9E%84%E9%80%A0%EF%BC%8C%25d%20%E6%AC%A1%E6%9E%90%E6%9E%84%EF%BC%88%E5%85%B6%E4%B8%AD%20%25d%20%E6%AC%A1%E8%B5%B0%20unwind%20%E8%B7%AF%E5%BE%84%EF%BC%89%22%0A%20%20%20%20%20%20%20%20%20%20%25%20(len(ctors)%2C%20len(dtors)%2C%20len(unwind)))%0A%20%20%20%20print()%0A%0Ashow(%22%E8%B7%AF%E5%BE%84%E4%B8%80%EF%BC%9A%E4%BB%80%E4%B9%88%E9%83%BD%E6%B2%A1%E6%8A%9B%22%2C%20False)%0Ashow(%22%E8%B7%AF%E5%BE%84%E4%BA%8C%EF%BC%9A%E5%9C%A8%E6%9C%80%E5%86%85%E5%B1%82%E4%BD%9C%E7%94%A8%E5%9F%9F%E6%8A%9B%E5%87%BA%22%2C%20True)%0A%0Aprint(%22%E5%90%8C%E4%B8%80%E4%BB%BD%E5%B5%8C%E5%A5%97%E7%BB%93%E6%9E%84%EF%BC%8C%E4%B8%A4%E6%9D%A1%E9%80%80%E5%87%BA%E8%B7%AF%E5%BE%84%E3%80%82%E6%AF%8F%E4%B8%AA%E4%BD%9C%E7%94%A8%E5%9F%9F%E9%83%BD%E8%A6%81%E5%87%86%E5%A4%87%E4%B8%A4%E5%A5%97%E6%B8%85%E7%90%86%E4%BB%A3%E7%A0%81%E2%80%94%E2%80%94%22)%0Aprint(%22%E8%BF%99%E5%B0%B1%E6%98%AF%20cir.try%20%E6%9C%89%E4%B8%80%E4%B8%AA%20%60cleanup%60%20%E5%B1%9E%E6%80%A7%E3%80%81cir.cleanup.scope%20%E6%9C%89%E4%B8%80%E4%B8%AA%E7%8B%AC%E7%AB%8B%E7%9A%84%22)%0Aprint(%22%60cleanup%20eh%60%20region%20%E7%9A%84%E5%8E%9F%E5%9B%A0%EF%BC%9A%E6%AD%A3%E5%B8%B8%E8%B7%AF%E5%BE%84%E5%92%8C%20unwind%20%E8%B7%AF%E5%BE%84%E5%BF%85%E9%A1%BB%E5%88%86%E5%88%AB%E8%90%BD%E5%9C%B0%E3%80%82%22)"># 两条退出路径：正常返回 vs 异常 unwind。同一段嵌套作用域，析构顺序各是什么
+
+class CppThrow(Exception):
+    pass
+
+# 一段带 try / 嵌套作用域 / 局部对象的程序。("var", 名) 表示一个有析构函数的局部对象
+PROGRAM = [
+    ("var", "a"),
+    ("try",
+        [("var", "b"),
+         ("scope", [("var", "c"),
+                    ("maybe_throw", "std::bad_alloc"),
+                    ("var", "d")]),          # 抛出后这一行不会执行
+         ("var", "e")],
+        [("var", "h")]),                     # catch 体里的局部对象
+    ("var", "f"),
+]
+
+events = []
+
+def emit(kind, name, note=""):
+    events.append((kind, name, note))
+
+def run(body, throwing):
+    live = []                                # 本作用域里已构造、还活着的对象
+    try:
+        for node in body:
+            kind = node[0]
+            if kind == "var":
+                live.append(node[1])
+                emit("ctor", node[1])
+            elif kind == "scope":            # cir.scope { ... }
+                run(node[1], throwing)
+            elif kind == "maybe_throw":      # cir.throw
+                if throwing:
+                    emit("throw", node[1])
+                    raise CppThrow(node[1])
+            elif kind == "try":              # cir.try { ... } catch { ... }
+                try:
+                    run(node[1], throwing)
+                except CppThrow as e:
+                    emit("catch", str(e))
+                    run(node[2], throwing)
+    except CppThrow:
+        for name in reversed(live):          # unwind 路径的清理
+            emit("dtor", name, "unwind")
+        raise
+    else:
+        for name in reversed(live):          # 正常路径的清理
+            emit("dtor", name, "normal")
+
+def show(title, throwing):
+    global events
+    events = []
+    try:
+        run(PROGRAM, throwing)
+    except CppThrow:
+        emit("escape", "", "")
+    print("=== %s ===" % title)
+    for kind, name, note in events:
+        if kind == "ctor":
+            print("  ctor %s" % name)
+        elif kind == "dtor":
+            path = "正常退出" if note == "normal" else "unwind"
+            print("  dtor %s          [%s]" % (name, path))
+        elif kind == "throw":
+            print("  throw %s   &lt;-- 从这里开始 unwind" % name)
+        elif kind == "catch":
+            print("  catch %s" % name)
+    ctors = [e for e in events if e[0] == "ctor"]
+    dtors = [e for e in events if e[0] == "dtor"]
+    unwind = [e for e in dtors if e[2] == "unwind"]
+    print("  小计：%d 次构造，%d 次析构（其中 %d 次走 unwind 路径）"
+          % (len(ctors), len(dtors), len(unwind)))
+    print()
+
+show("路径一：什么都没抛", False)
+show("路径二：在最内层作用域抛出", True)
+
+print("同一份嵌套结构，两条退出路径。每个作用域都要准备两套清理代码——")
+print("这就是 cir.try 有一个 `cleanup` 属性、cir.cleanup.scope 有一个独立的")
+print("`cleanup eh` region 的原因：正常路径和 unwind 路径必须分别落地。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">=== 路径一：什么都没抛 ===
+  ctor a
+  ctor b
+  ctor c
+  ctor d
+  dtor d          [正常退出]
+  dtor c          [正常退出]
+  ctor e
+  dtor e          [正常退出]
+  dtor b          [正常退出]
+  ctor f
+  dtor f          [正常退出]
+  dtor a          [正常退出]
+  小计：6 次构造，6 次析构（其中 0 次走 unwind 路径）
+
+=== 路径二：在最内层作用域抛出 ===
+  ctor a
+  ctor b
+  ctor c
+  throw std::bad_alloc   &lt;-- 从这里开始 unwind
+  dtor c          [unwind]
+  dtor b          [unwind]
+  catch std::bad_alloc
+  ctor h
+  dtor h          [正常退出]
+  ctor f
+  dtor f          [正常退出]
+  dtor a          [正常退出]
+  小计：5 次构造，5 次析构（其中 2 次走 unwind 路径）</code></pre>
+</div><div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">同一份嵌套结构，两条退出路径。每个作用域都要准备两套清理代码——
+这就是 cir.try 有一个 `cleanup` 属性、cir.cleanup.scope 有一个独立的
+`cleanup eh` region 的原因：正常路径和 unwind 路径必须分别落地。</code></pre>
+</div><p>对着两段输出比：<code>d</code> 在异常路径下<strong>根本没被构造</strong>，<code>e</code> 也没有；<code>c</code> 和 <code>b</code> 的析构从「正常退出」变成了「unwind」，顺序是<strong>由内到外</strong>，这正是嵌套作用域结构直接给出的顺序。而 <code>a</code> 和 <code>f</code> 两条路径都是正常退出——因为 <code>try</code> 把异常挡在了里面。</p>
+<p>请动手改两处：一是把 <code>(&quot;maybe_throw&quot;, ...)</code> 挪到 <code>(&quot;var&quot;, &quot;b&quot;)</code> 前面，看 <code>b</code> 会不会被析构（不会——它还没构造）；二是把整个 <code>try</code> 节点换成一个普通 <code>(&quot;scope&quot;, ...)</code>（把 catch 体删掉），异常就会一路逃到最外层，<code>a</code> 和 <code>f</code> 的清理路径也会变。你会体会到：<strong>「哪些对象要清理」完全由「抛出点在嵌套结构里的位置」决定</strong>。在结构化的 CIR 里这个信息是现成的；扁平化之后，它变成了「哪些块能到达哪个 landing pad」这样的图问题——这也是 <code>cir-flatten-cfg</code> 必须和清理机制配合、而 <code>cir-eh-abi-lowering</code> 必须排在它之后的原因。</p>
+<h2>小结与下一步</h2>
+<ul>
+<li>MLIR 的 <strong>Operation → Region → Block → Operation</strong> 可无限嵌套，这是 CIR 能保留结构的本钱。<code>cir.if</code> / <code>cir.scope</code> / <code>cir.switch</code> / <code>cir.while</code> / <code>cir.do</code> / <code>cir.for</code> / <code>cir.ternary</code> / <code>cir.try</code> / <code>cir.cleanup.scope</code> 都是带 region 的操作，region 用 <code>cir.yield</code> / <code>cir.condition</code> 收尾。</li>
+<li><strong><code>cir-flatten-cfg</code></strong> 是结构消失的那一刻：<code>cir.if</code> → <code>cir.brcond</code> + 基本块。因为 <code>.cir</code> 能手写，这个 pass 的测试是一个 <code>cir-opt %s -cir-flatten-cfg</code> 加 FileCheck，完全不碰 C++。</li>
+<li><strong><code>!cir.struct</code></strong> 有具名完整 / 具名不完整 / 匿名三种形态，成员带种类标记（<code>data</code> / <code>pad</code> / <code>empty</code> / <code>bitfield</code>），<code>class</code> 关键字被保留，不完整类型是一等形态——这些在 LLVM IR 里全都没有。</li>
+<li><strong>虚表</strong>由四个具名操作表达，<code>cir.vtable.address_point</code> 用的是 Itanium ABI 的 <code>&lt;index, offset&gt;</code> 二元坐标而不是字节偏移。这解释了第 25 章那个 GEP 差异的来源。</li>
+<li><strong>异常</strong>用 <code>cir.try</code> + 类型化 token（<code>!cir.eh_token</code> / <code>!cir.catch_token</code>）+ 一大串 <code>cir.eh.*</code>，动态异常规范复用同一个操作、换一对 <code>filter</code>/<code>unexpected</code> handler。约束（如「<code>cir.end_catch</code> 必须在 cleanup region 里」）用结构表达而不是靠人记。</li>
+<li>贯穿的套式：<strong>高层构造记录事实 → 专门的 pass 降级</strong>。12 个 pass 就是 12 道这样的边界。</li>
+</ul>
+<p>下一章走到这一部分的落点：CUDA/HIP。你会看到同一个套式被用在一个全新的地方——用 CIR 属性记下「这个全局变量要注册到 CUDA 运行时」「这个 kernel 的名字是什么」，再由一个 pass 展开成 <code>__cudaRegisterVar</code> / <code>cudaLaunchKernel</code> 这些运行时调用；以及一个只有在这层才可能出现的设计：主机端和设备端的表示<strong>在同一层里共存</strong>。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>MLIR 的 <strong>Region</strong> 让操作可以嵌套，CIR 借此把控制流表达成结构化操作而非基本块：<code>cir.if</code>、<code>cir.scope</code>、<code>cir.switch</code>/<code>cir.case</code>、<code>cir.while</code>/<code>cir.do</code>、<code>cir.for</code>（cond/body/step 三个 region）、<code>cir.ternary</code>、<code>cir.try</code>、<code>cir.cleanup.scope</code>。终结子是 <code>cir.yield</code> / <code>cir.condition</code> / <code>cir.break</code> / <code>cir.continue</code>。</li>
+<li><strong><code>cir-flatten-cfg</code></strong> 把它们拍成 <code>cir.brcond</code> + 基本块；<code>cir.switch</code> → <code>cir.switch.flat</code>；<code>goto</code> 由 <code>cir-goto-solver</code> 单独处理。扁平化后出现的 <code>^bb3: // no predecessors</code> 提醒你「可达性」的含义变了。</li>
+<li><strong><code>!cir.struct</code></strong>：三种形态（完整/不完整/匿名）+ 成员种类（<code>data</code>/<code>pad</code>/<code>empty</code>/<code>bitfield</code>）+ 保留 <code>class</code> 关键字。成员访问用 <code>cir.get_member</code> / <code>cir.get_bitfield</code>，基类调整用 <code>cir.base_class_addr</code>。</li>
+<li><strong>虚表四操作</strong>：<code>cir.vtable.address_point</code>（<code>&lt;index, offset&gt;</code> Itanium 坐标，返回 <code>!cir.vptr</code>）、<code>get_vptr</code>、<code>get_virtual_fn_addr</code>、<code>get_type_info</code>。专用类型 <code>!cir.vptr</code> 换来基于类型的检查。</li>
+<li><strong>成员指针</strong> <code>!cir.data_member</code> / <code>!cir.method</code> 把 ABI 决策推迟到 <code>cir-cxxabi-lowering</code>。</li>
+<li><strong>异常</strong>：<code>cir.try</code> 带 try/handler/unwind 多个 region，用 <code>!cir.eh_token</code>、<code>!cir.catch_token</code> 取代无类型的 landingpad 值；<code>cir.call exception</code> 对应 <code>invoke</code>；动态异常规范用 <code>filter</code> + <code>unexpected</code> 一对 handler，且包住整个函数体。降级由 <code>cir-eh-abi-lowering</code> 负责，排在 <code>cir-flatten-cfg</code> 之后。</li>
+<li>12 个上游 CIR pass：<code>cir-canonicalize</code>、<code>cir-simplify</code>、<code>cir-hoist-allocas</code>、<code>cir-flatten-cfg</code>、<code>cir-goto-solver</code>、<code>cir-cxxabi-lowering</code>、<code>cir-target-lowering</code>、<code>cir-eh-abi-lowering</code>、<code>cir-lowering-prepare</code>、<code>cir-idiom-recognizer</code>、<code>cir-lib-opt</code>、<code>cir-call-conv-lowering</code>。</li>
+<li>判断某个 C++ 特性支持到什么程度，去数 <code>clang/test/CIR/</code> 下的测试——<strong>测试覆盖到哪就支持到哪</strong>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch25.html">← 第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</a>
+  <a class="nav-next" href="ch27.html">第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

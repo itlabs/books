@@ -135,6 +135,8 @@ renderer.code = function (token) {
     "llvm":         { prism: "language-llvm", tag: "LLVM IR" },
     "llvm-norun":   { prism: "language-llvm", tag: "LLVM IR" },
     "spirv-norun":  { prism: "language-llvm", tag: "SPIR-V" },
+    "cir-norun":    { prism: "language-llvm", tag: "ClangIR（cir 方言）" },
+    "mlir-norun":   { prism: "language-llvm", tag: "MLIR" },
   };
   const langClass = norun[lang]
     ? norun[lang].prism

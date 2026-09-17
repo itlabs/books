@@ -30,7 +30,10 @@
     ["ch22", "第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持"],
     ["ch23", "第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）"],
     ["ch24", "第 24 章 从提案到落地：写扩展的完整流程与测试"],
-    ["appendix-a", "附录 A 搭建与构建 intel/llvm：config、compile 与常用命令"],
+    ["ch25", "第 25 章 ClangIR：把 AST → LLVM IR 那一段切开"],
+    ["ch26", "第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常"],
+    ["ch27", "第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长"],
+    ["appendix-a","附录 A 搭建与构建 intel/llvm：config、compile 与常用命令"],
     ["appendix-b", "附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR"],
     ["appendix-c", "附录 C 源码导览地图：想看某个功能去哪个目录"]
   ]

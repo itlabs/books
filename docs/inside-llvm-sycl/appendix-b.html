@@ -36,6 +36,9 @@
 <li><a href="ch22.html">第 22 章 需要编译器配合的扩展：SemaSYCL 与前端支持</a></li>
 <li><a href="ch23.html">第 23 章 案例巡礼：bindless images 与 kernel_compiler（运行时编译）</a></li>
 <li><a href="ch24.html">第 24 章 从提案到落地：写扩展的完整流程与测试</a></li>
+<li><a href="ch25.html">第 25 章 ClangIR：把 AST → LLVM IR 那一段切开</a></li>
+<li><a href="ch26.html">第 26 章 CIR 里的 C++：结构化控制流、类与虚表、异常</a></li>
+<li><a href="ch27.html">第 27 章 CIR 上的 CUDA/HIP：offloading 在新一层里怎么长</a></li>
 <li><a href="appendix-a.html">附录 A 搭建与构建 intel/llvm：config、compile 与常用命令</a></li>
 <li class="active"><a href="appendix-b.html">附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</a></li>
 <li><a href="appendix-c.html">附录 C 源码导览地图：想看某个功能去哪个目录</a></li></ul></nav>
@@ -44,7 +47,7 @@
 <h1>附录 B 术语与缩写对照：LLVM / SYCL / SPIR-V / UR</h1>
 <h2>这份附录怎么用</h2>
 <div class="goal-box">
-<p>编译器世界的缩写密度极高——一句话里可能同时出现 IR、SSA、SPIR-V、UR、USM。这份附录把全书出现过的术语按四大领域（LLVM 基础设施 / SYCL 编程模型 / SPIR-V 与设备 / UR 与运行时）汇成一张对照表，每条给出<strong>英文全称 + 一句话中文解释 + 正文对应章节</strong>，方便你读到一半忘了某个词时回来查。</p>
+<p>编译器世界的缩写密度极高——一句话里可能同时出现 IR、SSA、SPIR-V、UR、USM。这份附录把全书出现过的术语按四大领域（LLVM 基础设施 / SYCL 编程模型 / SPIR-V 与设备 / UR 与运行时）汇成一张对照表，末尾再单列一节 <strong>ClangIR</strong>（第五部分的词汇），每条给出<strong>英文全称 + 一句话中文解释 + 正文对应章节</strong>，方便你读到一半忘了某个词时回来查。</p>
 <p>它是<strong>索引</strong>而非教程——想真正理解某个概念，跟着"正文章节"回去读那一章。术语解释力求"够用就走"，不追求 Khronos 规范级别的严谨。</p>
 </div><h2>LLVM 基础设施</h2>
 <table>
@@ -462,12 +465,180 @@
 <td>第 18 章</td>
 </tr>
 </tbody></table>
+<h2>ClangIR（第五部分）</h2>
+<p>这一节的锚点是上游 <code>llvm/llvm-project</code>（以及孵化器 <code>llvm/clangir</code>），不是 <code>intel/llvm</code>。</p>
+<table>
+<thead>
+<tr>
+<th>术语</th>
+<th>全称</th>
+<th>一句话解释</th>
+<th>正文</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>MLIR</strong></td>
+<td>Multi-Level Intermediate Representation</td>
+<td>LLVM 生态里造中间表示的基础设施；提供方言、操作、region 等积木</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong>方言</strong></td>
+<td>dialect</td>
+<td>MLIR 里一组自成体系的操作/类型/属性；<code>cir</code> 就是一个方言</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong>CIR / ClangIR</strong></td>
+<td>Clang IR</td>
+<td>Clang AST 与 LLVM IR 之间新增的一层 MLIR 方言（<code>name = &quot;cir&quot;</code>）</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong>OG / OGCG</strong></td>
+<td>Original CodeGen</td>
+<td>社区对经典 <code>clang/lib/CodeGen/</code> 那条路径的叫法；<code>OGCG</code> 是 lit 测试里的 FileCheck 前缀</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong>parity</strong></td>
+<td>—</td>
+<td>CIR 的验收线：产出与经典路径<strong>语义等价</strong>的 LLVM IR（不要求文本相同）</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong><code>-fclangir</code></strong></td>
+<td>—</td>
+<td>打开 CIR 路径的 cc1 开关（默认关闭）</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong><code>-emit-cir</code></strong></td>
+<td>—</td>
+<td>让编译停在 <code>cir</code> 方言，输出可读的 <code>.cir</code> 文本</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong><code>cir-opt</code> / <code>cir-translate</code></strong></td>
+<td>—</td>
+<td>CIR 世界里对应 <code>opt</code> / <code>llc</code> 的工具；可对手写 <code>.cir</code> 单跑某个 pass</td>
+<td>第 25 章</td>
+</tr>
+<tr>
+<td><strong>Region</strong></td>
+<td>—</td>
+<td>MLIR 的一层嵌套结构（Operation → Region → Block → Operation），CIR 保留结构化控制流的本钱</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>cir.yield</code> / <code>cir.condition</code></strong></td>
+<td>—</td>
+<td>region 的终结子；把值/条件交回外层操作</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>cir-flatten-cfg</code></strong></td>
+<td>—</td>
+<td>把 <code>cir.if</code>/<code>cir.for</code> 等结构化操作拍成 <code>cir.brcond</code> + 基本块的 pass</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>!cir.struct</code></strong></td>
+<td>—</td>
+<td>CIR 的记录类型；有完整/不完整/匿名三态，成员带 <code>data</code>/<code>pad</code>/<code>empty</code>/<code>bitfield</code> 种类</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>!cir.vptr</code></strong></td>
+<td>—</td>
+<td>虚表指针的专用类型，配 <code>cir.vtable.*</code> 四个具名操作使用</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>!cir.eh_token</code> / <code>!cir.catch_token</code></strong></td>
+<td>—</td>
+<td>带类型的异常 token，取代 LLVM IR 里无类型的 landingpad 值</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>cir-cxxabi-lowering</code></strong></td>
+<td>—</td>
+<td>把成员指针（<code>!cir.data_member</code> / <code>!cir.method</code>）等 ABI 决策落地的 pass</td>
+<td>第 26 章</td>
+</tr>
+<tr>
+<td><strong><code>cir-target-lowering</code></strong></td>
+<td>—</td>
+<td>把语言地址空间翻成目标地址空间编号等目标相关决策落地的 pass</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong><code>lang_address_space(...)</code></strong></td>
+<td>—</td>
+<td>语言层地址空间（<code>offload_global</code> / <code>offload_constant</code> / <code>offload_local</code> …）</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong><code>target_address_space(N)</code></strong></td>
+<td>—</td>
+<td>目标层地址空间编号（NVPTX：global=1、constant=4、shared=3；0 为默认）</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong><code>MemorySpaceAttrInterface</code></strong></td>
+<td>—</td>
+<td>MLIR 接口，让上面两个属性能出现在 <code>!cir.ptr&lt;...&gt;</code> 的同一个语法位置</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong>device stub</strong></td>
+<td>—</td>
+<td>主机端代表某个 <code>__global__</code> kernel 的存根函数（<code>__device_stub__</code> 前缀）</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong><code>cu.kernel_name</code></strong></td>
+<td>—</td>
+<td>挂在 stub 上的属性，记住设备端 kernel 的 mangled name</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong><code>cu.var_registration</code></strong></td>
+<td>—</td>
+<td>挂在主机端影子全局上的属性，记录注册所需的名字与标志</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong><code>cu.binary_handle</code></strong></td>
+<td>—</td>
+<td>挂在 ModuleOp 上的属性，记录传给主机端的设备二进制文件名</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong>fatbin</strong></td>
+<td>fat binary</td>
+<td>打包了一个或多个架构的设备二进制；主机端在 <code>__cuda_module_ctor</code> 里注册它</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong>host–device co-optimization</strong></td>
+<td>—</td>
+<td>让主机与设备表示在同一层共存后才可能做的跨边界优化（探索中）</td>
+<td>第 27 章</td>
+</tr>
+<tr>
+<td><strong>FIR</strong></td>
+<td>Fortran IR</td>
+<td>Flang 在 AST 与 LLVM IR 之间的 MLIR 方言；CIR 之于 Clang 相当于 FIR 之于 Flang</td>
+<td>第 25 章</td>
+</tr>
+</tbody></table>
 <div class="keypoint">
 <strong>四层坐标系：LLVM（基础设施）→ SYCL（编程模型）→ SPIR-V（设备 IR）→ UR（运行时适配）</strong>
 <strong>读全书任何一段代码，先定位它在哪一层：</strong>LLVM 层是 IR/Pass/TableGen 那套通用基础设施；SYCL 层是 queue/accessor/kernel_bundle 那套用户 API 与 clang 前端（Sema/CodeGen）；SPIR-V 层是设备镜像与 `llvm-spirv`/libclc/libdevice；UR 层是运行时到各后端的适配。<strong>同一个功能往往贯穿四层</strong>（如第 19 章 <code>sycl::sqrt</code>：SYCL 头 → `__spirv_ocl_sqrt`（SPIR-V）→ libclc/驱动，第 23 章 kernel_compiler：kernel_bundle（SYCL）→ sycl-jit（SPIR-V）→ 镜像加载（UR）），认清分层就不会在缩写里迷路。
 </div><h2>小结</h2>
 <ul>
-<li>本附录按四层——<strong>LLVM / SYCL / SPIR-V / UR</strong>——汇总全书术语，每条给全称、一句话解释、正文章节。</li>
+<li>本附录按四层——<strong>LLVM / SYCL / SPIR-V / UR</strong>——汇总全书术语，每条给全称、一句话解释、正文章节；末尾单列 <strong>ClangIR</strong> 一节，对应第五部分（第 25–27 章），锚点是上游 <code>llvm/llvm-project</code> 而非 <code>intel/llvm</code>。</li>
 <li>记不清某缩写时回来查；想真正理解，跟&quot;正文&quot;列回到对应章节。</li>
 <li>最有用的心智模型是那条<strong>四层坐标系</strong>：一个功能常从 SYCL 用户 API，穿过 clang 前端、SPIR-V 设备 IR，落到 UR 运行时与具体后端——每一层都有自己的一套词汇。</li>
 </ul>

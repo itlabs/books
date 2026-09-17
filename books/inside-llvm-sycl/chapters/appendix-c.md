@@ -88,6 +88,36 @@ intel/llvm 根目录下和 SYCL/DPC++ 最相关的顶层目录（与 `llvm/`、`
 | 各后端 adapter | `unified-runtime/source/adapters/{level_zero,opencl,cuda,hip}/` | 第 18 章 |
 | bindless images 的 UR 入口 | `ur_api.h` 里 `urBindlessImages*Exp` | 第 23 章 |
 
+## ClangIR（第五部分）
+
+<div class="warn">
+<strong>这一节换了代码库</strong>
+上面所有路径都相对 <code>intel/llvm</code>。下面这一节的路径相对<strong>上游 <code>llvm/llvm-project</code></strong>（孵化器是 <code>llvm/clangir</code>）——ClangIR 是正在上游进行中的工作，<code>intel/llvm</code> 里未必有对应内容，也未必同步。
+</div>
+
+CIR 的家在 `clang/` 下一个独立的 `CIR/` 子树，和经典 CodeGen 平级共存：
+
+| 想看什么 | 去哪 | 正文 |
+|---|---|---|
+| AST → `cir` 方言（对应经典 `clang/lib/CodeGen/CG*.cpp`） | `clang/lib/CIR/CodeGen/CIRGen*.cpp` | 第 25 章 |
+| 方言本身的定义 + 模块级属性名（`cir.offload.kind` 等） | `clang/include/clang/CIR/Dialect/IR/CIRDialect.td` | 第 25、27 章 |
+| 所有 `cir.*` 操作的 TableGen 定义 | `.../CIR/Dialect/IR/CIROps.td` | 第 26 章 |
+| 所有 `!cir.*` 类型（`!cir.struct` / `!cir.vptr` / `!cir.method`……） | `.../CIR/Dialect/IR/CIRTypes.td` | 第 26 章 |
+| 属性（含 `lang_address_space` / `target_address_space`） | `.../CIR/Dialect/IR/CIRAttrs.td` | 第 27 章 |
+| CUDA/HIP 专用属性（`cu.kernel_name` / `cu.var_registration`……） | `.../CIR/Dialect/IR/CIRCUDAAttrs.td`（**独立文件，不在 `CIRAttrs.td` 里**） | 第 27 章 |
+| OpenCL 专用属性 | `.../CIR/Dialect/IR/CIROpenCLAttrs.td` | — |
+| 12 个 CIR pass 的实现（一个 pass 一个文件） | `clang/lib/CIR/Dialect/Transforms/`（`FlattenCFG.cpp` `CXXABILowering.cpp` `TargetLowering.cpp` `EHABILowering.cpp` `LoweringPrepare.cpp`……） | 第 26、27 章 |
+| pass 管线怎么装配、顺序契约写在哪 | `clang/lib/CIR/Lowering/CIRPasses.cpp`（`runCIRToCIRPasses` / `populateCIRPreLoweringPasses`） | 第 25 章 |
+| `cir` 方言 → MLIR 的 LLVM 方言 | `clang/lib/CIR/Lowering/DirectToLLVM/` | 第 25 章 |
+| CIR 上的数据流分析 | `clang/lib/CIR/Dialect/Analysis/` | — |
+| `cir-opt` / `cir-translate` / `cir-lsp-server` | `clang/tools/cir-opt/` `cir-translate/` `cir-lsp-server/` | 第 25 章 |
+| 测试总入口（按领域分子目录） | `clang/test/CIR/` | 第 25–27 章 |
+| C/C++ 发射测试（含 `OGCG` 前缀的三条 RUN 线） | `clang/test/CIR/CodeGen/` `CodeGenCXX/` | 第 25、26 章 |
+| pass 测试（手写 `.cir` + `cir-opt`） | `clang/test/CIR/Transforms/`（如 `if.cir`） | 第 26 章 |
+| CUDA / HIP offloading 测试 | `clang/test/CIR/CodeGenCUDA/` `CodeGenHIP/` | 第 27 章 |
+| SYCL 在 CIR 上的起步 | `clang/lib/CIR/CodeGen/CIRGenSYCL.cpp`、`clang/test/CIR/CodeGenSYCL/` | 第 27 章 |
+| `ThroughMLIR`（先降到 `scf`/`memref` 再往下）——**只在孵化器里** | `llvm/clangir` 仓库的 `clang/lib/CIR/Lowering/ThroughMLIR/` | 第 25 章 |
+
 ## 一个实用工作流：从"现象"倒查到"源码"
 
 合上书真动手时，最常见的不是"我知道去哪个文件"，而是"我看到某个行为/字符串，想找它从哪来"。推荐的倒查流程：
@@ -107,6 +137,13 @@ grep -rl 'feature_you_want' sycl/test/ sycl/test-e2e/
 
 # 5. 想找一个 clang 属性的全链（定义→检查→codegen）
 grep -rn 'SYCLReqdWorkGroupSize' clang/include clang/lib
+
+# 6.（ClangIR，在 llvm-project 树里）想知道一个 cir 操作/类型/属性在哪定义
+grep -rn 'cir.vtable.address_point' clang/include/clang/CIR/
+
+# 7. 想知道某个 C++/CUDA 特性 CIR 支持到什么程度——去数测试
+ls clang/test/CIR/CodeGenCXX/ clang/test/CIR/CodeGenCUDA/
+grep -rl 'OGCG' clang/test/CIR/ | wc -l    # 有多少测试在和经典路径逐行对齐
 ```
 
 <div class="keypoint">
@@ -116,7 +153,7 @@ grep -rn 'SYCLReqdWorkGroupSize' clang/include clang/lib
 
 ## 小结
 
-- 本附录把全书源码锚点倒过来组织成地图：**顶层目录总览 + 按功能索引（clang / sycl / 设备库+SPIR-V / UR）**。
+- 本附录把全书源码锚点倒过来组织成地图：**顶层目录总览 + 按功能索引（clang / sycl / 设备库+SPIR-V / UR / ClangIR）**。注意最后一节的锚点是上游 `llvm/llvm-project`，不是 `intel/llvm`。
 - 找功能的顺序：先定层（附录 B 四层）→ 定顶层目录 → 查功能表定文件；记不住路径就用 `grep -rn` 从现象倒查。
-- 高频落点：编译器前端 `clang/lib/Sema/SemaSYCL*.cpp` + `clang/include/clang/Basic/Attr.td`；运行时 `sycl/source/detail/`；扩展文档 `sycl/doc/extensions/`；设备库 `libdevice/`+`libclc/`；翻译 `llvm-spirv/`；适配 `unified-runtime/`。
+- 高频落点：编译器前端 `clang/lib/Sema/SemaSYCL*.cpp` + `clang/include/clang/Basic/Attr.td`；运行时 `sycl/source/detail/`；扩展文档 `sycl/doc/extensions/`；设备库 `libdevice/`+`libclc/`；翻译 `llvm-spirv/`；适配 `unified-runtime/`；ClangIR `clang/lib/CIR/` + `clang/include/clang/CIR/Dialect/IR/*.td` + `clang/test/CIR/`。
 - 铁律：**行号会漂移，路径可能搬家（如 `Options.td` 从 `Driver/` 到 `Options/`）——永远先在你手上的树里搜一遍再引用**。这也是全书"源码为锚"精神的收尾。
