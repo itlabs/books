@@ -316,28 +316,25 @@ func.func @dead_reduce(%a: tensor&lt;4x4xf32&gt;) {
 <li>属性是否存在、类型对不对</li>
 </ul>
 <p><strong>拦不住</strong>——下面两个实测例子都<strong>通过了验证</strong>，而它们显然是错的：</p>
-<div class="code-block cpp">
-  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
-    </div>
-  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
-// ① 把 4×8 "转置"成 4×8：形状根本不是转置关系
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">// ① 把 4×8 "转置"成 4×8：形状根本不是转置关系
 func.func @bogus_transpose(%a: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt; {
   %t = pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;4x8xf32&gt;
   return %t : tensor&lt;4x8xf32&gt;
 }</code></pre>
-  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
-</div><div class="code-block cpp">
-  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
-    </div>
-  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
-// ② pipeline 声明返回一张图，但 body 什么都没 yield
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">// ② pipeline 声明返回一张图，但 body 什么都没 yield
 func.func @empty_pipeline() -&gt; tensor&lt;4x4xf32&gt; {
   %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
   }
   return %out : tensor&lt;4x4xf32&gt;
 }</code></pre>
-  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
 </div><p>两段都干干净净地过了 <code>pix-opt</code>。原因很简单：<strong>没有人声明过这些关系</strong>。</p>
+<blockquote>
+<p>这两块标的是 <code>mlir-norun</code>，不带&quot;在 Compiler Explorer 打开&quot;的按钮，也不进随书校验——因为它们要的是<strong>第 8 章这一刻</strong>的 pix 方言。<code>code/pix/</code> 里放的是全书结束时的终态，第 10 章补上的 verifier 和接口正好会把这两段拦下来（那就是第 10 章 <code>invalid_verifiers.mlir</code> 的内容）。想亲手复现&quot;它居然过了&quot;，把 <code>PixOps.cpp</code> 里 <code>verify()</code> 和 <code>getSuccessorInputs</code> 相关的部分注释掉重编即可。</p>
+</blockquote>
 <ul>
 <li>例 ①：ODS 只知道两个类型都得是 <code>F32Tensor</code>，&quot;结果形状必须是输入形状的逆序&quot;这条语义只在你脑子里。</li>
 <li>例 ②：<code>SingleBlockImplicitTerminator</code> 只管&quot;有没有终结符&quot;，不管&quot;终结符交出的值与 op 的结果对不对齐&quot;。</li>

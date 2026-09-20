@@ -20,8 +20,11 @@ func.func @kernel_shape_mismatch() -> !pix.kernel<5 x 5> {
 // -----
 
 func.func @pipeline_yields_nothing() -> tensor<4x4xf32> {
-  // 这条检查不是手写的：实现了 RegionBranchOpInterface 之后由通用机制给出
-  // expected-error @+1 {{source has 0 operands, but target successor needs 1}}
+  // 这条检查不是手写的：实现了 RegionBranchOpInterface 之后由通用机制给出。
+  // 通用机制除了报错还会附一条 note 指出"边的起点在哪"，--verify-diagnostics
+  // 要求 note 也得预期，漏了它测试同样算失败。
+  // expected-error @+2 {{region branch point has 0 operands, but region successor needs 1 inputs}}
+  // expected-note @+1 {{region branch point}}
   %out = pix.pipeline : tensor<4x4xf32> {
   }
   return %out : tensor<4x4xf32>

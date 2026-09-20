@@ -108,10 +108,12 @@ def Pix_ReduceOp : Pix_Op<"reduce", [Pure]> {
 def Pix_PipelineOp : Pix_Op<"pipeline", [
     SingleBlockImplicitTerminator<"YieldOp">,
     RecursiveMemoryEffects,
-    // 第 10 章：声明"控制流怎么在我和我的 region 之间走"。只要实现这一个接口方法，
-    // 通用机制就会替我们检查"yield 出来的值与本 op 的结果是否个数、类型都对齐"——
-    // 正是第 2 章 scf.if 那条报错的来源。
-    DeclareOpInterfaceMethods<RegionBranchOpInterface>]> {
+    // 第 10 章：声明"控制流怎么在我和我的 region 之间走"，以及"每条边的落点接收
+    // 哪些值"。实现这两个接口方法，通用机制就会替我们检查"yield 出来的值与本 op 的
+    // 结果是否个数、类型都对齐"——正是第 2 章 scf.if 那条报错的来源。
+    // getSuccessorInputs 在接口里带默认实现（返回空），要覆盖就得显式列出来。
+    DeclareOpInterfaceMethods<RegionBranchOpInterface,
+                              ["getSuccessorInputs"]>]> {
   let summary = "把一串图像处理步骤打包成一个可整体变换的单元";
   let description = [{
     `pix.pipeline` 自己不算任何东西，它只是把一段处理流程围起来，

@@ -49,7 +49,7 @@
 <h2>这一章想让你带走什么</h2>
 <div class="goal-box">
 <p>第 8、9 章结尾我们攒下了三个洞：<code>pix.transpose</code> 可以把 4×8「转置」成 4×8；<code>pix.kernel</code> 的权重形状可以和 <code>!pix.kernel&lt;R x C&gt;</code> 说的不一致；<code>pix.pipeline</code> 可以声明有结果却什么都不 yield。三段荒唐的 IR 都干干净净地通过了验证——因为没人声明过这些规则。这一章把它们全堵上。</p>
-<p>但比"怎么写 verifier"更重要的是<strong>两条路的选择</strong>：手写 <code>verify()</code>，还是去实现一个接口让通用机制替你查？两条我们都走一遍——pipeline 那个洞，我们只写了 <strong>10 行 <code>getSuccessorRegions</code></strong>，检查就白拿到了，报错措辞和第 2 章 <code>scf.if</code> 那条一模一样。</p>
+<p>但比"怎么写 verifier"更重要的是<strong>两条路的选择</strong>：手写 <code>verify()</code>，还是去实现一个接口让通用机制替你查？两条我们都走一遍——pipeline 那个洞，我们只写了 <strong>两个接口方法、二十来行</strong>，检查就白拿到了，报错和第 2 章 <code>scf.if</code> 那条除了 op 名一个字都不差。</p>
 <p>另外三件实用的事：<strong>验证的执行顺序</strong>（以及由此而来的一条硬规矩：<code>verify()</code> 里不能碰嵌套 op）、<strong>类型参数怎么验</strong>（它发生在还没有 op 的时候，所以报错方式不同）、以及<strong>怎么给"报错行为"写测试</strong>。</p>
 </div><h2>先看清验证是怎么跑的</h2>
 <p>打开 <code>mlir/lib/IR/Verifier.cpp</code>，整个验证器是一次树的遍历，每个 op 有两个钩子——<strong>进门时</strong>和<strong>出门时</strong>：</p>
@@ -223,9 +223,10 @@ func.func @f(%k: !pix.kernel&lt;2 x 4&gt;) {
   <pre class="line-numbers"><code class="language-llvm">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
     SingleBlockImplicitTerminator&lt;"YieldOp"&gt;,
     RecursiveMemoryEffects,
-    DeclareOpInterfaceMethods&lt;RegionBranchOpInterface&gt;]&gt; {</code></pre>
+    DeclareOpInterfaceMethods&lt;RegionBranchOpInterface,
+                              ["getSuccessorInputs"]&gt;]&gt; {</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
-</div><p>C++ 里实现<strong>唯一一个</strong>必需方法——描述控制流怎么在&quot;本 op&quot;与&quot;它的 region&quot;之间流动：</p>
+</div><p>C++ 里实现两个方法。第一个描述控制流怎么在&quot;本 op&quot;与&quot;它的 region&quot;之间流动：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">C++</span></div>
   <pre class="line-numbers"><code class="language-cpp">void PipelineOp::getSuccessorRegions(RegionBranchPoint point,
@@ -235,23 +236,35 @@ func.func @f(%k: !pix.kernel&lt;2 x 4&gt;) {
     regions.push_back(RegionSuccessor(&amp;getBody()));
     return;
   }
-  // 从 body 出来 → 回到 pipeline（此时携带的值就是 yield 的操作数）
+  // 从 body 出来 → 回到 pipeline
   regions.push_back(RegionSuccessor(getOperation()));
 }</code></pre>
-</div><p><strong>十行代码，换来的报错是这样的</strong>（真实输出）：</p>
+</div><p>第二个说清每条边的<strong>落点接收哪些值</strong>。这一步不能省：<code>RegionSuccessor</code> 只记&quot;落在哪&quot;（一个 region，还是本 op），它不带值，所以框架得另外问你一次：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">ValueRange PipelineOp::getSuccessorInputs(RegionSuccessor successor) {
+  // 落在本 op 上 → 接收方是本 op 的结果，这正是 yield 要对齐的目标
+  if (successor.isOperation())
+    return getOperation()-&gt;getResults();
+  // 落在 body 上 → body 没有块参数
+  return {};
+}</code></pre>
+</div><p><code>getSuccessorInputs</code> 在接口里带默认实现（返回空），所以 ODS 那行必须把它<strong>显式列进覆盖名单</strong>，否则你写的版本不会被调用——框架会以为这条边上一个值都不接收，于是合法的 <code>pix.yield %c</code> 反而被判成错。</p>
+<p><strong>二十行代码，换来的报错是这样的</strong>（真实输出）：</p>
 <div class="code-block">
   
-  <pre class="line-numbers"><code class="language-none">error: 'pix.pipeline' op  region control flow edge from Region #0 to parent results: source has 0 operands, but target successor needs 1
+  <pre class="line-numbers"><code class="language-none">error: 'pix.pipeline' op along control flow edge from Operation pix.yield to Operation pix.pipeline: region branch point has 0 operands, but region successor needs 1 inputs
   %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
-         ^</code></pre>
+         ^
+note: region branch point</code></pre>
 </div><p>对比第 2 章我们在 <code>scf.if</code> 上看到的那条：</p>
 <div class="code-block">
   
   <pre class="line-numbers"><code class="language-none">error: 'scf.if' op along control flow edge from Operation scf.yield to Operation scf.if: region branch point has 0 operands, but region successor needs 1 inputs</code></pre>
-</div><p><strong>同一套机制，同样的措辞风格。</strong> 你的 op 现在和内建 op 一样，享受通用的控制流验证——而且这个接口的回报远不止验证：第 19 章的数据流分析、第 13 章某些 pass 的正确性，都建立在它之上。</p>
+</div><p>把两条放在一起看：除了 op 名，<strong>一个字都不差</strong>。你的 op 现在和内建 op 走的是同一条代码路径，报错由同一个函数打印（<code>mlir/lib/Interfaces/ControlFlowInterfaces.cpp</code> 里那段边检查）。而且这个接口的回报远不止验证：第 19 章的数据流分析、第 13 章某些 pass 的正确性，都建立在它之上。</p>
 <div class="warn">
 <strong>接口方法的签名会随版本变</strong>
-<p><code>RegionSuccessor</code> 的构造方式在我实测的两个版本里就不一样：LLVM 23.x 有 <code>RegionSuccessor(Operation *)</code>，而 LLVM 19 只有 <code>RegionSuccessor(Operation::result_range)</code>。本书代码按基线（23.1）写。<strong>实现任何接口前，先打开你手上那份头文件看方法签名</strong>——这类漂移在 MLIR 里很常见，附录 A 第 0 节那条"以你手上的版本为准"就是为它准备的。</p>
+<p>这个接口本身就是活例子。早先的 <code>RegionSuccessor</code> 是<strong>连值一起带</strong>的，构造时就把"落点接收哪些值"塞进去（<code>RegionSuccessor(Operation::result_range)</code> 之类）；基线 23.1 把这件事拆开了——<code>RegionSuccessor</code> 只记落点，值改由单独的 <code>getSuccessorInputs</code> 回答。照老写法只实现 <code>getSuccessorRegions</code> 的代码在 23.1 上不会编译失败，而是<strong>静悄悄地行为不对</strong>：默认实现说"这条边不接收任何值"，于是空 <code>pipeline</code> 不报错了，合法的 <code>yield</code> 倒被判错——这种失败最难查。<strong>实现任何接口前，先打开你手上那份头文件，把方法列表和默认实现一起看过</strong>；带默认实现的方法尤其要留意，漏了它编译器不会提醒你。附录 A 第 0 节那条"以你手上的版本为准"就是为它准备的。</p>
 </div><h2>该写 verifier 还是该实现接口？</h2>
 <p>一张判断表，是这一章最该带走的东西：</p>
 <table>
@@ -301,8 +314,9 @@ func.func @f(%k: !pix.kernel&lt;2 x 4&gt;) {
 <p>判断原则很简单：<strong>如果这条信息除了&quot;验证&quot;之外还能被别的地方用到，就把它做成接口；如果它纯粹是本 op 的私事，就写 verifier。</strong> 接口的成本高一点（要读文档、实现方法），但它是<strong>可复用的声明</strong>，而 verifier 只是一次性的检查。</p>
 <h2>给报错行为写测试</h2>
 <p>verifier 写完不测，等于没写——它最容易在后续重构里悄悄失效。测试写法就是第 3 章那套 <code>--split-input-file --verify-diagnostics</code>：</p>
-<div class="code-block">
-  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
   <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --split-input-file --verify-diagnostics
 
 func.func @transpose_not_reversed(%a: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt; {
@@ -314,8 +328,11 @@ func.func @transpose_not_reversed(%a: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8
 // -----
 
 func.func @pipeline_yields_nothing() -&gt; tensor&lt;4x4xf32&gt; {
-  // 这条检查不是手写的：实现了 RegionBranchOpInterface 之后由通用机制给出
-  // expected-error @+1 {{source has 0 operands, but target successor needs 1}}
+  // 这条检查不是手写的：实现了 RegionBranchOpInterface 之后由通用机制给出。
+  // 通用机制除了报错还附一条 note 指出"边的起点在哪"，--verify-diagnostics
+  // 要求 note 也得预期，漏了它测试同样算失败。
+  // expected-error @+2 {{region branch point has 0 operands, but region successor needs 1 inputs}}
+  // expected-note @+1 {{region branch point}}
   %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
   }
   return %out : tensor&lt;4x4xf32&gt;
@@ -327,6 +344,7 @@ func.func @pipeline_yields_nothing() -&gt; tensor&lt;4x4xf32&gt; {
 func.func @even_kernel(%k: !pix.kernel&lt;2 x 4&gt;) {
   return
 }</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --split-input-file --verify-diagnostics input.mlir</code></div>
 </div><p>三个写法要点：</p>
 <ul>
 <li><strong><code>@+1</code></strong> 表示&quot;错误发生在下一行&quot;。也可以写 <code>@-1</code>（上一行）、<code>@+2</code>，或者不带偏移（本行）。</li>
@@ -336,6 +354,22 @@ func.func @even_kernel(%k: !pix.kernel&lt;2 x 4&gt;) {
 <div class="keypoint">
 <strong>别忘了测"合法的也得过"</strong>
 <p>verifier 写紧了比写松了更难发现——一段本该合法的 IR 被拒绝，往往要等到很久以后有人写出那种 IR 才暴露。我们的测试文件最后一段专门放一堆<strong>合法</strong>的 op（正确的转置、匹配的卷积核、正常 yield 的 pipeline），确保新加的检查没有误伤。</p>
+</div><p>测试文件的最后一段就是这个&quot;合法也得过&quot;的对照组，它同时也是本章成果的一次总检阅——
+四条新不变式全部生效，而这些写法一个都不能被误伤：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+func.func @all_legal(%a: tensor&lt;4x8xf32&gt;, %img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x4xf32&gt; {
+  %t = pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;       // 形状确实逆序
+  %k = pix.kernel dense&lt;1.0&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;  // 权重与类型一致，边长为奇数
+  %c = pix.convolve %img, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  %p = pix.pipeline : tensor&lt;8x8xf32&gt; {
+    pix.yield %c : tensor&lt;8x8xf32&gt;                                  // yield 与结果对齐
+  }
+  return %t : tensor&lt;8x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
 </div><p>现在跑全套：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">终端</span></div>
@@ -367,7 +401,7 @@ Total Discovered Tests: 5
 <li>对应两个 ODS 开关：<code>hasVerifier</code> → <code>verify()</code>；<code>hasRegionVerifier</code> → <code>verifyRegions()</code>。</li>
 <li>诊断三习惯：用 <code>emitOpError()</code>（自动带 op 名与位置）、消息里别重复 op 名、把期望值与实际值都写进去；要指向别处用 <code>attachNote</code>。</li>
 <li><strong>类型参数的不变式用类型自己的 <code>genVerifyDecl</code> + <code>verify()</code></strong>，签名里第一个参数是 <code>emitError</code> 回调——因为类型验证发生在&quot;构造类型&quot;那一刻，还没有 op 可言。它连函数签名里的坏类型都拦得住。</li>
-<li><strong>能做成接口的，就别写 verifier</strong>：pipeline 的 yield 对齐，我们只实现了 10 行 <code>getSuccessorRegions</code>，就白拿到和 <code>scf.if</code> 同级的控制流验证，而且同一个接口还会被第 13、19 章的分析复用。判断原则：<strong>这条信息只用于验证，还是也能被别人用？</strong></li>
+<li><strong>能做成接口的，就别写 verifier</strong>：pipeline 的 yield 对齐，我们只实现了 <code>getSuccessorRegions</code> 与 <code>getSuccessorInputs</code> 两个方法、二十来行，就白拿到和 <code>scf.if</code> 同级的控制流验证，而且同一个接口还会被第 13、19 章的分析复用。判断原则：<strong>这条信息只用于验证，还是也能被别人用？</strong></li>
 <li>给报错行为写测试：<code>--split-input-file --verify-diagnostics</code> + <code>expected-error @+1 {{正则}}</code>。正则只匹配最稳定的片段；<strong>别忘了同时测&quot;合法的仍然通过&quot;</strong>，否则 verifier 写紧了没人知道。</li>
 <li>顺带的一个印证：验证器在&quot;出门&quot;那一步用 <code>parallelForEach</code> <strong>并发</strong>验证带 <code>IsolatedFromAbove</code> 的子 op——第 2 章那句&quot;这个 trait 是并发的前提&quot;，在这里第一次兑现。</li>
 </ul>

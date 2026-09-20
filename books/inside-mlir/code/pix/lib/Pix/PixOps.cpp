@@ -60,9 +60,10 @@ LogicalResult KernelOp::verify() {
 // pix.pipeline
 //===----------------------------------------------------------------------===//
 
-// RegionBranchOpInterface 只要求这一个方法：描述控制流怎么在"本 op"与"它的 region"
-// 之间流动。实现它之后，通用机制会顺带替我们检查每条控制流边上的值个数与类型
-// （也就是 yield 与 op 结果的对齐）——这就是"实现接口换来免费检查"的最小例子。
+// RegionBranchOpInterface 要两个方法：一个说控制流怎么在"本 op"与"它的 region"
+// 之间流动，另一个说每条边的**落点**接收哪些值。实现它们之后，通用机制会顺带替我们
+// 检查每条边上的值个数与类型（也就是 yield 与 op 结果的对齐）——这就是"实现接口
+// 换来免费检查"的最小例子。
 void PipelineOp::getSuccessorRegions(RegionBranchPoint point,
                                      SmallVectorImpl<RegionSuccessor> &regions) {
   // 从 pipeline 自己出发 → 进入 body
@@ -70,6 +71,15 @@ void PipelineOp::getSuccessorRegions(RegionBranchPoint point,
     regions.push_back(RegionSuccessor(&getBody()));
     return;
   }
-  // 从 body 出来 → 回到 pipeline（此时携带的值就是 yield 的操作数）
+  // 从 body 出来 → 回到 pipeline
   regions.push_back(RegionSuccessor(getOperation()));
+}
+
+// 落点接收哪些值。RegionSuccessor 本身只记"落在哪"（region 还是 op），不带值，
+// 所以得单独告诉框架：落在本 op 上时，接收方是本 op 的结果；落在 body 上时，
+// body 没有块参数，接收方为空。前者正是 yield 要对齐的目标。
+ValueRange PipelineOp::getSuccessorInputs(RegionSuccessor successor) {
+  if (successor.isOperation())
+    return getOperation()->getResults();
+  return {};
 }
