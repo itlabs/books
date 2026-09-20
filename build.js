@@ -290,9 +290,13 @@ ${irScripts}<script src="vendor/prism-line-numbers.min.js"></script>
 }
 
 // 目录侧边栏（每本书内共用）
-function buildToc(book, currentSlug) {
+// written 是"已经写了 .md 的章节"集合。没写的章照样列出来（读者能看到全书规划），
+// 但**不给链接**——否则点开就是 404。书还没写完时这个区别很要紧。
+function buildToc(book, currentSlug, written) {
   const items = book.chapters
     .map(([slug, title]) => {
+      if (written && !written.has(slug))
+        return `<li class="toc-todo"><span>${title}</span></li>`;
       const cls = slug === currentSlug ? ' class="active"' : "";
       return `<li${cls}><a href="${slug}.html">${title}</a></li>`;
     })
@@ -332,6 +336,13 @@ function buildBook(book) {
   }
 
   const chDir = path.join(book.dir, "chapters");
+  // 先过一遍：哪些章真的有 .md。目录、上下章导航、首页链接都以它为准，
+  // 免得生成指向不存在的 .html 的死链。
+  const written = new Set(
+    book.chapters
+      .map(([slug]) => slug)
+      .filter((slug) => fs.existsSync(path.join(chDir, slug + ".md"))),
+  );
   bookUsesIr = false;
   let built = 0;
   book.chapters.forEach(([slug, title], i) => {
@@ -343,8 +354,15 @@ function buildBook(book) {
     blockId = 0;
     const md = stripBlankLinesInSvg(fs.readFileSync(mdPath, "utf8"));
     const body = marked.parse(md);
-    const prev = book.chapters[i - 1];
-    const next = book.chapters[i + 1];
+    // 上/下一章只连**紧邻**那一章，且它得真的写了。
+    // 不跨过没写的章去找更远的——那样「下一章 →」会指到十几章之后的附录，
+    // 比没有链接更误导。书写完之后这个判断自然就不起作用了。
+    const neighbor = (j) => {
+      const ch = book.chapters[j];
+      return ch && written.has(ch[0]) ? ch : undefined;
+    };
+    const prev = neighbor(i - 1);
+    const next = neighbor(i + 1);
     const prevLink = prev
       ? `<a class="nav-prev" href="${prev[0]}.html">← ${prev[1]}</a>`
       : "";
@@ -353,7 +371,7 @@ function buildBook(book) {
       : "";
     fs.writeFileSync(
       path.join(outDir, slug + ".html"),
-      page(title, body, prevLink, nextLink, buildToc(book, slug)),
+      page(title, body, prevLink, nextLink, buildToc(book, slug, written)),
     );
     built++;
   });
@@ -372,13 +390,19 @@ function buildBook(book) {
 
   if (fs.existsSync(readmePath)) {
     const indexMd = stripBlankLinesInSvg(fs.readFileSync(readmePath, "utf8"));
-    // 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html
+    // 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html。
+    // 但**只改已经写了的**——还没写的那些，整个 markdown 链接降级成纯文本，
+    // 否则首页上就是一排 404。
     const indexBody = marked.parse(
-      indexMd.replace(/chapters\/([\w-]+)\.md/g, "$1.html"),
+      indexMd
+        .replace(/\[([^\]]+)\]\(chapters\/([\w-]+)\.md\)/g, (m, text, slug) =>
+          written.has(slug) ? `[${text}](${slug}.html)` : `${text}（待写）`,
+        )
+        .replace(/chapters\/([\w-]+)\.md/g, "$1.html"),
     );
     fs.writeFileSync(
       path.join(outDir, "index.html"),
-      page(book.title, indexBody, "", "", buildToc(book, "index")),
+      page(book.title, indexBody, "", "", buildToc(book, "index", written)),
     );
   }
 

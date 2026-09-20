@@ -55,6 +55,15 @@ body {
   border-left-color: var(--accent);
   font-weight: 600;
 }
+/* 还没写的章：照样列出来让读者看到全书规划，但不可点（没有对应的 .html） */
+.toc-list li.toc-todo span {
+  display: block;
+  padding: 9px 22px;
+  color: #7c766c;
+  font-size: 15px;
+  border-left: 3px solid transparent;
+  cursor: default;
+}
 #menu-toggle {
   display: none;
   position: fixed; top: 12px; left: 12px; z-index: 200;
