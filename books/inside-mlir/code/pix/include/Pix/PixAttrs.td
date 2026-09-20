@@ -30,4 +30,24 @@ def Pix_BorderModeAttr : EnumAttr<Pix_Dialect, Pix_BorderMode, "border"> {
   let assemblyFormat = "`<` $value `>`";
 }
 
+//===----------------------------------------------------------------------===//
+// 第 12 章：第二个枚举属性 —— pix.reduce 的归约方式
+//   第 8 章把 reduce 的语义写死成"求和"，留了句"以后用枚举扩展"。现在兑现。
+//   写法和 border 一模一样（两步），这正是要点：枚举属性是有套路的，
+//   第二个就该是照抄。
+//===----------------------------------------------------------------------===//
+
+def Pix_ReduceKind : I32EnumAttr<"ReduceKind", "全图归约的方式", [
+      I32EnumAttrCase<"Sum", 0, "sum">,
+      I32EnumAttrCase<"Max", 1, "max">,
+      I32EnumAttrCase<"Min", 2, "min">
+    ]> {
+  let cppNamespace = "::mlir::pix";
+  let genSpecializedAttr = 0;
+}
+
+def Pix_ReduceKindAttr : EnumAttr<Pix_Dialect, Pix_ReduceKind, "reduce_kind"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 #endif // PIX_ATTRS

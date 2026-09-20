@@ -47,7 +47,7 @@ func.func @add_nonzero_stays(%img: tensor<4x4xf32>) -> tensor<4x4xf32> {
 // splat：2.5 × 16 个元素 = 40
 // CHECK-LABEL: func.func @reduce_splat
 // CHECK: %[[C:.*]] = arith.constant 4.000000e+01 : f32
-// CHECK-NEXT: return %[[C]]
+// CHECK-NEXT: return %[[C]] :
 // CHECK-NOT: pix.reduce
 func.func @reduce_splat() -> f32 {
   %img = arith.constant dense<2.5> : tensor<4x4xf32>
@@ -58,7 +58,7 @@ func.func @reduce_splat() -> f32 {
 // 逐元素：1 + 2 + 3 + 4 = 10
 // CHECK-LABEL: func.func @reduce_dense
 // CHECK: %[[C:.*]] = arith.constant 1.000000e+01 : f32
-// CHECK-NEXT: return %[[C]]
+// CHECK-NEXT: return %[[C]] :
 // CHECK-NOT: pix.reduce
 func.func @reduce_dense() -> f32 {
   %img = arith.constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32>
@@ -134,7 +134,7 @@ func.func @single_transpose_stays(%img: tensor<4x8xf32>) -> tensor<8x4xf32> {
 
 // CHECK-LABEL: func.func @nested_scale
 // CHECK: %[[C:.*]] = arith.constant 6.000000e+00 : f32
-// CHECK: pix.scale %arg0, %[[C]]
+// CHECK: pix.scale %arg0, %[[C]] :
 // CHECK-NOT: pix.scale
 // CHECK-NOT: arith.mulf
 func.func @nested_scale(%img: tensor<4x4xf32>) -> tensor<4x4xf32> {
@@ -149,7 +149,7 @@ func.func @nested_scale(%img: tensor<4x4xf32>) -> tensor<4x4xf32> {
 // 这说明 pattern 本身不依赖常量——能折是 arith 的功劳。
 // CHECK-LABEL: func.func @nested_scale_dynamic
 // CHECK: %[[M:.*]] = arith.mulf %arg1, %arg2
-// CHECK: pix.scale %arg0, %[[M]]
+// CHECK: pix.scale %arg0, %[[M]] :
 // CHECK-NOT: pix.scale
 func.func @nested_scale_dynamic(%img: tensor<4x4xf32>, %a: f32, %b: f32) -> tensor<4x4xf32> {
   %s1 = pix.scale %img, %a : tensor<4x4xf32>
@@ -165,7 +165,7 @@ func.func @nested_scale_dynamic(%img: tensor<4x4xf32>, %a: f32, %b: f32) -> tens
 
 // CHECK-LABEL: func.func @add_self
 // CHECK: %[[C:.*]] = arith.constant 2.000000e+00 : f32
-// CHECK: pix.scale %arg0, %[[C]]
+// CHECK: pix.scale %arg0, %[[C]] :
 // CHECK-NOT: pix.add
 func.func @add_self(%img: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %r = pix.add %img, %img : tensor<4x4xf32>
@@ -189,7 +189,7 @@ func.func @add_two_stays(%a: tensor<4x4xf32>, %b: tensor<4x4xf32>) -> tensor<4x4
 
 // CHECK-LABEL: func.func @relay
 // CHECK: %[[C:.*]] = arith.constant 6.000000e+00 : f32
-// CHECK: pix.scale %arg0, %[[C]]
+// CHECK: pix.scale %arg0, %[[C]] :
 // CHECK-NOT: pix.add
 func.func @relay(%img: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %three = arith.constant 3.0 : f32

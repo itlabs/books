@@ -114,24 +114,52 @@ OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-// ② 返回**算出来的常量**（一个 Attribute）：整张常量图求和，编译期就能得到标量。
+// ② 返回**算出来的常量**（一个 Attribute）：整张常量图在编译期就归约完。
 //    这是 OpFoldResult 的另一半，也是"常量折叠"最本来的含义。
+//
+// 第 12 章：kind 变成枚举之后，这里按三种方式分别算。注意 splat 那条捷径
+// 对三者都成立，但理由不同：sum 是"乘以元素个数"，max/min 是"就是那个值"。
 OpFoldResult ReduceOp::fold(FoldAdaptor adaptor) {
   auto dense = dyn_cast_or_null<DenseFPElementsAttr>(adaptor.getImage());
   if (!dense)
     return {};
+  // 空图的 max/min 没有定义（min 该返回什么？），直接不折。
+  if (dense.getNumElements() == 0)
+    return {};
 
-  // splat（所有元素相同）可以直接乘，省得遍历几十万个元素。
-  APFloat sum(0.0f);
+  const ReduceKind kind = getKind();
+
   if (dense.isSplat()) {
     APFloat v = dense.getSplatValue<APFloat>();
-    sum = v * APFloat(static_cast<float>(dense.getNumElements()));
-  } else {
-    for (APFloat v : dense.getValues<APFloat>())
-      sum = sum + v;
+    APFloat r = kind == ReduceKind::Sum
+                    ? v * APFloat(static_cast<float>(dense.getNumElements()))
+                    : v; // max/min 全都一样，就是它自己
+    return FloatAttr::get(getResult().getType(), r);
   }
-  // 结果类型就是本 op 的结果类型（F32），照它造 FloatAttr。
-  return FloatAttr::get(getResult().getType(), sum);
+
+  auto values = dense.getValues<APFloat>();
+  APFloat acc = *values.begin();
+  bool first = true;
+  for (APFloat v : values) {
+    if (first) {
+      first = false;
+      if (kind == ReduceKind::Sum)
+        acc = v;
+      continue;
+    }
+    switch (kind) {
+    case ReduceKind::Sum:
+      acc = acc + v;
+      break;
+    case ReduceKind::Max:
+      acc = maxnum(acc, v);
+      break;
+    case ReduceKind::Min:
+      acc = minnum(acc, v);
+      break;
+    }
+  }
+  return FloatAttr::get(getResult().getType(), acc);
 }
 
 OpFoldResult ScaleOp::fold(FoldAdaptor adaptor) {

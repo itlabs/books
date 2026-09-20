@@ -6,7 +6,7 @@
 
 // CHECK-LABEL: func.func @cse_two_adds
 // CHECK: %[[S:.*]] = pix.add %arg0, %arg1
-// CHECK: pix.add %[[S]], %[[S]]
+// CHECK: pix.add %[[S]], %[[S]] :
 // CHECK-NOT: pix.add
 func.func @cse_two_adds(%a: tensor<4x4xf32>, %b: tensor<4x4xf32>) -> tensor<4x4xf32> {
   %s1 = pix.add %a, %b : tensor<4x4xf32>

@@ -102,18 +102,25 @@ def Pix_TransposeOp : Pix_Op<"transpose", [Pure]> {
 
 //===----------------------------------------------------------------------===//
 // 第 8 章新增：全图归约
-//   看点：结果是**标量**，不是图。归约方式先固定为求和；第 9 章会用枚举属性
-//   把它扩展成 sum/max/min。
+//   看点：结果是**标量**，不是图。
+// 第 12 章：归约方式由枚举属性给出（sum/max/min），兑现第 8 章留的那句话。
+//   kind 带默认值，所以老的 `pix.reduce %img : … -> f32` 写法仍然能解析——
+//   给已有 op 加属性时这是个值得学的招（详见第 12 章）。
 //===----------------------------------------------------------------------===//
 
 def Pix_ReduceOp : Pix_Op<"reduce", [Pure]> {
-  let summary = "把整张图求和成一个标量";
-  let arguments = (ins F32Tensor:$image);
+  let summary = "把整张图归约成一个标量";
+  let arguments = (ins F32Tensor:$image,
+                       DefaultValuedAttr<Pix_ReduceKindAttr,
+                                         "ReduceKind::Sum">:$kind);
   let results = (outs F32:$result);
+
+  // kind 走 attr-dict 打印：默认值（sum）时整个字典是空的，IR 一个字都不多；
+  // 写了 max/min 才会出现 {kind = #pix.reduce_kind<max>}。
   let assemblyFormat = "$image attr-dict `:` type($image) `->` type($result)";
 
-  // 第 11 章：常量图可以在编译期直接求和。这是 fold 返回**Attribute** 的例子
-  // ——真正意义上的"常量折叠"。
+  // 第 11 章：常量图可以在编译期直接算完。这是 fold 返回**Attribute** 的例子
+  // ——真正意义上的"常量折叠"。第 12 章起它要按 kind 分三种算法。
   let hasFolder = 1;
 }
 

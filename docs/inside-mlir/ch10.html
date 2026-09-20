@@ -23,7 +23,7 @@
 <li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
 <li class="active"><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
 <li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
-<li class="toc-todo"><span>第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</span></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
 <li class="toc-todo"><span>第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</span></li>
 <li class="toc-todo"><span>第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</span></li>
 <li class="toc-todo"><span>第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</span></li>
@@ -484,7 +484,7 @@ Total Discovered Tests: 5
 <li>顺带的一个印证：验证器在&quot;出门&quot;那一步用 <code>parallelForEach</code> <strong>并发</strong>验证带 <code>IsolatedFromAbove</code> 的子 op——第 2 章那句&quot;这个 trait 是并发的前提&quot;，在这里第一次兑现。</li>
 </ul>
 <p><strong>pix 进度</strong>：三个洞全补上（transpose 形状、kernel 权重与类型一致、pipeline yield 对齐），外加一条类型级不变式（边长为正奇数）。5 个 lit 测试全绿，其中一个专门守报错行为。</p>
-<p>下一章讲 <strong>fold 与 canonicalize</strong>：让 <code>pix.add %x, 零图</code> 直接消失、让两次 <code>pix.transpose</code> 互相抵消、让常量卷积核在编译期就算完。你会看到&quot;折叠&quot;和&quot;规范化&quot;是两件不同的事，也会亲手撞上一个经典陷阱——两条互逆的规则打成死循环。</p>
+<p>下一章讲 <strong>fold 与 canonicalize</strong>：让 <code>pix.add %x, 零图</code> 直接消失、让两次 <code>pix.transpose</code> 互相抵消、让 <code>pix.reduce</code> 对一张常量图在编译期就把和算出来。你会看到&quot;折叠&quot;和&quot;规范化&quot;是两件不同的事——分界线只有一条，<strong>结果里需要新造 op 吗</strong>——也会亲手撞上一个经典陷阱：两条互逆的规则打成死循环，而且它不报错，是直接挂死。</p>
 
 <div class="chapter-nav">
   <a class="nav-prev" href="ch09.html">← 第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a>
