@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li class="active"><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 8 章造的都是 op，用的类型全是内建的。这一章补上 ODS 的另一半：<strong>自定义类型</strong>与<strong>自定义属性</strong>。pix 会新增一个参数化类型 <code>!pix.kernel&lt;3 x 3&gt;</code>（stencil 权重矩阵）和一个枚举属性 <code>#pix.border&lt;clamp|zero|wrap&gt;</code>（边界处理方式），再用它们定义真正的邻域运算 <code>pix.convolve</code>——它是第四部分做 tiling 和向量化的主角。</p>
+<p>三个知识点：<strong>参数化类型</strong>怎么声明（参数、格式、额外方法）、<strong>枚举属性</strong>的两步写法（先枚举、再包成方言属性）、以及 <code>add_mlir_dialect</code> 覆盖不到的地方<strong>怎么手写 <code>mlir_tablegen</code></strong>。</p>
+<p>另外这一章有四个"踩坑实录"。它们都是我把这套东西真编出来时撞到的，报错措辞看起来都跟真正的原因无关——比如 <code>!pix.kernel&lt;3x3&gt;</code> 为什么必须写成 <code>&lt;3 x 3&gt;</code>（答案在词法分析器那里）。</p>
+</div><h2>先决定：什么该做成自定义类型</h2>
+<p>这个判断比语法重要得多。pix 处理图像，图像该不该做成 <code>!pix.image&lt;8x8xf32&gt;</code>？</p>
+<p><strong>我们的答案是不。</strong> 图像直接用内建的 <code>tensor&lt;8x8xf32&gt;</code>，理由有三条：</p>
+<ol>
+<li><strong>下降会变麻烦。</strong> 第四部分要把 pix 降到 <code>linalg</code>，而 <code>linalg</code> 本来就在 <code>tensor</code> 上工作。图像若是自定义类型，中间必须插一整套类型转换（第 16、17 章的活儿），而这套转换<strong>什么语义都没增加</strong>，纯属自找麻烦。</li>
+<li><strong>会挡住现成的 trait。</strong> <code>SameOperandsAndResultType</code>、<code>ElementwiseMappable</code> 这些都是围绕 shaped 类型设计的；换成自定义类型，很多现成能力要自己重做一遍。</li>
+<li><strong>它不表达任何新约束。</strong> 图像就是&quot;二维 f32 数组&quot;，<code>tensor&lt;HxWxf32&gt;</code> 说得完整、准确。</li>
+</ol>
+<p><strong>那卷积核为什么值得自定义？</strong> 因为它确实是个<strong>不同的概念</strong>：尺寸受限（通常是奇数边长）、语义不同（权重而非像素）、而且我们希望&quot;尺寸在编译期已知&quot;这件事写进类型里——第 21 章算 halo（分块时边界要多取几行）时直接读类型就有了，不必去分析数据。</p>
+<div class="keypoint">
+<strong>判断标准</strong>
+<p>该不该自定义一个类型，看它能不能回答"<strong>我比现成类型多表达了什么约束或语义</strong>"。答不出来，就用内建类型——每个自定义类型都会给你增加一笔"与内建生态对接"的税，必须有相应的收益。</p>
+</div><h2>自定义类型：<code>!pix.kernel&lt;R x C&gt;</code></h2>
+<p>类型定义放在一个新文件 <code>include/Pix/PixTypes.td</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">class Pix_Type&lt;string name, string typeMnemonic, list&lt;Trait&gt; traits = []&gt;
+    : TypeDef&lt;Pix_Dialect, name, traits&gt; {
+  let mnemonic = typeMnemonic;
+}
+
+def Pix_KernelType : Pix_Type&lt;"Kernel", "kernel"&gt; {
+  let summary = "stencil 权重矩阵的类型";
+
+  // 参数就是类型的"内容"。类型是唯一化的不可变值（第 4 章），
+  // 所以参数一旦定下就不能改——要改只能造一个新类型。
+  let parameters = (ins "int64_t":$rows, "int64_t":$cols);
+
+  // 自定义格式，与 op 的 assemblyFormat 是同一套小语言
+  let assemblyFormat = "`&lt;` $rows `x` $cols `&gt;`";
+
+  let extraClassDeclaration = [{
+    int64_t getNumWeights() const { return getRows() * getCols(); }
+    bool isSquare() const { return getRows() == getCols(); }
+  }];
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>几处要点：</p>
+<ul>
+<li><strong><code>mnemonic</code></strong> 决定文本里的名字：<code>!pix.kernel&lt;…&gt;</code>。方言名 <code>pix</code> 是自动加的前缀。</li>
+<li><strong><code>parameters</code></strong> 里可以是 C++ 类型（<code>&quot;int64_t&quot;</code>）、MLIR 的类型/属性（<code>&quot;Type&quot;:$elementType</code>），或者数组（<code>ArrayRefParameter&lt;&quot;int64_t&quot;&gt;:$shape</code>）。</li>
+<li><strong><code>extraClassDeclaration</code></strong> 往生成的 C++ 类里塞你自己的方法。这是个常用口子：把&quot;关于这个类型的小逻辑&quot;放在类型身上，而不是散落在各个 pass 里。<code>getRows()</code> / <code>getCols()</code> 是 TableGen 按参数名自动生成的。</li>
+<li>类型的参数<strong>没有默认验证</strong>。&quot;行列必须是正奇数&quot;这条规则要靠 <code>let genVerifyDecl = 1</code> + 手写 <code>verify()</code>，那是第 10 章的活。</li>
+</ul>
+<h3>踩坑实录一：为什么必须写 <code>&lt;3 x 3&gt;</code> 而不是 <code>&lt;3x3&gt;</code></h3>
+<p>我一开始写的是 <code>!pix.kernel&lt;3x3&gt;</code>，解析直接失败：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: expected 'x'
+  ... : !pix.kernel&lt;3x3&gt;
+                     ^</code></pre>
+</div><p>原因在<strong>词法分析器</strong>：MLIR 先把输入切成 token，<code>3x3</code> 会被切成整数 <code>3</code> 和标识符 <code>x3</code>——于是格式里那个字面量 <code>x</code> 永远匹配不上。</p>
+<p>内建类型 <code>tensor&lt;4x4xf32&gt;</code> 能写得那么紧凑，是因为它有一套专门的 dimension-list 解析器。自定义类型要想要同样的紧凑写法，只能 <code>let hasCustomAssemblyFormat = 1;</code> 然后自己写 parser/printer。<strong>上游 <code>!spirv.array&lt;4 x f32&gt;</code> 就是选了加空格这条省事的路</strong>，我们跟它一致。</p>
+<h3>类型的两种打印形式</h3>
+<p>有意思的细节：同一个类型在不同位置打印得不一样（这是 <code>pix-opt</code> 的真实输出）。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+func.func @kernel_in_signature(%k: !pix.kernel&lt;1 x 5&gt;) -&gt; !pix.kernel&lt;1 x 5&gt; {
+  return %k : !pix.kernel&lt;1 x 5&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><p>函数签名里是<strong>完整形式</strong> <code>!pix.kernel&lt;1 x 5&gt;</code>；而在 pix 自己的 op 里，同一个类型印成了简写 <code>&lt;3 x 3&gt;</code>：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">%1 = pix.convolve %arg0, %0 border &lt;zero&gt; : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;</code></pre>
+</div><p>因为在 pix 方言的 op 内部，方言前缀可以由上下文推出来，MLIR 于是省掉了它。两种形式都能被解析回去（<code>pix-opt … | pix-opt</code> 跑通过）。<strong>第一次看到这个简写会以为是 bug，其实是特性。</strong></p>
+<h2>自定义属性：枚举的两步写法</h2>
+<p>边界处理方式是典型的枚举：clamp / zero / wrap。写在 <code>include/Pix/PixAttrs.td</code>，分两步。</p>
+<p><strong>第一步，定义枚举本身</strong>（生成一个 C++ <code>enum class BorderMode</code>）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_BorderMode : I32EnumAttr&lt;"BorderMode", "卷积的边界处理方式", [
+      I32EnumAttrCase&lt;"Clamp", 0, "clamp"&gt;,  // 取最近的边界像素
+      I32EnumAttrCase&lt;"Zero",  1, "zero"&gt;,   // 界外当 0
+      I32EnumAttrCase&lt;"Wrap",  2, "wrap"&gt;    // 环绕到另一侧
+    ]&gt; {
+  let cppNamespace = "::mlir::pix";
+  let genSpecializedAttr = 0;   // 不要顺带生成属性类，下一步我们要更好的那种
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p><strong>第二步，把枚举包成一个真正的方言属性</strong>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_BorderModeAttr : EnumAttr&lt;Pix_Dialect, Pix_BorderMode, "border"&gt; {
+  let assemblyFormat = "`&lt;` $value `&gt;`";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>这一步换来的是：属性有了自己的 mnemonic（<code>border</code>）和打印形式 <code>#pix.border&lt;clamp&gt;</code>，而不是一个裸整数。<strong>裸整数属性也能用，但它在 IR 里是 <code>2 : i32</code>，读的人不知道 2 是什么。</strong></p>
+<p>枚举的 C++ 侧还白拿两个函数：<code>stringifyBorderMode()</code> 和 <code>symbolizeBorderMode()</code>，在写诊断信息和解析用户输入时很好用。</p>
+<p>写错枚举值时的报错也很体贴（实测）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: custom op 'pix.convolve' expected ::mlir::pix::BorderMode to be one of: clamp, zero, wrap</code></pre>
+</div><h2><code>add_mlir_dialect</code> 管不到的地方：手写 <code>mlir_tablegen</code></h2>
+<p>第 7 章讲过 <code>add_mlir_dialect(PixOps pix)</code> 展开成六次 <code>mlir_tablegen</code>——注意那六次里<strong>没有属性</strong>。所以属性和枚举要自己加（<code>include/Pix/CMakeLists.txt</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">cmake</span></div>
+  <pre class="line-numbers"><code class="language-cmake">add_mlir_dialect(PixOps pix)
+
+# 属性与枚举不在 add_mlir_dialect 的覆盖范围里，所以手写底层三步：
+# 设定输入 .td → 逐个生成器跑一遍 → 建一个 TableGen 目标
+set(LLVM_TARGET_DEFINITIONS PixAttrs.td)
+mlir_tablegen(PixAttrs.h.inc -gen-attrdef-decls -attrdefs-dialect=pix)
+mlir_tablegen(PixAttrs.cpp.inc -gen-attrdef-defs -attrdefs-dialect=pix)
+mlir_tablegen(PixEnums.h.inc -gen-enum-decls)
+mlir_tablegen(PixEnums.cpp.inc -gen-enum-defs)
+add_public_tablegen_target(MLIRPixAttrsIncGen)</code></pre>
+</div><p>然后在 <code>lib/Pix/CMakeLists.txt</code> 的 <code>DEPENDS</code> 里加上 <code>MLIRPixAttrsIncGen</code>（漏了就是第 7 章那个偶发的&quot;找不到 .inc&quot;）。</p>
+<p>方言那边还要开两个开关，否则 <code>!pix.kernel&lt;…&gt;</code> 和 <code>#pix.border&lt;…&gt;</code> 没人解析：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  // …
+  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
+  let extraClassDeclaration = [{
+    void registerTypes();
+    void registerAttributes();
+  }];
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p><code>initialize()</code> 里把它们注册进来——和第 7 章注册 op 是同一个套路：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">void PixDialect::initialize() {
+  addOperations&lt;
+#define GET_OP_LIST
+#include "Pix/PixOps.cpp.inc"
+      &gt;();
+  registerTypes();       // 实现在 PixTypes.cpp
+  registerAttributes();  // 实现在 PixAttrs.cpp
+}</code></pre>
+</div><div class="warn">
+<strong>踩坑实录二：生成文件的名字还是跟着 <code>add_mlir_dialect</code> 的第一个参数走</strong>
+<p>类型的声明在 <strong><code>PixOpsTypes.h.inc</code></strong>（不是 <code>PixTypes.h.inc</code>），因为它由 <code>add_mlir_dialect(<strong>PixOps</strong> pix)</code> 生成。而属性的 <code>.inc</code> 是我们手写 <code>mlir_tablegen</code> 生成的，名字由我们自己定（<code>PixAttrs.h.inc</code>）。<strong>同一个项目里两种命名规则并存</strong>，第一次配的时候特别容易搞混——出现"找不到某个 .inc"时，先去 <code>build/include/Pix/</code> 里 <code>ls</code> 一下实际生成了什么。</p>
+</div><h2>用起来：<code>pix.kernel</code> 与 <code>pix.convolve</code></h2>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_KernelOp : Pix_Op&lt;"kernel", [Pure, ConstantLike]&gt; {
+  let arguments = (ins ElementsAttr:$weights);
+  let results = (outs Pix_KernelType:$result);
+  let assemblyFormat = "$weights attr-dict `-&gt;` type($result)";
+}
+
+def Pix_ConvolveOp : Pix_Op&lt;"convolve", [Pure, AllTypesMatch&lt;["image", "result"]&gt;]&gt; {
+  let arguments = (ins F32Tensor:$image,
+                       Pix_KernelType:$kernel,
+                       DefaultValuedAttr&lt;Pix_BorderModeAttr,
+                                         "::mlir::pix::BorderMode::Clamp"&gt;:$border);
+  let results = (outs F32Tensor:$result);
+  let assemblyFormat = [{
+    $image `,` $kernel (`border` $border^)? attr-dict
+    `:` type($kernel) `,` type($result)
+  }];
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>跑起来（<code>pix-opt</code> 的真实输出，注意第二个 <code>convolve</code> 没有写 <code>border</code>）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+func.func @laplace(%img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %k = pix.kernel dense&lt;[[0.0, 1.0, 0.0],
+                         [1.0, -4.0, 1.0],
+                         [0.0, 1.0, 0.0]]&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;
+  %out = pix.convolve %img, %k border&lt;zero&gt; : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  %dfl = pix.convolve %out, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  return %dfl : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><p>打印回来是这样：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    %0 = pix.kernel dense&lt;[[0.000000e+00, 1.000000e+00, 0.000000e+00], [1.000000e+00, -4.000000e+00, 1.000000e+00], [0.000000e+00, 1.000000e+00, 0.000000e+00]]&gt; : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %1 = pix.convolve %arg0, %0 border &lt;zero&gt; : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+    %2 = pix.convolve %1, %0 : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;</code></pre>
+</div><p><strong><code>%2</code> 那行没有 <code>border</code></strong>——因为它取默认值 <code>clamp</code>，被 <code>DefaultValuedAttr</code> + 可选组一起省掉了。这是个值得学的习惯：<strong>让常见情况在 IR 里消失，读者的注意力才能落在不常见的地方。</strong></p>
+<h3>踩坑实录三：自定义类型的操作数，类型必须打印出来</h3>
+<p>我最初把 convolve 的格式写成 <code>… attr-dict </code>:<code> type($result)</code>（只打印一个类型，像第 8 章的 <code>pix.scale</code> 那样）。TableGen 直接拒绝：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: type of operand #1, named 'kernel', is not buildable
+       and a buildable type cannot be inferred</code></pre>
+</div><p>读法：解析器要构造出 <code>$kernel</code> 的类型，但 <code>!pix.kernel&lt;R x C&gt;</code> <strong>带参数</strong>——没有一个&quot;默认的 kernel 类型&quot;可以凭空造出来，而 <code>AllTypesMatch</code> 只覆盖了 image 和 result。所以必须把它打印出来：<code>type($kernel) </code>,<code> type($result)</code>。</p>
+<blockquote>
+<p>一般规律：<strong>类型不打印的前提是它能被推出来</strong>（靠 <code>AllTypesMatch</code>、<code>TypesMatchWith</code>、或者那种唯一的无参数类型）。带参数的自定义类型基本都得显式打印。</p>
+</blockquote>
+<h3>踩坑实录四：<code>ElementsAttr</code> 必须配 shaped 类型</h3>
+<p><code>pix.kernel</code> 的格式我一开始也写成 <code>$weights attr-dict </code>:<code> type($result)</code>，结果解析时报：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: elements literal must be a shaped type</code></pre>
+</div><p>因为那样写等于告诉解析器&quot;用 <code>!pix.kernel&lt;3 x 3&gt;</code> 当这个 <code>dense&lt;…&gt;</code> 字面量的类型&quot;，而 <code>DenseElementsAttr</code> 必须配 shaped 类型（tensor / vector）。修法就是让属性带上自己的类型，再用一个箭头指向结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pix.kernel dense&lt;…&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;</code></pre>
+</div><p><strong>两个类型看着啰嗦，但它们说的是两件事</strong>：<code>tensor&lt;3x3xf32&gt;</code> 是那堆权重数据的类型，<code>!pix.kernel&lt;3 x 3&gt;</code> 是这个 op 产出的值的类型。第 10 章会加一条 verifier，确保两者的形状一致——因为现在它们可以不一致而无人过问。</p>
+<h2>动手</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 1. 看类型与属性生成了什么
+mlir-tblgen -gen-typedef-decls -typedefs-dialect=pix -I $LLVM_SRC/mlir/include -I include \
+  include/Pix/PixOps.td
+mlir-tblgen -gen-attrdef-decls -attrdefs-dialect=pix -I $LLVM_SRC/mlir/include -I include \
+  include/Pix/PixAttrs.td
+mlir-tblgen -gen-enum-decls -I $LLVM_SRC/mlir/include -I include include/Pix/PixAttrs.td
+
+# 2. 构建并跑测试（现在有 4 个测试了）
+books/inside-mlir/verify/verify-pix.sh</code></pre>
+</div><p><strong>改一改：</strong></p>
+<ol>
+<li><strong>给 <code>!pix.kernel</code> 加第三个参数</strong>，比如 <code>&quot;bool&quot;:$separable</code>（可分离核，能拆成两次一维卷积）。格式怎么改？想一想这个信息放在<strong>类型</strong>里还是放在 <strong>op 的属性</strong>里更合适——判断标准是&quot;它是数据的属性，还是这个值本身类型的一部分&quot;。</li>
+<li><strong>把 <code>border</code> 的默认值从 <code>Clamp</code> 改成 <code>Zero</code></strong>，重新编译，跑本章那段 IR。哪一行的打印变了？（提示：现在被省略的是 <code>zero</code>，而 <code>clamp</code> 要显式打印了。）</li>
+<li><strong>试试 <code>!pix.kernel&lt;3x3&gt;</code>（去掉空格）</strong>，亲眼看 <code>expected &#39;x&#39;</code>。然后想想：如果你就是想要紧凑写法，<code>hasCustomAssemblyFormat</code> 那条路要写多少代码？（提示：<code>parseDimensionList</code>）</li>
+<li><strong>把 <code>pix.kernel</code> 的 <code>ConstantLike</code> 去掉</strong>，再在同一个函数里写两个一模一样的 <code>pix.kernel</code>，跑 <code>--cse</code>。合并了吗？加回去再试。这是第 11 章&quot;常量折叠&quot;的预习。</li>
+<li><strong>故意让权重形状与类型不符</strong>：<code>dense&lt;…&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;5 x 5&gt;</code>。跑 <code>pix-opt</code>——它<strong>通过了</strong>。这就是第 10 章要修的第一个洞。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>该不该自定义类型，看它<strong>比现成类型多表达了什么约束</strong>。pix 的图像用内建 <code>tensor</code>（避免与 <code>linalg</code> 对接时的无谓转换），而卷积核值得自定义（尺寸进类型，编译期可知）。</li>
+<li>自定义类型 = <code>TypeDef</code> + <code>mnemonic</code> + <code>parameters</code> + <code>assemblyFormat</code>；<code>extraClassDeclaration</code> 是给类型加小方法的正规口子。类型参数<strong>没有默认验证</strong>，要靠 <code>genVerifyDecl</code>（第 10 章）。</li>
+<li>枚举属性两步走：<code>I32EnumAttr</code> 定义枚举（<code>genSpecializedAttr = 0</code>），再用 <code>EnumAttr</code> 包成方言属性，得到 <code>#pix.border&lt;clamp&gt;</code> 这种自解释的写法，外加 <code>stringify</code>/<code>symbolize</code> 两个函数。</li>
+<li><strong><code>add_mlir_dialect</code> 不管属性</strong>：属性和枚举要自己写 <code>set(LLVM_TARGET_DEFINITIONS …)</code> + <code>mlir_tablegen(…)</code> + <code>add_public_tablegen_target(…)</code>，并把新目标加进 <code>DEPENDS</code>。</li>
+<li>方言要开 <code>useDefaultTypePrinterParser</code> / <code>useDefaultAttributePrinterParser</code>，并在 <code>initialize()</code> 里 <code>registerTypes()</code> / <code>registerAttributes()</code>。</li>
+<li>四个真实的坑：<strong><code>&lt;3x3&gt;</code> 会被词法器切成 <code>3</code> + <code>x3</code></strong>（要写 <code>&lt;3 x 3&gt;</code>，或自己写 parser）；<strong>生成文件的名字两套规则并存</strong>（<code>PixOpsTypes.h.inc</code> vs <code>PixAttrs.h.inc</code>）；<strong>带参数的自定义类型当操作数时，类型必须打印</strong>（否则 <code>not buildable</code>）；<strong><code>ElementsAttr</code> 必须配 shaped 类型</strong>（所以 <code>pix.kernel</code> 要写两个类型）。</li>
+<li>用 <code>DefaultValuedAttr</code> + 可选组，让<strong>常见情况在 IR 里消失</strong>——读者的注意力就能落在不常见的地方。</li>
+</ul>
+<p><strong>pix 进度</strong>：9 个 op、1 个自定义类型（<code>!pix.kernel&lt;R x C&gt;</code>）、1 个枚举属性（<code>#pix.border</code>），4 个 lit 测试全绿。但已经攒下三个&quot;没人检查&quot;的洞：转置的形状关系、pipeline 的 yield 对齐、kernel 权重形状与类型是否一致。</p>
+<p>下一章专门补洞：<strong>verifier 与不变式</strong>。我们会手写 <code>verify()</code>、给类型加 <code>genVerifyDecl</code>，还会走另一条路——去实现 <code>RegionBranchOpInterface</code>，让通用机制替我们检查 pipeline 的 yield 对齐。两条路走完，你就知道&quot;什么时候写 verifier、什么时候该实现接口&quot;。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch08.html">← 第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a>
+  <a class="nav-next" href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

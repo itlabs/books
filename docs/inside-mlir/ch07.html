@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li class="active"><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第一部分全是"读"，从这一章开始"写"。目标很具体：<strong>在 LLVM 源码树之外</strong>建一个自己的项目，里面有一个叫 <code>pix</code> 的方言、一个叫 <code>pix.add</code> 的 op、一个叫 <code>pix-opt</code> 的命令行工具，以及三个 lit 测试。做完你就有了本书后面所有章节的工作台。</p>
+<p>但这一章的重点<strong>不是</strong>把文件抄一遍，而是讲清那条<strong>构建链</strong>：一行 <code>add_mlir_dialect(PixOps pix)</code> 到底生成了哪六个文件、<code>#define GET_OP_CLASSES</code> 这个宏把戏为什么必须这么写、<code>find_package(MLIR)</code> 带来了什么。搞不清这条链，以后每次改 <code>.td</code> 都是在碰运气；搞清了，你会发现 MLIR 的工程结构其实非常规整。</p>
+<p>还有一个免费的惊喜在等着：我们一行优化代码都不会写，但 <code>pix.add</code> 直接就能被 <code>--cse</code> 优化——因为第 5 章那套 trait 声明。</p>
+</div><h2>先说结果</h2>
+<p>这一章结束时，你的项目长这样（完整工程在随书代码 <code>books/inside-mlir/code/pix/</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pix/
+├── CMakeLists.txt          顶层：find_package(MLIR) + 一串 include(...)
+├── include/Pix/
+│   ├── CMakeLists.txt      一行 add_mlir_dialect(PixOps pix)
+│   ├── PixDialect.td       方言声明 + op 基类
+│   ├── PixOps.td           op 的 ODS 定义
+│   ├── PixDialect.h        方言的 C++ 入口
+│   └── PixOps.h            op 的 C++ 声明
+├── lib/Pix/
+│   ├── CMakeLists.txt      add_mlir_dialect_library(MLIRPix …)
+│   ├── PixDialect.cpp      initialize()：注册 op
+│   └── PixOps.cpp          op 实现（第 10、11 章往里加东西）
+├── pix-opt/pix-opt.cpp     "你自己的 mlir-opt"，一共十几行
+└── test/Pix/               lit 测试：roundtrip / cse / invalid</code></pre>
+</div><p>然后这两条命令能跑通：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cmake -G Ninja -S . -B build -DMLIR_DIR=&lt;llvm-build&gt;/lib/cmake/mlir
+ninja -C build &amp;&amp; ninja -C build check-pix</code></pre>
+</div><div class="note">
+<strong>不想手抄？</strong>
+<p>随书代码里就是这个工程（<code>books/inside-mlir/code/pix/</code>），而 <code>books/inside-mlir/verify/verify-pix.sh</code> 会自动探测 <code>MLIR_DIR</code>、构建它、跑测试。本章正文只贴关键片段并解释"为什么"，完整文件去那里看。</p>
+<p>另外，上游 <code>mlir/examples/standalone/</code> 是官方维护的 out-of-tree 模板（还带 Python 绑定、C API 和 plugin 示例）。本章这套骨架就是照它裁剪的——<strong>以后 MLIR 改了构建约定，去对一下那个模板</strong>，它永远是最新的。</p>
+</div><h2>那条构建链</h2>
+<p>先看全局。从你写的三种源文件到最后的 <code>pix-opt</code>，中间经过 <code>mlir-tblgen</code> 这一道代码生成：</p>
+<div class="concept">
+<svg viewBox="0 0 700 340" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c7arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#6b7280"/></marker>
+    <marker id="c7hot" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">你写的（左） → mlir-tblgen 生成的（中） → 编译产物（右）</text>
+  <rect x="14" y="32" width="170" height="120" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="26" y="52" font-size="11" font-weight="bold" fill="#2b6cb0">你写的源文件</text>
+  <text x="26" y="72" font-size="10" fill="#24292f">PixDialect.td　方言声明</text>
+  <text x="26" y="88" font-size="10" fill="#24292f">PixOps.td　　　op 定义</text>
+  <text x="26" y="106" font-size="10" fill="#24292f">PixDialect.cpp　initialize()</text>
+  <text x="26" y="122" font-size="10" fill="#24292f">PixOps.cpp　　verify/fold</text>
+  <text x="26" y="140" font-size="10" fill="#24292f">pix-opt.cpp　　驱动</text>
+  <line x1="186" y1="80" x2="248" y2="80" stroke="#e06a3b" stroke-width="1.6" marker-end="url(#c7hot)"/>
+  <text x="192" y="72" font-size="9" fill="#e06a3b">mlir-tblgen</text>
+  <rect x="250" y="32" width="210" height="140" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="262" y="52" font-size="11" font-weight="bold" fill="#e06a3b">生成的 .inc（在 build/ 里）</text>
+  <text x="262" y="72" font-size="10" fill="#24292f">PixOps.h.inc　　op 类声明</text>
+  <text x="262" y="88" font-size="10" fill="#24292f">PixOps.cpp.inc　op 类实现</text>
+  <text x="262" y="104" font-size="10" fill="#24292f">PixOpsDialect.h.inc</text>
+  <text x="262" y="120" font-size="10" fill="#24292f">PixOpsDialect.cpp.inc</text>
+  <text x="262" y="136" font-size="10" fill="#24292f">PixOpsTypes.h.inc</text>
+  <text x="262" y="152" font-size="10" fill="#24292f">PixOpsTypes.cpp.inc</text>
+  <text x="262" y="166" font-size="9" fill="#6b7280">六个文件，全部来自一行 CMake</text>
+  <line x1="462" y1="100" x2="520" y2="100" stroke="#6b7280" stroke-width="1.4" marker-end="url(#c7arr)"/>
+  <text x="466" y="92" font-size="9" fill="#6b7280">C++ 编译</text>
+  <rect x="524" y="60" width="162" height="80" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="536" y="80" font-size="11" font-weight="bold" fill="#2f7a45">libMLIRPix.a</text>
+  <text x="536" y="98" font-size="10" fill="#24292f">+ MLIROptLib 等</text>
+  <text x="536" y="118" font-size="11" font-weight="bold" fill="#2f7a45">→ bin/pix-opt</text>
+  <text x="536" y="134" font-size="9" fill="#6b7280">你自己的 mlir-opt</text>
+  <line x1="14" y1="192" x2="686" y2="192" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="214" font-size="12" font-weight="bold" fill="#24292f">两个关键的"缝合点"</text>
+  <rect x="14" y="226" width="330" height="100" rx="6" fill="#fff" stroke="#e06a3b"/>
+  <text x="26" y="246" font-size="11" font-weight="bold" fill="#e06a3b">① 宏 + include，把生成代码缝进你的类</text>
+  <text x="26" y="266" font-size="10" font-family="monospace" fill="#24292f">#define GET_OP_CLASSES</text>
+  <text x="26" y="282" font-size="10" font-family="monospace" fill="#24292f">#include "Pix/PixOps.h.inc"</text>
+  <text x="26" y="302" font-size="10" fill="#6b7280">同一个 .inc 被不同的宏切成几段，</text>
+  <text x="26" y="318" font-size="10" fill="#6b7280">按需展开——这是 MLIR 的通用惯用法</text>
+  <rect x="356" y="226" width="330" height="100" rx="6" fill="#fff" stroke="#2b6cb0"/>
+  <text x="368" y="246" font-size="11" font-weight="bold" fill="#2b6cb0">② DEPENDS，让编译等代码生成</text>
+  <text x="368" y="266" font-size="10" font-family="monospace" fill="#24292f">DEPENDS MLIRPixOpsIncGen</text>
+  <text x="368" y="286" font-size="10" fill="#6b7280">漏了它，ninja 可能先编 .cpp 再生成 .inc，</text>
+  <text x="368" y="302" font-size="10" fill="#6b7280">于是报"找不到 PixOps.h.inc"——</text>
+  <text x="368" y="318" font-size="10" fill="#6b7280">而且只在并行构建时偶发，很难查</text>
+</svg>
+<div class="caption">图 7-1　out-of-tree 方言的构建链。左边三类源文件你都要写；中间六个 `.inc` 一个字都不用写，但**你得知道它们叫什么、在哪里**，否则 include 路径写不对</div>
+</div><h2>第一句秘密：<code>find_package(MLIR REQUIRED CONFIG)</code></h2>
+<p>顶层 <code>CMakeLists.txt</code> 的核心只有这一句：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">cmake</span></div>
+  <pre class="line-numbers"><code class="language-cmake">find_package(MLIR REQUIRED CONFIG)
+
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+
+include(TableGen)          # mlir_tablegen / add_public_tablegen_target
+include(AddLLVM)           # add_llvm_executable
+include(AddMLIR)           # add_mlir_dialect / add_mlir_dialect_library
+include(HandleLLVMOptions) # 让本项目用与 LLVM 一致的编译选项</code></pre>
+</div><p><code>find_package(MLIR REQUIRED CONFIG)</code> 会去 <code>MLIR_DIR</code> 指定的目录找 <code>MLIRConfig.cmake</code>，然后一次性给你三样东西：</p>
+<ol>
+<li><strong>头文件与库的位置</strong>：<code>MLIR_INCLUDE_DIRS</code>、<code>LLVM_INCLUDE_DIRS</code>、<code>LLVM_BUILD_LIBRARY_DIR</code>，以及所有 MLIR 库的 CMake 目标名（<code>MLIRIR</code>、<code>MLIROptLib</code>……）。</li>
+<li><strong>CMake 函数</strong>：<code>add_mlir_dialect</code>、<code>add_mlir_dialect_library</code>、<code>mlir_tablegen</code> 这些不是 CMake 内建的，是 MLIR 提供的模块（所以要先把 <code>MLIR_CMAKE_DIR</code> 加进 <code>CMAKE_MODULE_PATH</code> 再 <code>include</code>）。</li>
+<li><strong>一致的编译选项</strong>：<code>HandleLLVMOptions</code> 让你的项目用和 LLVM 一样的 C++ 标准、RTTI/异常设置、警告级别。<strong>这一条经常被忽略，但后果很严重</strong>——LLVM 默认关掉 RTTI，如果你的项目开着 RTTI 去链接它，会得到一堆莫名其妙的链接错误。</li>
+</ol>
+<p>配置时把 <code>MLIR_DIR</code> 指到安装树或构建树里的 <code>lib/cmake/mlir</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cmake -G Ninja -S . -B build \
+  -DMLIR_DIR=$HOME/llvm-project/build/lib/cmake/mlir \
+  -DLLVM_DIR=$HOME/llvm-project/build/lib/cmake/llvm \
+  -DCMAKE_BUILD_TYPE=Release</code></pre>
+</div><h2>一行 CMake 生成六个文件</h2>
+<p><code>include/Pix/CMakeLists.txt</code> 只有一行有效内容：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">cmake</span></div>
+  <pre class="line-numbers"><code class="language-cmake">add_mlir_dialect(PixOps pix)</code></pre>
+</div><p>这一行到底做了什么？直接去看它的定义（<code>mlir/cmake/modules/AddMLIR.cmake</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">cmake</span></div>
+  <pre class="line-numbers"><code class="language-cmake">function(add_mlir_dialect dialect dialect_namespace)
+  set(LLVM_TARGET_DEFINITIONS ${dialect}.td)
+  mlir_tablegen(${dialect}.h.inc -gen-op-decls)
+  mlir_tablegen(${dialect}.cpp.inc -gen-op-defs)
+  mlir_tablegen(${dialect}Types.h.inc -gen-typedef-decls -typedefs-dialect=${dialect_namespace})
+  mlir_tablegen(${dialect}Types.cpp.inc -gen-typedef-defs -typedefs-dialect=${dialect_namespace})
+  mlir_tablegen(${dialect}Dialect.h.inc -gen-dialect-decls -dialect=${dialect_namespace})
+  mlir_tablegen(${dialect}Dialect.cpp.inc -gen-dialect-defs -dialect=${dialect_namespace})
+  add_mlir_dialect_tablegen_target(MLIR${dialect}IncGen)
+endfunction()</code></pre>
+</div><p>一目了然：<strong>两个参数分别是&quot;td 文件名&quot;和&quot;方言名&quot;</strong>，然后以 <code>PixOps.td</code> 为输入跑六次 <code>mlir-tblgen</code>，每次换一个生成器（<code>-gen-op-decls</code>、<code>-gen-dialect-defs</code>……），最后建立一个名叫 <code>MLIRPixOpsIncGen</code> 的目标。</p>
+<div class="warn">
+<strong>第一个坑：生成文件的名字跟着第一个参数走</strong>
+<p>我们写的是 <code>add_mlir_dialect(<strong>PixOps</strong> pix)</code>，所以方言类的声明在 <strong><code>PixOpsDialect.h.inc</code></strong>，而不是你可能以为的 <code>PixDialect.h.inc</code>——即使方言定义写在 <code>PixDialect.td</code> 里也一样。原因看函数定义就明白：所有生成文件都用 <code>${dialect}</code> 当前缀，而那就是第一个参数。</p>
+<p>所以 <code>PixDialect.h</code> 里要写 <code>#include "Pix/PixOpsDialect.h.inc"</code>。这个不对称让很多人第一次配置时卡住，记住"名字跟着 td 文件走"就不会错。</p>
+<p>另外注意它<strong>总是</strong>生成 Types 那两个文件，哪怕你还没定义任何自定义类型（我们第 9 章才加 <code>!pix.kernel</code>）。生成了不用它，没有任何坏处。</p>
+</div><div class="note">
+<strong>想更细的控制？把它展开写</strong>
+<p><code>add_mlir_dialect</code> 只是个便利封装。如果你只想生成其中几样、或者要加自定义的生成器（比如第 15 章的 DRR 规则、第 13 章的 pass 声明），就直接用底层写法：</p>
+<p><code>set(LLVM_TARGET_DEFINITIONS PixPasses.td)</code> → <code>mlir_tablegen(PixPasses.h.inc --gen-pass-decls)</code> → <code>add_public_tablegen_target(MLIRPixPassesIncGen)</code>。第 13 章给 pix 加 pass 时就会这么写。</p>
+</div><h2><code>#define GET_OP_CLASSES</code>：把生成代码缝进你的头文件</h2>
+<p>这是 MLIR 里最容易让人困惑的惯用法。<code>PixOps.h</code> 的核心就三行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// include/Pix/PixOps.h
+#define GET_OP_CLASSES
+#include "Pix/PixOps.h.inc"</code></pre>
+</div><p>为什么不是直接 <code>#include</code> 一个正常的头文件？因为<strong>同一个 <code>.inc</code> 文件里装了好几段内容</strong>，靠宏来决定展开哪一段。生成出来的文件大致长这样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#ifdef GET_OP_LIST
+#undef GET_OP_LIST
+::mlir::pix::AddOp            // ← 只要 op 类名的列表（注册时用）
+#endif  // GET_OP_LIST
+
+#ifdef GET_OP_CLASSES
+#undef GET_OP_CLASSES
+// ← 完整的 op 类声明/定义（几百行）
+#endif  // GET_OP_CLASSES</code></pre>
+</div><p>于是同一个文件被两处用到，各取所需：</p>
+<ul>
+<li><code>PixOps.h</code> 里 <code>#define GET_OP_CLASSES</code> → 拿到 <strong>op 类的声明</strong>；</li>
+<li><code>PixDialect.cpp</code> 里 <code>#define GET_OP_LIST</code> → 拿到 <strong>op 类名的逗号列表</strong>，正好塞进 <code>addOperations&lt;…&gt;()</code> 的模板参数里。</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// lib/Pix/PixDialect.cpp —— 方言唯一必须手写的部分
+void PixDialect::initialize() {
+  addOperations&lt;
+#define GET_OP_LIST
+#include "Pix/PixOps.cpp.inc"
+      &gt;();
+}</code></pre>
+</div><p><strong>读法</strong>：<code>addOperations&lt;</code> 后面那个 include 展开成 <code>::mlir::pix::AddOp</code>（以后有几十个 op 就是几十个名字），最后 <code>&gt;();</code> 收尾。第一次见确实怪，但它省掉了&quot;加一个 op 要在三处手工登记&quot;的苦差事——你只改 <code>.td</code>，注册列表自动跟上。</p>
+<div class="keypoint">
+<strong>"注册"到底是什么意思？</strong>
+<p><code>addOperations&lt;AddOp&gt;()</code> 做的事，是让 <code>MLIRContext</code> 知道"<code>pix.add</code> 这个<strong>字符串</strong>对应哪个 C++ 类、它有哪些 trait 与接口实现、怎么解析和打印"。回想第 2 章：op 名是<strong>运行时数据</strong>，不是枚举——注册就是把字符串和实现挂钩的那一步。这也解释了第 3 章那个 <code>--allow-unregistered-dialect</code>：不注册也能解析通用格式，但 MLIR 对它一无所知，只能当黑盒。</p>
+</div><h2>方言与第一个 op</h2>
+<p>方言声明本身很短（<code>include/Pix/PixDialect.td</code>）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  // 这个名字就是 IR 里的前缀：pix.add、pix.convolve……
+  let name = "pix";
+  let summary = "一个小型图像处理方言（《深入 MLIR》贯穿案例）";
+  // 生成的 C++ 类会放进这个命名空间：mlir::pix::PixDialect
+  let cppNamespace = "::mlir::pix";
+}
+
+// 本方言所有 op 的基类。省去每个 op 重复写方言参数。
+class Pix_Op&lt;string mnemonic, list&lt;Trait&gt; traits = []&gt;
+    : Op&lt;Pix_Dialect, mnemonic, traits&gt;;</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>第一个 op 也很短（<code>include/Pix/PixOps.td</code>）。第 8 章会把 ODS 的每个部分拆开细讲，这里只求跑通：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
+  let summary = "两张图逐点相加";
+
+  let arguments = (ins F32Tensor:$lhs, F32Tensor:$rhs);
+  let results = (outs F32Tensor:$result);
+
+  // 自定义格式：让 IR 读起来像 `pix.add %a, %b : tensor&lt;4x4xf32&gt;`
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>四行信息量很大，对着第一部分的知识点读：</p>
+<ul>
+<li><strong><code>Pure</code></strong>（第 5 章）：声明&quot;不碰内存、结果只由操作数决定&quot;。<strong>这一个词就解锁了 CSE、DCE、以及把它移出循环的资格。</strong></li>
+<li><strong><code>Commutative</code></strong>：两个操作数可交换。</li>
+<li><strong><code>SameOperandsAndResultType</code></strong>：操作数与结果类型必须一致——<strong>这条验证由 trait 自动生成，我们不写一行 verifier</strong>。</li>
+<li><strong><code>F32Tensor</code></strong>：类型约束，来自 <code>mlir/include/mlir/IR/CommonTypeConstraints.td</code>（那里还有 <code>AnyRankedTensor</code>、<code>AnyTensor</code>、<code>MemRefOf&lt;…&gt;</code> 等等）。约束不满足时的报错，就是第 1 章你见过的那种 <code>operand #0 must be tensor of 32-bit float values</code>。</li>
+<li><strong><code>assemblyFormat</code></strong>：自定义格式（第 3 章讲的&quot;糖&quot;）。<code>attr-dict</code> 是必须留的位置——不写它，可丢弃属性就没地方打印，round-trip 会失败。</li>
+</ul>
+<h2><code>pix-opt</code>：你自己的 mlir-opt，一共十几行</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// pix-opt/pix-opt.cpp
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
+#include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "Pix/PixDialect.h"
+
+int main(int argc, char **argv) {
+  // 1. 注册 pass：内建的那些（--canonicalize、--cse……）拿来就用
+  mlir::registerAllPasses();
+
+  // 2. 注册方言：registry 决定这个工具"能解析哪些 op"
+  mlir::DialectRegistry registry;
+  registry.insert&lt;mlir::pix::PixDialect&gt;();
+  mlir::registerAllDialects(registry);   // 让 pix 能和 arith/tensor/func 混用
+
+  return mlir::asMainReturnCode(
+      mlir::MlirOptMain(argc, argv, "pix optimizer driver\n", registry));
+}</code></pre>
+</div><p><code>MlirOptMain</code> 是 <code>mlir-opt</code> 的全部主体：命令行解析、<code>--pass-pipeline</code> 的解释、<code>--split-input-file</code> / <code>--verify-diagnostics</code> / <code>--mlir-print-ir-after-all</code> 这些选项，统统在里面。<strong>你写的工具和官方 <code>mlir-opt</code> 的差别只是 registry 里多了一个方言。</strong></p>
+<p>为什么要 <code>registerAllDialects</code>？因为 pix 不会孤立存在——IR 里会同时有 <code>func.func</code>、<code>arith.constant</code>、<code>tensor</code> 类型（第 6 章的&quot;方言共存&quot;）。不注册它们，解析 <code>func.func</code> 时就会报 unregistered dialect。代价是二进制变大、链接变慢；等你的项目定型了，可以只 <code>insert</code> 真正用到的那几个。</p>
+<h2>跑起来</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 构建（或者直接用 books/inside-mlir/verify/verify-pix.sh）
+cmake -G Ninja -S . -B build -DMLIR_DIR=&lt;llvm-build&gt;/lib/cmake/mlir
+ninja -C build
+
+# 解析 + 验证 + 打印：最基本的冒烟测试
+build/bin/pix-opt test/Pix/roundtrip.mlir</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @add_two_images(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = pix.add %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }
+  func.func @dynamic_shape(%arg0: tensor&lt;?x4xf32&gt;, %arg1: tensor&lt;?x4xf32&gt;) -&gt; tensor&lt;?x4xf32&gt; {
+    %0 = pix.add %arg0, %arg1 : tensor&lt;?x4xf32&gt;
+    return %0 : tensor&lt;?x4xf32&gt;
+  }
+}</code></pre>
+</div><p><strong>你的方言活了。</strong> 现在看那个免费的惊喜——我们没写一行优化代码：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">build/bin/pix-opt test/Pix/cse.mlir --cse</code></pre>
+</div><p>输入里有两次一模一样的 <code>pix.add</code>，运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @cse_two_adds(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = pix.add %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    %1 = pix.add %0, %0 : tensor&lt;4x4xf32&gt;
+    return %1 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p>两次合成了一次。<strong>CSE 从来没听说过 <code>pix.add</code></strong>，它只是问了一句&quot;你有内存副作用吗&quot;，而 <code>Pure</code> 回答了&quot;没有&quot;（第 5 章那张问答图，现在发生在你自己的 op 上）。</p>
+<p>同理，类型不一致的 <code>pix.add</code> 会被拦下来，而我们一行 verifier 都没写：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">build/bin/pix-opt test/Pix/invalid.mlir --split-input-file --verify-diagnostics</code></pre>
+</div><p><code>test/Pix/invalid.mlir</code> 里用 <code>expected-error</code> 精确预言了报错（第 3 章讲过这套写法），所以这条命令<strong>成功退出</strong>——而如果哪天 trait 不再生成这个检查，测试立刻失败。</p>
+<p>最后跑全套测试：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">ninja -C build check-pix</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[6/7] Running the pix regression tests
+-- Testing: 3 tests, 3 workers --
+Testing:  0.. 10.. 20.. 30.. 40.. 50.. 60.. 70.. 80.. 90..
+
+Testing Time: 0.29s
+
+Total Discovered Tests: 3
+  Passed: 3 (100.00%)</code></pre>
+</div><div class="warn">
+<strong>第一次跑 <code>check-pix</code> 大概率会撞上这个</strong>
+<p>报错是 <code>/bin/sh: 1: &lt;你的构建目录&gt;/bin/llvm-lit: not found</code>。原因：<code>add_lit_testsuite</code> 默认去<strong>自己的</strong>构建目录找 <code>bin/llvm-lit</code>，而那个脚本只存在于 LLVM 本身的构建树里——out-of-tree 项目没有它。</p>
+<p>解法是配置时告诉它 lit 在哪：</p>
+<p><code>cmake -S . -B build -DLLVM_EXTERNAL_LIT=&lt;llvm-build&gt;/bin/llvm-lit</code></p>
+<p>（源码树里的 <code>llvm/utils/lit/lit.py</code> 也可以直接用。）随书的 <code>verify-pix.sh</code> 会替你探测并传这个参数，所以用脚本时不会遇到。这个坑与本书内容无关、纯属工程配置，但几乎每个人都会撞一次。</p>
+</div><h2>搭这个工程时我真撞到的四个错</h2>
+<p>这四个报错不是编的，是把本章这个工程从零编出来的过程中实际遇到的。它们的共同点是<strong>报错位置离真正的原因很远</strong>，所以值得记住样子：</p>
+<table>
+<thead>
+<tr>
+<th>报错</th>
+<th>真正的原因</th>
+<th>修法</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>fatal error: Pix/PixOps.h.inc: No such file or directory</code></td>
+<td><code>add_mlir_dialect_library</code> 漏了 <code>DEPENDS MLIRPixOpsIncGen</code>，编译跑在了代码生成之前（只在并行构建时偶发）</td>
+<td>加上 <code>DEPENDS</code></td>
+</tr>
+<tr>
+<td>一堆 <code>incomplete type &#39;mlir::OpAsmParser&#39; used in nested name specifier</code>，全部指向生成的 <code>.inc</code></td>
+<td><code>assemblyFormat</code> 生成的 <code>parse</code>/<code>print</code> 用到 <code>OpAsmParser</code>/<code>OpAsmPrinter</code>，而头文件没 include 它们的声明</td>
+<td>在 <code>PixOps.h</code> 里 <code>#include &quot;mlir/IR/OpImplementation.h&quot;</code></td>
+</tr>
+<tr>
+<td><code>&#39;RegionBranchTerminatorOpInterface&#39; is not a member of &#39;mlir&#39;</code></td>
+<td>ODS 里 include 了某个接口的 <code>.td</code>（这里是 <code>ControlFlowInterfaces.td</code> 带来的 <code>ReturnLike</code>），但 C++ 头文件没 include 对应的 <code>.h</code></td>
+<td><strong>两套平行的 include 世界</strong>：<code>.td</code> 加了什么，<code>.h</code> 就要跟一个</td>
+</tr>
+<tr>
+<td><code>no matching function for call to &#39;YieldOp::build(OpBuilder&amp;, OperationState&amp;)&#39;</code></td>
+<td>带 <code>SingleBlockImplicitTerminator</code> 的 op，其终结符必须能被<strong>零参数</strong>构造</td>
+<td>给终结符加 <code>let builders = [OpBuilder&lt;(ins), [{ }]&gt;];</code>（第 8 章细讲）</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>一条通用的排查经验</strong>
+<p>MLIR 的编译错误常常指向 <code>build/</code> 里生成的 <code>.inc</code>。<strong>别在那里找 bug</strong>——生成的代码基本不会错。真正的原因几乎总在三个地方之一：<code>.td</code> 写漏了 include、<code>.h</code> 写漏了对应的 include、或者 CMake 漏了 <code>DEPENDS</code>。遇到看不懂的模板报错，先按这三处过一遍。</p>
+</div><h2>动手</h2>
+<p><strong>先跑通，再破坏。</strong> 下面四个改动都能让你更懂那条构建链——建议真的做一遍，报错长什么样比读描述有用得多：</p>
+<ol>
+<li><strong>改 <code>.td</code>，看生成的代码变了什么。</strong> 把 <code>pix.add</code> 的 <code>assemblyFormat</code> 改成 <code>$lhs </code>,<code>$rhs attr-dict</code>:<code> type($lhs)</code>（把 <code>type($result)</code> 换成 <code>type($lhs)</code>），重新 <code>ninja</code>。IR 打印有变化吗？为什么没有？（提示：<code>SameOperandsAndResultType</code> + 类型推断）</li>
+<li><strong>删掉 <code>DEPENDS MLIRPixOpsIncGen</code></strong>，<code>rm -rf build</code> 重新构建几次。可能好几次都没事，然后某次报 <code>fatal error: Pix/PixOps.h.inc: No such file or directory</code>——这就是图 7-1 里说的那个偶发竞争。<strong>记住这个报错的样子</strong>，它是漏 DEPENDS 的特征。</li>
+<li><strong>把 <code>registry.insert&lt;mlir::pix::PixDialect&gt;()</code> 注释掉</strong>，重新编译后跑 <code>pix-opt test/Pix/roundtrip.mlir</code>。报错会是 <code>error: operation being parsed with an unregistered dialect</code>（第 3 章见过）——注册的意义就在这一行。</li>
+<li><strong>亲手看生成的代码</strong>。直接跑 <code>mlir-tblgen</code>，不经过 CMake：</li>
+</ol>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-tblgen -gen-op-decls -I &lt;llvm-src&gt;/mlir/include -I include include/Pix/PixOps.td | head -60</code></pre>
+</div><p>你会看到生成出来的 <code>AddOp</code> 类：builder、<code>getLhs()</code>/<code>getRhs()</code>、parser、printer、verifier 骨架，几百行。<strong>这些都是你写那 8 行 ODS 换来的。</strong> 第 8 章会精读其中几段。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>out-of-tree 项目的全部秘密是 <strong><code>find_package(MLIR REQUIRED CONFIG)</code> + <code>MLIR_DIR</code></strong>，它带来头文件、库、CMake 函数，以及<strong>与 LLVM 一致的编译选项</strong>（<code>HandleLLVMOptions</code>，漏了会有诡异的链接错误）。</li>
+<li><strong><code>add_mlir_dialect(PixOps pix)</code> = 六次 <code>mlir-tblgen</code> + 一个 IncGen 目标</strong>。生成文件的名字跟着<strong>第一个参数</strong>走，所以是 <code>PixOpsDialect.h.inc</code>——这是第一次配置最常卡住的地方。</li>
+<li><strong><code>#define GET_OP_CLASSES</code> / <code>GET_OP_LIST</code> 是宏切片</strong>：同一个 <code>.inc</code> 按需展开成&quot;类声明&quot;或&quot;类名列表&quot;。于是加 op 只改 <code>.td</code>，注册列表自动跟上。</li>
+<li><strong><code>DEPENDS MLIRPixOpsIncGen</code> 不能漏</strong>，否则并行构建时偶发&quot;找不到 .inc&quot;。</li>
+<li>&quot;注册方言&quot;的含义是：让 context 知道 <strong>op 名这个字符串</strong> 对应哪个 C++ 类、有哪些 trait 与接口。</li>
+<li><strong><code>pix-opt</code> 与官方 <code>mlir-opt</code> 的差别只是 registry 里多一个方言</strong>，主体逻辑全在 <code>MlirOptMain</code> 里。</li>
+<li>最重要的一条：<strong><code>Pure</code> + <code>SameOperandsAndResultType</code> 两个声明，换来了免费的 CSE 和免费的类型验证</strong>。第 5 章那句&quot;trait 是承诺，不是标签&quot;，你现在在自己的 op 上看到了回报。</li>
+</ul>
+<p><strong>pix 进度</strong>：方言注册成功，一个 op（<code>pix.add</code>），<code>pix-opt</code> 可用，三个 lit 测试（round-trip / CSE / 报错行为）全绿。</p>
+<p>下一章正式进入 <strong>ODS</strong>：把 <code>arguments</code>/<code>results</code>/<code>assemblyFormat</code>/builder/<code>extraClassDeclaration</code> 一个个拆开，看 TableGen 到底替你生成了什么——并把 pix 的 op 集补齐到能表达逐点、stencil、归约三类计算。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch06.html">← 第 6 章 方言全景：内建方言巡览与它们的分工</a>
+  <a class="nav-next" href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

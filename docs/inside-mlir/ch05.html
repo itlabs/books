@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 章 Trait 与 Interface：MLIR 复用的真正机关</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li class="active"><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 5 章 Trait 与 Interface：MLIR 复用的真正机关</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 4 章末尾那个问题，是理解 MLIR 的分水岭：<strong>既然 MLIR 核心不认识任何具体 op，<code>--cse</code>、<code>--canonicalize</code>、LICM 这些通用 pass 凭什么能正确地变换一个它从没见过的 <code>pix.convolve</code>？</strong></p>
+<p>答案是本章的全部内容：它们<strong>不问"你是谁"，只问"你声明了什么"</strong>。声明的手段有两种——<strong>trait</strong>（编译期的静态标签，回答是/不是）和 <strong>interface</strong>（运行时的虚函数表，回答具体是多少、请你算一下）。你会亲手跑一个模拟器，看同一段 IR 只改 op 的声明，通用 pass 的行为差多少；也会用真 <code>mlir-opt</code> 验证一次：两条相同的 <code>memref.load</code> 中间插一条 <code>store</code>，<code>--cse</code> 就不敢合并了——而 CSE 从头到尾不知道 <code>memref.load</code> 是什么意思。</p>
+<p>这一章也是第二部分的"需求说明书"：给 pix 的每个 op 挑对 trait、实现对接口，就是在给它解锁整条优化管线。</p>
+</div><h2>问题：三种可能的答案，MLIR 选了第三种</h2>
+<p>假设你是 CSE pass 的作者。你要判断&quot;这两个 op 是不是同一次计算，能不能合并&quot;。摆在面前有三条路：</p>
+<ol>
+<li><strong>写死一张表</strong>：枚举所有 op，逐个规定。——那 MLIR 的可扩展性就没了，你的 <code>pix.convolve</code> 永远得不到 CSE。</li>
+<li><strong>让每个 pass 认识每个 op</strong>：N 个 pass × M 种 op。——这就是第 1 章那个 N×M 灾难的翻版。</li>
+<li><strong>让 op 自己回答问题</strong>：pass 只问几个抽象问题（&quot;你有副作用吗&quot;、&quot;你的操作数可交换吗&quot;、&quot;你的循环边界是什么&quot;），op 负责回答。</li>
+</ol>
+<p>MLIR 选第三种。于是核心问题变成：<strong>怎么让 op&quot;能被问&quot;？</strong> 两种机制，分工明确。</p>
+<div class="concept">
+<svg viewBox="0 0 700 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c5q" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c5a" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M8,0 L0,4 L8,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">通用 pass 不问"你是谁"，只问"你声明了什么"</text>
+  <rect x="14" y="34" width="150" height="120" rx="8" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="28" y="54" font-size="12" font-weight="bold" fill="#2b6cb0">通用 pass</text>
+  <text x="28" y="74" font-size="10" fill="#24292f">--cse</text>
+  <text x="28" y="90" font-size="10" fill="#24292f">--canonicalize</text>
+  <text x="28" y="106" font-size="10" fill="#24292f">LICM</text>
+  <text x="28" y="122" font-size="10" fill="#24292f">--symbol-dce</text>
+  <text x="28" y="144" font-size="10" fill="#e06a3b">代码里一个字都没提 pix</text>
+  <g stroke="#2b6cb0" stroke-width="1.3">
+    <line x1="166" y1="60" x2="300" y2="60" marker-end="url(#c5q)"/>
+    <line x1="166" y1="100" x2="300" y2="100" marker-end="url(#c5q)"/>
+    <line x1="166" y1="140" x2="300" y2="140" marker-end="url(#c5q)"/>
+  </g>
+  <text x="176" y="54" font-size="10" fill="#2b6cb0">「你写内存吗？」</text>
+  <text x="176" y="94" font-size="10" fill="#2b6cb0">「操作数可交换吗？」</text>
+  <text x="176" y="134" font-size="10" fill="#2b6cb0">「循环边界是多少？」</text>
+  <rect x="304" y="34" width="180" height="46" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="316" y="52" font-size="11" font-weight="bold" fill="#2f7a45">interface（虚表）</text>
+  <text x="316" y="70" font-size="10" fill="#24292f">MemoryEffectOpInterface</text>
+  <rect x="304" y="86" width="180" height="46" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="316" y="104" font-size="11" font-weight="bold" fill="#e06a3b">trait（静态标签）</text>
+  <text x="316" y="122" font-size="10" fill="#24292f">Commutative / Pure</text>
+  <rect x="304" y="138" width="180" height="46" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="316" y="156" font-size="11" font-weight="bold" fill="#2f7a45">interface（虚表）</text>
+  <text x="316" y="174" font-size="10" fill="#24292f">LoopLikeOpInterface</text>
+  <g stroke="#3f9b5c" stroke-width="1.3">
+    <line x1="490" y1="57" x2="560" y2="90" marker-start="url(#c5a)"/>
+    <line x1="490" y1="109" x2="560" y2="105" marker-start="url(#c5a)"/>
+    <line x1="490" y1="161" x2="560" y2="120" marker-start="url(#c5a)"/>
+  </g>
+  <rect x="562" y="70" width="124" height="80" rx="8" fill="#fff" stroke="#e06a3b" stroke-width="2"/>
+  <text x="574" y="90" font-size="11" font-weight="bold" fill="#e06a3b">pix.convolve</text>
+  <text x="574" y="108" font-size="10" fill="#24292f">Pure</text>
+  <text x="574" y="124" font-size="10" fill="#24292f">（你声明的）</text>
+  <text x="574" y="142" font-size="10" fill="#6b7280">pass 从没见过它</text>
+  <line x1="14" y1="204" x2="686" y2="204" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="226" font-size="12" font-weight="bold" fill="#24292f">两种机制的分工</text>
+  <rect x="14" y="238" width="330" height="80" rx="6" fill="#fdf1ec" stroke="#e06a3b"/>
+  <text x="26" y="256" font-size="11" font-weight="bold" fill="#e06a3b">trait：编译期静态标签</text>
+  <text x="26" y="274" font-size="10" fill="#24292f">只能回答"是/不是"，没有参数、没有返回值</text>
+  <text x="26" y="290" font-size="10" fill="#24292f">查询：op-&gt;hasTrait&lt;OpTrait::IsCommutative&gt;()</text>
+  <text x="26" y="308" font-size="10" fill="#6b7280">顺带能自动注入验证（SameOperandsAndResultType）</text>
+  <rect x="356" y="238" width="330" height="80" rx="6" fill="#f0f8f2" stroke="#3f9b5c"/>
+  <text x="368" y="256" font-size="11" font-weight="bold" fill="#2f7a45">interface：运行时虚函数表</text>
+  <text x="368" y="274" font-size="10" fill="#24292f">能回答"具体是多少"、"请你算一下"</text>
+  <text x="368" y="290" font-size="10" fill="#24292f">查询：dyn_cast&lt;LoopLikeOpInterface&gt;(op)</text>
+  <text x="368" y="308" font-size="10" fill="#6b7280">op / 类型 / 属性 / 方言都可以实现接口</text>
+</svg>
+<div class="caption">图 5-1　pass 与 op 之间的问答。所有通用变换的能力边界，就是这些问题的集合——这也解释了第二部分为什么要花那么大力气给 pix 的 op 挑 trait、实现接口：那是在决定"通用管线能为你做多少事"</div>
+</div><h2>Trait：编译期的静态标签</h2>
+<p><strong>trait 回答的是&quot;是/不是&quot;这类不带参数的问题。</strong> 它在 C++ 里是模板 mixin，附加在 op 类上；在 ODS 里就是 op 定义里那个方括号列表（第 8 章你会亲手写）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
+  // ...
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>trait 做两件事：</p>
+<ul>
+<li><strong>注入方法</strong>：带 <code>Commutative</code> 的 op 自动获得相关能力，pass 可以用 <code>op-&gt;hasTrait&lt;OpTrait::IsCommutative&gt;()</code> 查询。</li>
+<li><strong>注入验证</strong>：<code>SameOperandsAndResultType</code> 会自动生成&quot;所有操作数和结果类型必须相同&quot;的检查，你不用手写 verifier（第 10 章细讲验证的执行顺序）。</li>
+</ul>
+<p>常用的一批，先认脸（ODS 名字 → C++ 名字）：</p>
+<table>
+<thead>
+<tr>
+<th>ODS 里写</th>
+<th>C++ 里是</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Pure</code></td>
+<td>见下节（是个组合）</td>
+<td>无副作用、可自由移动/删除/合并</td>
+</tr>
+<tr>
+<td><code>Commutative</code></td>
+<td><code>OpTrait::IsCommutative</code></td>
+<td>操作数可交换（<code>a+b == b+a</code>）</td>
+</tr>
+<tr>
+<td><code>Idempotent</code></td>
+<td><code>OpTrait::IsIdempotent</code></td>
+<td><code>f(f(x)) == f(x)</code></td>
+</tr>
+<tr>
+<td><code>Involution</code></td>
+<td><code>OpTrait::IsInvolution</code></td>
+<td><code>f(f(x)) == x</code>（取反、转置）</td>
+</tr>
+<tr>
+<td><code>Terminator</code></td>
+<td><code>OpTrait::IsTerminator</code></td>
+<td>必须是 block 的最后一个 op</td>
+</tr>
+<tr>
+<td><code>IsolatedFromAbove</code></td>
+<td><code>OpTrait::IsIsolatedFromAbove</code></td>
+<td>region 内不得引用外部值（第 2 章讲过）</td>
+</tr>
+<tr>
+<td><code>ConstantLike</code></td>
+<td><code>OpTrait::ConstantLike</code></td>
+<td>我是个常量 op（折叠时要用）</td>
+</tr>
+<tr>
+<td><code>SameOperandsAndResultType</code></td>
+<td>同名</td>
+<td>类型一致性，自动验证</td>
+</tr>
+</tbody></table>
+<p>源码位置值得记住：通用 trait 在 <code>mlir/include/mlir/IR/OpBase.td</code>（ODS 侧）与 <code>mlir/include/mlir/IR/OpDefinition.h</code>（C++ 侧）；跟类型推断有关的（比如 <code>SameOperandsAndResultType</code>）在 <code>mlir/include/mlir/Interfaces/InferTypeOpInterface.td</code>。</p>
+<div class="warn">
+<strong>trait 的天花板</strong>
+<p>trait 只能表达"有/没有这个性质"。它没法回答"你的循环下界是哪个值"、"你读了哪块内存"、"给这些输入类型，你的结果类型是什么"。这类<strong>带返回值的问题</strong>必须换一种机制——interface。</p>
+</div><h2>Interface：运行时的虚函数表</h2>
+<p><strong>interface 是一组方法签名，op（或类型、属性、方言）可以实现它。</strong> pass 拿到一个 op，用 <code>dyn_cast</code> 问：&quot;你实现了这个接口吗？&quot;实现了就能调用它的方法。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 典型的 pass 代码长这样：不判断 op 是什么，只问它实现了什么
+if (auto loopOp = dyn_cast&lt;LoopLikeOpInterface&gt;(op)) {
+  // 现在可以调用接口方法，而完全不必知道这是 scf.for、affine.for 还是你的 pix.loop
+  for (Value iv : loopOp.getLoopInductionVars().value_or(SmallVector&lt;Value&gt;{}))
+    /* ... */;
+}</code></pre>
+</div><p>这就是 MLIR 复用的<strong>真正机关</strong>：LICM 一个 pass，能提升 <code>scf.for</code>、<code>affine.for</code>、以及你自己写的循环 op 里的不变量——因为它只依赖 <code>LoopLikeOpInterface</code>。</p>
+<p>几个你早晚会用到的接口（都在 <code>mlir/include/mlir/Interfaces/</code> 下，一个 <code>.td</code> 一个文件）：</p>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>它让 pass 能问什么</th>
+<th>文件</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MemoryEffectOpInterface</code></td>
+<td>你读了/写了/分配了哪些资源？</td>
+<td><code>SideEffectInterfaces.td</code></td>
+</tr>
+<tr>
+<td><code>LoopLikeOpInterface</code></td>
+<td>你的归纳变量、上下界、步长；能把东西移出循环吗？</td>
+<td><code>LoopLikeInterface.td</code></td>
+</tr>
+<tr>
+<td><code>InferTypeOpInterface</code></td>
+<td>给定操作数，你的结果类型是什么？</td>
+<td><code>InferTypeOpInterface.td</code></td>
+</tr>
+<tr>
+<td><code>RegionBranchOpInterface</code></td>
+<td>控制流在你的 region 之间怎么走？</td>
+<td><code>ControlFlowInterfaces.td</code></td>
+</tr>
+<tr>
+<td><code>DestinationStyleOpInterface</code></td>
+<td>哪些操作数其实是&quot;输出目的地&quot;？</td>
+<td><code>DestinationStyleOpInterface.td</code></td>
+</tr>
+<tr>
+<td><code>TilingInterface</code></td>
+<td>你的迭代空间是什么？能否切分？</td>
+<td><code>TilingInterface.td</code></td>
+</tr>
+<tr>
+<td><code>CallOpInterface</code> / <code>CallableOpInterface</code></td>
+<td>你在调用谁？你是可调用的吗？</td>
+<td><code>CallInterfaces.td</code></td>
+</tr>
+<tr>
+<td><code>ViewLikeOpInterface</code></td>
+<td>你是不是只是某块内存的一个视图？</td>
+<td><code>ViewLikeInterface.td</code></td>
+</tr>
+</tbody></table>
+<p>第 2 章那个&quot;空 else&quot;的报错 <code>&#39;scf.if&#39; op along control flow edge ... region successor needs 1 inputs</code>，就是 <code>RegionBranchOpInterface</code> 在干活——它让通用机制能检查&quot;region 之间传值的个数与类型对不对&quot;，而不必认识 <code>scf.if</code>。</p>
+<div class="note">
+<strong>四种 interface</strong>
+<p>除了 op interface，还有 <strong>type interface</strong>（比如"我是个 shaped 类型，你可以问我形状"）、<strong>attribute interface</strong>、以及 <strong>dialect interface</strong>（整个方言实现的，比如"我这个方言的 op 该怎么内联"、"该怎么下降到 LLVM"）。第 16 章讲 dialect conversion 时会遇到 dialect interface 的实际用法。</p>
+</div><h2><code>Pure</code> 到底是什么</h2>
+<p><code>Pure</code> 是全书出现频率最高的 trait，但它其实是个<strong>组合</strong>。源码里只有一行（<code>mlir/include/mlir/Interfaces/SideEffectInterfaces.td</code>）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pure : TraitList&lt;[AlwaysSpeculatable, NoMemoryEffect]&gt;;</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>拆开看：</p>
+<ul>
+<li><strong><code>NoMemoryEffect</code></strong> = <code>MemoryEffects&lt;[]&gt;</code>：通过 <code>MemoryEffectOpInterface</code> 声明&quot;我不读不写任何内存&quot;。</li>
+<li><strong><code>AlwaysSpeculatable</code></strong>：声明&quot;我可以被无条件地提前执行&quot;（不会崩、不会除零、不依赖执行到这里的前提）。它背后是 <code>ConditionallySpeculatable</code> 接口。</li>
+</ul>
+<p>两者缺一不可，因为它们回答的是两个不同的问题：</p>
+<ul>
+<li>「能不能<strong>删掉</strong>/<strong>合并</strong>？」——看有没有内存副作用。</li>
+<li>「能不能<strong>挪到别处</strong>（比如提到循环外、提到分支前）？」——看能不能推测执行。一个整数除法不读不写内存，但它<strong>可能除零</strong>，所以不能随便提到分支之前。</li>
+</ul>
+<p>这就是为什么 <code>arith.divsi</code> 不是 <code>Pure</code>（它可能除零），而 <code>arith.addi</code> 是。</p>
+<p>配套的工具函数在 <code>mlir/include/mlir/Interfaces/SideEffectInterfaces.h</code>，名字直白，值得记住：<code>isPure(op)</code>、<code>isMemoryEffectFree(op)</code>、以及决定 DCE 的 <strong><code>wouldOpBeTriviallyDead(op)</code></strong>。</p>
+<h2>实测：CSE 从不认识 <code>memref.load</code>，但它知道该不该合并</h2>
+<p>两条一模一样的 <code>memref.load</code>，中间什么都没有：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXMgLS1jc2VcbmZ1bmMuZnVuYyBAdHdvX2xvYWRzKCVtOiBtZW1yZWY8NHhmMzI%2BLCAlaTogaW5kZXgpIC0%2BIGYzMiB7XG4gICVhID0gbWVtcmVmLmxvYWQgJW1bJWldIDogbWVtcmVmPDR4ZjMyPlxuICAlYiA9IG1lbXJlZi5sb2FkICVtWyVpXSA6IG1lbXJlZjw0eGYzMj5cbiAgJXMgPSBhcml0aC5hZGRmICVhLCAlYiA6IGYzMlxuICByZXR1cm4gJXMgOiBmMzJcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6Ii0tY3NlIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s --cse
+func.func @two_loads(%m: memref&lt;4xf32&gt;, %i: index) -&gt; f32 {
+  %a = memref.load %m[%i] : memref&lt;4xf32&gt;
+  %b = memref.load %m[%i] : memref&lt;4xf32&gt;
+  %s = arith.addf %a, %b : f32
+  return %s : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt --cse input.mlir</code></div>
+</div><p>运行结果——合并了，第二次读没了：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @two_loads(%arg0: memref&lt;4xf32&gt;, %arg1: index) -&gt; f32 {
+    %0 = memref.load %arg0[%arg1] : memref&lt;4xf32&gt;
+    %1 = arith.addf %0, %0 : f32
+    return %1 : f32
+  }
+}</code></pre>
+</div><p>现在中间插一条写：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXMgLS1jc2VcbmZ1bmMuZnVuYyBAdHdvX2xvYWRzX3dpdGhfc3RvcmUoJW06IG1lbXJlZjw0eGYzMj4sICVpOiBpbmRleCwgJXY6IGYzMikgLT4gZjMyIHtcbiAgJWEgPSBtZW1yZWYubG9hZCAlbVslaV0gOiBtZW1yZWY8NHhmMzI%2BXG4gIG1lbXJlZi5zdG9yZSAldiwgJW1bJWldIDogbWVtcmVmPDR4ZjMyPlxuICAlYiA9IG1lbXJlZi5sb2FkICVtWyVpXSA6IG1lbXJlZjw0eGYzMj5cbiAgJXMgPSBhcml0aC5hZGRmICVhLCAlYiA6IGYzMlxuICByZXR1cm4gJXMgOiBmMzJcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6Ii0tY3NlIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s --cse
+func.func @two_loads_with_store(%m: memref&lt;4xf32&gt;, %i: index, %v: f32) -&gt; f32 {
+  %a = memref.load %m[%i] : memref&lt;4xf32&gt;
+  memref.store %v, %m[%i] : memref&lt;4xf32&gt;
+  %b = memref.load %m[%i] : memref&lt;4xf32&gt;
+  %s = arith.addf %a, %b : f32
+  return %s : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt --cse input.mlir</code></div>
+</div><p>运行结果——不敢合并了，两次读都保留：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @two_loads_with_store(%arg0: memref&lt;4xf32&gt;, %arg1: index, %arg2: f32) -&gt; f32 {
+    %0 = memref.load %arg0[%arg1] : memref&lt;4xf32&gt;
+    memref.store %arg2, %arg0[%arg1] : memref&lt;4xf32&gt;
+    %1 = memref.load %arg0[%arg1] : memref&lt;4xf32&gt;
+    %2 = arith.addf %0, %1 : f32
+    return %2 : f32
+  }
+}</code></pre>
+</div><div class="keypoint">
+<strong>关键在于 CSE 的代码里没有一个字提到 <code>memref</code>。</strong>
+<p>它只做了三件事：问每个 op「你有没有写内存」（<code>MemoryEffectOpInterface</code>），问「你们两个是不是同一次计算」（op 名 + 操作数 + 属性，全是通用信息），然后调 <code>replaceAllUsesWith</code>（第 2 章你亲手实现过）。<strong>把 <code>memref.load</code> 换成你自己的 <code>pix.load_tile</code>，只要声明同样的副作用，你免费得到同样的优化。</strong></p>
+</div><p>再看一个 DCE 的实测。三个 op，都没人用它们的结果：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXMgLS1jYW5vbmljYWxpemVcbmZ1bmMuZnVuYyBAZGVhZCglbTogbWVtcmVmPDR4ZjMyPiwgJWk6IGluZGV4LCAleDogZjMyKSB7XG4gICV1bnVzZWRfYWRkID0gYXJpdGguYWRkZiAleCwgJXggOiBmMzJcbiAgJXVudXNlZF9sb2FkID0gbWVtcmVmLmxvYWQgJW1bJWldIDogbWVtcmVmPDR4ZjMyPlxuICBtZW1yZWYuc3RvcmUgJXgsICVtWyVpXSA6IG1lbXJlZjw0eGYzMj5cbiAgcmV0dXJuXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im1saXJvcHR0cnVuayIsIm9wdGlvbnMiOiItLWNhbm9uaWNhbGl6ZSJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s --canonicalize
+func.func @dead(%m: memref&lt;4xf32&gt;, %i: index, %x: f32) {
+  %unused_add = arith.addf %x, %x : f32
+  %unused_load = memref.load %m[%i] : memref&lt;4xf32&gt;
+  memref.store %x, %m[%i] : memref&lt;4xf32&gt;
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @dead(%arg0: memref&lt;4xf32&gt;, %arg1: index, %arg2: f32) {
+    memref.store %arg2, %arg0[%arg1] : memref&lt;4xf32&gt;
+    return
+  }
+}</code></pre>
+</div><p><strong>没人用的 <code>arith.addf</code>（<code>Pure</code>）被删了，没人用的 <code>memref.load</code>（只读）也被删了，而 <code>memref.store</code>（写）留下了。</strong> 判据正是 <code>wouldOpBeTriviallyDead</code>：没有用户 + 不写内存。注意&quot;只读&quot;也是可删的——读一块内存却不用结果，确实没有意义。</p>
+<h2>亲手跑一遍这套问答</h2>
+<p>下面的模拟器把上面全部串起来：定义一个 pass <strong>从没见过</strong>的 <code>pix.convolve</code>，只改它的声明，看通用 DCE / CSE 的行为怎么变。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E9%80%9A%E7%94%A8%20pass%20%E5%87%AD%E4%BB%80%E4%B9%88%E6%95%A2%E5%8A%A8%E4%B8%80%E4%B8%AA%E5%AE%83%E4%BB%8E%E6%B2%A1%E8%A7%81%E8%BF%87%E7%9A%84%20op%EF%BC%9F%0A%23%20%E7%AD%94%E6%A1%88%EF%BC%9A%E5%AE%83%E4%B8%8D%E9%97%AE%22%E4%BD%A0%E6%98%AF%E8%B0%81%22%EF%BC%8C%E5%8F%AA%E9%97%AE%22%E4%BD%A0%E5%A3%B0%E6%98%8E%E4%BA%86%E4%BB%80%E4%B9%88%22%E3%80%82%E4%B8%8B%E9%9D%A2%E6%8A%8A%E8%BF%99%E5%A5%97%E9%97%AE%E7%AD%94%E5%81%9A%E5%87%BA%E6%9D%A5%E3%80%82%0A%0Aclass%20Op%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20ins%2C%20out%3DNone%2C%20traits%3D()%2C%20effects%3D())%3A%0A%20%20%20%20%20%20%20%20self.name%2C%20self.ins%2C%20self.out%20%3D%20name%2C%20ins%2C%20out%0A%20%20%20%20%20%20%20%20self.traits%20%3D%20set(traits)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%BC%96%E8%AF%91%E6%9C%9F%E9%9D%99%E6%80%81%E5%A3%B0%E6%98%8E%EF%BC%8C%E5%8F%AA%E8%83%BD%E5%9B%9E%E7%AD%94%22%E6%98%AF%2F%E4%B8%8D%E6%98%AF%22%0A%20%20%20%20%20%20%20%20self.effects%20%3D%20list(effects)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%8E%A5%E5%8F%A3%E5%9B%9E%E7%AD%94%E7%9A%84%22%E5%85%B7%E4%BD%93%E5%86%85%E5%AE%B9%22%EF%BC%9A%5B('read'%7C'write'%2C%20%E8%B5%84%E6%BA%90)%5D%0A%0A%20%20%20%20%23%20%E2%80%94%E2%80%94%20pass%20%E4%BC%9A%E9%97%AE%E7%9A%84%E5%87%A0%E4%B8%AA%E9%97%AE%E9%A2%98%EF%BC%8C%E5%85%A8%E9%83%A8%E5%8F%AA%E5%9F%BA%E4%BA%8E%E5%A3%B0%E6%98%8E%EF%BC%8C%E4%B8%8D%E5%9F%BA%E4%BA%8E%20op%20%E7%9A%84%E8%BA%AB%E4%BB%BD%20%E2%80%94%E2%80%94%0A%20%20%20%20def%20is_pure(self)%3A%0A%20%20%20%20%20%20%20%20return%20%22Pure%22%20in%20self.traits%0A%0A%20%20%20%20def%20writes(self)%3A%0A%20%20%20%20%20%20%20%20return%20%5Br%20for%20kind%2C%20r%20in%20self.effects%20if%20kind%20%3D%3D%20%22write%22%5D%20or%20%5C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%5B%22%3C%E4%BB%BB%E6%84%8F%E5%86%85%E5%AD%98%3E%22%5D%20if%20not%20self.is_pure()%20and%20not%20self.effects%20else%20%5B%5D)%0A%0A%20%20%20%20def%20reads(self)%3A%0A%20%20%20%20%20%20%20%20return%20%5Br%20for%20kind%2C%20r%20in%20self.effects%20if%20kind%20%3D%3D%20%22read%22%5D%0A%0A%20%20%20%20def%20key(self)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20CSE%20%E7%94%A8%E5%AE%83%E5%88%A4%E6%96%AD%22%E6%98%AF%E4%B8%8D%E6%98%AF%E5%90%8C%E4%B8%80%E6%AC%A1%E8%AE%A1%E7%AE%97%22%0A%20%20%20%20%20%20%20%20return%20(self.name%2C%20tuple(self.ins))%0A%0A%20%20%20%20def%20__repr__(self)%3A%0A%20%20%20%20%20%20%20%20lhs%20%3D%20f%22%7Bself.out%7D%20%3D%20%22%20if%20self.out%20else%20%22%22%0A%20%20%20%20%20%20%20%20return%20f%22%7Blhs%7D%7Bself.name%7D(%7B'%2C%20'.join(self.ins)%7D)%22%0A%0A%0Adef%20dce(ops%2C%20used)%3A%0A%20%20%20%20%22%22%22%E5%88%A0%E6%8E%89%E6%B2%A1%E4%BA%BA%E7%94%A8%E3%80%81%E4%B8%94%E4%B8%8D%E5%86%99%E5%86%85%E5%AD%98%E7%9A%84%20op%E3%80%82%E5%AF%B9%E5%BA%94%20wouldOpBeTriviallyDead()%E3%80%82%22%22%22%0A%20%20%20%20kept%2C%20removed%20%3D%20%5B%5D%2C%20%5B%5D%0A%20%20%20%20for%20op%20in%20ops%3A%0A%20%20%20%20%20%20%20%20has_user%20%3D%20op.out%20in%20used%0A%20%20%20%20%20%20%20%20if%20not%20has_user%20and%20not%20op.writes()%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20removed.append(op)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20kept.append(op)%0A%20%20%20%20return%20kept%2C%20removed%0A%0A%0Adef%20cse(ops)%3A%0A%20%20%20%20%22%22%22%E5%90%88%E5%B9%B6%E9%87%8D%E5%A4%8D%E8%AE%A1%E7%AE%97%EF%BC%9B%E9%81%87%E5%88%B0%E5%86%99%E5%86%85%E5%AD%98%E7%9A%84%20op%20%E5%B0%B1%E6%B8%85%E7%A9%BA%E7%BC%93%E5%AD%98%EF%BC%88%E5%AE%83%E5%8F%AF%E8%83%BD%E8%AE%A9%E4%B9%8B%E5%89%8D%E8%AF%BB%E5%88%B0%E7%9A%84%E5%80%BC%E8%BF%87%E6%9C%9F%EF%BC%89%E3%80%82%22%22%22%0A%20%20%20%20seen%2C%20out%2C%20merged%20%3D%20%7B%7D%2C%20%5B%5D%2C%20%5B%5D%0A%20%20%20%20for%20op%20in%20ops%3A%0A%20%20%20%20%20%20%20%20if%20op.writes()%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20seen.clear()%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%89%E5%86%99%E5%85%A5%20%E2%86%92%20%E4%B9%8B%E5%89%8D%E7%BC%93%E5%AD%98%E7%9A%84%E8%AF%BB%E5%85%A8%E9%83%A8%E4%BD%9C%E5%BA%9F%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(op)%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20k%20%3D%20op.key()%0A%20%20%20%20%20%20%20%20if%20k%20in%20seen%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20merged.append((op%2C%20seen%5Bk%5D))%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20seen%5Bk%5D%20%3D%20op%0A%20%20%20%20%20%20%20%20out.append(op)%0A%20%20%20%20return%20out%2C%20merged%0A%0A%0Adef%20report(title%2C%20ops%2C%20used)%3A%0A%20%20%20%20print(f%22%3D%3D%3D%20%7Btitle%7D%20%3D%3D%3D%22)%0A%20%20%20%20for%20op%20in%20ops%3A%0A%20%20%20%20%20%20%20%20t%20%3D%20%22%E3%80%81%22.join(sorted(op.traits))%20or%20%22%EF%BC%88%E6%B2%A1%E6%9C%89%E5%A3%B0%E6%98%8E%E4%BB%BB%E4%BD%95%20trait%EF%BC%89%22%0A%20%20%20%20%20%20%20%20e%20%3D%20%22%E3%80%81%22.join(f%22%7Bk%7D%20%7Br%7D%22%20for%20k%2C%20r%20in%20op.effects)%20or%20%22%EF%BC%88%E6%B2%A1%E6%9C%89%E5%A3%B0%E6%98%8E%E5%89%AF%E4%BD%9C%E7%94%A8%EF%BC%89%22%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bop!r%3A%3C38%7D%20trait%3A%20%7Bt%3A%3C26%7D%20%E5%89%AF%E4%BD%9C%E7%94%A8%3A%20%7Be%7D%22)%0A%20%20%20%20after_cse%2C%20merged%20%3D%20cse(ops)%0A%20%20%20%20for%20dup%2C%20orig%20in%20merged%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20CSE%EF%BC%9A%7Bdup!r%7D%20%E4%B8%8E%20%7Borig!r%7D%20%E6%98%AF%E5%90%8C%E4%B8%80%E6%AC%A1%E8%AE%A1%E7%AE%97%20%E2%86%92%20%E5%90%88%E5%B9%B6%22)%0A%20%20%20%20if%20not%20merged%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20CSE%EF%BC%9A%E6%B2%A1%E6%9C%89%E5%8F%AF%E5%90%88%E5%B9%B6%E7%9A%84%22)%0A%20%20%20%20after_dce%2C%20removed%20%3D%20dce(after_cse%2C%20used)%0A%20%20%20%20print(%22%20%20DCE%EF%BC%9A%22%20%2B%20(%22%E5%88%A0%E6%8E%89%20%22%20%2B%20%22%E3%80%81%22.join(repr(o)%20for%20o%20in%20removed)%20if%20removed%20else%20%22%E6%B2%A1%E6%9C%89%E5%8F%AF%E5%88%A0%E7%9A%84%22))%0A%20%20%20%20print(f%22%20%20%E6%9C%80%E7%BB%88%E5%89%A9%E4%B8%8B%20%7Blen(after_dce)%7D%20%E4%B8%AA%20op%5Cn%22)%0A%0A%0A%23%20%E5%9C%BA%E6%99%AF%EF%BC%9A%E4%B8%80%E4%B8%AA%20pass%20%E5%AE%8C%E5%85%A8%E4%B8%8D%E8%AE%A4%E8%AF%86%E7%9A%84%E8%87%AA%E5%AE%9A%E4%B9%89%20op%20%E2%80%94%E2%80%94%20pix.convolve%0Aused%20%3D%20%7B%22%25c1%22%7D%20%20%20%20%20%23%20%E5%8F%AA%E6%9C%89%E7%AC%AC%E4%B8%80%E4%B8%AA%E5%8D%B7%E7%A7%AF%E7%BB%93%E6%9E%9C%E8%A2%AB%E7%94%A8%E5%88%B0%EF%BC%88%E8%A2%AB%20return%20%E7%94%A8%E4%BA%86%EF%BC%89%0A%0Aprint(%22%E5%90%8C%E4%B8%80%E6%AE%B5%20IR%EF%BC%8C%E5%8F%AA%E6%94%B9%20pix.convolve%20%E7%9A%84%E5%A3%B0%E6%98%8E%EF%BC%8C%E7%9C%8B%E9%80%9A%E7%94%A8%20pass%20%E7%9A%84%E8%A1%8C%E4%B8%BA%E5%B7%AE%E5%A4%9A%E5%B0%91%5Cn%22)%0A%0A%23%20%E5%A3%B0%E6%98%8E%E4%BA%86%20Pure%EF%BC%9A%E5%91%8A%E8%AF%89%E6%A1%86%E6%9E%B6%22%E6%88%91%E4%B8%8D%E7%A2%B0%E5%86%85%E5%AD%98%E3%80%81%E7%BB%93%E6%9E%9C%E5%8F%AA%E7%94%B1%E6%93%8D%E4%BD%9C%E6%95%B0%E5%86%B3%E5%AE%9A%22%0Areport(%22pix.convolve%20%E5%A3%B0%E6%98%8E%E4%BA%86%20Pure%22%2C%20%5B%0A%20%20%20%20Op(%22pix.convolve%22%2C%20%5B%22%25img%22%2C%20%22%25k%22%5D%2C%20%22%25c1%22%2C%20traits%3D%5B%22Pure%22%5D)%2C%0A%20%20%20%20Op(%22pix.convolve%22%2C%20%5B%22%25img%22%2C%20%22%25k%22%5D%2C%20%22%25c2%22%2C%20traits%3D%5B%22Pure%22%5D)%2C%20%20%20%23%20%E9%87%8D%E5%A4%8D%E8%AE%A1%E7%AE%97%0A%20%20%20%20Op(%22pix.blur%22%2C%20%20%20%20%20%5B%22%25img%22%5D%2C%20%20%20%20%20%20%20%22%25b1%22%2C%20traits%3D%5B%22Pure%22%5D)%2C%20%20%20%23%20%E6%B2%A1%E4%BA%BA%E7%94%A8%0A%5D%2C%20used)%0A%0A%23%20%E4%BB%80%E4%B9%88%E9%83%BD%E4%B8%8D%E5%A3%B0%E6%98%8E%EF%BC%9A%E6%A1%86%E6%9E%B6%E5%8F%AA%E8%83%BD%E5%81%87%E8%AE%BE%E6%9C%80%E5%9D%8F%E6%83%85%E5%86%B5%0Areport(%22pix.convolve%20%E4%BB%80%E4%B9%88%E9%83%BD%E6%B2%A1%E5%A3%B0%E6%98%8E%22%2C%20%5B%0A%20%20%20%20Op(%22pix.convolve%22%2C%20%5B%22%25img%22%2C%20%22%25k%22%5D%2C%20%22%25c1%22)%2C%0A%20%20%20%20Op(%22pix.convolve%22%2C%20%5B%22%25img%22%2C%20%22%25k%22%5D%2C%20%22%25c2%22)%2C%0A%20%20%20%20Op(%22pix.blur%22%2C%20%20%20%20%20%5B%22%25img%22%5D%2C%20%20%20%20%20%20%20%22%25b1%22)%2C%0A%5D%2C%20used)%0A%0A%23%20%E7%B2%BE%E7%A1%AE%E5%A3%B0%E6%98%8E%22%E5%8F%AA%E8%AF%BB%E6%9F%90%E5%9D%97%E5%86%85%E5%AD%98%22%EF%BC%9A%E4%B8%A4%E6%AC%A1%E8%AF%BB%E4%B9%8B%E9%97%B4%E6%B2%A1%E6%9C%89%E5%86%99%20%E2%86%92%20%E5%8F%AF%E4%BB%A5%E5%90%88%E5%B9%B6%0Areport(%22%E4%B8%A4%E6%AC%A1%20read%EF%BC%8C%E4%B8%AD%E9%97%B4%E6%B2%A1%E6%9C%89%20write%22%2C%20%5B%0A%20%20%20%20Op(%22pix.load_tile%22%2C%20%5B%22%25buf%22%5D%2C%20%22%25t1%22%2C%20effects%3D%5B(%22read%22%2C%20%22%25buf%22)%5D)%2C%0A%20%20%20%20Op(%22pix.load_tile%22%2C%20%5B%22%25buf%22%5D%2C%20%22%25t2%22%2C%20effects%3D%5B(%22read%22%2C%20%22%25buf%22)%5D)%2C%0A%5D%2C%20%7B%22%25t1%22%2C%20%22%25t2%22%7D)%0A%0A%23%20%E5%90%8C%E6%A0%B7%E4%B8%A4%E6%AC%A1%E8%AF%BB%EF%BC%8C%E4%B8%AD%E9%97%B4%E6%8F%92%E4%B8%80%E6%AC%A1%E5%86%99%20%E2%86%92%20%E7%AC%AC%E4%BA%8C%E6%AC%A1%E5%BF%85%E9%A1%BB%E9%87%8D%E6%96%B0%E8%AF%BB%0Areport(%22%E4%B8%A4%E6%AC%A1%20read%EF%BC%8C%E4%B8%AD%E9%97%B4%E6%8F%92%E4%BA%86%E4%B8%80%E6%AC%A1%20write%22%2C%20%5B%0A%20%20%20%20Op(%22pix.load_tile%22%2C%20%5B%22%25buf%22%5D%2C%20%22%25t1%22%2C%20effects%3D%5B(%22read%22%2C%20%22%25buf%22)%5D)%2C%0A%20%20%20%20Op(%22pix.store_tile%22%2C%20%5B%22%25buf%22%2C%20%22%25t1%22%5D%2C%20None%2C%20effects%3D%5B(%22write%22%2C%20%22%25buf%22)%5D)%2C%0A%20%20%20%20Op(%22pix.load_tile%22%2C%20%5B%22%25buf%22%5D%2C%20%22%25t2%22%2C%20effects%3D%5B(%22read%22%2C%20%22%25buf%22)%5D)%2C%0A%5D%2C%20%7B%22%25t1%22%2C%20%22%25t2%22%7D)%0Aprint(%22%E6%9C%80%E5%90%8E%E4%B8%A4%E7%BB%84%E6%AD%A3%E6%98%AF%E7%9C%9F%E5%AE%9E%20mlir-opt%20%E7%9A%84%E8%A1%8C%E4%B8%BA%EF%BC%9Amemref.load%20%E4%B9%8B%E9%97%B4%E6%8F%92%E4%B8%80%E6%9D%A1%20memref.store%EF%BC%8C--cse%20%E5%B0%B1%E4%B8%8D%E5%86%8D%E5%90%88%E5%B9%B6%E3%80%82%22)%0Aprint()%0A%0Aprint(%22%E7%BB%93%E8%AE%BA%EF%BC%9Apass%20%E7%9A%84%E8%83%BD%E5%8A%9B%E4%B8%8D%E6%98%AF'%E8%AE%A4%E8%AF%86%E5%A4%9A%E5%B0%91%20op'%EF%BC%8C%E8%80%8C%E6%98%AF'op%20%E5%A3%B0%E6%98%8E%E4%BA%86%E5%A4%9A%E5%B0%91%E4%BF%A1%E6%81%AF'%E3%80%82%22)%0Aprint(%22%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%BA%E4%BB%80%E4%B9%88%E7%AC%AC%E4%BA%8C%E9%83%A8%E5%88%86%E7%BB%99%20pix%20%E7%9A%84%E6%AF%8F%E4%B8%AA%20op%20%E6%8C%91%20trait%E3%80%81%E5%AE%9E%E7%8E%B0%E6%8E%A5%E5%8F%A3%EF%BC%8C%E6%98%AF%E5%9C%A8%E7%BB%99%E5%AE%83'%E8%A7%A3%E9%94%81'%E6%95%B4%E6%9D%A1%E4%BC%98%E5%8C%96%E7%AE%A1%E7%BA%BF%E3%80%82%22)"># 通用 pass 凭什么敢动一个它从没见过的 op？
+# 答案：它不问"你是谁"，只问"你声明了什么"。下面把这套问答做出来。
+
+class Op:
+    def __init__(self, name, ins, out=None, traits=(), effects=()):
+        self.name, self.ins, self.out = name, ins, out
+        self.traits = set(traits)                 # 编译期静态声明，只能回答"是/不是"
+        self.effects = list(effects)              # 接口回答的"具体内容"：[('read'|'write', 资源)]
+
+    # —— pass 会问的几个问题，全部只基于声明，不基于 op 的身份 ——
+    def is_pure(self):
+        return "Pure" in self.traits
+
+    def writes(self):
+        return [r for kind, r in self.effects if kind == "write"] or \
+               (["&lt;任意内存&gt;"] if not self.is_pure() and not self.effects else [])
+
+    def reads(self):
+        return [r for kind, r in self.effects if kind == "read"]
+
+    def key(self):                                 # CSE 用它判断"是不是同一次计算"
+        return (self.name, tuple(self.ins))
+
+    def __repr__(self):
+        lhs = f"{self.out} = " if self.out else ""
+        return f"{lhs}{self.name}({', '.join(self.ins)})"
+
+
+def dce(ops, used):
+    """删掉没人用、且不写内存的 op。对应 wouldOpBeTriviallyDead()。"""
+    kept, removed = [], []
+    for op in ops:
+        has_user = op.out in used
+        if not has_user and not op.writes():
+            removed.append(op)
+        else:
+            kept.append(op)
+    return kept, removed
+
+
+def cse(ops):
+    """合并重复计算；遇到写内存的 op 就清空缓存（它可能让之前读到的值过期）。"""
+    seen, out, merged = {}, [], []
+    for op in ops:
+        if op.writes():
+            seen.clear()                           # 有写入 → 之前缓存的读全部作废
+            out.append(op)
+            continue
+        k = op.key()
+        if k in seen:
+            merged.append((op, seen[k]))
+            continue
+        seen[k] = op
+        out.append(op)
+    return out, merged
+
+
+def report(title, ops, used):
+    print(f"=== {title} ===")
+    for op in ops:
+        t = "、".join(sorted(op.traits)) or "（没有声明任何 trait）"
+        e = "、".join(f"{k} {r}" for k, r in op.effects) or "（没有声明副作用）"
+        print(f"  {op!r:&lt;38} trait: {t:&lt;26} 副作用: {e}")
+    after_cse, merged = cse(ops)
+    for dup, orig in merged:
+        print(f"  CSE：{dup!r} 与 {orig!r} 是同一次计算 → 合并")
+    if not merged:
+        print("  CSE：没有可合并的")
+    after_dce, removed = dce(after_cse, used)
+    print("  DCE：" + ("删掉 " + "、".join(repr(o) for o in removed) if removed else "没有可删的"))
+    print(f"  最终剩下 {len(after_dce)} 个 op\n")
+
+
+# 场景：一个 pass 完全不认识的自定义 op —— pix.convolve
+used = {"%c1"}     # 只有第一个卷积结果被用到（被 return 用了）
+
+print("同一段 IR，只改 pix.convolve 的声明，看通用 pass 的行为差多少\n")
+
+# 声明了 Pure：告诉框架"我不碰内存、结果只由操作数决定"
+report("pix.convolve 声明了 Pure", [
+    Op("pix.convolve", ["%img", "%k"], "%c1", traits=["Pure"]),
+    Op("pix.convolve", ["%img", "%k"], "%c2", traits=["Pure"]),   # 重复计算
+    Op("pix.blur",     ["%img"],       "%b1", traits=["Pure"]),   # 没人用
+], used)
+
+# 什么都不声明：框架只能假设最坏情况
+report("pix.convolve 什么都没声明", [
+    Op("pix.convolve", ["%img", "%k"], "%c1"),
+    Op("pix.convolve", ["%img", "%k"], "%c2"),
+    Op("pix.blur",     ["%img"],       "%b1"),
+], used)
+
+# 精确声明"只读某块内存"：两次读之间没有写 → 可以合并
+report("两次 read，中间没有 write", [
+    Op("pix.load_tile", ["%buf"], "%t1", effects=[("read", "%buf")]),
+    Op("pix.load_tile", ["%buf"], "%t2", effects=[("read", "%buf")]),
+], {"%t1", "%t2"})
+
+# 同样两次读，中间插一次写 → 第二次必须重新读
+report("两次 read，中间插了一次 write", [
+    Op("pix.load_tile", ["%buf"], "%t1", effects=[("read", "%buf")]),
+    Op("pix.store_tile", ["%buf", "%t1"], None, effects=[("write", "%buf")]),
+    Op("pix.load_tile", ["%buf"], "%t2", effects=[("read", "%buf")]),
+], {"%t1", "%t2"})
+print("最后两组正是真实 mlir-opt 的行为：memref.load 之间插一条 memref.store，--cse 就不再合并。")
+print()
+
+print("结论：pass 的能力不是'认识多少 op'，而是'op 声明了多少信息'。")
+print("这就是为什么第二部分给 pix 的每个 op 挑 trait、实现接口，是在给它'解锁'整条优化管线。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">同一段 IR，只改 pix.convolve 的声明，看通用 pass 的行为差多少
+
+=== pix.convolve 声明了 Pure ===
+  %c1 = pix.convolve(%img, %k)           trait: Pure                       副作用: （没有声明副作用）
+  %c2 = pix.convolve(%img, %k)           trait: Pure                       副作用: （没有声明副作用）
+  %b1 = pix.blur(%img)                   trait: Pure                       副作用: （没有声明副作用）
+  CSE：%c2 = pix.convolve(%img, %k) 与 %c1 = pix.convolve(%img, %k) 是同一次计算 → 合并
+  DCE：删掉 %b1 = pix.blur(%img)
+  最终剩下 1 个 op
+
+=== pix.convolve 什么都没声明 ===
+  %c1 = pix.convolve(%img, %k)           trait: （没有声明任何 trait）             副作用: （没有声明副作用）
+  %c2 = pix.convolve(%img, %k)           trait: （没有声明任何 trait）             副作用: （没有声明副作用）
+  %b1 = pix.blur(%img)                   trait: （没有声明任何 trait）             副作用: （没有声明副作用）
+  CSE：没有可合并的
+  DCE：没有可删的
+  最终剩下 3 个 op
+
+=== 两次 read，中间没有 write ===
+  %t1 = pix.load_tile(%buf)              trait: （没有声明任何 trait）             副作用: read %buf
+  %t2 = pix.load_tile(%buf)              trait: （没有声明任何 trait）             副作用: read %buf
+  CSE：%t2 = pix.load_tile(%buf) 与 %t1 = pix.load_tile(%buf) 是同一次计算 → 合并
+  DCE：没有可删的
+  最终剩下 1 个 op
+
+=== 两次 read，中间插了一次 write ===
+  %t1 = pix.load_tile(%buf)              trait: （没有声明任何 trait）             副作用: read %buf
+  pix.store_tile(%buf, %t1)              trait: （没有声明任何 trait）             副作用: write %buf
+  %t2 = pix.load_tile(%buf)              trait: （没有声明任何 trait）             副作用: read %buf
+  CSE：没有可合并的
+  DCE：没有可删的
+  最终剩下 3 个 op
+
+最后两组正是真实 mlir-opt 的行为：memref.load 之间插一条 memref.store，--cse 就不再合并。
+
+结论：pass 的能力不是'认识多少 op'，而是'op 声明了多少信息'。
+这就是为什么第二部分给 pix 的每个 op 挑 trait、实现接口，是在给它'解锁'整条优化管线。</code></pre>
+</div><p>第一组和第二组的对比就是本章的全部要点：<strong>同样的 IR、同样的 pass，只因为 op 多声明了一个 <code>Pure</code>，优化就发生了。</strong> 你在第二部分给 pix 挑 trait 时，挑的不是标签，是能力。</p>
+<h2>动手</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 1. 复现上面两个 CSE 实验，确认 memory effect 真的在起作用
+mlir-opt two_loads.mlir --cse
+mlir-opt two_loads_with_store.mlir --cse
+
+# 2. 看一个 op 到底声明了哪些 trait 和接口：直接读它的 ODS 定义
+grep -n -A6 "def AddFOp" $LLVM_SRC/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td
+
+# 3. 找出所有实现了某个接口的 op（读源码最实用的一招）
+grep -rn "LoopLikeOpInterface" $LLVM_SRC/mlir/include/mlir/Dialect/ | head</code></pre>
+</div><p><strong>改一改：</strong></p>
+<ol>
+<li>把 <code>two_loads_with_store.mlir</code> 里的 <code>store</code> 改成写<strong>另一个</strong> memref（给函数加一个参数 <code>%m2</code>，写 <code>%m2</code>）。<code>--cse</code> 现在敢合并那两次 <code>load</code> 吗？想一想：要敢合并，编译器必须知道 <code>%m</code> 和 <code>%m2</code> 不重叠——这就是别名分析的地盘（第 19 章）。</li>
+<li>把两次 <code>memref.load</code> 的下标改成不同的 <code>%i</code> 和 <code>%j</code>。CSE 还合并吗？为什么？（提示：CSE 的&quot;同一次计算&quot;包含操作数相同）</li>
+<li><code>arith.divsi %a, %b</code> 放在一个 <code>scf.if</code> 里面，<code>b</code> 可能为 0。试试 LICM 相关的 pass（<code>--loop-invariant-code-motion</code>）能不能把它提出去。结合本节讲的 <code>AlwaysSpeculatable</code>，解释你看到的结果。</li>
+<li>想象给 <code>pix.convolve</code> 加 <code>Commutative</code>。这个声明<strong>对不对</strong>？（卷积的两个输入是图像和卷积核，交换它们语义变吗？）这个问题说明：<strong>trait 是承诺，声明错了框架会按错的来优化</strong>——第 10 章会讲怎么用测试守住这些承诺。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>通用 pass 能变换未知 op，靠的不是认识它，而是<strong>问它声明了什么</strong>。这是 MLIR 全部复用能力的来源。</li>
+<li><strong>trait</strong> 是编译期静态标签，回答&quot;是/不是&quot;，还能自动注入验证（<code>SameOperandsAndResultType</code>）。<strong>interface</strong> 是运行时虚表，回答&quot;具体是多少/请你算一下&quot;（<code>LoopLikeOpInterface</code> 的循环边界、<code>InferTypeOpInterface</code> 的结果类型）。</li>
+<li><code>Pure</code> = <code>AlwaysSpeculatable</code> + <code>NoMemoryEffect</code>。前者管&quot;能不能挪&quot;，后者管&quot;能不能删/合&quot;。<code>arith.divsi</code> 不是 <code>Pure</code>，因为它可能除零。</li>
+<li>决定 DCE 的函数就叫 <code>wouldOpBeTriviallyDead</code>（<code>SideEffectInterfaces.h</code>）：<strong>没有用户 + 不写内存</strong>。只读且结果没人用的 op 也会被删。</li>
+<li>实测确认：两条相同 <code>memref.load</code> 中间插一条 <code>store</code>，<code>--cse</code> 立刻放弃合并——而 CSE 的代码里没有一个字提到 <code>memref</code>。</li>
+<li>接口住在 <code>mlir/include/mlir/Interfaces/</code>，一个 <code>.td</code> 一个文件。想知道&quot;某个通用变换要求我实现什么&quot;，去那里找接口，比读 pass 源码快。</li>
+<li>除 op interface 外还有 type / attribute / dialect interface。</li>
+<li><strong>对第二部分的意义</strong>：给 pix 的 op 挑 trait、实现接口，等于给它解锁整条通用优化管线。挑错了不是没效果，而是<strong>按错的语义优化</strong>——这是承诺，不是标签。</li>
+</ul>
+<p>下一章做第一部分的收尾：<strong>方言全景</strong>。把 <code>builtin</code>、<code>func</code>、<code>arith</code>、<code>scf</code>、<code>cf</code>、<code>memref</code>、<code>tensor</code>、<code>vector</code>、<code>linalg</code>、<code>gpu</code>、<code>spirv</code>、<code>llvm</code>、<code>transform</code> 这些内建方言摆成一座塔，看清每一层的抽象高度和它们之间的典型下降边——这张图就是第四部分那条下降路线的地图。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch04.html">← 第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a>
+  <a class="nav-next" href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

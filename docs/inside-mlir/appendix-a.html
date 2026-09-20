@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li class="active"><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</h1>
+<h2>这份附录怎么用</h2>
+<div class="goal-box">
+<p>正文讲"为什么这么设计"，这份附录帮你"把环境弄好"。全书每个源码锚点（<code>mlir/include/mlir/IR/Operation.h</code>、<code>DialectConversion.cpp</code> 里的 <code>OperationLegalizer</code>……）都指向上游 <strong><code>llvm/llvm-project</code> 的 <code>mlir/</code> 子树</strong>；第 7 章起的 pix 方言又需要一份<strong>装好的</strong> MLIR 才能编出 <code>pix-opt</code>。这份附录把这条路走一遍：拿到 MLIR 的三条路、源码构建的 CMake 参数、编出来的工具各管什么、out-of-tree 项目模板，以及日常命令速查。</p>
+<p>它不是官方文档的替代（<a href="https://mlir.llvm.org/getting_started/">mlir.llvm.org/getting_started</a> 永远是权威），而是一份"够用就走"的清单。<strong>本书的版本基线写在下面第 0 节，请先看一眼。</strong></p>
+</div><h2>0. 版本基线（全书按这个写）</h2>
+<p>MLIR 是 LLVM 里演进最快的部分：pass 名会改、选项会加、工具会更名。本书正文统一按这个基线写：</p>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>本书取值</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>LLVM / MLIR 版本</td>
+<td><strong>23.1.x</strong>（23.1.1 发布于 2026-09-08）</td>
+</tr>
+<tr>
+<td>源码仓库</td>
+<td><code>https://github.com/llvm/llvm-project</code></td>
+</tr>
+<tr>
+<td>源码锚点前缀</td>
+<td><code>mlir/include/mlir/...</code>、<code>mlir/lib/...</code></td>
+</tr>
+<tr>
+<td>网页代码块跑的工具</td>
+<td>Compiler Explorer 的 <strong>trunk</strong> 版 <code>mlir-opt</code> / <code>mlir-translate</code></td>
+</tr>
+</tbody></table>
+<p>两点提醒，后面不再重复：</p>
+<ul>
+<li><strong>正文引用的是类名和函数名，不是行号。</strong> 行号一个 commit 就过期；<code>grep -rn &quot;class OperationLegalizer&quot; mlir/</code> 永远有效。</li>
+<li><strong>网页按钮用的是 trunk，你手上可能是发布版。</strong> 极少数情况下（某个 pass 刚改名）两者会不一致——正文会在这类地方用 <code>warn</code> 框提醒你去 <code>mlir-opt --help</code> 核对。拿不准某个选项在你的版本里还存不存在时，最快的办法就是直接问工具：</li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-opt --help | grep -i bufferize     # 这个 pass 在你的版本里叫什么、有哪些选项
+mlir-opt --show-dialects                # 这份二进制注册了哪些方言</code></pre>
+</div><div class="warn">
+<strong>几个已知的"版本地雷"</strong>
+<p><code>mlir-cpu-runner</code> 在较新的 LLVM 里已更名为 <strong><code>mlir-runner</code></strong>（第 24 章 JIT 那一步会用到）。<code>--one-shot-bufferize</code> 的选项名（第 22 章）与 <code>transform</code> 方言的 op 名（第 18 章）在历史上都动过。<code>--convert-*-to-*</code> 这一族 pass 时有合并拆分。遇到"命令报 Unknown command line argument"，先别怀疑自己，去 <code>--help</code> 里搜一下。</p>
+</div><h2>1. 拿到 MLIR 的三条路</h2>
+<div class="concept">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="a-arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+  <text x="14" y="24" font-size="13" font-weight="bold" fill="#24292f">三条路，按你要做什么选</text>
+  <rect x="14" y="44" width="200" height="66" rx="8" fill="#eef4fb" stroke="#2b6cb0"/>
+  <text x="28" y="66" font-size="12" font-weight="bold" fill="#2b6cb0">① 发行版包</text>
+  <text x="28" y="84" font-size="11" fill="#24292f">十分钟装好，能跑 mlir-opt</text>
+  <text x="28" y="100" font-size="11" fill="#24292f">读第一、三、四部分够用</text>
+  <rect x="14" y="124" width="200" height="66" rx="8" fill="#eef4fb" stroke="#2b6cb0"/>
+  <text x="28" y="146" font-size="12" font-weight="bold" fill="#2b6cb0">② 源码构建</text>
+  <text x="28" y="164" font-size="11" fill="#24292f">几十分钟～几小时</text>
+  <text x="28" y="180" font-size="11" fill="#24292f">要造方言、要读源码就走这条</text>
+  <rect x="14" y="204" width="200" height="66" rx="8" fill="#f5f5f5" stroke="#6b7280"/>
+  <text x="28" y="226" font-size="12" font-weight="bold" fill="#6b7280">③ 什么都不装</text>
+  <text x="28" y="244" font-size="11" fill="#24292f">点代码块的 CE 按钮</text>
+  <text x="28" y="260" font-size="11" fill="#24292f">通勤路上读也能动手</text>
+  <line x1="214" y1="77" x2="300" y2="140" stroke="#6b7280" marker-end="url(#a-arr)"/>
+  <line x1="214" y1="157" x2="300" y2="150" stroke="#6b7280" marker-end="url(#a-arr)"/>
+  <line x1="214" y1="237" x2="300" y2="160" stroke="#6b7280" marker-end="url(#a-arr)"/>
+  <rect x="308" y="112" width="150" height="76" rx="8" fill="#fff" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="330" y="140" font-size="13" font-weight="bold" fill="#2b6cb0">mlir-opt</text>
+  <text x="322" y="160" font-size="11" fill="#24292f">读 IR → 跑 pass</text>
+  <text x="322" y="176" font-size="11" fill="#24292f">→ 打印 IR</text>
+  <line x1="458" y1="150" x2="530" y2="150" stroke="#6b7280" marker-end="url(#a-arr)"/>
+  <rect x="538" y="60" width="168" height="54" rx="8" fill="#f0f8f2" stroke="#3f9b5c"/>
+  <text x="552" y="82" font-size="12" font-weight="bold" fill="#3f9b5c">第 1–6、13–23 章</text>
+  <text x="552" y="100" font-size="11" fill="#24292f">读 IR、跑 pass 就够</text>
+  <rect x="538" y="124" width="168" height="54" rx="8" fill="#fdf1ec" stroke="#e06a3b"/>
+  <text x="552" y="146" font-size="12" font-weight="bold" fill="#e06a3b">第 7–12 章（pix）</text>
+  <text x="552" y="164" font-size="11" fill="#24292f">必须要 ② 的安装树</text>
+  <rect x="538" y="188" width="168" height="54" rx="8" fill="#fdf1ec" stroke="#e06a3b"/>
+  <text x="552" y="210" font-size="12" font-weight="bold" fill="#e06a3b">第 24–25 章</text>
+  <text x="552" y="228" font-size="11" fill="#24292f">JIT / GPU 出口要 ②</text>
+</svg>
+<div class="caption">图 A-1　三条路与它们分别够读哪些章</div>
+</div><h3>① 发行版包（最快）</h3>
+<p>Debian/Ubuntu 用 LLVM 官方 apt 源，装工具 + 开发头文件：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 官方脚本按版本号装（把 23 换成你要的版本）
+bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)" -- 23
+sudo apt install mlir-23-tools libmlir-23-dev llvm-23-dev
+# 工具带版本后缀，做个软链或用全名
+mlir-opt-23 --version</code></pre>
+</div><p>macOS 上 <code>brew install llvm</code> 自带 MLIR 工具（<code>$(brew --prefix llvm)/bin</code>）。包名与版本后缀各发行版不同，<code>apt search mlir</code> / <code>brew info llvm</code> 确认一下。</p>
+<p>这条路能跑全书绝大多数代码块，也够 <code>verify-mlir.sh</code> 用。但要编 out-of-tree 方言（第 7 章起），需要 <code>libmlir-*-dev</code> 带的 <code>MLIRConfig.cmake</code>——包装得全不全各发行版有差异，编不过就走第 ② 条。</p>
+<h3>② 源码构建（要造方言、要读源码就走这条）</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">git clone --depth=1 https://github.com/llvm/llvm-project.git
+cd llvm-project
+cmake -G Ninja -S llvm -B build \
+  -DLLVM_ENABLE_PROJECTS="mlir" \
+  -DLLVM_TARGETS_TO_BUILD="host;NVPTX" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_ENABLE_ASSERTIONS=ON \
+  -DLLVM_INSTALL_UTILS=ON \
+  -DLLVM_USE_LINKER=lld \
+  -DLLVM_CCACHE_BUILD=ON
+ninja -C build -j"$(nproc)"</code></pre>
+</div><p>每个参数都有理由，别照抄了不看：</p>
+<ul>
+<li><strong><code>LLVM_ENABLE_PROJECTS=&quot;mlir&quot;</code></strong>：MLIR 是 monorepo 里的一个 project，不开这个开关它不参与构建。（想同时玩 ClangIR 就加 <code>clang</code>，见第 28 章。）</li>
+<li><strong><code>LLVM_ENABLE_ASSERTIONS=ON</code></strong>：<strong>强烈建议开</strong>，哪怕 Release 构建。两个理由：一是 MLIR 的很多不变式（第 10 章讲的 verifier、pattern 的前置条件）靠断言兜住，关了断言，写错的变换不会当场炸，而是给你一段莫名其妙的 IR；二是 <strong><code>--debug-only=</code> 这个选项只在开了断言的构建里存在</strong>——关掉断言的二进制上它直接报 <code>Unknown command line argument</code>，而第 14、17 章调试 pattern 和 conversion 全靠它。这不是调试选项，是 MLIR 开发的必需品。</li>
+<li><strong><code>LLVM_TARGETS_TO_BUILD=&quot;host;NVPTX&quot;</code></strong>：<code>host</code> 够跑第 24 章的 JIT；<code>NVPTX</code> 是第 25 章 GPU 出口之一（AMD 的话加 <code>AMDGPU</code>）。全都编（<code>all</code>）会显著拖慢构建。</li>
+<li><strong><code>LLVM_INSTALL_UTILS=ON</code></strong>：把 <code>lit</code>、<code>FileCheck</code> 一起装出来——第 12 章给 pix 写测试要用。</li>
+<li><strong><code>LLVM_USE_LINKER=lld</code> / <code>LLVM_CCACHE_BUILD=ON</code></strong>：链接和重编快很多，装了 <code>lld</code>/<code>ccache</code> 就加上。</li>
+<li>想<strong>跟着源码下断点</strong>看 pass 怎么跑，用 <code>-DCMAKE_BUILD_TYPE=RelWithDebInfo</code>（Debug 慢且二进制巨大）。</li>
+<li>想用 Python 探索 IR（第 3 章会提一句），加 <code>-DMLIR_ENABLE_BINDINGS_PYTHON=ON</code>。</li>
+</ul>
+<p>构建产物在 <code>build/bin/</code>。不装到系统也能用，本书所有命令都支持直接指到这里：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">export PATH="$PWD/build/bin:$PATH"          # 或者
+export MLIR_BIN="$PWD/build/bin"            # verify-mlir.sh 认这个变量</code></pre>
+</div><p>跑一下 MLIR 自己的测试，确认构建是好的：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">ninja -C build check-mlir</code></pre>
+</div><h3>③ 什么都不装</h3>
+<p>本书的 <code>mlir</code> 代码块右上角有 <strong>🔗 在 Compiler Explorer 打开（mlir-opt）</strong>，点开就是 trunk 版 <code>mlir-opt</code> 在跑，改一行立刻看结果。第一、三部分的概念章这样读完全够；另有浏览器里直接运行的 Python 模拟器讲机制。只有第 7–12 章（造方言）和第 24–25 章（落地）真的需要本地工具链。</p>
+<h2>2. 编出来的工具各管什么</h2>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>干什么</th>
+<th>本书哪里用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>mlir-opt</code></td>
+<td>读 <code>.mlir</code> → 跑 pass/管线 → 打印 <code>.mlir</code>。<strong>全书主力</strong></td>
+<td>第 3 章起处处</td>
+</tr>
+<tr>
+<td><code>mlir-translate</code></td>
+<td>IR ↔ 外部格式互转（如 <code>--mlir-to-llvmir</code>）</td>
+<td>第 24 章</td>
+</tr>
+<tr>
+<td><code>mlir-tblgen</code></td>
+<td>把 <code>.td</code>（ODS）生成 C++ 头/实现</td>
+<td>第 7–9 章</td>
+</tr>
+<tr>
+<td><code>mlir-runner</code></td>
+<td>把 IR 交给 JIT 直接跑（旧名 <code>mlir-cpu-runner</code>）</td>
+<td>第 24 章</td>
+</tr>
+<tr>
+<td><code>mlir-lsp-server</code></td>
+<td>编辑器里的 MLIR 补全/跳转（VS Code 装 &quot;MLIR&quot; 插件）</td>
+<td>写 pix 时的生产力工具</td>
+</tr>
+<tr>
+<td><code>mlir-reduce</code></td>
+<td>自动缩小一个触发崩溃的 IR 输入</td>
+<td>第 17 章调试</td>
+</tr>
+<tr>
+<td><code>lit</code> / <code>FileCheck</code></td>
+<td>测试驱动与输出匹配</td>
+<td>第 12 章</td>
+</tr>
+</tbody></table>
+<h2>3. out-of-tree 项目模板</h2>
+<p>第 7 章会把这套骨架逐行拆开讲，这里先给出最小形态，方便你现在就确认环境是通的。关键只有一句 <code>find_package(MLIR)</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">cmake</span></div>
+  <pre class="line-numbers"><code class="language-cmake"># CMakeLists.txt 的开头
+cmake_minimum_required(VERSION 3.20)
+project(pix LANGUAGES CXX C)
+
+find_package(MLIR REQUIRED CONFIG)          # ← 由 MLIR_DIR 指过来
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
+include(AddLLVM)
+include(AddMLIR)
+include(TableGen)</code></pre>
+</div><p>配置时把 <code>MLIR_DIR</code> 指到安装树或构建树里的 <code>lib/cmake/mlir</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cmake -G Ninja -S books/inside-mlir/code/pix -B /tmp/pix-build \
+  -DMLIR_DIR=$HOME/llvm-project/build/lib/cmake/mlir \
+  -DLLVM_DIR=$HOME/llvm-project/build/lib/cmake/llvm \
+  -DCMAKE_BUILD_TYPE=Release
+ninja -C /tmp/pix-build</code></pre>
+</div><p>本书带了脚本替你做这件事（含参数探测与错误提示）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-mlir/verify/verify-pix.sh          # 构建 code/pix 并跑 lit 测试</code></pre>
+</div><h2>4. 常用命令速查</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># —— 看 IR 与 pass ——
+mlir-opt input.mlir                                  # 只解析 + verify + 打印回来（round-trip）
+mlir-opt input.mlir --verify-roundtrip               # 再确认打印出来的还能重新解析成同一个 IR
+mlir-opt input.mlir --mlir-print-op-generic          # 用通用格式打印（第 3 章：通用格式才是真相）
+mlir-opt input.mlir --canonicalize --cse             # 按顺序跑几个 pass
+mlir-opt input.mlir --pass-pipeline='builtin.module(func.func(canonicalize,cse))'
+                                                     # 嵌套管线：第 13 章讲它为什么长这样
+mlir-opt input.mlir --canonicalize --mlir-print-ir-after-all   # 每个 pass 后都打印一遍
+mlir-opt input.mlir --canonicalize --mlir-print-ir-after-change # 只在 IR 真变了时打印
+mlir-opt input.mlir --allow-unregistered-dialect     # 允许没注册的方言（手写实验 IR 时很方便）
+
+# —— 出问题时 ——
+# 注意：--debug-only 需要开了断言的构建（见上文），且 DEBUG_TYPE 名以源码里的
+# `#define DEBUG_TYPE` 为准（grep 一下就知道）。网页上的 CE 按钮跑的是关断言的构建，没有这个选项。
+mlir-opt input.mlir --debug-only=greedy-rewriter     # 看 pattern 驱动到底在试什么（第 14 章）
+mlir-opt input.mlir --debug-only=dialect-conversion  # 看合法化卡在哪个 op（第 17 章）
+mlir-opt input.mlir --mlir-print-ir-tree-dir=/tmp/ir # 每步 IR 落盘成目录树，便于 diff
+mlir-opt input.mlir --mlir-pass-pipeline-crash-reproducer=/tmp/repro.mlir
+
+# —— 查清单 ——
+mlir-opt --show-dialects                             # 注册了哪些方言
+mlir-opt --help | less                               # 所有 pass 与选项（最终真相）
+
+# —— 落地 ——
+mlir-opt input.mlir --convert-to-llvm                # 下降到 llvm 方言（第 24 章）
+mlir-translate llvm.mlir --mlir-to-llvmir            # llvm 方言 → 真正的 .ll
+mlir-runner input.mlir -e main --entry-point-result=void \
+  --shared-libs=$MLIR_BIN/../lib/libmlir_c_runner_utils.so     # JIT 直接跑
+
+# —— 生成 ODS 代码（第 8 章会看生成出来的东西）——
+mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td
+mlir-tblgen -gen-op-defs  -I $(llvm-config --includedir) PixOps.td
+mlir-tblgen -gen-dialect-doc -I $(llvm-config --includedir) PixOps.td   # 自动生成方言文档</code></pre>
+</div><h2>5. 校验本书的代码</h2>
+<p>书里的 MLIR 代码块不是抄来的伪 IR，都过了工具。你也可以自己验一遍：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-mlir/verify/verify-mlir.sh                 # 需要本地 mlir-opt
+CE=1 books/inside-mlir/verify/verify-mlir.sh            # 没装本地工具，走 Compiler Explorer
+books/inside-mlir/verify/verify-mlir.sh ch16 ch17       # 只验指定章</code></pre>
+</div><p>细节（<code>// RUN:</code> 行的约定、各语言默认参数）见 <code>books/inside-mlir/verify/README.md</code>。</p>
+<h2>6. 顺手配好的两件小事</h2>
+<ul>
+<li><strong>编辑器</strong>：VS Code 装 MLIR 官方插件，指向你的 <code>mlir-lsp-server</code>；<code>.mlir</code> 里能补全 op 名、跳转到方言定义、悬停看 op 文档。写 pix 时它比 grep 快得多。</li>
+<li><strong>一份可 grep 的源码</strong>：全书的源码锚点都假设你手边有 <code>llvm-project</code>。哪怕你走的是发行版包那条路，也建议 <code>git clone --depth=1</code> 一份源码放着——读到 <code>RewritePattern</code> 就去 <code>grep -rn &quot;class RewritePattern&quot; mlir/include/</code>，亲眼确认比记住结论重要。</li>
+</ul>
+<hr>
+<p><strong>这份附录的要点</strong></p>
+<ul>
+<li>本书基线是 <strong>LLVM/MLIR 23.1.x</strong>，源码锚点用类名与函数名而非行号；工具的 <code>--help</code> 永远是最终真相。</li>
+<li>拿到 MLIR 有三条路：发行版包（快）、源码构建（要造方言必走）、什么都不装（点网页上的 Compiler Explorer 按钮）。</li>
+<li>源码构建<strong>务必开 <code>LLVM_ENABLE_ASSERTIONS=ON</code></strong>——MLIR 的不变式靠断言兜住，关了就从&quot;当场报错&quot;退化成&quot;结果诡异&quot;。</li>
+<li>out-of-tree 项目的全部秘密就是 <code>find_package(MLIR REQUIRED CONFIG)</code> + <code>MLIR_DIR</code>，第 7 章详解。</li>
+<li><code>mlir-opt</code> 是全书主力；调试三件套是 <code>--mlir-print-ir-after-change</code>、<code>--debug-only=…</code>、<code>--mlir-print-ir-tree-dir</code>。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch28.html">← 第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a>
+  <a class="nav-next" href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li class="active"><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>你已经有 LLVM IR 了。它跨语言、跨芯片、能落盘、有一整套优化管线——按第一直觉，再造一层中间表示是多余的。这一章要说明白：<strong>LLVM IR 的问题不是它不好，而是它站得太低</strong>。当你要表达「一次张量加法」「这个循环可并行」「这块内存归谁」时，LLVM IR 已经把这些信息拆成标量指令和分支了，而拆解是不可逆的。</p>
+<p>读完你会拿到三样东西：一，能说清 LLVM IR 的三个具体天花板（过早下降、类型系统固定、每个领域都在重造基础设施），并亲手用一个浏览器里能跑的小程序量出「同一个优化决定在高层和低层分别要证明几个条件」；二，MLIR 对这三点的回答——<strong>可扩展的 op、多方言共存、渐进下降</strong>；三，一个贯穿全书的认识：<strong>MLIR 不是一种 IR，而是造 IR 的框架</strong>，所以读任何 MLIR 项目的第一个问题都是「它有哪些方言、每层是什么抽象」。</p>
+</div><h2>先看一眼：同一个计算，两种高度</h2>
+<p>不铺垫概念，先看东西。下面这段 MLIR 描述的是「两张 4×4 的图相加，再整体乘 2」：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6ImZ1bmMuZnVuYyBAYWRkX3RoZW5fc2NhbGUoJWE6IHRlbnNvcjw0eDR4ZjMyPiwgJWI6IHRlbnNvcjw0eDR4ZjMyPikgLT4gdGVuc29yPDR4NHhmMzI%2BIHtcbiAgJXN1bSA9IGFyaXRoLmFkZGYgJWEsICViIDogdGVuc29yPDR4NHhmMzI%2BXG4gICV0d28gPSBhcml0aC5jb25zdGFudCBkZW5zZTwyLjA%2BIDogdGVuc29yPDR4NHhmMzI%2BXG4gICVvdXQgPSBhcml0aC5tdWxmICVzdW0sICV0d28gOiB0ZW5zb3I8NHg0eGYzMj5cbiAgcmV0dXJuICVvdXQgOiB0ZW5zb3I8NHg0eGYzMj5cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6IiJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">func.func @add_then_scale(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %sum = arith.addf %a, %b : tensor&lt;4x4xf32&gt;
+  %two = arith.constant dense&lt;2.0&gt; : tensor&lt;4x4xf32&gt;
+  %out = arith.mulf %sum, %two : tensor&lt;4x4xf32&gt;
+  return %out : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt input.mlir</code></div>
+</div><p>注意 <code>tensor&lt;4x4xf32&gt;</code> 是<strong>类型</strong>，<code>arith.addf</code> 作用在整张 4×4 上——「对应位置相加」这件事是 op 的语义，没有循环，没有下标，没有内存。</p>
+<p>同一个计算，下降一层之后是这样（循环显式了，值变成了内存）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6ImZ1bmMuZnVuYyBAYWRkX3RoZW5fc2NhbGUoJWE6IG1lbXJlZjw0eDR4ZjMyPiwgJWI6IG1lbXJlZjw0eDR4ZjMyPiwgJW91dDogbWVtcmVmPDR4NHhmMzI%2BKSB7XG4gICVjMCA9IGFyaXRoLmNvbnN0YW50IDAgOiBpbmRleFxuICAlYzEgPSBhcml0aC5jb25zdGFudCAxIDogaW5kZXhcbiAgJWM0ID0gYXJpdGguY29uc3RhbnQgNCA6IGluZGV4XG4gICV0d28gPSBhcml0aC5jb25zdGFudCAyLjAgOiBmMzJcbiAgc2NmLmZvciAlaSA9ICVjMCB0byAlYzQgc3RlcCAlYzEge1xuICAgIHNjZi5mb3IgJWogPSAlYzAgdG8gJWM0IHN0ZXAgJWMxIHtcbiAgICAgICVhdiA9IG1lbXJlZi5sb2FkICVhWyVpLCAlal0gOiBtZW1yZWY8NHg0eGYzMj5cbiAgICAgICVidiA9IG1lbXJlZi5sb2FkICViWyVpLCAlal0gOiBtZW1yZWY8NHg0eGYzMj5cbiAgICAgICVzID0gYXJpdGguYWRkZiAlYXYsICVidiA6IGYzMlxuICAgICAgJW0gPSBhcml0aC5tdWxmICVzLCAldHdvIDogZjMyXG4gICAgICBtZW1yZWYuc3RvcmUgJW0sICVvdXRbJWksICVqXSA6IG1lbXJlZjw0eDR4ZjMyPlxuICAgIH1cbiAgfVxuICByZXR1cm5cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6IiJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">func.func @add_then_scale(%a: memref&lt;4x4xf32&gt;, %b: memref&lt;4x4xf32&gt;, %out: memref&lt;4x4xf32&gt;) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %two = arith.constant 2.0 : f32
+  scf.for %i = %c0 to %c4 step %c1 {
+    scf.for %j = %c0 to %c4 step %c1 {
+      %av = memref.load %a[%i, %j] : memref&lt;4x4xf32&gt;
+      %bv = memref.load %b[%i, %j] : memref&lt;4x4xf32&gt;
+      %s = arith.addf %av, %bv : f32
+      %m = arith.mulf %s, %two : f32
+      memref.store %m, %out[%i, %j] : memref&lt;4x4xf32&gt;
+    }
+  }
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt input.mlir</code></div>
+</div><p>两段都是合法的 MLIR，都能被同一个 <code>mlir-opt</code> 读进来、验证、打印出去。<strong>这就是 MLIR 与 LLVM IR 最表层的区别：抽象层不是固定的一层，而是你可以选的一叠。</strong> 第二段已经很接近 LLVM IR 了（再降一步就是分支和裸指针）；第一段在 LLVM IR 里根本没法表达——它没有 <code>tensor</code> 类型，也没有「整张相加」这个指令。</p>
+<p>这个差别听起来只是&quot;方便&quot;，但它决定了优化能不能做。下面这一节说清为什么。</p>
+<h2>天花板一：过早下降，信息是不可逆地丢的</h2>
+<p>把上面第一段变成第二段，是一个**下降（lowering）**动作。下降永远在丢信息：形状、逐点语义、&quot;这个中间结果只被用一次&quot;都从类型和 def-use 关系里，掉到了循环上下界、下标表达式、内存读写里。</p>
+<p>丢了信息，优化就得&quot;考古&quot;把它挖回来。挖，就得证明。看一个最普通的优化：把两趟遍历<strong>融合</strong>成一趟（少一次写、少一次读、少一块中间存储）。</p>
+<p>在高层，这个决定几乎是免费的：<code>%sum</code> 的类型写着形状，def-use 边上写着&quot;只有一个消费者&quot;，两条就够。在标量循环上，同样的决定要靠循环分析和依赖分析逐条证明：嵌套深度、上下界步长、归纳变量、下标表达式、有没有别的读者、会不会别名。下面这段代码把两边要证明的条件<strong>数出来</strong>——直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E5%90%8C%E4%B8%80%E4%B8%AA%E4%BC%98%E5%8C%96%E5%86%B3%E5%AE%9A%EF%BC%88%E6%8A%8A%E4%B8%A4%E8%B6%9F%E9%81%8D%E5%8E%86%E8%9E%8D%E5%90%88%E6%88%90%E4%B8%80%E8%B6%9F%EF%BC%89%EF%BC%8C%E5%9C%A8%22%E9%AB%98%E5%B1%82%20IR%22%E5%92%8C%22%E6%A0%87%E9%87%8F%E5%BE%AA%E7%8E%AF%22%E4%B8%8A%E5%88%86%E5%88%AB%E8%A6%81%E4%BB%98%E5%A4%9A%E5%B0%91%E4%BB%A3%E4%BB%B7%E3%80%82%0A%23%20%E8%BF%99%E6%AE%B5%E4%BB%A3%E7%A0%81%E4%B8%8D%E4%BE%9D%E8%B5%96%E4%BB%BB%E4%BD%95%E5%BA%93%EF%BC%8C%E7%9B%B4%E6%8E%A5%E8%B7%91%E3%80%82%0A%0A%23%20----------%20%E9%AB%98%E5%B1%82%EF%BC%9A%E8%AF%AD%E4%B9%89%E5%B0%B1%E6%91%86%E5%9C%A8%20op%20%E4%B8%8A%20----------%0A%23%20addf(A%2C%20B)%20-%3E%20T1%20%EF%BC%9Bmulf(T1%2C%20two)%20-%3E%20OUT%20%EF%BC%8C%E9%83%BD%E6%98%AF%E6%95%B4%E5%BC%A0%204x4%20%E5%BC%A0%E9%87%8F%E4%B8%8A%E7%9A%84%E4%B8%80%E6%AC%A1%E8%BF%90%E7%AE%97%0Ahigh%20%3D%20%5B%0A%20%20%20%20%7B%22op%22%3A%20%22arith.addf%22%2C%20%22ins%22%3A%20%5B%22A%22%2C%20%22B%22%5D%2C%20%20%20%20%22out%22%3A%20%22T1%22%2C%20%20%22shape%22%3A%20(4%2C%204)%7D%2C%0A%20%20%20%20%7B%22op%22%3A%20%22arith.mulf%22%2C%20%22ins%22%3A%20%5B%22T1%22%2C%20%22two%22%5D%2C%20%22out%22%3A%20%22OUT%22%2C%20%22shape%22%3A%20(4%2C%204)%7D%2C%0A%5D%0A%0Adef%20can_fuse_high(ops)%3A%0A%20%20%20%20prod%2C%20cons%20%3D%20ops%5B0%5D%2C%20ops%5B1%5D%0A%20%20%20%20users%20%3D%20%5Bo%20for%20o%20in%20ops%20if%20prod%5B%22out%22%5D%20in%20o%5B%22ins%22%5D%5D%0A%20%20%20%20return%20%5B%0A%20%20%20%20%20%20%20%20(%22%E4%B8%A4%E4%B8%AA%20op%20%E7%9A%84%E5%BD%A2%E7%8A%B6%E4%B8%80%E8%87%B4%22%2C%20prod%5B%22shape%22%5D%20%3D%3D%20cons%5B%22shape%22%5D)%2C%0A%20%20%20%20%20%20%20%20(%22%E4%B8%AD%E9%97%B4%E7%BB%93%E6%9E%9C%E5%8F%AA%E6%9C%89%E4%B8%80%E4%B8%AA%E6%B6%88%E8%B4%B9%E8%80%85%22%2C%20len(users)%20%3D%3D%201)%2C%0A%20%20%20%20%5D%0A%0A%23%20----------%20%E4%BD%8E%E5%B1%82%EF%BC%9A%E5%90%8C%E4%B8%80%E6%AE%B5%E8%AE%A1%E7%AE%97%E8%A2%AB%E6%8B%86%E6%88%90%E6%A0%87%E9%87%8F%E5%BE%AA%E7%8E%AF%E4%B9%8B%E5%90%8E%20----------%0A%23%20for%20i%20in%200..4%3A%20for%20j%20in%200..4%3A%20T1%5Bi%5D%5Bj%5D%20%3D%20A%5Bi%5D%5Bj%5D%20%2B%20B%5Bi%5D%5Bj%5D%0A%23%20for%20i%20in%200..4%3A%20for%20j%20in%200..4%3A%20OUT%5Bi%5D%5Bj%5D%20%3D%20T1%5Bi%5D%5Bj%5D%20*%202.0%0Adef%20loop(bounds%2C%20reads%2C%20write%2C%20idx)%3A%0A%20%20%20%20return%20%7B%22bounds%22%3A%20bounds%2C%20%22reads%22%3A%20reads%2C%20%22write%22%3A%20write%2C%20%22idx%22%3A%20idx%7D%0A%0Anest1%20%3D%20loop(%5B(0%2C%204%2C%201)%2C%20(0%2C%204%2C%201)%5D%2C%20%5B%22A%22%2C%20%22B%22%5D%2C%20%22T1%22%2C%20(%22i%22%2C%20%22j%22))%0Anest2%20%3D%20loop(%5B(0%2C%204%2C%201)%2C%20(0%2C%204%2C%201)%5D%2C%20%5B%22T1%22%5D%2C%20%20%20%20%20%22OUT%22%2C%20(%22i%22%2C%20%22j%22))%0A%0Adef%20can_fuse_low(n1%2C%20n2%2C%20extra_readers%3D())%3A%0A%20%20%20%20%23%20%E8%BF%99%E4%BA%9B%E6%AD%A3%E6%98%AF%E7%9C%9F%E5%AE%9E%E7%BC%96%E8%AF%91%E5%99%A8%E9%87%8C%20loop%20fusion%20%E5%BF%85%E9%A1%BB%E9%80%90%E6%9D%A1%E8%AF%81%E6%98%8E%E7%9A%84%E5%89%8D%E6%8F%90%0A%20%20%20%20same_depth%20%3D%20len(n1%5B%22bounds%22%5D)%20%3D%3D%20len(n2%5B%22bounds%22%5D)%0A%20%20%20%20same_trip%20%3D%20n1%5B%22bounds%22%5D%20%3D%3D%20n2%5B%22bounds%22%5D%0A%20%20%20%20same_idx%20%3D%20n1%5B%22idx%22%5D%20%3D%3D%20n2%5B%22idx%22%5D%0A%20%20%20%20%23%20%E7%94%9F%E4%BA%A7%E8%80%85%E5%86%99%E8%BF%9B%20T1%20%E7%9A%84%E4%B8%8B%E6%A0%87%20%E5%92%8C%20%E6%B6%88%E8%B4%B9%E8%80%85%E8%AF%BB%20T1%20%E7%9A%84%E4%B8%8B%E6%A0%87%E5%BF%85%E9%A1%BB%E9%80%90%E7%BB%B4%E7%9B%B8%E5%90%8C%EF%BC%8C%E5%90%A6%E5%88%99%E4%B8%8D%E6%98%AF%22%E9%80%90%E7%82%B9%22%E5%85%B3%E7%B3%BB%0A%20%20%20%20same_subscript%20%3D%20n1%5B%22idx%22%5D%20%3D%3D%20n2%5B%22idx%22%5D%0A%20%20%20%20no_other_reader%20%3D%20n1%5B%22write%22%5D%20not%20in%20extra_readers%0A%20%20%20%20%23%20%E6%98%AF%E5%90%A6%E5%8F%AF%E8%83%BD%E4%B8%8E%E5%88%AB%E7%9A%84%E6%95%B0%E7%BB%84%E9%87%8D%E5%8F%A0%EF%BC%88%E7%9C%9F%E5%AE%9E%E7%BC%96%E8%AF%91%E5%99%A8%E8%A6%81%E9%9D%A0%E5%88%AB%E5%90%8D%E5%88%86%E6%9E%90%EF%BC%9B%E8%BF%99%E9%87%8C%E5%81%87%E8%AE%BE%E5%B7%B2%E7%9F%A5%E4%B8%8D%E9%87%8D%E5%8F%A0%EF%BC%89%0A%20%20%20%20no_alias%20%3D%20n2%5B%22write%22%5D%20not%20in%20(n1%5B%22reads%22%5D%20%2B%20%5Bn1%5B%22write%22%5D%5D)%0A%20%20%20%20return%20%5B%0A%20%20%20%20%20%20%20%20(%22%E4%B8%A4%E4%B8%AA%E5%BE%AA%E7%8E%AF%E5%B5%8C%E5%A5%97%E6%B7%B1%E5%BA%A6%E7%9B%B8%E5%90%8C%22%2C%20same_depth)%2C%0A%20%20%20%20%20%20%20%20(%22%E6%AF%8F%E4%B8%80%E5%B1%82%E7%9A%84%E4%B8%8A%E4%B8%8B%E7%95%8C%E4%B8%8E%E6%AD%A5%E9%95%BF%E9%83%BD%E7%9B%B8%E5%90%8C%22%2C%20same_trip)%2C%0A%20%20%20%20%20%20%20%20(%22%E5%BD%92%E7%BA%B3%E5%8F%98%E9%87%8F%E7%9A%84%E4%BD%BF%E7%94%A8%E6%96%B9%E5%BC%8F%E7%9B%B8%E5%90%8C%22%2C%20same_idx)%2C%0A%20%20%20%20%20%20%20%20(%22%E5%86%99%20T1%20%E7%9A%84%E4%B8%8B%E6%A0%87%20%3D%3D%20%E8%AF%BB%20T1%20%E7%9A%84%E4%B8%8B%E6%A0%87%EF%BC%88%E9%80%90%E7%82%B9%E4%BE%9D%E8%B5%96%EF%BC%89%22%2C%20same_subscript)%2C%0A%20%20%20%20%20%20%20%20(%22T1%20%E6%B2%A1%E6%9C%89%E5%BE%AA%E7%8E%AF%E4%B9%8B%E5%A4%96%E7%9A%84%E5%85%B6%E5%AE%83%E8%AF%BB%E8%80%85%22%2C%20no_other_reader)%2C%0A%20%20%20%20%20%20%20%20(%22OUT%20%E4%B8%8D%E4%B8%8E%20A%2FB%2FT1%20%E5%88%AB%E5%90%8D%E9%87%8D%E5%8F%A0%22%2C%20no_alias)%2C%0A%20%20%20%20%5D%0A%0Adef%20report(title%2C%20checks)%3A%0A%20%20%20%20print(f%22%7Btitle%7D%EF%BC%9A%E9%9C%80%E8%A6%81%E8%AF%81%E6%98%8E%20%7Blen(checks)%7D%20%E4%B8%AA%E6%9D%A1%E4%BB%B6%22)%0A%20%20%20%20for%20name%2C%20ok%20in%20checks%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7B'%E2%9C%93'%20if%20ok%20else%20'%E2%9C%97'%7D%20%7Bname%7D%22)%0A%20%20%20%20print(%22%20%20%3D%3E%20%22%20%2B%20(%22%E5%8F%AF%E4%BB%A5%E8%9E%8D%E5%90%88%22%20if%20all(ok%20for%20_%2C%20ok%20in%20checks)%20else%20%22%E6%94%BE%E5%BC%83%E8%9E%8D%E5%90%88%EF%BC%88%E4%BF%9D%E5%AE%88%E5%A4%84%E7%90%86%EF%BC%89%22))%0A%20%20%20%20print()%0A%0Areport(%22%E9%AB%98%E5%B1%82%EF%BC%88tensor%20%E4%B8%8A%E7%9A%84%E4%B8%A4%E4%B8%AA%20op%EF%BC%89%22%2C%20can_fuse_high(high))%0Areport(%22%E4%BD%8E%E5%B1%82%EF%BC%88%E4%B8%A4%E4%B8%AA%E6%A0%87%E9%87%8F%E5%BE%AA%E7%8E%AF%E5%B5%8C%E5%A5%97%EF%BC%89%22%2C%20can_fuse_low(nest1%2C%20nest2))%0A%0A%23%20%E7%8E%B0%E5%9C%A8%E8%AE%A9%E5%88%AB%E5%A4%84%E4%B9%9F%E8%AF%BB%E4%B8%80%E6%AC%A1%20T1%E2%80%94%E2%80%94%E6%AF%94%E5%A6%82%E8%B0%83%E8%AF%95%E6%89%93%E5%8D%B0%E3%80%81%E6%88%96%E8%80%85%E5%8F%A6%E4%B8%80%E4%B8%AA%E5%87%BD%E6%95%B0%E6%8B%BF%E8%B5%B0%E4%BA%86%E5%AE%83%0Areport(%22%E4%BD%8E%E5%B1%82%EF%BC%8C%E4%B8%94%20T1%20%E5%9C%A8%E5%88%AB%E5%A4%84%E4%B9%9F%E8%A2%AB%E8%AF%BB%E4%BA%86%E4%B8%80%E6%AC%A1%22%2C%20can_fuse_low(nest1%2C%20nest2%2C%20extra_readers%3D(%22T1%22%2C)))%0Aprint(%22%E6%B3%A8%E6%84%8F%E6%9C%80%E5%90%8E%E4%B8%80%E7%A7%8D%E6%83%85%E5%86%B5%EF%BC%9A%E9%AB%98%E5%B1%82%20IR%20%E9%87%8C'%E8%B0%81%E7%94%A8%E4%BA%86%E8%BF%99%E4%B8%AA%E5%80%BC'%E6%98%AF%20def-use%20%E8%BE%B9%E4%B8%8A%E4%B8%80%E7%9C%BC%E5%8F%AF%E8%A7%81%E7%9A%84%EF%BC%9B%22)%0Aprint(%22%E8%80%8C%E5%9C%A8%E6%A0%87%E9%87%8F%E5%BE%AA%E7%8E%AF%E9%87%8C%EF%BC%8C%E8%BF%99%E4%BB%B6%E4%BA%8B%E5%BE%97%E9%9D%A0%E5%88%AB%E5%90%8D%E5%88%86%E6%9E%90%E5%92%8C%E4%BE%9D%E8%B5%96%E5%88%86%E6%9E%90%E5%8E%BB'%E8%80%83%E5%8F%A4'%E6%89%8D%E8%83%BD%E7%9F%A5%E9%81%93%E3%80%82%22)"># 同一个优化决定（把两趟遍历融合成一趟），在"高层 IR"和"标量循环"上分别要付多少代价。
+# 这段代码不依赖任何库，直接跑。
+
+# ---------- 高层：语义就摆在 op 上 ----------
+# addf(A, B) -&gt; T1 ；mulf(T1, two) -&gt; OUT ，都是整张 4x4 张量上的一次运算
+high = [
+    {"op": "arith.addf", "ins": ["A", "B"],    "out": "T1",  "shape": (4, 4)},
+    {"op": "arith.mulf", "ins": ["T1", "two"], "out": "OUT", "shape": (4, 4)},
+]
+
+def can_fuse_high(ops):
+    prod, cons = ops[0], ops[1]
+    users = [o for o in ops if prod["out"] in o["ins"]]
+    return [
+        ("两个 op 的形状一致", prod["shape"] == cons["shape"]),
+        ("中间结果只有一个消费者", len(users) == 1),
+    ]
+
+# ---------- 低层：同一段计算被拆成标量循环之后 ----------
+# for i in 0..4: for j in 0..4: T1[i][j] = A[i][j] + B[i][j]
+# for i in 0..4: for j in 0..4: OUT[i][j] = T1[i][j] * 2.0
+def loop(bounds, reads, write, idx):
+    return {"bounds": bounds, "reads": reads, "write": write, "idx": idx}
+
+nest1 = loop([(0, 4, 1), (0, 4, 1)], ["A", "B"], "T1", ("i", "j"))
+nest2 = loop([(0, 4, 1), (0, 4, 1)], ["T1"],     "OUT", ("i", "j"))
+
+def can_fuse_low(n1, n2, extra_readers=()):
+    # 这些正是真实编译器里 loop fusion 必须逐条证明的前提
+    same_depth = len(n1["bounds"]) == len(n2["bounds"])
+    same_trip = n1["bounds"] == n2["bounds"]
+    same_idx = n1["idx"] == n2["idx"]
+    # 生产者写进 T1 的下标 和 消费者读 T1 的下标必须逐维相同，否则不是"逐点"关系
+    same_subscript = n1["idx"] == n2["idx"]
+    no_other_reader = n1["write"] not in extra_readers
+    # 是否可能与别的数组重叠（真实编译器要靠别名分析；这里假设已知不重叠）
+    no_alias = n2["write"] not in (n1["reads"] + [n1["write"]])
+    return [
+        ("两个循环嵌套深度相同", same_depth),
+        ("每一层的上下界与步长都相同", same_trip),
+        ("归纳变量的使用方式相同", same_idx),
+        ("写 T1 的下标 == 读 T1 的下标（逐点依赖）", same_subscript),
+        ("T1 没有循环之外的其它读者", no_other_reader),
+        ("OUT 不与 A/B/T1 别名重叠", no_alias),
+    ]
+
+def report(title, checks):
+    print(f"{title}：需要证明 {len(checks)} 个条件")
+    for name, ok in checks:
+        print(f"  {'✓' if ok else '✗'} {name}")
+    print("  =&gt; " + ("可以融合" if all(ok for _, ok in checks) else "放弃融合（保守处理）"))
+    print()
+
+report("高层（tensor 上的两个 op）", can_fuse_high(high))
+report("低层（两个标量循环嵌套）", can_fuse_low(nest1, nest2))
+
+# 现在让别处也读一次 T1——比如调试打印、或者另一个函数拿走了它
+report("低层，且 T1 在别处也被读了一次", can_fuse_low(nest1, nest2, extra_readers=("T1",)))
+print("注意最后一种情况：高层 IR 里'谁用了这个值'是 def-use 边上一眼可见的；")
+print("而在标量循环里，这件事得靠别名分析和依赖分析去'考古'才能知道。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">高层（tensor 上的两个 op）：需要证明 2 个条件
+  ✓ 两个 op 的形状一致
+  ✓ 中间结果只有一个消费者
+  =&gt; 可以融合
+
+低层（两个标量循环嵌套）：需要证明 6 个条件
+  ✓ 两个循环嵌套深度相同
+  ✓ 每一层的上下界与步长都相同
+  ✓ 归纳变量的使用方式相同
+  ✓ 写 T1 的下标 == 读 T1 的下标（逐点依赖）
+  ✓ T1 没有循环之外的其它读者
+  ✓ OUT 不与 A/B/T1 别名重叠
+  =&gt; 可以融合
+
+低层，且 T1 在别处也被读了一次：需要证明 6 个条件
+  ✓ 两个循环嵌套深度相同
+  ✓ 每一层的上下界与步长都相同
+  ✓ 归纳变量的使用方式相同
+  ✓ 写 T1 的下标 == 读 T1 的下标（逐点依赖）
+  ✗ T1 没有循环之外的其它读者
+  ✓ OUT 不与 A/B/T1 别名重叠
+  =&gt; 放弃融合（保守处理）
+
+注意最后一种情况：高层 IR 里'谁用了这个值'是 def-use 边上一眼可见的；
+而在标量循环里，这件事得靠别名分析和依赖分析去'考古'才能知道。</code></pre>
+</div><p><strong>6 比 2 不是重点，重点是这 6 条里每一条都可能证不出来。</strong> 真实代码里上下界是动态的、下标带 <code>%</code> 和 <code>/</code>、指针来自参数无法确定别名——任何一条失败，优化就保守放弃。而在高层，这些信息压根没丢过，不需要证明。</p>
+<div class="keypoint">
+<strong>核心观念：优化的能力上限，由 IR 保留了多少语义决定。</strong>
+<p>「先降到一个低层 IR，再靠强大的分析把结构恢复出来」是过去三十年的主流路线，代价是分析越写越复杂、结论越来越保守。MLIR 的路线相反：<strong>在还知道语义的那一层就把变换做掉</strong>，然后再往下降一点。这就是后面会反复出现的<strong>渐进下降（progressive lowering）</strong>。</p>
+</div><h2>天花板二：类型和指令集是固定的</h2>
+<p>LLVM IR 的类型系统是机器视角的：整数、浮点、指针、定长向量、结构体、数组。指令集也是固定的一张表（<code>add</code>、<code>load</code>、<code>br</code>、<code>call</code>……），你不能&quot;注册&quot;一条新指令。</p>
+<p>于是当你想表达领域概念时，只剩三种绕法，每种都难受：</p>
+<ul>
+<li><strong>靠 intrinsic</strong>：<code>llvm.matrix.multiply.*</code>、<code>llvm.vector.reduce.*</code> 这类。能塞进去，但每加一个都要改 LLVM 本体，且优化器对它基本是黑盒。</li>
+<li><strong>靠 metadata</strong>：<code>!llvm.loop.parallel_accesses</code> 这种挂在指令上的注解。问题是 metadata <strong>可以被合法地丢掉</strong>——它的语义是&quot;提示&quot;，不是&quot;事实&quot;，所以优化器不能完全信任它，一次不小心的变换就把它抹了。</li>
+<li><strong>靠命名约定</strong>：把信息编码进函数名，前端和后端约定好。脆，且完全没有验证。</li>
+</ul>
+<p>三种绕法的共同点是：<strong>领域语义在 IR 里没有一等公民的地位</strong>。它没有类型、没有验证、没有打印格式、没有折叠规则。</p>
+<h2>天花板三：于是每个领域都在重造同一套基础设施</h2>
+<p>这才是真正推动 MLIR 诞生的那个观察。既然没法在 LLVM IR 里表达领域概念，各家就在 LLVM IR <strong>上面</strong>各造一层自己的 IR：</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>自建的中间表示</th>
+<th>为什么需要它</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Swift</td>
+<td>SIL</td>
+<td>要做所有权、协议派发、专门化</td>
+</tr>
+<tr>
+<td>Rust</td>
+<td>MIR</td>
+<td>要做借用检查、drop 插入</td>
+</tr>
+<tr>
+<td>TensorFlow / XLA</td>
+<td>HLO</td>
+<td>要做图级别的算子融合、布局选择</td>
+</tr>
+<tr>
+<td>Halide / TVM</td>
+<td>自己的调度 IR</td>
+<td>要把&quot;算什么&quot;和&quot;怎么算&quot;分开</td>
+</tr>
+<tr>
+<td>Fortran（flang）</td>
+<td>FIR</td>
+<td>要保留数组语义、等价声明</td>
+</tr>
+</tbody></table>
+<p>每一层都要重新实现同一堆东西：SSA 值与 def-use 链、基本块与 CFG、pass 管理与调度、常量折叠、CSE、位置信息（报错要指到源码行）、文本格式与序列化、verifier、还有测试工具。<strong>这些代码和领域无关，但每个项目都得写一遍。</strong></p>
+<p>MLIR 的出发点就是把这一层&quot;IR 的通用基础设施&quot;抽出来，做成可复用的库——你只定义<strong>自己领域的 op 和类型</strong>，SSA、region、pass 管线、打印解析、验证、诊断、测试工具全是现成的。</p>
+<div class="concept">
+<svg viewBox="0 0 700 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c1arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+  </defs>
+  <text x="14" y="20" font-size="13" font-weight="bold" fill="#6b7280">过去：每个领域自建一层，基础设施重写 N 遍</text>
+  <g font-size="10.5">
+    <rect x="14" y="34" width="120" height="58" rx="6" fill="#f5f5f5" stroke="#6b7280"/>
+    <text x="24" y="52" font-weight="bold" fill="#24292f">Swift SIL</text>
+    <text x="24" y="68" fill="#6b7280">SSA/CFG/pass/print</text>
+    <text x="24" y="83" fill="#6b7280">verifier/诊断/测试</text>
+    <rect x="146" y="34" width="120" height="58" rx="6" fill="#f5f5f5" stroke="#6b7280"/>
+    <text x="156" y="52" font-weight="bold" fill="#24292f">Rust MIR</text>
+    <text x="156" y="68" fill="#6b7280">SSA/CFG/pass/print</text>
+    <text x="156" y="83" fill="#6b7280">verifier/诊断/测试</text>
+    <rect x="278" y="34" width="120" height="58" rx="6" fill="#f5f5f5" stroke="#6b7280"/>
+    <text x="288" y="52" font-weight="bold" fill="#24292f">XLA HLO</text>
+    <text x="288" y="68" fill="#6b7280">SSA/CFG/pass/print</text>
+    <text x="288" y="83" fill="#6b7280">verifier/诊断/测试</text>
+    <rect x="410" y="34" width="120" height="58" rx="6" fill="#f5f5f5" stroke="#6b7280"/>
+    <text x="420" y="52" font-weight="bold" fill="#24292f">Halide IR</text>
+    <text x="420" y="68" fill="#6b7280">SSA/CFG/pass/print</text>
+    <text x="420" y="83" fill="#6b7280">verifier/诊断/测试</text>
+    <rect x="542" y="34" width="120" height="58" rx="6" fill="#f5f5f5" stroke="#6b7280"/>
+    <text x="552" y="52" font-weight="bold" fill="#24292f">FIR…</text>
+    <text x="552" y="68" fill="#6b7280">SSA/CFG/pass/print</text>
+    <text x="552" y="83" fill="#6b7280">verifier/诊断/测试</text>
+  </g>
+  <g stroke="#6b7280" stroke-width="1.2">
+    <line x1="74" y1="92" x2="300" y2="122" marker-end="url(#c1arr)"/>
+    <line x1="206" y1="92" x2="320" y2="122" marker-end="url(#c1arr)"/>
+    <line x1="338" y1="92" x2="340" y2="122" marker-end="url(#c1arr)"/>
+    <line x1="470" y1="92" x2="360" y2="122" marker-end="url(#c1arr)"/>
+    <line x1="602" y1="92" x2="380" y2="122" marker-end="url(#c1arr)"/>
+  </g>
+  <rect x="270" y="124" width="140" height="34" rx="6" fill="#eef0f2" stroke="#6b7280"/>
+  <text x="340" y="146" text-anchor="middle" font-size="12" font-weight="bold" fill="#24292f">LLVM IR</text>
+  <line x1="14" y1="176" x2="686" y2="176" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="198" font-size="13" font-weight="bold" fill="#2b6cb0">MLIR：基础设施共享一份，各领域只定义自己的 op 与类型</text>
+  <g font-size="10.5">
+    <rect x="14" y="212" width="120" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0"/>
+    <text x="24" y="230" font-weight="bold" fill="#2b6cb0">tt / ttg</text>
+    <text x="24" y="245" fill="#6b7280">Triton（第 26 章）</text>
+    <rect x="146" y="212" width="120" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0"/>
+    <text x="156" y="230" font-weight="bold" fill="#2b6cb0">flow / hal</text>
+    <text x="156" y="245" fill="#6b7280">IREE（第 27 章）</text>
+    <rect x="278" y="212" width="120" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0"/>
+    <text x="288" y="230" font-weight="bold" fill="#2b6cb0">fir / hlfir</text>
+    <text x="288" y="245" fill="#6b7280">flang（第 27 章）</text>
+    <rect x="410" y="212" width="120" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0"/>
+    <text x="420" y="230" font-weight="bold" fill="#2b6cb0">cir</text>
+    <text x="420" y="245" fill="#6b7280">ClangIR（第 28 章）</text>
+    <rect x="542" y="212" width="120" height="40" rx="6" fill="#fdf1ec" stroke="#e06a3b"/>
+    <text x="552" y="230" font-weight="bold" fill="#e06a3b">pix</text>
+    <text x="552" y="245" fill="#6b7280">你的（第 7 章起）</text>
+  </g>
+  <g stroke="#2b6cb0" stroke-width="1.2">
+    <line x1="74" y1="252" x2="300" y2="274" marker-end="url(#c1arr)"/>
+    <line x1="206" y1="252" x2="320" y2="274" marker-end="url(#c1arr)"/>
+    <line x1="338" y1="252" x2="340" y2="274" marker-end="url(#c1arr)"/>
+    <line x1="470" y1="252" x2="360" y2="274" marker-end="url(#c1arr)"/>
+    <line x1="602" y1="252" x2="380" y2="274" marker-end="url(#c1arr)"/>
+  </g>
+  <rect x="180" y="276" width="320" height="44" rx="8" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="340" y="295" text-anchor="middle" font-size="12" font-weight="bold" fill="#2b6cb0">MLIR 基础设施</text>
+  <text x="340" y="311" text-anchor="middle" font-size="10" fill="#24292f">op/region/SSA · pass 管线 · 打印解析 · verifier · 诊断 · lit 测试</text>
+</svg>
+<div class="caption">图 1-1　上半是 MLIR 之前的现实：每个领域自建一层 IR，把同一套通用机制重写一遍。下半是 MLIR 的主张：通用机制只实现一次，各领域只定义自己的 op 和类型——包括本书第 7 章起你要造的那个 pix</div>
+</div><h2>MLIR 的三个回答</h2>
+<h3>回答一：没有固定的指令集，op 是注册进来的</h3>
+<p>LLVM IR 里&quot;有哪些指令&quot;是写死在 <code>Instruction.def</code> 里的。MLIR 反过来：<strong>核心不认识任何具体的 op</strong>，它只知道&quot;op 有操作数、有结果、有属性、有 region&quot;这个骨架。具体的 <code>arith.addf</code>、<code>scf.for</code>、<code>memref.load</code> 都是各自的**方言（dialect）**注册进来的，和你自己将要写的 <code>pix.convolve</code> 地位完全平等——没有内建 op 与自定义 op 的等级差。</p>
+<p>想看这个骨架，把上面第一段代码用**通用格式（generic form）**打印出来：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-opt add_then_scale.mlir --mlir-print-op-generic</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">"builtin.module"() ({
+  "func.func"() &lt;{function_type = (tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt;, sym_name = "add_then_scale"}&gt; ({
+  ^bb0(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;):
+    %0 = "arith.addf"(%arg0, %arg1) &lt;{fastmath = #arith.fastmath&lt;none&gt;}&gt; : (tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt;
+    %1 = "arith.constant"() &lt;{value = dense&lt;2.000000e+00&gt; : tensor&lt;4x4xf32&gt;}&gt; : () -&gt; tensor&lt;4x4xf32&gt;
+    %2 = "arith.mulf"(%0, %1) &lt;{fastmath = #arith.fastmath&lt;none&gt;}&gt; : (tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt;
+    "func.return"(%2) : (tensor&lt;4x4xf32&gt;) -&gt; ()
+  }) : () -&gt; ()
+}) : () -&gt; ()</code></pre>
+</div><p>这段输出里有三件事值得停下来看：</p>
+<ol>
+<li><strong>一切都是 op</strong>。函数是一个 op（<code>&quot;func.func&quot;</code>），<strong>模块本身也是一个 op</strong>（<code>&quot;builtin.module&quot;</code>）。没有&quot;顶层容器&quot;这种特殊结构——第 2 章会讲这带来的巨大好处：pass 可以跑在任何 op 上。</li>
+<li><strong>每个 op 的写法是统一的</strong>：<code>&quot;方言.op名&quot;(操作数) &lt;{属性}&gt; ({嵌套的 region}) : (输入类型) -&gt; 输出类型</code>。你平时看到的 <code>arith.addf %a, %b : tensor&lt;4x4xf32&gt;</code> 只是这个统一形式的<strong>自定义简写</strong>（第 3 章、第 8 章会讲这个简写是怎么来的）。</li>
+<li><code>%0</code> 这些值、<code>^bb0</code> 这个块、块参数 <code>%arg0</code>——SSA 那套东西都在，但没有 <code>phi</code> 指令。MLIR 用<strong>块参数</strong>代替 phi，第 2 章细讲。</li>
+</ol>
+<h3>回答二：方言可以共存在同一个模块里</h3>
+<p>这是很多人第一次读 MLIR 时的困惑来源：一个函数里为什么既有 <code>linalg</code> 的 op，又有 <code>scf</code> 的循环，还有 <code>llvm</code> 的调用？</p>
+<p>因为 MLIR <strong>不要求一个模块里的 op 属于同一个方言</strong>。这不是妥协，而是设计目标：只有允许高层和低层 op 共存，才可能一步一步地降——每一步替换掉一部分 op，剩下的暂时不动。中间状态是&quot;混着的&quot;，但它仍然是<strong>合法的、可验证的、能打印出来的 IR</strong>。</p>
+<h3>回答三：渐进下降</h3>
+<p>于是编译过程不再是&quot;前端 → IR → 后端&quot;三段跳，而是一串小步：</p>
+<div class="concept">
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c1a2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+  <text x="14" y="20" font-size="13" font-weight="bold" fill="#24292f">渐进下降：每一级都是合法 IR，都能停下来 print / verify / 测试</text>
+  <g font-size="11">
+    <rect x="30" y="34" width="250" height="36" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+    <text x="44" y="57" font-weight="bold" fill="#2b6cb0">pix（你的领域方言）</text>
+    <text x="292" y="57" fill="#6b7280">形状、逐点/邻域语义都在</text>
+    <rect x="70" y="86" width="250" height="36" rx="6" fill="#eef4fb" stroke="#2b6cb0"/>
+    <text x="84" y="109" font-weight="bold" fill="#2b6cb0">linalg on tensor</text>
+    <text x="332" y="109" fill="#6b7280">迭代空间显式，可 tile / fuse</text>
+    <rect x="110" y="138" width="250" height="36" rx="6" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="124" y="161" font-weight="bold" fill="#3f9b5c">scf + memref</text>
+    <text x="372" y="161" fill="#6b7280">循环显式，值语义变内存语义</text>
+    <rect x="150" y="190" width="250" height="36" rx="6" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="164" y="213" font-weight="bold" fill="#3f9b5c">vector + cf</text>
+    <text x="412" y="213" fill="#6b7280">向量宽度、分支都定下来</text>
+    <rect x="190" y="242" width="250" height="36" rx="6" fill="#eef0f2" stroke="#6b7280"/>
+    <text x="204" y="265" font-weight="bold" fill="#24292f">llvm 方言 → LLVM IR</text>
+    <text x="452" y="265" fill="#6b7280">交给老朋友做机器码</text>
+  </g>
+  <g stroke="#e06a3b" stroke-width="1.5">
+    <line x1="60" y1="70" x2="90" y2="84" marker-end="url(#c1a2)"/>
+    <line x1="100" y1="122" x2="130" y2="136" marker-end="url(#c1a2)"/>
+    <line x1="140" y1="174" x2="170" y2="188" marker-end="url(#c1a2)"/>
+    <line x1="180" y1="226" x2="210" y2="240" marker-end="url(#c1a2)"/>
+  </g>
+  <text x="14" y="292" font-size="11" fill="#e06a3b">每一步只降一点 ——「该在哪一层做的变换，就在那一层做掉」</text>
+</svg>
+<div class="caption">图 1-2　渐进下降。关键不是层多，而是每一层都是完整的 IR：能 `mlir-opt` 打印、能过 verifier、能写 lit 测试。调试时你可以在任意一级喊停，看看是哪一步把 IR 弄坏的（第 3 章的 `--mlir-print-ir-after-change` 就是干这个的）</div>
+</div><p>这张图正好是本书第四部分的路线：第 20 章把 pix 降到 <code>linalg</code>，第 21 章在那一层做 tiling 和融合，第 22 章从 tensor 变 memref，第 23 章向量化，第 24 章落到 LLVM，第 25 章拐向 GPU。</p>
+<h2>一个要尽早接受的事实：MLIR 不是一种 IR</h2>
+<p>你可以准确地说「LLVM IR 长什么样」——它有固定的类型系统和指令表。但<strong>你没法说「MLIR 长什么样」</strong>，只能说：</p>
+<ul>
+<li>MLIR 的<strong>骨架</strong>长什么样：Operation / Region / Block / Value，加上属性和类型的唯一化（第 2、4 章）；</li>
+<li>你<strong>选了哪些方言</strong>，以及它们各自的抽象层次。</li>
+</ul>
+<p>所以读任何一个 MLIR 项目，第一个问题永远是：<strong>它定义了哪些方言，每层代表什么抽象，边界在哪里？</strong> Triton 的答案是 <code>tt</code> → <code>ttg</code>（第 26 章），IREE 的答案是 <code>flow</code> → <code>stream</code> → <code>hal</code>（第 27 章），flang 的答案是 <code>hlfir</code> → <code>fir</code>（第 27 章）。问对了这个问题，几十万行代码就有了骨架。</p>
+<div class="note">
+<strong>名字的由来</strong>
+<p>MLIR 最初是 <em>Multi-Level IR</em>（多层 IR）的缩写——"多层"正是它的全部主张。后来官方把它解释成"MLIR 就叫 MLIR"，因为它早已不只用于机器学习或某个特定层次；但记住"多层"这个原意，对理解设计最有帮助。</p>
+</div><h2>代价：这一层不是白拿的</h2>
+<p>这本书会老实讲代价，因为不讲的话你迟早自己踩到：</p>
+<ul>
+<li><strong>IR 变啰嗦。</strong> 通用格式那段输出你已经看到了。自定义格式能救回可读性，但那是你要<strong>自己写</strong>的（第 8 章）。</li>
+<li><strong>语义要你自己定义。</strong> 造了 <code>pix.convolve</code> 之后，它的验证规则、折叠规则、能不能被 CSE、有没有副作用，全得你告诉框架（第 10、11 章，以及第 5 章的 trait/interface）。LLVM IR 的 <code>add</code> 这些语义是现成的，你的 op 没有。</li>
+<li><strong>概念负担重。</strong> trait、interface、pattern、conversion、bufferization、transform——一堆词，且互相咬合。本书第一、二部分就是为了把这堆词变成手感。</li>
+<li><strong>编译时间与内存。</strong> 多层表示、频繁的 pattern 重写、字符串化的 op 名，都有成本。真实项目里 pass 管线的组织方式会直接决定编译时间（第 13 章）。</li>
+<li><strong>生态仍在动。</strong> pass 名改、接口调整、文档跟不上代码，是常态（附录 A 第 0 节的版本基线就是为此而立）。</li>
+</ul>
+<p><strong>什么时候值得付这个代价？</strong> 判断标准很简单：你的领域有没有&quot;降到标量循环之后就丢掉、且优化真的需要&quot;的语义。张量形状、并行性、内存所有权、数值语义——有，就值得；如果你只是要把一门普通命令式语言编译到 CPU，LLVM IR 直接用就好。</p>
+<h2>动手：三分钟把手感建起来</h2>
+<p>三条命令，都在本章的第一段代码上跑。没装 MLIR 也行——点代码块右上角的 <strong>🔗 在 Compiler Explorer 打开（mlir-opt）</strong> 就是同一件事（见附录 A）。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 1. 什么 pass 都不跑：解析 → 验证 → 打印回来。这一步过不了，说明 IR 本身有问题
+mlir-opt add_then_scale.mlir
+
+# 2. 看统一的骨架：所有自定义简写都还原成 "方言.op名"(...) 的形式
+mlir-opt add_then_scale.mlir --mlir-print-op-generic
+
+# 3. 跑一个真变换：把乘 1.0 这种废操作折掉
+mlir-opt redundant.mlir --canonicalize</code></pre>
+</div><p>第 3 条用下面这段（把系数从 2.0 改成 1.0，让它变成一次无意义的乘法）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXMgLS1jYW5vbmljYWxpemVcbmZ1bmMuZnVuYyBAcmVkdW5kYW50KCVhOiB0ZW5zb3I8NHg0eGYzMj4sICViOiB0ZW5zb3I8NHg0eGYzMj4pIC0%2BIHRlbnNvcjw0eDR4ZjMyPiB7XG4gICVzdW0gPSBhcml0aC5hZGRmICVhLCAlYiA6IHRlbnNvcjw0eDR4ZjMyPlxuICAlb25lID0gYXJpdGguY29uc3RhbnQgZGVuc2U8MS4wPiA6IHRlbnNvcjw0eDR4ZjMyPlxuICAlb3V0ID0gYXJpdGgubXVsZiAlc3VtLCAlb25lIDogdGVuc29yPDR4NHhmMzI%2BXG4gIHJldHVybiAlb3V0IDogdGVuc29yPDR4NHhmMzI%2BXG59IiwiY29tcGlsZXJzIjpbeyJpZCI6Im1saXJvcHR0cnVuayIsIm9wdGlvbnMiOiItLWNhbm9uaWNhbGl6ZSJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s --canonicalize
+func.func @redundant(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %sum = arith.addf %a, %b : tensor&lt;4x4xf32&gt;
+  %one = arith.constant dense&lt;1.0&gt; : tensor&lt;4x4xf32&gt;
+  %out = arith.mulf %sum, %one : tensor&lt;4x4xf32&gt;
+  return %out : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @redundant(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = arith.addf %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p>乘法和那个常量都不见了——<code>arith.mulf</code> 自己带的折叠规则认出了&quot;乘 1.0 等于没乘&quot;。<strong>注意这件事发生在 <code>tensor&lt;4x4xf32&gt;</code> 上，不是标量上</strong>：整张图的乘法一次就折掉了，不需要先展开成 16 次标量乘法再逐个折。这就是&quot;在还知道语义的那一层做变换&quot;最小的一个例子。</p>
+<p><strong>改一改，看看会怎样：</strong></p>
+<ol>
+<li>把 <code>dense&lt;1.0&gt;</code> 改成 <code>dense&lt;0.0&gt;</code>，再跑 <code>--canonicalize</code>。乘 0 被折掉了吗？想一想为什么浮点乘 0 不能随便折（提示：<code>NaN</code>、<code>-0.0</code>）——这正是第 11 章要讲的&quot;折叠规则必须是保语义的&quot;。</li>
+<li>把两个 <code>tensor&lt;4x4xf32&gt;</code> 改成 <code>tensor&lt;?x4xf32&gt;</code>（动态维度）。还能过 verifier 吗？形状检查放宽到什么程度？第 4 章讲类型，第 10 章讲验证。</li>
+<li>把 <code>arith.addf</code> 换成 <code>arith.addi</code>，但类型仍写 <code>tensor&lt;4x4xf32&gt;</code>。跑一下，报错会是 <code>operand #0 must be signless-non-zero-bitwidth-integer-like, but got &#39;tensor&lt;4x4xf32&gt;&#39;</code>——<strong>这句话不是手写的检查，而是 <code>arith.addi</code> 在它的 ODS 定义里声明的类型约束自动生成的</strong>。第 8 章你会亲手写这种约束，第 10 章讲它和 verifier 的关系。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>LLVM IR 的天花板不在&quot;不好&quot;，而在&quot;站得低&quot;：<strong>过早下降会不可逆地丢掉语义</strong>，优化只能靠分析去考古，而考古随时会失败——你已经亲手数过 2 个条件 vs 6 个条件的差别。</li>
+<li>它的类型系统与指令集是固定的，领域概念只能靠 intrinsic / metadata / 命名约定硬塞，都没有一等公民地位。</li>
+<li>结果是每个领域（Swift、Rust、XLA、Halide、Fortran）都自建一层 IR，把 SSA、pass 管线、打印解析、verifier、测试工具重写一遍。MLIR 把这套基础设施抽成库，<strong>你只定义自己的 op 和类型</strong>。</li>
+<li>MLIR 的三个回答：<strong>op 是注册进来的</strong>（连 module 和 func 都是 op）、<strong>方言可以共存</strong>、<strong>渐进下降</strong>（每一级都是可验证可打印的完整 IR）。</li>
+<li><strong>MLIR 不是一种 IR，是造 IR 的框架。</strong> 读任何 MLIR 项目先问：有哪些方言、每层什么抽象、边界在哪。</li>
+<li>代价是真实的：IR 啰嗦、语义要自己定义、概念负担重、编译开销、生态在动。值不值得，看你的领域有没有&quot;降下去就丢、但优化需要&quot;的语义。</li>
+</ul>
+<p>下一章我们把骨架本身拆开：<strong>Operation / Region / Block / Value</strong> 到底是什么数据结构，<code>%0</code> 和 <code>^bb0</code> 在内存里长什么样，为什么 MLIR 不需要 <code>phi</code> 指令——并与你熟悉的 LLVM IR 逐项对照。</p>
+
+<div class="chapter-nav">
+  <span></span>
+  <a class="nav-next" href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

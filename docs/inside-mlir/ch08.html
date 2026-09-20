@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li class="active"><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 7 章你写了 8 行 ODS，换来一个能用的 <code>pix.add</code>。这一章把那 8 行拆开，逐项讲清 <strong>ODS（Operation Definition Specification）</strong>：<code>arguments</code> / <code>results</code> 怎么声明类型约束、<code>assemblyFormat</code> 那套小语言怎么写、region 怎么在 ODS 里表达、以及 TableGen 到底替你生成了什么（<strong>七个 op 生成两千多行 C++</strong>，我们会直接把它调出来看）。</p>
+<p>同时把 pix 的 op 集补齐：<code>mul</code>、<code>scale</code>、<code>transpose</code>、<code>reduce</code>、以及带 region 的 <code>pipeline</code> + <code>yield</code>。每个 op 都挑了一个不同的知识点——<code>scale</code> 演示"两个操作数类型不同怎么办"，<code>transpose</code> 演示"结果类型和输入不一样"，<code>pipeline</code> 演示 region 与隐式终结符。</p>
+<p>最后一节最重要：<strong>ODS 拦得住什么、拦不住什么。</strong>你会看到 <code>pix.transpose</code> 把 4×8 "转置"成 4×8 照样通过验证——这不是 bug，是我们还没写 verifier（第 10 章）。分清"声明能自动保证的"和"必须自己写的"，是用好 ODS 的关键。</p>
+</div><h2>一份声明，两千多行 C++</h2>
+<p>先看投入产出比。pix 现在有 7 个 op，<code>.td</code> 文件一百多行。跑一遍 <code>mlir-tblgen</code> 看生成了什么规模：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-tblgen -gen-op-decls -I $LLVM_SRC/mlir/include -I include include/Pix/PixOps.td | wc -l   # 1024
+mlir-tblgen -gen-op-defs  -I $LLVM_SRC/mlir/include -I include include/Pix/PixOps.td | wc -l   # 1171</code></pre>
+</div><p>两千多行。它们不是模板套话，是实打实的东西。把 <code>AddOp</code> 那一段截出来看关键成员：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">class AddOp : public ::mlir::Op&lt;AddOp, /* 一长串 trait */ ...&gt; {
+public:
+  static constexpr ::llvm::StringLiteral getOperationName() { … }   // "pix.add"
+
+  // 类型化的访问器：不是 getOperand(0)，而是按名字取，且类型已经收窄
+  ::mlir::TypedValue&lt;::mlir::TensorType&gt; getLhs() { … }
+  ::mlir::TypedValue&lt;::mlir::TensorType&gt; getRhs() { … }
+  ::mlir::OpOperand &amp;getLhsMutable() { … }          // 想改这条 def-use 边时用它
+
+  // 五个 build 重载，从"什么都给"到"能推的都推"
+  static void build(OpBuilder &amp;, OperationState &amp;, Type result, Value lhs, Value rhs);
+  static void build(OpBuilder &amp;, OperationState &amp;, Value lhs, Value rhs);  // ← 结果类型可推断
+  static void build(OpBuilder &amp;, OperationState &amp;, TypeRange resultTypes, Value lhs, Value rhs);
+  static void build(OpBuilder &amp;, OperationState &amp;, TypeRange, ValueRange, ArrayRef&lt;NamedAttribute&gt;);
+  static void build(OpBuilder &amp;, OperationState &amp;, ValueRange, ArrayRef&lt;NamedAttribute&gt;);
+
+  ::llvm::LogicalResult verifyInvariants();                          // trait 与类型约束的检查
+  static ::mlir::ParseResult parse(OpAsmParser &amp;, OperationState &amp;);  // 由 assemblyFormat 生成
+  void print(OpAsmPrinter &amp;);                                        // 同上
+};</code></pre>
+</div><p>三个观察，每个都对应后面要讲的一件事：</p>
+<ol>
+<li><strong>访问器带名字也带类型</strong>：<code>getLhs()</code> 返回 <code>TypedValue&lt;TensorType&gt;</code>，不是裸 <code>Value</code>。名字来自 <code>$lhs</code>，类型收窄来自 <code>F32Tensor</code> 这个约束。写 pattern 时（第 14 章）这一点会让代码干净很多。</li>
+<li><strong>有一个不要结果类型的 <code>build</code></strong>：因为 <code>SameOperandsAndResultType</code> 声明了&quot;结果类型 = 操作数类型&quot;，TableGen 于是能生成一个&quot;帮你推断&quot;的重载。<strong>trait 不只是检查，它还影响生成什么 API。</strong></li>
+<li><strong><code>parse</code> 和 <code>print</code> 是 <code>assemblyFormat</code> 编译出来的</strong>——你写的那行格式字符串，变成了两个真正的函数。</li>
+</ol>
+<h2><code>arguments</code> 与 <code>results</code>：类型约束从哪来</h2>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">let arguments = (ins F32Tensor:$lhs, F32Tensor:$rhs);
+let results = (outs F32Tensor:$result);</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p><code>(ins …)</code> / <code>(outs …)</code> 里的每一项是 <strong>约束:$名字</strong>。约束这个词要理解准：它不是&quot;类型&quot;，而是<strong>对类型的谓词</strong>。<code>F32Tensor</code> 的意思是&quot;元素类型为 f32 的张量&quot;，形状没管；<code>AnyRankedTensor</code> 是&quot;有阶的张量，元素类型随意&quot;。</p>
+<p>常用的一批都在 <code>mlir/include/mlir/IR/CommonTypeConstraints.td</code> 里，值得翻一遍：</p>
+<table>
+<thead>
+<tr>
+<th>约束</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>F32</code> / <code>AnyFloat</code> / <code>AnyInteger</code></td>
+<td>标量</td>
+</tr>
+<tr>
+<td><code>Index</code></td>
+<td><code>index</code> 类型（第 4 章讲过它不是 <code>i64</code>）</td>
+</tr>
+<tr>
+<td><code>F32Tensor</code> / <code>AnyTensor</code> / <code>AnyRankedTensor</code></td>
+<td>张量，逐级放宽</td>
+</tr>
+<tr>
+<td><code>TensorOf&lt;[F32, F16]&gt;</code></td>
+<td>自己组合元素类型</td>
+</tr>
+<tr>
+<td><code>MemRefOf&lt;[F32]&gt;</code></td>
+<td>memref</td>
+</tr>
+<tr>
+<td><code>AnyType</code></td>
+<td>什么都行（少用，等于放弃检查）</td>
+</tr>
+<tr>
+<td><code>Variadic&lt;F32Tensor&gt;</code></td>
+<td>数量不定的同类操作数</td>
+</tr>
+<tr>
+<td><code>Optional&lt;F32&gt;</code></td>
+<td>可有可无的一个操作数</td>
+</tr>
+</tbody></table>
+<p>属性也写在 <code>arguments</code> 里（这点第一次见会觉得奇怪，但它符合 MLIR 的模型：操作数与属性都是 op 的&quot;输入&quot;）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">let arguments = (ins F32Tensor:$image,
+                     I64Attr:$radius,                          // 必须给
+                     DefaultValuedAttr&lt;I64Attr, "1"&gt;:$stride,   // 不给就是 1
+                     UnitAttr:$fast);                          // 在/不在就是全部信息</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><h3>当操作数类型互不相同：<code>AllTypesMatch</code></h3>
+<p><code>pix.scale</code> 是&quot;整张图乘一个标量&quot;，两个操作数一个是张量一个是标量，<code>SameOperandsAndResultType</code> 显然用不了。换成只约束需要相等的那一对：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_ScaleOp : Pix_Op&lt;"scale", [Pure, AllTypesMatch&lt;["image", "result"]&gt;]&gt; {
+  let arguments = (ins F32Tensor:$image, F32:$factor);
+  let results = (outs F32Tensor:$result);
+  let assemblyFormat = "$image `,` $factor attr-dict `:` type($result)";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>这条声明是真的在干活。故意写错一个：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%s = "pix.scale"(%a, %f) : (tensor&lt;4x8xf32&gt;, f32) -&gt; tensor&lt;8x4xf32&gt;</code></pre>
+</div><p><code>pix-opt</code> 的报错（实测）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: 'pix.scale' op failed to verify that all of {image, result} have same type</code></pre>
+</div><div class="note">
+<strong>还有一对亲戚：<code>TypesMatchWith</code></strong>
+<p>当两个类型不是"相等"而是"能算出来"的关系时（例如"结果是操作数的元素类型"、"结果是操作数去掉最后一维"），用 <code>TypesMatchWith&lt;说明, 源参数, 目标参数, 变换表达式&gt;</code>。它比手写 verifier 划算，因为顺带还能让 <code>assemblyFormat</code> 少打印一个类型。</p>
+</div><h2><code>assemblyFormat</code>：把糖配出来</h2>
+<p>第 3 章讲过自定义格式只是糖，而通用格式才是真相。<code>assemblyFormat</code> 就是配这个糖的小语言：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>元素表：</p>
+<table>
+<thead>
+<tr>
+<th>写法</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>$name</code></td>
+<td>打印/解析这个操作数、属性或 region</td>
+</tr>
+<tr>
+<td><code>type($name)</code></td>
+<td>那个值的类型</td>
+</tr>
+<tr>
+<td><code>`,`</code> <code>`:`</code> <code>`to`</code></td>
+<td>反引号里是字面量（标点或关键字）</td>
+</tr>
+<tr>
+<td><code>attr-dict</code></td>
+<td>可丢弃属性字典。<strong>几乎必须有</strong>，否则属性没地方打印</td>
+</tr>
+<tr>
+<td><code>functional-type($ins, $outs)</code></td>
+<td>打印成 <code>(输入类型) -&gt; 输出类型</code></td>
+</tr>
+<tr>
+<td><code>(… )?</code> 与 <code>^</code></td>
+<td>可选组；<code>^</code> 标记&quot;锚&quot;，锚有值整组才打印</td>
+</tr>
+</tbody></table>
+<p>三个例子，对应三种常见情况：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">// ① 结果类型与操作数相同 → 只打印一个类型
+let assemblyFormat = "$image `,` $factor attr-dict `:` type($result)";
+
+// ② 结果类型与操作数不同 → 两个都要打印，中间用字面量分开
+let assemblyFormat = "$image attr-dict `:` type($image) `to` type($result)";
+
+// ③ 操作数可有可无 → 可选组 + 锚
+let assemblyFormat = "attr-dict ($values^ `:` type($values))?";</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>① 是 <code>pix.scale</code>：只写 <code>type($result)</code> 也能解析回来，因为 <code>AllTypesMatch</code> 告诉解析器 <code>image</code> 的类型与它相同。<strong>约束让 IR 更短，这是声明式的额外红利。</strong></p>
+<p>② 是 <code>pix.transpose</code>：<code>tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;</code>，两个类型都得写，否则无法还原。</p>
+<p>③ 是 <code>pix.yield</code>：有值时打印 <code>pix.yield %t : tensor&lt;4x4xf32&gt;</code>，没值时只打印 <code>pix.yield</code>。</p>
+<div class="warn">
+<strong><code>attr-dict</code> 漏了会怎样</strong>
+<p>不会立刻报错，但任何人给你的 op 挂一个可丢弃属性（第 2 章那种 <code>{my_pass.visited = true}</code>）之后，打印出来就丢了——于是 round-trip 失败，而且失败点离真正的原因很远。<strong>写 <code>assemblyFormat</code> 时先把 <code>attr-dict</code> 放进去</strong>，就像写 C 结构体先想好对齐一样。</p>
+</div><p>什么时候放弃 <code>assemblyFormat</code>？当格式依赖运行时信息、或者你要打印派生出来的东西（比如把 indexing map 渲染成人类可读的形式）。那就改用 <code>let hasCustomAssemblyFormat = 1;</code> 然后在 <code>.cpp</code> 里手写 <code>parse</code>/<code>print</code>。<strong>能用声明式就别手写</strong>——手写的那两个函数必须互为逆运算，出 bug 的方式非常隐蔽。</p>
+<h2>region 在 ODS 里怎么写</h2>
+<p><code>pix.pipeline</code> 是个容器 op：自己不算任何东西，只把一段处理流程围起来，好让后面的变换把它当整体处理。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
+    SingleBlockImplicitTerminator&lt;"YieldOp"&gt;,
+    RecursiveMemoryEffects]&gt; {
+  let results = (outs F32Tensor:$result);
+  let regions = (region SizedRegion&lt;1&gt;:$body);
+  let assemblyFormat = "attr-dict `:` type($result) $body";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>四处都值得说：</p>
+<ul>
+<li><strong><code>let regions = (region SizedRegion&lt;1&gt;:$body)</code></strong>：声明一个 region，且它只能有 1 个 block。想要多块就用 <code>AnyRegion</code>，想要多个 region 就写多项（<code>scf.if</code> 就是两个）。</li>
+<li><strong><code>SingleBlockImplicitTerminator&lt;&quot;YieldOp&quot;&gt;</code></strong>：单块 + 终结符固定是 <code>pix.yield</code>，而且<strong>允许你在文本里省略不写</strong>，框架会替你插。</li>
+<li><strong><code>RecursiveMemoryEffects</code></strong>：这个 op 自己没有副作用，它的副作用<strong>取决于 region 里的内容</strong>。少了它，通用 pass 只能假设最坏情况（第 5 章）。</li>
+<li><strong>它没有 <code>IsolatedFromAbove</code></strong>：所以 body 里可以直接引用外面的值。代价是它不能被直接抽成独立函数——第 25 章做 GPU kernel outlining 时需要那个 trait，到时候会看到区别。</li>
+</ul>
+<p>配套的终结符：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_YieldOp : Pix_Op&lt;"yield", [Pure, ReturnLike, Terminator,
+                                   HasParent&lt;"PipelineOp"&gt;]&gt; {
+  let arguments = (ins Variadic&lt;F32Tensor&gt;:$values);
+  let builders = [OpBuilder&lt;(ins), [{ /* 什么都不用做：造一个空的 yield */ }]&gt;];
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p><code>HasParent&lt;&quot;PipelineOp&quot;&gt;</code> 声明&quot;我只能出现在 pipeline 里&quot;。而那个<strong>零参数 builder</strong> 不是可选的装饰——它是被编译器逼出来的。我第一次写的时候没加，编译直接失败：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: no matching function for call to ‘mlir::pix::YieldOp::build(mlir::OpBuilder&amp;, mlir::OperationState&amp;)’</code></pre>
+</div><p>原因是隐式终结符机制要能用 <code>build(builder, state)</code> 凭空造一个终结符出来，而我的 yield 要求一个操作数。上游 <code>scf.yield</code> 用的是完全一样的招（<code>let builders = [OpBuilder&lt;(ins), [{ /* nothing to do */ }]&gt;];</code>）——<strong>遇到这类&quot;框架要求某个重载存在&quot;的报错，去上游找一个同类 op 抄它的写法，比猜快得多。</strong></p>
+<h3>隐式终结符真的被插进去了</h3>
+<p>写一个空 body 的 pipeline，自定义格式打印出来是空的：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%out = pix.pipeline : tensor&lt;4x4xf32&gt; {
+}</code></pre>
+</div><p>但通用格式会暴露真相（实测）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    %0 = "pix.pipeline"() ({
+      "pix.yield"() : () -&gt; ()
+    }) : () -&gt; tensor&lt;4x4xf32&gt;</code></pre>
+</div><p><strong><code>pix.yield</code> 确实存在</strong>，只是自定义格式在打印 region 时把&quot;没有操作数的隐式终结符&quot;省略了。第 3 章那句&quot;通用格式才是真相&quot;，这里又应验一次。</p>
+<h2>补齐后的 pix</h2>
+<p>现在 7 个 op 都能用了。一段把它们全用上的 IR（<code>pix-opt</code> 的真实输出）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+func.func @all_ops(%a: tensor&lt;4x8xf32&gt;, %b: tensor&lt;4x8xf32&gt;, %f: f32)
+    -&gt; (tensor&lt;4x8xf32&gt;, tensor&lt;8x4xf32&gt;, f32) {
+  %m = pix.mul %a, %b : tensor&lt;4x8xf32&gt;
+  %s = pix.scale %m, %f : tensor&lt;4x8xf32&gt;
+  %t = pix.transpose %s : tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;
+  %r = pix.reduce %s : tensor&lt;4x8xf32&gt; -&gt; f32
+  return %s, %t, %r : tensor&lt;4x8xf32&gt;, tensor&lt;8x4xf32&gt;, f32
+}
+
+func.func @with_pipeline(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
+    %x = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+    %y = pix.mul %x, %x : tensor&lt;4x4xf32&gt;
+    pix.yield %y : tensor&lt;4x4xf32&gt;
+  }
+  return %out : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><blockquote>
+<p>注意这段 IR 里的 <code>pix.add</code>、<code>pix.mul</code> 在 pipeline 的 region 内部，却直接用了函数的参数 <code>%a</code>、<code>%b</code>——因为 <code>pix.pipeline</code> 不是 <code>IsolatedFromAbove</code>。第 2 章讲的&quot;内层 region 可以引用外层值&quot;，在你自己的 op 上生效了。</p>
+</blockquote>
+<p>再确认一次免费的优化。<code>pix.reduce</code> 声明了 <code>Pure</code>，所以没人用它的结果时它会被删掉（实测）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --canonicalize
+func.func @dead_reduce(%a: tensor&lt;4x4xf32&gt;) {
+  %r = pix.reduce %a : tensor&lt;4x4xf32&gt; -&gt; f32
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --canonicalize input.mlir</code></div>
+</div><p>输出里 <code>pix.reduce</code> 消失了，只剩一个 <code>return</code>。</p>
+<h2>声明拦得住什么，拦不住什么</h2>
+<p>这是本章最该记住的一节。ODS 的声明能自动生成一批检查，但<strong>边界很清楚</strong>。</p>
+<p><strong>拦得住</strong>（<code>verifyInvariants()</code> 里自动生成）：</p>
+<ul>
+<li>操作数/结果的<strong>类型约束</strong>：<code>F32Tensor</code> 不满足 → <code>operand #0 must be tensor of 32-bit float values, but got &#39;tensor&lt;4x4xi32&gt;&#39;</code></li>
+<li>操作数/结果的<strong>个数</strong></li>
+<li>trait 带的结构检查：<code>SameOperandsAndResultType</code>、<code>AllTypesMatch</code>、<code>HasParent</code>、<code>SingleBlockImplicitTerminator</code>（单块）</li>
+<li>属性是否存在、类型对不对</li>
+</ul>
+<p><strong>拦不住</strong>——下面两个实测例子都<strong>通过了验证</strong>，而它们显然是错的：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+// ① 把 4×8 "转置"成 4×8：形状根本不是转置关系
+func.func @bogus_transpose(%a: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt; {
+  %t = pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;4x8xf32&gt;
+  return %t : tensor&lt;4x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+// ② pipeline 声明返回一张图，但 body 什么都没 yield
+func.func @empty_pipeline() -&gt; tensor&lt;4x4xf32&gt; {
+  %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
+  }
+  return %out : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><p>两段都干干净净地过了 <code>pix-opt</code>。原因很简单：<strong>没有人声明过这些关系</strong>。</p>
+<ul>
+<li>例 ①：ODS 只知道两个类型都得是 <code>F32Tensor</code>，&quot;结果形状必须是输入形状的逆序&quot;这条语义只在你脑子里。</li>
+<li>例 ②：<code>SingleBlockImplicitTerminator</code> 只管&quot;有没有终结符&quot;，不管&quot;终结符交出的值与 op 的结果对不对齐&quot;。</li>
+</ul>
+<div class="keypoint">
+<strong>对比第 2 章那个 <code>scf.if</code>：同样的错误，它拦住了。</strong>
+<p>回忆第 2 章的实验：<code>scf.if</code> 的 else 分支什么都不 yield 时，报错是 <code>'scf.if' op along control flow edge … region successor needs 1 inputs</code>。为什么 <code>scf.if</code> 能查，<code>pix.pipeline</code> 不能？<strong>因为 <code>scf.if</code> 声明了 <code>RegionBranchOpInterface</code></strong>（第 5 章那张问答图），通用机制于是能问它"你的 region 之间怎么传值"，并据此检查个数与类型。</p>
+<p>这就是第 5 章那句话的实际含义再一次显形：<strong>你声明了什么，框架才能替你做什么。</strong>第 10 章我们有两条路可选——手写 <code>verify()</code>，或者去实现 <code>RegionBranchOpInterface</code> 白拿这套检查。两条都会走一遍，然后你就知道该怎么选了。</p>
+</div><h2>动手</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 1. 亲眼看生成的代码（把 $LLVM_SRC 换成你的 llvm-project 路径）
+mlir-tblgen -gen-op-decls -I $LLVM_SRC/mlir/include -I include include/Pix/PixOps.td | less
+
+# 2. 只看某个 op 生成了什么
+mlir-tblgen -gen-op-decls -I $LLVM_SRC/mlir/include -I include include/Pix/PixOps.td \
+  | sed -n '/^class TransposeOp /,/^};/p'
+
+# 3. 顺手生成方言文档（ODS 里的 summary/description 会变成 markdown）
+mlir-tblgen -gen-dialect-doc -dialect=pix -I $LLVM_SRC/mlir/include -I include \
+  include/Pix/PixOps.td</code></pre>
+</div><p><strong>改一改。</strong> 每一项都会让你对 ODS 的边界更清楚：</p>
+<ol>
+<li><strong>删掉 <code>pix.add</code> 的 <code>attr-dict</code></strong>，重新编译，然后给它挂个属性试试：<code>%s = &quot;pix.add&quot;(%a, %b) {my.tag = 1 : i64} : …</code>，再 round-trip。属性丢了吗？这就是上面那个 <code>warn</code> 框在说的事。</li>
+<li><strong>给 <code>pix.scale</code> 的 <code>factor</code> 加一个默认值属性版本</strong>：把 <code>F32:$factor</code> 改成属性 <code>F32Attr:$factor</code>（于是系数必须是编译期常量），看 <code>assemblyFormat</code> 要怎么改、生成的 <code>build</code> 重载变成什么样。想一想：什么时候该用属性、什么时候该用操作数？（提示：能不能是运行时算出来的值）</li>
+<li><strong>把 <code>pix.transpose</code> 的 trait 里加上 <code>SameOperandsAndResultType</code></strong>，重新编译并跑本章那段 <code>bogus_transpose</code>。这次拦住了吗？拦住的是&quot;形状必须逆序&quot;还是&quot;形状必须相同&quot;？——<strong>这说明选错 trait 比不选更糟</strong>。</li>
+<li><strong>给 <code>pix.reduce</code> 去掉 <code>Pure</code></strong>，重跑 <code>--canonicalize</code>，看没人用的 reduce 还会不会被删。第 5 章的结论在你自己的 op 上复现一遍。</li>
+<li><strong>把 <code>pix.yield</code> 的零参数 builder 删掉</strong>，编译，看那条 <code>no matching function for call to &#39;YieldOp::build(OpBuilder&amp;, OperationState&amp;)&#39;</code>。记住它——以后给任何带隐式终结符的 op 写终结符时都会遇到。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>ODS 是一份声明，<code>mlir-tblgen</code> 把它变成<strong>两千多行 C++</strong>：类型化访问器、多个 <code>build</code> 重载、<code>verifyInvariants()</code>、以及由 <code>assemblyFormat</code> 编译出来的 <code>parse</code>/<code>print</code>。</li>
+<li><strong>trait 不只是检查，还影响生成什么 API</strong>：<code>SameOperandsAndResultType</code> 让 TableGen 多生成一个&quot;不用给结果类型&quot;的 <code>build</code>。</li>
+<li><code>arguments</code>/<code>results</code> 里写的是<strong>类型约束</strong>（对类型的谓词），不是具体类型；属性也写在 <code>arguments</code> 里。约束表在 <code>mlir/include/mlir/IR/CommonTypeConstraints.td</code>。</li>
+<li>操作数类型互不相同时用 <strong><code>AllTypesMatch</code></strong>（只约束需要相等的那几个），关系更复杂时用 <strong><code>TypesMatchWith</code></strong>。约束还能让 <code>assemblyFormat</code> 少打印一个类型。</li>
+<li><code>assemblyFormat</code> 里 <strong><code>attr-dict</code> 几乎必须有</strong>，漏了会在很远的地方以 round-trip 失败的形式报复你。</li>
+<li>region 用 <code>let regions = (region SizedRegion&lt;1&gt;:$body)</code> 声明；<code>SingleBlockImplicitTerminator&lt;&quot;YieldOp&quot;&gt;</code> 允许省略终结符，但<strong>终结符会被真的插进 IR</strong>（通用格式可见）；这类终结符<strong>必须提供零参数 builder</strong>，否则编译不过。</li>
+<li><strong>两套平行的 include 世界</strong>：ODS 里 include 了某个接口的 <code>.td</code>，C++ 头文件就要 include 对应的 <code>.h</code>。漏了会在生成的 <code>.inc</code> 里报&quot;某接口不是 mlir 的成员&quot;，误导性很强。</li>
+<li><strong>最重要的边界</strong>：ODS 拦得住类型约束、个数、trait 的结构检查；<strong>拦不住你脑子里的语义</strong>。<code>pix.transpose</code> 把 4×8 转置成 4×8、<code>pix.pipeline</code> 声明有结果却什么都不 yield——两者都顺利通过。而同样的错误 <code>scf.if</code> 能拦住，<strong>因为它声明了 <code>RegionBranchOpInterface</code></strong>。</li>
+</ul>
+<p><strong>pix 进度</strong>：7 个 op（add / mul / scale / transpose / reduce / pipeline / yield），涵盖逐点、标量缩放、转置、归约、region 容器五种形态；类型约束与 trait 自动生成的检查已生效，但&quot;形状关系&quot;&quot;yield 对齐&quot;这类语义还没人守。</p>
+<p>下一章补上 ODS 的另一半：<strong>自定义类型与属性</strong>。我们会给 pix 造一个参数化类型 <code>!pix.kernel&lt;3x3&gt;</code>（stencil 权重）和一个枚举属性 <code>#pix.border&lt;clamp&gt;</code>（边界处理方式），再用它们定义真正的邻域运算 <code>pix.convolve</code>——那是第四部分做 tiling 与向量化时的主角。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch07.html">← 第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a>
+  <a class="nav-next" href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
