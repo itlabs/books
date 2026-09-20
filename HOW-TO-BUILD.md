@@ -13,7 +13,8 @@ books/
 ├── shared/             所有书共用的资源
 │   ├── style.css       样式
 │   ├── runner.js       浏览器内运行 Python 的脚本
-│   └── vendor/         Prism.js 高亮（本地，离线可用）
+│   ├── mlir-syntax.js  在 Prism 的 llvm 语法上派生出 mlir 语言（// 注释、^bb 标签、形状、内建类型）
+│   └── vendor/         Prism.js 高亮（本地，离线可用；含 prism-llvm 供 LLVM IR / MLIR 用）
 ├── books/              每本书一个子目录
 │   └── python-teens/
 │       ├── book.json   书的元数据：标题、章节顺序与导航标题
@@ -94,6 +95,28 @@ node pack.js python-teens    # 生成 python-teens-offline.zip
 > books/gpu-programming/verify/verify-triton.sh  # 需 triton+torch+GPU；无 GPU 自动降级为语法检查（SYNTAX=1）
 > ```
 > 三者共用 `verify/extract-blocks.js` 从章节抽取完整代码块。工具链缺失时脚本干净退出（127）并给出安装提示（见附录 A）。不带参数校验全书，也可只传章名如 `verify-cuda.sh ch09 ch11`。详见 `verify/README.md`。这些脚本随书入库、便于在任何装好工具链的机器上验证，但不参与 `node build.js` 网页构建。
+
+**MLIR 书（inside-mlir）：**
+- ` ```mlir ` —— 完整、能 round-trip 的 MLIR 模块。"🔗 在 Compiler Explorer 打开（mlir-opt）"+ 本地 `mlir-opt` 命令。
+- ` ```mlir-lower ` —— 同上，按钮为"🔬 看下降结果（mlir-opt）"，默认参数 `--canonicalize`。用于展示一条下降管线。
+- ` ```mlir-translate ` —— 用 `mlir-translate` 出 LLVM IR（默认 `--mlir-to-llvmir`）。
+- ` ```tablegen ` —— ODS（`.td`）定义，只高亮 + `mlir-tblgen` 生成命令（CE 没有 tblgen）。
+- ` ```mlir-norun ` —— IR 片段、伪 IR，只高亮不给按钮。
+- ` ```cpp-norun ` —— Pass/pattern 的 C++ 实现（MLIR 的 C++ 在 CE 上缺头文件编不过，本书不用 ` ```cpp `）。
+- ` ```python ` —— 浏览器里真运行（Pyodide）的概念模拟器（pattern 收敛、conversion 合法化、tiling 迭代空间等）。
+
+> **`// RUN:` 行**：`mlir` 系列代码块的首行可以写 lit 风格的 `// RUN: mlir-opt %s --foo`，
+> `build.js`（`mlirRunArgs()`）会把工具名之后、`|` 之前的参数同时用于 **CE 按钮**和**底部本地命令**；
+> 随书校验脚本 `verify/extract-blocks.js` 解析同一行。一处写，网页与校验跑的是同一条管线。
+> 没写 `RUN:` 行就按语言取默认参数。`//` 是 MLIR 注释，这一行留在正文里不影响解析。
+>
+> **MLIR 代码校验（`books/inside-mlir/verify/`）**：
+> ```bash
+> books/inside-mlir/verify/verify-mlir.sh          # 需本地 mlir-opt（或 MLIR_BIN=<llvm-build>/bin）
+> CE=1 books/inside-mlir/verify/verify-mlir.sh     # 没装本地 MLIR：走 godbolt 的 trunk 工具（会上传代码块）
+> books/inside-mlir/verify/verify-pix.sh           # 构建贯穿全书的 code/pix 方言项目并跑 check-pix
+> ```
+> 详见 `books/inside-mlir/verify/README.md`；工具链缺失时干净退出（127）。不参与 `node build.js`。
 
 **通用：**
 - ` ```bash ` —— 终端命令，只高亮。

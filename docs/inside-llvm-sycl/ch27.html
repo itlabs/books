@@ -96,7 +96,7 @@ CIR 侧：<code>clang/lib/CIR/CodeGen/CIRGenCUDANV.cpp</code>、<code>CIRGenCUDA
 <p>于是一个信息断链出现了：主机端的 stub 需要知道<strong>设备端那个 kernel 叫什么名字</strong>，才能在注册时把两者对上。经典 CodeGen 靠 IRGen 内部的数据结构记住这件事。CIR 的做法是——把它写在 IR 上。</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def CIR_CUDAKernelNameAttr : CIR_Attr&lt;"CUDAKernelName", "cu.kernel_name"&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def CIR_CUDAKernelNameAttr : CIR_Attr&lt;"CUDAKernelName", "cu.kernel_name"&gt; {
   let summary = "Device-side function name for this stub.";
   let description =
   [{
@@ -120,7 +120,7 @@ int main(void) { kernel&lt;&lt;&lt;1, 1&gt;&gt;&gt;(42, 1.0f); }</code></pre>
 </div><p>五条 RUN 线覆盖 CUDA/HIP × 新旧驱动路径。我们只看主机端 CIR。调用点被展开成这样（CHECK 行原文，<code>{{.*}}</code> 是 FileCheck 的通配）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.alloca {{.*}} ["agg.tmp0"] : !cir.ptr&lt;!rec_dim3&gt;
+  <pre class="line-numbers"><code class="language-mlir">cir.alloca {{.*}} ["agg.tmp0"] : !cir.ptr&lt;!rec_dim3&gt;
 cir.alloca {{.*}} ["agg.tmp1"] : !cir.ptr&lt;!rec_dim3&gt;
 cir.call @_ZN4dim3C1Ejjj(...) {uniform_work_group_size}     // grid  = dim3(1,1,1)
 cir.call @_ZN4dim3C1Ejjj(...) {uniform_work_group_size}     // block = dim3(1,1,1)
@@ -140,7 +140,7 @@ cir.if %b {
 <p>stub 内部是配置的另一半：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.func {{.*}} @_Z21__device_stub__kernelif(%arg0: !s32i, %arg1: !cir.float) {
+  <pre class="line-numbers"><code class="language-mlir">cir.func {{.*}} @_Z21__device_stub__kernelif(%arg0: !s32i, %arg1: !cir.float) {
   cir.alloca {{.*}} ["x", init]
   cir.alloca {{.*}} ["y", init]
   cir.alloca {{.*}} ["kernel_args"] : !cir.ptr&lt;!cir.array&lt;!cir.ptr&lt;!void&gt; x 2&gt;&gt;
@@ -202,13 +202,13 @@ cir.if %b {
 </div><p>设备端那一趟就朴素得多。<code>ptx-kernels.cu</code> 里，<code>__global__</code> 函数只是多了一个调用约定：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.func {{.*}} @global_function() cc(ptx_kernel)
+  <pre class="line-numbers"><code class="language-mlir">cir.func {{.*}} @global_function() cc(ptx_kernel)
 // 降到 LLVM IR：
 // define ptx_kernel void @global_function()</code></pre>
 </div><p><code>cuda-builtin-vars.cu</code> 显示 <code>threadIdx.x</code> 这类内建变量走的是通用的内建函数机制：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.call_llvm_intrinsic "nvvm.read.ptx.sreg.tid.x" : () -&gt; !u32i
+  <pre class="line-numbers"><code class="language-mlir">cir.call_llvm_intrinsic "nvvm.read.ptx.sreg.tid.x" : () -&gt; !u32i
 // → call i32 @llvm.nvvm.read.ptx.sreg.tid.x()</code></pre>
 </div><p>也就是说 CIR 并不为 NVPTX 造新概念，它借道 <code>cir.call_llvm_intrinsic</code> 直通 LLVM 的 intrinsic。这是一个刻意的选择：<strong>只在「前端知道的事实会丢」的地方加抽象，其它地方老老实实转发。</strong></p>
 <h2>双地址空间：一个变量的两种身份</h2>
@@ -217,7 +217,7 @@ cir.if %b {
 <p>CIR 把这一步<strong>拆成了两个属性</strong>。<code>clang/include/clang/CIR/Dialect/IR/CIRAttrs.td</code>：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def CIR_LangAddressSpaceAttr : CIR_Attr&lt;"LangAddressSpace", "lang_address_space", [
+  <pre class="line-numbers"><code class="language-mlir">def CIR_LangAddressSpaceAttr : CIR_Attr&lt;"LangAddressSpace", "lang_address_space", [
     DeclareAttrInterfaceMethods&lt;MemorySpaceAttrInterface&gt;]&gt; {
   // 例：!cir.ptr&lt;!s32i, lang_address_space(offload_local)&gt;
   //   取值：Default / offload_global / offload_constant / offload_local /
@@ -246,7 +246,7 @@ def CIR_TargetAddressSpaceAttr : CIR_Attr&lt;"TargetAddressSpace", "target_addre
 <div class="known">
 <div class="compare-head">CIR-PRE：语言地址空间</div><div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.global external
+  <pre class="line-numbers"><code class="language-mlir">cir.global external
   lang_address_space(offload_global)
   @i = #cir.int&lt;0&gt;
 
@@ -266,7 +266,7 @@ cir.global external
 <div class="cpp-side">
 <div class="compare-head">CIR-POST：目标地址空间</div><div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.global external
+  <pre class="line-numbers"><code class="language-mlir">cir.global external
   target_address_space(1)
   @i = #cir.int&lt;0&gt;
 
@@ -340,7 +340,7 @@ store i32 %val, ptr addrspacecast (ptr addrspace(3) @_ZZ2fnvE1j to ptr)</code></
 <p>CIR 换了个顺序：CIRGen 只在 IR 上<strong>挂属性</strong>，展开留给降级阶段。<code>CIRCUDAAttrs.td</code> 里一共四个属性，除了前面见过的 <code>cu.kernel_name</code>，还有：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def CIR_CUDAExternallyInitializedAttr
+  <pre class="line-numbers"><code class="language-mlir">def CIR_CUDAExternallyInitializedAttr
     : CIR_Attr&lt;"CUDAExternallyInitialized", "cu.externally_initialized"&gt; {
   let description = [{
     CUDA __device__ and __constant__ variables, along with surface and
@@ -373,7 +373,7 @@ def CIR_CUDAVarRegistrationInfoAttr
 <p>于是 <code>address-spaces.cu</code> 里主机端那一侧看起来是这样——注意主机端的 <code>@i</code> 只是个<strong>影子</strong>（<code>#cir.undef</code>），真正的存储在设备上：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">// CIR-HOST: cir.global {{.*}} @i = #cir.undef : {{.*}}
+  <pre class="line-numbers"><code class="language-mlir">// CIR-HOST: cir.global {{.*}} @i = #cir.undef : {{.*}}
 // CIR-HOST-SAME: {cu.var_registration = #cir.cu.var_registration&lt;i, Variable&gt;}
 // LLVM-HOST:     @i = internal global i32 undef
 
@@ -383,7 +383,7 @@ def CIR_CUDAVarRegistrationInfoAttr
 </div><p><code>device-stub.cu</code> 则给出属性被消费之后的完整形态。<code>__cuda_module_ctor</code> 的骨架（CHECK 行原文，串起来读）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">// 模块级：把 ctor 注册成优先级 65535 的全局构造函数
+  <pre class="line-numbers"><code class="language-mlir">// 模块级：把 ctor 注册成优先级 65535 的全局构造函数
 cir.global_ctors = [#cir.global_ctor&lt;"__cuda_module_ctor", 65535&gt;]
 
 // 设备二进制本体和它的包装结构（注意 section）
@@ -467,7 +467,7 @@ cir.func private @__cudaUnregisterFatBinary(!cir.ptr&lt;!cir.ptr&lt;!void&gt;&gt
 <p>最能说明「对齐做到了什么程度」的，是 <code>clang/test/CIR/CodeGenHIP/device-var-registration.hip</code>。它有三条 RUN 线，但只有<strong>两个</strong> FileCheck 前缀：一个 <code>CIR</code> 看中间形态，一个 <code>LLVM</code>——而这个 <code>LLVM</code> 前缀的 CHECK 行<strong>同时验证 <code>-fclangir -emit-llvm</code> 和不带 <code>-fclangir</code> 的经典 <code>-emit-llvm</code> 的输出</strong>。同一批 CHECK，两条路径都得过：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">// CIR: cir.func private @__hipRegisterVar(...)
+  <pre class="line-numbers"><code class="language-mlir">// CIR: cir.func private @__hipRegisterVar(...)
 // CIR: cir.func internal private @__hip_register_globals(...)
 // CIR:   cu.var_registration = #cir.cu.var_registration&lt;device_var, Variable&gt;
 // CIR:   cu.var_registration = #cir.cu.var_registration&lt;constant_var, Variable, constant&gt;
@@ -739,6 +739,9 @@ module attributes {
 <script src="vendor/prism-c.min.js"></script>
 <script src="vendor/prism-cpp.min.js"></script>
 <script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
 <script src="vendor/prism-line-numbers.min.js"></script>
 <!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>

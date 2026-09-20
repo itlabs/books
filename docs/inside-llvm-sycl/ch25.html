@@ -121,7 +121,7 @@ ClangIR 每周都在变：操作会改名（孵化器里叫 <code>!cir.record</c
 <p>「ClangIR 和 MLIR、LLVM IR 是什么关系」是最容易搞混的一点。直接看方言定义文件的开头（<code>clang/include/clang/CIR/Dialect/IR/CIRDialect.td</code>）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">MLIR</span></div>
-  <pre class="line-numbers"><code class="language-llvm">include "mlir/IR/OpBase.td"
+  <pre class="line-numbers"><code class="language-mlir">include "mlir/IR/OpBase.td"
 
 def CIR_Dialect : Dialect {
   let name = "cir";
@@ -180,7 +180,7 @@ CIR <strong>不是</strong> MLIR 的替代品，它是 MLIR 的<strong>客户</s
 </div><p>它的 CIR 长这样（取自 <code>clang/test/CIR/CodeGenCXX/basic.cpp</code> 的 CHECK 行，为可读性去掉了 FileCheck 的变量捕获语法）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.func @_Z2f5v() -&gt; (!cir.ptr&lt;!s32i&gt;) {
+  <pre class="line-numbers"><code class="language-mlir">cir.func @_Z2f5v() -&gt; (!cir.ptr&lt;!s32i&gt;) {
   %0 = cir.alloca "__retval" align(8) : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
   %1 = cir.alloca "p" align(8) init : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
   %2 = cir.const #cir.ptr&lt;null&gt; : !cir.ptr&lt;!s32i&gt;
@@ -214,7 +214,7 @@ CIR <strong>不是</strong> MLIR 的替代品，它是 MLIR 的<strong>客户</s
 <div class="known">
 <div class="compare-head">CIR：贴着 C++ 语义</div><div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">%1 = cir.alloca "p" align(8)
+  <pre class="line-numbers"><code class="language-mlir">%1 = cir.alloca "p" align(8)
        : !cir.ptr&lt;!cir.ptr&lt;!s32i&gt;&gt;
 cir.scope {
   %3 = cir.alloca "x" align(4)
@@ -464,7 +464,7 @@ if (enableCallConvLowering)
 </div><p>输入是手写的 <code>.cir</code>，输出用 FileCheck 校验。你甚至可以手写一个只有几行的模块，把目标三元组和数据布局直接写在模块属性上：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">module attributes {
+  <pre class="line-numbers"><code class="language-mlir">module attributes {
   cir.triple = "spirv64-unknown-unknown",
   dlti.dl_spec = #dlti.dl_spec&lt;...&gt;
 } {
@@ -680,6 +680,9 @@ CIR 的价值不是「扁平形态丢了信息」，而是：在扁平之前，
 <script src="vendor/prism-c.min.js"></script>
 <script src="vendor/prism-cpp.min.js"></script>
 <script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
 <script src="vendor/prism-line-numbers.min.js"></script>
 <!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
