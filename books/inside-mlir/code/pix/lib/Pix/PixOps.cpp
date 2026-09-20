@@ -7,6 +7,12 @@
 #include "Pix/PixOps.h"
 #include "Pix/PixDialect.h"
 
+// 第 11 章：canonicalize pattern 要**造** arith.constant / arith.mulf，
+// 于是这里必须依赖 arith 方言（CMakeLists 里也要加 MLIRArithDialect）。
+// 只解析别人的 op 不需要依赖，要创建才需要——这条界线值得记住。
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/PatternMatch.h"
+
 using namespace mlir;
 using namespace mlir::pix;
 
@@ -82,4 +88,130 @@ ValueRange PipelineOp::getSuccessorInputs(RegionSuccessor successor) {
   if (successor.isOperation())
     return getOperation()->getResults();
   return {};
+}
+
+//===----------------------------------------------------------------------===//
+// 第 11 章：fold —— 只许"就地算出答案"，不许造 op
+//===----------------------------------------------------------------------===//
+
+// fold 的返回值是 OpFoldResult：要么一个 Attribute（算出了常量），
+// 要么一个已经存在的 Value（这个 op 其实等于别人），要么空（折不动）。
+// 参数 adaptor 提供的是"每个操作数**如果是常量**，它的 Attribute；否则为 null"。
+
+// ① 返回**已有的值**：加一张全零图等于什么都没加。
+//    Commutative 不会帮你把常量挪到右边（那是 arith 自己 pattern 做的事），
+//    所以两边都得看。
+OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
+  auto isZeroImage = [](Attribute attr) {
+    auto dense = dyn_cast_or_null<DenseFPElementsAttr>(attr);
+    return dense && dense.isSplat() &&
+           dense.getSplatValue<APFloat>().isZero();
+  };
+  if (isZeroImage(adaptor.getRhs()))
+    return getLhs();
+  if (isZeroImage(adaptor.getLhs()))
+    return getRhs();
+  return {};
+}
+
+// ② 返回**算出来的常量**（一个 Attribute）：整张常量图求和，编译期就能得到标量。
+//    这是 OpFoldResult 的另一半，也是"常量折叠"最本来的含义。
+OpFoldResult ReduceOp::fold(FoldAdaptor adaptor) {
+  auto dense = dyn_cast_or_null<DenseFPElementsAttr>(adaptor.getImage());
+  if (!dense)
+    return {};
+
+  // splat（所有元素相同）可以直接乘，省得遍历几十万个元素。
+  APFloat sum(0.0f);
+  if (dense.isSplat()) {
+    APFloat v = dense.getSplatValue<APFloat>();
+    sum = v * APFloat(static_cast<float>(dense.getNumElements()));
+  } else {
+    for (APFloat v : dense.getValues<APFloat>())
+      sum = sum + v;
+  }
+  // 结果类型就是本 op 的结果类型（F32），照它造 FloatAttr。
+  return FloatAttr::get(getResult().getType(), sum);
+}
+
+OpFoldResult ScaleOp::fold(FoldAdaptor adaptor) {
+  // 系数是常量 1.0 → 整个 op 等于它的输入图
+  if (auto f = dyn_cast_or_null<FloatAttr>(adaptor.getFactor()))
+    if (f.getValue().isExactlyValue(1.0))
+      return getImage();
+  return {};
+}
+
+// 双重转置互相抵消。这里要看**操作数是谁产生的**，adaptor 帮不上忙
+// （它只管常量），所以直接顺着 def-use 链问一句。
+OpFoldResult TransposeOp::fold(FoldAdaptor adaptor) {
+  auto inner = getImage().getDefiningOp<TransposeOp>();
+  if (!inner)
+    return {};
+  // 防身：形状真的绕回来了才抵消。verifier 已保证每一层都是逆序，
+  // 但 fold 不该依赖"别人一定验过"这种假设。
+  if (inner.getImage().getType() != getResult().getType())
+    return {};
+  return inner.getImage();
+}
+
+//===----------------------------------------------------------------------===//
+// 第 11 章：canonicalize —— 需要造新 op 时走这条路
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+// scale(scale(%x, a), b) → scale(%x, a * b)
+//
+// 为什么不能写成 fold：结果里有一个**新的** arith.mulf。
+// 注意这里不要求 a、b 是常量——直接造 arith.mulf 就行；如果它们恰好都是常量，
+// arith 自己的 folder 会在同一轮 canonicalize 里把 mulf 折掉。
+// 两个方言的化简就这样自动接力，谁都不用知道对方存在。
+struct MergeNestedScale : OpRewritePattern<ScaleOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ScaleOp op,
+                                PatternRewriter &rewriter) const override {
+    auto inner = op.getImage().getDefiningOp<ScaleOp>();
+    if (!inner)
+      return failure();
+
+    Value merged = arith::MulFOp::create(rewriter, op.getLoc(),
+                                        inner.getFactor(), op.getFactor());
+    rewriter.replaceOpWithNewOp<ScaleOp>(op, inner.getImage(), merged);
+    return success();
+  }
+};
+
+// add(%x, %x) → scale(%x, 2.0)
+//
+// 同样是"造新 op"，所以也只能是 pattern。
+// 方向很关键：往 scale 走是**收敛**的（一个 op 换一个 op，且不会再触发自己）；
+// 反过来写 scale→add 就和这条互为逆操作，两条同时注册会让 greedy driver
+// 原地打转——第 11 章正文专门拿这个当反例。
+struct AddSelfToScale : OpRewritePattern<AddOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AddOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getLhs() != op.getRhs())
+      return failure();
+
+    Value two = arith::ConstantOp::create(rewriter, op.getLoc(),
+                                          rewriter.getF32FloatAttr(2.0));
+    rewriter.replaceOpWithNewOp<ScaleOp>(op, op.getLhs(), two);
+    return success();
+  }
+};
+
+} // namespace
+
+void ScaleOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                          MLIRContext *context) {
+  patterns.add<MergeNestedScale>(context);
+}
+
+void AddOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                        MLIRContext *context) {
+  patterns.add<AddSelfToScale>(context);
 }

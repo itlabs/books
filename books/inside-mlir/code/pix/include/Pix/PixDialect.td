@@ -29,6 +29,22 @@ def Pix_Dialect : Dialect {
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
 
+  // 第 11 章：我们的 canonicalize pattern 会**造** arith.constant / arith.mulf。
+  // 想创建某个方言的 op，那个方言必须已经加载进 MLIRContext——这里声明一下，
+  // 于是"加载 pix"就顺带加载 arith。
+  //
+  // 漏掉它的后果很有欺骗性：只要输入 IR 里本来就出现过 arith 的 op，arith 就被
+  // 解析器顺手加载了，一切正常；等你喂一个不含 arith 的输入，才会撞上
+  //   LLVM ERROR: arith.constant created with unregistered dialect
+  // 而且它不是诊断，是直接 abort。
+  let dependentDialects = ["::mlir::arith::ArithDialect"];
+
+  // 第 11 章：fold 返回一个 Attribute（比如 pix.reduce 把常量图求和成 f32）时，
+  // 框架需要把那个 Attribute 变回一条真的 op 才能替换掉原来的 op——这个"落地"
+  // 动作就问方言的 materializeConstant。**不实现它，返回 Attribute 的 fold 会
+  // 静悄悄地不起作用**：折是折出来了，但没人能把它放回 IR 里。
+  let hasConstantMaterializer = 1;
+
   // 这两个函数由我们自己在 .cpp 里实现（把生成的类型/属性列表注册进方言）。
   let extraClassDeclaration = [{
     void registerTypes();

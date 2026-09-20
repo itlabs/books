@@ -16,6 +16,7 @@ add_mlir_dialect_library(MLIRPix
 
   LINK_LIBS PUBLIC
   MLIRIR
+  MLIRArithDialect          # 第 11 章的 canonicalize pattern 要造 arith.constant/mulf
   MLIRInferTypeOpInterface  # SameOperandsAndResultType 用到
   MLIRSideEffectInterfaces  # Pure 用到
   )

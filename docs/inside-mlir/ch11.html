@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li class="active"><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章把"不该出现的 IR"挡在门外。这一章反过来：把"能出现但没必要出现"的 IR 化简掉——加一张全零图、乘以系数 1、连续两次转置、对一张常量图求和。</p>
+<p>MLIR 给了<strong>两个</strong>口子做这件事，而分界线只有一条，异常清晰：<strong>结果里需要新造 op 吗？</strong>不需要就写 <code>fold()</code>，需要就写 canonicalize pattern。想明白这一条，"该写哪个"就不再是问题。</p>
+<p>另外三件事是这一章真正的收获，都是这次给 pix 写化简时<strong>实打实撞出来的</strong>：<code>fold()</code> 返回 Attribute 之后还差一步"落地"，少了它<strong>折叠会静默失效</strong>；pattern 要造别的方言的 op，方言必须声明依赖，否则<strong>直接 abort 而不是报诊断</strong>；以及最经典的那个坑——两条互逆的规则凑在一起，<code>--canonicalize</code> 不会报"没收敛"，它会<strong>挂死</strong>，而 <code>maxIterations = 10</code> 救不了你。</p>
+</div><h2>先分清两件事</h2>
+<p>新手最容易卡在&quot;我该写 <code>fold</code> 还是写 pattern&quot;。判据只有一条：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>fold()</code></th>
+<th>canonicalize pattern</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ODS 开关</td>
+<td><code>let hasFolder = 1;</code></td>
+<td><code>let hasCanonicalizer = 1;</code></td>
+</tr>
+<tr>
+<td>能不能造新 op</td>
+<td><strong>不能</strong></td>
+<td>能</td>
+</tr>
+<tr>
+<td>签名</td>
+<td><code>OpFoldResult fold(FoldAdaptor)</code></td>
+<td><code>LogicalResult matchAndRewrite(Op, PatternRewriter &amp;)</code></td>
+</tr>
+<tr>
+<td>看得到什么</td>
+<td>本 op + 操作数的常量值</td>
+<td>整个 IR，想往上下游走多远都行</td>
+</tr>
+<tr>
+<td>谁会调用它</td>
+<td><code>--canonicalize</code>、dialect conversion、<code>createOrFold</code>，以及各种 pass 顺手调</td>
+<td><code>--canonicalize</code>，和显式装了这批 pattern 的 pass</td>
+</tr>
+<tr>
+<td>典型用途</td>
+<td>恒等化简、常量折叠</td>
+<td>改写结构、合并相邻 op、引入新 op</td>
+</tr>
+</tbody></table>
+<p>最后两行值得多看一眼：<strong><code>fold</code> 的适用面比 pattern 广得多</strong>——dialect conversion（第 16 章）在合法化过程中会调它，<code>OpBuilder::createOrFold</code> 在构造 IR 时就地调它。所以<strong>能写成 <code>fold</code> 的就别写成 pattern</strong>，白赚一堆调用点。而它&quot;不许造 op&quot;的限制是硬的，不是建议：有些调用它的地方根本没有 <code>OpBuilder</code> 可用。</p>
+<h2>fold：<code>OpFoldResult</code> 的两种返回</h2>
+<p>返回类型一眼就说清了它能做什么。<code>mlir/include/mlir/IR/OpDefinition.h:273</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">class OpFoldResult : public PointerUnion&lt;Attribute, Value&gt; {</code></pre>
+</div><p>一个 <code>Attribute</code> 或一个 <code>Value</code> 的联合，加上&quot;空&quot;。三种可能，对应三句话：给 <strong><code>Value</code></strong>——「这个 op 其实等于那边那个已经存在的值」；给 <strong><code>Attribute</code></strong>——「我在编译期把答案算出来了」；给<strong>空</strong>——「折不动，别管我」。</p>
+<h3>返回一个已经存在的值</h3>
+<p>pix 里有三处：加全零图、乘系数 1、双重转置。ODS 那边只是开个开关：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
+  // …
+  let hasFolder = 1;        // 加一张全零图等于没加
+  let hasCanonicalizer = 1; // add %x, %x → scale %x, 2.0（下一节）
+}
+
+def Pix_TransposeOp : Pix_Op&lt;"transpose", [Pure]&gt; {
+  // …
+  let hasVerifier = 1;      // 第 10 章：形状必须互为转置
+  let hasFolder = 1;        // transpose(transpose(%x)) → %x
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>实现：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
+  auto isZeroImage = [](Attribute attr) {
+    auto dense = dyn_cast_or_null&lt;DenseFPElementsAttr&gt;(attr);
+    return dense &amp;&amp; dense.isSplat() &amp;&amp;
+           dense.getSplatValue&lt;APFloat&gt;().isZero();
+  };
+  if (isZeroImage(adaptor.getRhs()))
+    return getLhs();
+  if (isZeroImage(adaptor.getLhs()))
+    return getRhs();
+  return {};
+}</code></pre>
+</div><p>三个细节，都藏在这十行里。<strong><code>adaptor</code> 给的是常量，不是值</strong>：<code>adaptor.getRhs()</code> 的类型是 <code>Attribute</code>，右操作数是常量就给你属性，否则给 null——这正是 <code>fold</code> 不需要 <code>OpBuilder</code> 也能干活的原因，它要的信息已经被嚼碎喂过来了。因此要用 <strong><code>dyn_cast_or_null</code></strong>，<code>dyn_cast</code> 会在 null 上断言失败。最后，<strong><code>Commutative</code> 不会帮你把常量挪到右边</strong>：那个 trait 只声明&quot;两个操作数可交换&quot;，把常量规范到右侧是 arith 自己写的 pattern 干的事。所以两边都得查——我一开始只查了右边，<code>pix.add %zero, %img</code> 就漏了。</p>
+<p>双重转置要看&quot;操作数是谁产生的&quot;，<code>adaptor</code> 帮不上忙（它只管常量），直接顺 def-use 链问一句：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">OpFoldResult TransposeOp::fold(FoldAdaptor adaptor) {
+  auto inner = getImage().getDefiningOp&lt;TransposeOp&gt;();
+  if (!inner)
+    return {};
+  // 防身：形状真的绕回来了才抵消。verifier 已保证每层都是逆序，
+  // 但 fold 不该依赖"别人一定验过"这种假设。
+  if (inner.getImage().getType() != getResult().getType())
+    return {};
+  return inner.getImage();
+}</code></pre>
+</div><p>跑一下（<code>pix.scale</code> 系数为 1 的那条同理，实现就是查 <code>FloatAttr</code> 是否 <code>isExactlyValue(1.0)</code>）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --canonicalize
+func.func @add_zero(%img: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %zero = arith.constant dense&lt;0.0&gt; : tensor&lt;4x4xf32&gt;
+  %r = pix.add %img, %zero : tensor&lt;4x4xf32&gt;
+  return %r : tensor&lt;4x4xf32&gt;
+}
+
+func.func @double_transpose(%img: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt; {
+  %t1 = pix.transpose %img : tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;
+  %t2 = pix.transpose %t1 : tensor&lt;8x4xf32&gt; to tensor&lt;4x8xf32&gt;
+  return %t2 : tensor&lt;4x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @add_zero(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    return %arg0 : tensor&lt;4x4xf32&gt;
+  }
+  func.func @double_transpose(%arg0: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt; {
+    return %arg0 : tensor&lt;4x8xf32&gt;
+  }
+}</code></pre>
+</div><p>两个函数都塌成一句 <code>return %arg0</code>。注意那个 <code>arith.constant</code> 也跟着没了——我们一行清理代码都没写，是 <code>Pure</code>（第 5 章）让通用的 DCE 敢删掉没人用的它。<strong>声明换来的红利，又一次。</strong></p>
+<h3>返回一个算出来的 Attribute</h3>
+<p>这才是&quot;常量折叠&quot;的本义：<code>pix.reduce</code> 对一张常量图求和，编译期就得出标量。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">OpFoldResult ReduceOp::fold(FoldAdaptor adaptor) {
+  auto dense = dyn_cast_or_null&lt;DenseFPElementsAttr&gt;(adaptor.getImage());
+  if (!dense)
+    return {};
+
+  // splat（所有元素相同）直接乘，省得遍历几十万个元素。
+  APFloat sum(0.0f);
+  if (dense.isSplat()) {
+    APFloat v = dense.getSplatValue&lt;APFloat&gt;();
+    sum = v * APFloat(static_cast&lt;float&gt;(dense.getNumElements()));
+  } else {
+    for (APFloat v : dense.getValues&lt;APFloat&gt;())
+      sum = sum + v;
+  }
+  return FloatAttr::get(getResult().getType(), sum);
+}</code></pre>
+</div><p><code>isSplat()</code> 那个分支不是炫技。<code>dense&lt;0.0&gt; : tensor&lt;1024x1024xf32&gt;</code> 在内存里只存一个元素（第 4 章讲过 <code>DenseElementsAttr</code> 的 splat 优化），照 <code>getNumElements()</code> 遍历一百万次纯属自找。<strong>折叠代码跑在编译期，它自己的复杂度就是编译时间的一部分。</strong></p>
+<h3>踩坑实录：折出来了，却没生效</h3>
+<p>写完上面那段我跑了一遍，<code>pix.reduce</code> <strong>一动不动</strong>——没有报错，没有警告，IR 原样输出。断点打进 <code>fold()</code>，它确实返回了正确的 <code>FloatAttr</code>。</p>
+<p>问题在<strong>下一步</strong>。<code>fold</code> 交出一个 Attribute，框架要把它变成一条真的 op 才能替换原来的 op，而&quot;怎么把 Attribute 变成 op&quot;只有方言自己知道。这个钩子在 <code>mlir/include/mlir/IR/Dialect.h:83</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">virtual Operation *materializeConstant(OpBuilder &amp;builder, Attribute value,
+                                       Type type, Location loc) {
+  return nullptr;
+}</code></pre>
+</div><p>默认返回 <code>nullptr</code>，意思是&quot;我落不了这个常量&quot;。框架于是<strong>放弃那次折叠</strong>——它不能崩，也没什么可报的，就当没发生。于是你看到一个完全正常、却什么都没做的 <code>fold</code>。补上开关和实现：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  // …
+  let hasConstantMaterializer = 1;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">Operation *PixDialect::materializeConstant(OpBuilder &amp;builder, Attribute value,
+                                           Type type, Location loc) {
+  auto typed = dyn_cast&lt;TypedAttr&gt;(value);
+  if (!typed || typed.getType() != type)
+    return nullptr;
+  if (!isa&lt;FloatType&gt;(type))
+    return nullptr;
+  return arith::ConstantOp::create(builder, loc, typed);
+}</code></pre>
+</div><p>pix 没有自己的标量常量 op，就借 <code>arith.constant</code> 落地。上游 arith 的实现在 <code>mlir/lib/Dialect/Arith/IR/ArithDialect.cpp:65</code>，长得差不多。再跑：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --canonicalize
+func.func @reduce_splat() -&gt; f32 {
+  %img = arith.constant dense&lt;2.5&gt; : tensor&lt;4x4xf32&gt;
+  %s = pix.reduce %img : tensor&lt;4x4xf32&gt; -&gt; f32
+  return %s : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @reduce_splat() -&gt; f32 {
+    %cst = arith.constant 4.000000e+01 : f32
+    return %cst : f32
+  }
+}</code></pre>
+</div><p>2.5 × 16 = 40，整张图消失了。逐元素那条路（<code>dense&lt;[[1.0, 2.0], [3.0, 4.0]]&gt;</code> 折成 10）由 <code>canonicalize.mlir</code> 里的 <code>reduce_dense</code> 守着。</p>
+<div class="warn">
+<strong>返回 Attribute 的 fold 要配一个 materializeConstant</strong>
+<p>这条值得单独记住：<strong>方言里只要有任何一个 <code>fold</code> 会返回 Attribute，就必须实现 <code>materializeConstant</code></strong>。少了它不会编译失败、不会运行时报错、不会有诊断，只是折叠悄悄作废——排查要一路跟到框架内部才看得见。反过来，如果你的 fold 全都只返回已有的 <code>Value</code>（像本章前半段那几个），就不需要这个钩子。</p>
+</div><h2>canonicalize：要造新 op，就只能走这条</h2>
+<p>pix 里有两条化简过不了&quot;不许造 op&quot;那道门：<code>scale(scale(%x, a), b)</code> → <code>scale(%x, a*b)</code>（多一个乘法），以及 <code>add(%x, %x)</code> → <code>scale(%x, 2.0)</code>（多一个常量）。只能写成 pattern：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// scale(scale(%x, a), b) → scale(%x, a * b)
+struct MergeNestedScale : OpRewritePattern&lt;ScaleOp&gt; {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ScaleOp op,
+                                PatternRewriter &amp;rewriter) const override {
+    auto inner = op.getImage().getDefiningOp&lt;ScaleOp&gt;();
+    if (!inner)
+      return failure();
+
+    Value merged = arith::MulFOp::create(rewriter, op.getLoc(),
+                                        inner.getFactor(), op.getFactor());
+    rewriter.replaceOpWithNewOp&lt;ScaleOp&gt;(op, inner.getImage(), merged);
+    return success();
+  }
+};
+
+void ScaleOp::getCanonicalizationPatterns(RewritePatternSet &amp;patterns,
+                                          MLIRContext *context) {
+  patterns.add&lt;MergeNestedScale&gt;(context);
+}</code></pre>
+</div><p>注册函数的签名照 <code>mlir/lib/Dialect/Arith/IR/ArithOps.cpp:439</code> 那个样子写就行。</p>
+<div class="warn">
+<strong>造 op 的写法在基线 23.1 变了</strong>
+<p>上面写的是 <code>arith::MulFOp::create(rewriter, loc, …)</code>。你在网上、在老书里看到的几乎都是 <code>rewriter.create&lt;arith::MulFOp&gt;(loc, …)</code>——那个写法在 23.1 的 <code>mlir/lib</code> 里已经<strong>一处都不剩</strong>（我数过：<code>rewriter.create&lt;</code> 与 <code>builder.create&lt;</code> 各 0 次，<code>OpTy::create(</code> 共 8445 次）。照老写法抄不一定编不过，但你会和整棵树的风格对不上。和第 10 章那个 <code>RegionSuccessor</code> 是同一类事：<strong>照你手上那份源码写，别照记忆写。</strong></p>
+</div><h3>跨方言接力：arith 替我们把 2.0 × 3.0 折了</h3>
+<p>注意 <code>MergeNestedScale</code> 里<strong>没有</strong>检查 <code>a</code>、<code>b</code> 是不是常量，直接造了个 <code>arith.mulf</code>。这是故意的：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --canonicalize
+func.func @nested_scale(%img: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %a = arith.constant 2.0 : f32
+  %b = arith.constant 3.0 : f32
+  %s1 = pix.scale %img, %a : tensor&lt;4x4xf32&gt;
+  %s2 = pix.scale %s1, %b : tensor&lt;4x4xf32&gt;
+  return %s2 : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @nested_scale(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %cst = arith.constant 6.000000e+00 : f32
+    %0 = pix.scale %arg0, %cst : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p>我们造的 <code>arith.mulf</code> 不见了，位置上是 <code>6.000000e+00</code>。<strong>我们没写一行常量折叠的乘法代码</strong>——arith 自己的 folder 在同一轮 <code>--canonicalize</code> 里把它折成了 6.0。把两个系数换成函数参数再跑，<code>arith.mulf</code> 就老实留在那儿（<code>canonicalize.mlir</code> 里的 <code>nested_scale_dynamic</code> 守着这条）。</p>
+<p>这就是渐进式化简的样子：<strong>每个方言只管好自己那一摊，凑在一起自动接力，谁都不用认识谁。</strong> 如果我在 pattern 里非要自己判断常量、自己算乘积，代码更长，而且只覆盖常量这一种情况。</p>
+<h3>踩坑实录：<code>created with unregistered dialect</code></h3>
+<p>第二条 pattern 要造一个 <code>arith.constant</code>。写完自测，前面那些例子都好；换一个输入就炸了：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">$ cat loop.mlir
+func.func @boom(%img: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %r = pix.add %img, %img : tensor&lt;4x4xf32&gt;
+  return %r : tensor&lt;4x4xf32&gt;
+}
+
+$ pix-opt loop.mlir --canonicalize
+LLVM ERROR: arith.constant created with unregistered dialect. If this is intended,
+please call allowUnregisteredDialects() on the MLIRContext, or use
+-allow-unregistered-dialect with the MLIR tool used.
+PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/</code></pre>
+</div><p>注意它<strong>不是诊断</strong>——是 <code>LLVM ERROR</code> 加 abort，直接把进程带走。</p>
+<p>为什么前面的例子好好的？因为那些输入里<strong>本来就有 <code>arith.constant</code></strong>，解析器读到它时顺手把 arith 加载进了 <code>MLIRContext</code>。这个 <code>loop.mlir</code> 一个 arith op 都没有，pattern 想创建时 arith 根本没被加载。<strong>这个 bug 的欺骗性就在这里：它取决于输入 IR 长什么样。</strong> 你的测试可能全绿，用户的第一个文件就炸。</p>
+<p>正解是在方言上声明依赖：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  // …
+  // 想创建某个方言的 op，那个方言必须已经加载进 MLIRContext。
+  let dependentDialects = ["::mlir::arith::ArithDialect"];
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>改完重编，会撞上第二个错误：<code>PixOpsDialect.cpp.inc:18:37: error: &#39;arith&#39; is not a member of &#39;mlir&#39;</code>。因为生成的 <code>.cpp.inc</code> 里多了一句 <code>loadDialect&lt;::mlir::arith::ArithDialect&gt;()</code>，而 <code>PixDialect.cpp</code> 没 include arith 的头——把 <code>#include &quot;mlir/Dialect/Arith/IR/Arith.h&quot;</code> 放到 include 生成代码<strong>之前</strong>即可。CMake 那边也要给 <code>LINK_LIBS</code> 加上 <code>MLIRArithDialect</code>。</p>
+<div class="keypoint">
+<strong>一条界线：解析别人的 op 不用依赖，创建别人的 op 才要。</strong>
+<p><code>pix-opt</code> 一直能<strong>读</strong> <code>arith.constant</code>，那是因为驱动里调了 <code>registerAllDialects</code>。但"<code>pix</code> 这个方言自己会造 arith 的 op"是另一回事，必须由方言声明 <code>dependentDialects</code>——它保证的是"只要谁加载了 pix，arith 就一定也在"。第 16 章写 conversion pattern 时你会反复用到它，那里造的 op 更多。</p>
+</div><div class="concept">
+<svg viewBox="0 0 700 372" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c11b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c11o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c11g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">分界线只有一条：结果里需要新造 op 吗？</text>
+  <text x="14" y="42" font-size="11" font-weight="bold" fill="#2b6cb0">不需要 → fold（适用面更广：conversion、createOrFold 都会调它）</text>
+  <rect x="14" y="50" width="172" height="48" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="26" y="70" font-size="10" font-family="monospace" fill="#24292f">OpFoldResult</text>
+  <text x="26" y="86" font-size="10" font-family="monospace" fill="#24292f">fold(FoldAdaptor)</text>
+  <text x="14" y="114" font-size="9" fill="#6b7280">= PointerUnion&lt;Attribute, Value&gt;</text>
+  <line x1="188" y1="62" x2="232" y2="62" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#c11b)"/>
+  <text x="192" y="56" font-size="9" fill="#2b6cb0">Value</text>
+  <line x1="188" y1="88" x2="232" y2="88" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#c11b)"/>
+  <text x="192" y="102" font-size="9" fill="#2b6cb0">Attribute</text>
+  <rect x="234" y="44" width="196" height="34" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="246" y="65" font-size="10" fill="#24292f">把 use 全换成那个值 —— 完成</text>
+  <rect x="234" y="82" width="196" height="34" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="246" y="103" font-size="10" fill="#24292f">materializeConstant 落地</text>
+  <line x1="432" y1="99" x2="470" y2="99" stroke="#3f9b5c" stroke-width="1.5" marker-end="url(#c11g)"/>
+  <rect x="472" y="82" width="140" height="34" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="484" y="103" font-size="10" font-family="monospace" fill="#24292f">arith.constant</text>
+  <text x="234" y="134" font-size="9" fill="#e06a3b">不实现这个钩子：折是折出来了，没人放得回 IR —— <tspan font-weight="bold">静默失效</tspan></text>
+  <line x1="14" y1="150" x2="686" y2="150" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="172" font-size="11" font-weight="bold" fill="#e06a3b">需要 → canonicalize pattern</text>
+  <rect x="14" y="182" width="172" height="48" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="26" y="202" font-size="10" font-family="monospace" fill="#24292f">matchAndRewrite(</text>
+  <text x="26" y="218" font-size="10" font-family="monospace" fill="#24292f">  op, rewriter)</text>
+  <line x1="188" y1="206" x2="228" y2="206" stroke="#e06a3b" stroke-width="1.5" marker-end="url(#c11o)"/>
+  <rect x="230" y="182" width="196" height="48" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="242" y="202" font-size="10" font-family="monospace" fill="#24292f">OpTy::create(rewriter, …)</text>
+  <text x="242" y="218" font-size="10" font-family="monospace" fill="#24292f">replaceOpWithNewOp</text>
+  <line x1="428" y1="206" x2="468" y2="206" stroke="#e06a3b" stroke-width="1.5" marker-end="url(#c11o)"/>
+  <rect x="470" y="182" width="196" height="48" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="482" y="202" font-size="10" fill="#24292f">新 op 重新入 worklist，</text>
+  <text x="482" y="218" font-size="10" fill="#24292f">可能又触发别的规则</text>
+  <path d="M 568 232 L 568 252 L 100 252 L 100 234" fill="none" stroke="#e06a3b" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#c11o)"/>
+  <text x="250" y="248" font-size="9" fill="#e06a3b">循环，直到 worklist 排空 = 到达不动点</text>
+  <rect x="14" y="266" width="672" height="94" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="26" y="286" font-size="11" font-weight="bold" fill="#e06a3b">那条循环箭头就是危险所在：两条互逆的规则会让 worklist 永远排不空</text>
+  <text x="26" y="306" font-size="10" fill="#24292f">A：add %x, %x → scale %x, 2.0　　　B：scale %x, 2.0 → add %x, %x　　两条都注册 → 原地打转</text>
+  <text x="26" y="326" font-size="10" fill="#24292f">而且它<tspan font-weight="bold">不会报"没收敛"</tspan>：<tspan font-family="monospace">maxIterations = 10</tspan> 管的是外层轮次；内层 processWorklist 的上限是</text>
+  <text x="26" y="344" font-size="10" fill="#24292f"><tspan font-family="monospace">maxNumRewrites</tspan>，而它默认 <tspan font-family="monospace">kNoLimit</tspan> —— 于是第一轮就再也出不来，进程挂死。</text>
+</svg>
+<div class="caption">图 11-1　fold 与 canonicalize 的分界线、fold 两种返回各自的下一步，以及 pattern 循环的收敛风险</div>
+</div><h2>不动点与那个经典陷阱</h2>
+<p><code>--canonicalize</code> 不是&quot;把每条规则跑一遍&quot;，而是<strong>反复跑到 IR 不再变化</strong>。驱动在 <code>mlir/lib/Transforms/Utils/GreedyPatternRewriteDriver.cpp</code>，两层循环：<strong>外层</strong>一轮一轮扫，上限 <code>maxIterations</code>，默认 <strong>10</strong>（<code>mlir/include/mlir/Transforms/GreedyPatternRewriteDriver.h:169</code>）；<strong>内层</strong> <code>processWorklist()</code> 从 worklist 取 op、试所有匹配的 pattern、成功就把受影响的 op 重新入队，注释写得很直白：<em>&quot;Process ops until the worklist is empty or <code>config.maxNumRewrites</code> is reached.&quot;</em></p>
+<p>现在做那个经典实验。我们已有 A：<code>add %x, %x → scale %x, 2.0</code>。再写一条反向的 B：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 千万别真注册这条。（匹配"系数是常量 2.0"那几行省略）
+struct ScaleTwoToAdd : OpRewritePattern&lt;ScaleOp&gt; {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ScaleOp op,
+                                PatternRewriter &amp;rewriter) const override {
+    // …确认 op.getFactor() 是常量 2.0，否则 return failure();
+    rewriter.replaceOpWithNewOp&lt;AddOp&gt;(op, op.getImage(), op.getImage());
+    return success();
+  }
+};</code></pre>
+</div><p>两条都注册，喂一个 <code>pix.add %img, %img</code>。你可能期待一句&quot;pattern 没收敛&quot;的警告。实际发生的是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">$ pix-opt loop.mlir --canonicalize
+# 没有输出。没有报错。进程再也不返回。</code></pre>
+</div><p><strong>它挂死了。</strong> 为什么 <code>maxIterations = 10</code> 没兜住？因为那是<strong>外层</strong>的上限，而这场 ping-pong 发生在<strong>内层</strong> worklist 里：A 改完，新的 <code>pix.scale</code> 入队；B 把它改回 <code>pix.add</code>，又入队；worklist 永远不空，<code>processWorklist()</code> 永远不返回，外层那个计数器一次都轮不到。而内层唯一的刹车 <code>maxNumRewrites</code> 默认是 <code>kNoLimit</code>。</p>
+<p>这句话有点绕，不如把那两层循环剥出来自己跑一遍。下面这个模型只有 40 行，结构和真驱动一一对应——点运行，然后试着改 <code>max_num_rewrites</code>、或者把 <code>diverging</code> 里的 B 去掉：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%2040%20%E8%A1%8C%E7%9A%84%20greedy%20driver%20%E6%A8%A1%E5%9E%8B%EF%BC%8C%E4%B8%A4%E5%B1%82%E5%BE%AA%E7%8E%AF%E5%92%8C%20MLIR%20%E9%87%8C%E9%82%A3%E4%B8%A4%E5%B1%82%E4%B8%80%E4%B8%80%E5%AF%B9%E5%BA%94%E3%80%82%0A%23%20IR%20%E7%AE%80%E5%8C%96%E6%88%90%E4%B8%80%E4%B8%B2%20op%20%E5%90%8D%EF%BC%9Bpattern%20%E5%B0%B1%E6%98%AF%22%E7%9C%8B%E5%88%B0%E4%BB%80%E4%B9%88%E3%80%81%E6%8D%A2%E6%88%90%E4%BB%80%E4%B9%88%22%E3%80%82%0A%0Adef%20run(patterns%2C%20ir%2C%20max_iterations%3D10%2C%20max_num_rewrites%3DNone%2C%20trace_limit%3D6)%3A%0A%20%20%20%20%22%22%22%E8%BF%94%E5%9B%9E%20(%E6%9C%80%E7%BB%88%20IR%2C%20%E7%BB%93%E6%9D%9F%E5%8E%9F%E5%9B%A0)%E3%80%82max_num_rewrites%3DNone%20%E8%A1%A8%E7%A4%BA%E6%97%A0%E4%B8%8A%E9%99%90%EF%BC%88MLIR%20%E7%9A%84%E9%BB%98%E8%AE%A4%EF%BC%89%E3%80%82%22%22%22%0A%20%20%20%20rewrites%20%3D%200%0A%20%20%20%20for%20iteration%20in%20range(1%2C%20max_iterations%20%2B%201)%3A%0A%20%20%20%20%20%20%20%20worklist%20%3D%20list(range(len(ir)))%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%AC%E8%BD%AE%E8%A6%81%E5%A4%84%E7%90%86%E7%9A%84%20op%20%E4%B8%8B%E6%A0%87%0A%20%20%20%20%20%20%20%20changed_this_iteration%20%3D%20False%0A%20%20%20%20%20%20%20%20while%20worklist%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E2%86%90%20%E5%86%85%E5%B1%82%EF%BC%9AprocessWorklist()%0A%20%20%20%20%20%20%20%20%20%20%20%20i%20%3D%20worklist.pop(0)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20i%20%3E%3D%20len(ir)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%20%20%20%20for%20name%2C%20(src%2C%20dst)%20in%20patterns.items()%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20ir%5Bi%5D%20%3D%3D%20src%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20ir%5Bi%5D%20%3D%20dst%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20rewrites%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20rewrites%20%3C%3D%20trace_limit%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%E7%AC%AC%20%7Brewrites%3A2d%7D%20%E6%AC%A1%E6%94%B9%E5%86%99%20%20%7Bname%7D%3A%20%7Bsrc%7D%20-%3E%20%7Bdst%7D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20worklist.append(i)%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%96%B0%20op%20%E9%87%8D%E6%96%B0%E5%85%A5%E9%98%9F%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20changed_this_iteration%20%3D%20True%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20break%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20max_num_rewrites%20is%20not%20None%20and%20rewrites%20%3E%3D%20max_num_rewrites%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20return%20ir%2C%20f%22%E5%86%85%E5%B1%82%E6%92%9E%E4%B8%8A%20max_num_rewrites%3D%7Bmax_num_rewrites%7D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20rewrites%20%3E%20trace_limit%20%2B%20200%3A%20%20%20%20%20%23%20%E5%8F%AA%E4%B8%BA%E4%BA%86%E8%AE%A9%E6%B5%8F%E8%A7%88%E5%99%A8%E5%88%AB%E5%8D%A1%E6%AD%BB%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20return%20ir%2C%20%22worklist%20%E6%B0%B8%E8%BF%9C%E6%8E%92%E4%B8%8D%E7%A9%BA%EF%BC%88%E7%9C%9F%E5%AE%9E%20MLIR%20%E4%BC%9A%E4%B8%80%E7%9B%B4%E6%8C%82%E5%9C%A8%E8%BF%99%E9%87%8C%EF%BC%89%22%0A%20%20%20%20%20%20%20%20if%20not%20changed_this_iteration%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20ir%2C%20f%22%E7%AC%AC%20%7Biteration%7D%20%E8%BD%AE%E6%B2%A1%E6%9C%89%E4%BB%BB%E4%BD%95%E6%94%B9%E5%8A%A8%20%E2%80%94%E2%80%94%20%E5%88%B0%E8%BE%BE%E4%B8%8D%E5%8A%A8%E7%82%B9%22%0A%20%20%20%20return%20ir%2C%20f%22%E5%A4%96%E5%B1%82%E6%92%9E%E4%B8%8A%20max_iterations%3D%7Bmax_iterations%7D%22%0A%0Aconverging%20%3D%20%7B%22A%22%3A%20(%22add%22%2C%20%22scale%22)%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8D%95%E5%90%91%0Adiverging%20%20%3D%20%7B%22A%22%3A%20(%22add%22%2C%20%22scale%22)%2C%20%22B%22%3A%20(%22scale%22%2C%20%22add%22)%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%BA%92%E9%80%86%0A%0Aprint(%22%E3%80%90%E4%B8%80%E3%80%91%E5%8F%AA%E6%B3%A8%E5%86%8C%20A%EF%BC%9Aadd%20-%3E%20scale%22)%0Air%2C%20why%20%3D%20run(converging%2C%20%5B%22add%22%5D)%0Aprint(f%22%20%20IR%20%3D%20%7Bir%7D%5Cn%20%20%E7%BB%93%E6%9D%9F%E5%8E%9F%E5%9B%A0%EF%BC%9A%7Bwhy%7D%5Cn%22)%0A%0Aprint(%22%E3%80%90%E4%BA%8C%E3%80%91A%20%E5%92%8C%20B%20%E9%83%BD%E6%B3%A8%E5%86%8C%EF%BC%88%E4%BA%92%E9%80%86%EF%BC%89%22)%0Air%2C%20why%20%3D%20run(diverging%2C%20%5B%22add%22%5D)%0Aprint(f%22%20%20IR%20%3D%20%7Bir%7D%5Cn%20%20%E7%BB%93%E6%9D%9F%E5%8E%9F%E5%9B%A0%EF%BC%9A%7Bwhy%7D%22)%0Aprint(%22%20%20%E6%B3%A8%E6%84%8F%EF%BC%9Amax_iterations%3D10%20%E4%B8%80%E6%AC%A1%E9%83%BD%E6%B2%A1%E8%BD%AE%E5%88%B0%20%E2%80%94%E2%80%94%20%E5%A4%96%E5%B1%82%E7%9A%84%E5%88%B9%E8%BD%A6%E7%AE%A1%E4%B8%8D%E4%BD%8F%E5%86%85%E5%B1%82%E7%9A%84%20worklist%E3%80%82%5Cn%22)%0A%0Aprint(%22%E3%80%90%E4%B8%89%E3%80%91%E5%90%8C%E6%A0%B7%E4%B8%A4%E6%9D%A1%E8%A7%84%E5%88%99%EF%BC%8C%E4%BD%86%E7%BB%99%E5%86%85%E5%B1%82%E8%AE%BE%E4%B8%8A%E9%99%90%EF%BC%88MLIR%20%E7%9A%84%20maxNumRewrites%EF%BC%89%22)%0Air%2C%20why%20%3D%20run(diverging%2C%20%5B%22add%22%5D%2C%20max_num_rewrites%3D5)%0Aprint(f%22%20%20IR%20%3D%20%7Bir%7D%5Cn%20%20%E7%BB%93%E6%9D%9F%E5%8E%9F%E5%9B%A0%EF%BC%9A%7Bwhy%7D%22)"># 一个 40 行的 greedy driver 模型，两层循环和 MLIR 里那两层一一对应。
+# IR 简化成一串 op 名；pattern 就是"看到什么、换成什么"。
+
+def run(patterns, ir, max_iterations=10, max_num_rewrites=None, trace_limit=6):
+    """返回 (最终 IR, 结束原因)。max_num_rewrites=None 表示无上限（MLIR 的默认）。"""
+    rewrites = 0
+    for iteration in range(1, max_iterations + 1):
+        worklist = list(range(len(ir)))          # 本轮要处理的 op 下标
+        changed_this_iteration = False
+        while worklist:                          # ← 内层：processWorklist()
+            i = worklist.pop(0)
+            if i &gt;= len(ir):
+                continue
+            for name, (src, dst) in patterns.items():
+                if ir[i] == src:
+                    ir[i] = dst
+                    rewrites += 1
+                    if rewrites &lt;= trace_limit:
+                        print(f"  第 {rewrites:2d} 次改写  {name}: {src} -&gt; {dst}")
+                    worklist.append(i)           # 新 op 重新入队
+                    changed_this_iteration = True
+                    break
+            if max_num_rewrites is not None and rewrites &gt;= max_num_rewrites:
+                return ir, f"内层撞上 max_num_rewrites={max_num_rewrites}"
+            if rewrites &gt; trace_limit + 200:     # 只为了让浏览器别卡死
+                return ir, "worklist 永远排不空（真实 MLIR 会一直挂在这里）"
+        if not changed_this_iteration:
+            return ir, f"第 {iteration} 轮没有任何改动 —— 到达不动点"
+    return ir, f"外层撞上 max_iterations={max_iterations}"
+
+converging = {"A": ("add", "scale")}                                   # 单向
+diverging  = {"A": ("add", "scale"), "B": ("scale", "add")}             # 互逆
+
+print("【一】只注册 A：add -&gt; scale")
+ir, why = run(converging, ["add"])
+print(f"  IR = {ir}\n  结束原因：{why}\n")
+
+print("【二】A 和 B 都注册（互逆）")
+ir, why = run(diverging, ["add"])
+print(f"  IR = {ir}\n  结束原因：{why}")
+print("  注意：max_iterations=10 一次都没轮到 —— 外层的刹车管不住内层的 worklist。\n")
+
+print("【三】同样两条规则，但给内层设上限（MLIR 的 maxNumRewrites）")
+ir, why = run(diverging, ["add"], max_num_rewrites=5)
+print(f"  IR = {ir}\n  结束原因：{why}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">【一】只注册 A：add -&gt; scale
+  第  1 次改写  A: add -&gt; scale
+  IR = ['scale']
+  结束原因：第 2 轮没有任何改动 —— 到达不动点
+
+【二】A 和 B 都注册（互逆）
+  第  1 次改写  A: add -&gt; scale
+  第  2 次改写  B: scale -&gt; add
+  第  3 次改写  A: add -&gt; scale
+  第  4 次改写  B: scale -&gt; add
+  第  5 次改写  A: add -&gt; scale
+  第  6 次改写  B: scale -&gt; add
+  IR = ['scale']
+  结束原因：worklist 永远排不空（真实 MLIR 会一直挂在这里）
+  注意：max_iterations=10 一次都没轮到 —— 外层的刹车管不住内层的 worklist。
+
+【三】同样两条规则，但给内层设上限（MLIR 的 maxNumRewrites）
+  第  1 次改写  A: add -&gt; scale
+  第  2 次改写  B: scale -&gt; add
+  第  3 次改写  A: add -&gt; scale
+  第  4 次改写  B: scale -&gt; add
+  第  5 次改写  A: add -&gt; scale
+  IR = ['scale']
+  结束原因：内层撞上 max_num_rewrites=5</code></pre>
+</div><p>【二】里那个&quot;永远排不空&quot;是模型为了不卡死浏览器加的护栏；真的 <code>pix-opt</code> 没有这道护栏，所以它就停在那儿了。</p>
+<p>想看真家伙在干什么，在开断言的本地构建上加个调试开关：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt loop.mlir --canonicalize --debug-only=greedy-rewriter</code></pre>
+</div><p>运行结果（截取开头两轮，地址每次运行都不同）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[greedy-rewriter:1] Processing operation : 'pix.add'(0x5940ea2813f0) {
+[greedy-rewriter:1]   * Pattern {anonymous}::AddSelfToScale : 'pix.add -&gt; ()' {
+[greedy-rewriter:1]     ** Insert  : 'pix.scale'(0x5940ea2c93f0)
+[greedy-rewriter:1]     ** Erase   : 'pix.add'(0x5940ea2813f0)
+[greedy-rewriter:1]   } -&gt; success : pattern applied successfully
+[greedy-rewriter:1] Processing operation : 'pix.scale'(0x5940ea2c93f0) {
+[greedy-rewriter:1]   * Pattern {anonymous}::ScaleTwoToAdd : 'pix.scale -&gt; ()' {
+[greedy-rewriter:1]     ** Insert  : 'pix.add'(0x5940ea2813f0)
+[greedy-rewriter:1]     ** Erase   : 'pix.scale'(0x5940ea2c93f0)
+[greedy-rewriter:1]   } -&gt; success : pattern applied successfully
+[greedy-rewriter:1] Processing operation : 'pix.add'(0x5940ea2813f0) {</code></pre>
+</div><p>（原始输出还有 <code>arith.constant</code> 的插入、以及 <code>MergeNestedScale</code> 匹配失败那几行，这里省掉了。）ping-pong 一目了然。顺带一个有意思的细节：最后那个 <code>pix.add</code> 的地址和第一行<strong>一模一样</strong>——刚被 erase 的内存立刻被新 op 复用了。所以<strong>别用地址判断&quot;是不是同一个 op&quot;</strong>，这个坑第 14 章讲 pattern 调试时还会遇到。</p>
+<p><code>--debug-only</code> 需要开断言的构建（附录 A 第 0 节）。发行版的 <code>mlir-opt</code> 和 Compiler Explorer 上那份都是关断言的，这个开关在它们上面直接报&quot;未知参数&quot;。</p>
+<div class="keypoint">
+<strong>一条规则往哪个方向写，是设计决定，不是口味问题。</strong>
+<p>A 和 B 在数学上等价，但只有一个方向能当 canonicalize：<strong>规范化必须有方向，而且全体规则要能定出一个"越走越简单"的序。</strong>判断方法很朴素——问自己"反复应用这条规则，IR 会不会停下来？"以及"它和别人合起来会不会停下来？"</p>
+<p>真的需要双向怎么办（比如一个方向利于向量化、另一个利于 GPU）？<strong>别放进 canonicalize</strong>，写成独立的 pass 或显式 pattern 集，由管线决定何时用哪个。canonicalize 是所有人共享的公共设施，只该放无争议的方向。第 14 章讲怎么装自己的 pattern 集，第 18 章的 transform 方言更进一步——把"什么时候用哪条规则"本身写成 IR。</p>
+</div><h2>动手：给 <code>pix.mul</code> 加两条化简</h2>
+<p><code>pix.mul</code> 现在一条化简都没有，而它有两个明显的机会，都走 fold，但返回的东西不同：<code>mul(%x, 全一图)</code> → <code>%x</code>（返回<strong>已有的值</strong>），<code>mul(%x, 全零图)</code> → 全零图（返回<strong>一个 Attribute</strong>）。</p>
+<p>给 <code>Pix_MulOp</code> 加 <code>let hasFolder = 1;</code>，然后照 <code>AddOp::fold</code> 的样子写。第 2 条有个岔子值得你亲自撞一下：它返回的是 <code>DenseFPElementsAttr</code>（tensor 类型），而我们的 <code>materializeConstant</code> 只认 <code>FloatType</code>——<strong>第 1 条会立刻生效，第 2 条会静默失效</strong>，正是本章那个坑。你得把钩子放宽才行。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">MLIR_DIR=$LLVM/build/lib/cmake/mlir books/inside-mlir/verify/verify-pix.sh
+pix-opt /tmp/mul.mlir --canonicalize    # 输入：pix.mul %img, dense&lt;1.0&gt;</code></pre>
+</div><p>预期结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @mul_one(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    return %arg0 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p><strong>再改一处</strong>：把 <code>MergeNestedScale</code> 的方向反过来（把一层 <code>scale</code> 拆成两层），注册上去跑 <code>--canonicalize</code>，亲眼看它挂死，再加 <code>--debug-only=greedy-rewriter</code> 看 ping-pong。看完记得改回来——<code>check-pix</code> 会因为超时而挂。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>分界线只有一条：<strong>结果里需要新造 op 吗？</strong> 不需要 → <code>fold()</code>；需要 → canonicalize pattern。</li>
+<li><strong>能写成 <code>fold</code> 的别写成 pattern</strong>：它的调用点多得多——<code>--canonicalize</code>、dialect conversion 的合法化、<code>OpBuilder::createOrFold</code>。代价是不许造 op，因为有些调用点根本没有 <code>OpBuilder</code>。</li>
+<li><code>OpFoldResult</code> 就是 <code>PointerUnion&lt;Attribute, Value&gt;</code>（<code>mlir/include/mlir/IR/OpDefinition.h:273</code>）。<code>FoldAdaptor</code> 喂给你的是<strong>操作数的常量属性</strong>（不是常量就是 null，用 <code>dyn_cast_or_null</code>）；要看&quot;操作数是谁产生的&quot;，自己走 <code>getDefiningOp&lt;T&gt;()</code>。</li>
+<li><strong>返回 Attribute 的 fold 必须配 <code>materializeConstant</code></strong>（<code>hasConstantMaterializer</code> + <code>Dialect.h:83</code>）。少了它没有任何报错，折叠<strong>静默作废</strong>——这一章最值钱的一条。</li>
+<li><strong>创建别的方言的 op，要声明 <code>dependentDialects</code></strong>。漏了它只在&quot;输入 IR 里恰好没有那个方言&quot;时才炸，而且是 <code>LLVM ERROR</code> + abort，不是诊断。解析不需要，创建才需要。</li>
+<li>让化简<strong>自动接力</strong>：造 <code>arith.mulf</code> 而不是自己判断常量，arith 的 folder 会替你折。每个方言管好自己那一摊，凑起来比谁都聪明。</li>
+<li><code>--canonicalize</code> 跑到<strong>不动点</strong>，两层上限：外层 <code>maxIterations</code> 默认 10，内层 <code>processWorklist</code> 的 <code>maxNumRewrites</code> 默认<strong>无上限</strong>。所以<strong>互逆的 pattern 不会得到&quot;没收敛&quot;的警告，而是直接挂死</strong>。规则必须有方向；真需要双向的，写成独立 pass 或显式 pattern 集。</li>
+<li>基线 23.1 里 <code>rewriter.create&lt;OpTy&gt;(…)</code> 已被 <code>OpTy::create(rewriter, …)</code> 全面替换（<code>mlir/lib</code> 下前者 0 次、后者 8445 次）。</li>
+</ul>
+<p><strong>pix 进度</strong>：四个 op 有了化简——<code>add</code>（零图恒等 + <code>add %x,%x → scale</code>）、<code>scale</code>（系数 1 恒等 + 嵌套合并）、<code>transpose</code>（双重抵消）、<code>reduce</code>（常量图求和）。方言层面补上 <code>dependentDialects</code> 与 <code>materializeConstant</code> 两个声明。新增 <code>canonicalize.mlir</code>，16 个用例覆盖&quot;该折的折了&quot;和&quot;不该动的没动&quot;两侧，<code>check-pix</code> 6 个测试全绿。</p>
+<p>下一章把 pix <strong>收尾成一个能交付的项目</strong>：补齐剩下的 op、把 <code>pix-opt</code> 的注册和诊断整理干净、把 lit 测试目录按上游惯例摆好，<code>ninja check-pix</code> 一条命令跑全套。第二部分到那里结束——你会有一个从零长出来、有类型有属性有 verifier 有化简有测试的完整方言，第三部分开始在它身上做真正的变换。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch10.html">← 第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a>
+  <a class="nav-next" href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -40,6 +40,12 @@ def Pix_AddOp : Pix_Op<"add", [Pure, Commutative, SameOperandsAndResultType]> {
   // 自定义格式：让 IR 读起来像 `pix.add %a, %b : tensor<4x4xf32>`
   // 而不是通用格式那一长串（第 3 章讲过两者的关系）。
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+
+  // 第 11 章：这个 op 两条路都用到，正好对照。
+  //   fold          —— 加一张全零图等于没加，返回**已有的值**
+  //   canonicalizer —— add %x, %x → scale %x, 2.0，要**造新 op**，fold 做不到
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -66,6 +72,12 @@ def Pix_ScaleOp : Pix_Op<"scale", [Pure, AllTypesMatch<["image", "result"]>]> {
   // 只打印一个类型：结果类型与 image 相同，由 AllTypesMatch 保证，
   // 解析时能据此推出 image 的类型——少写一个类型，IR 更好读。
   let assemblyFormat = "$image `,` $factor attr-dict `:` type($result)";
+
+  // 第 11 章：这个 op 同时要 fold 和 canonicalize，正好演示两者的分工。
+  //   fold          —— 系数为 1 时，整个 op 就等于它的输入，返回**已有的值**
+  //   canonicalizer —— 嵌套的两层 scale 合成一层，要造新 op
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -82,6 +94,10 @@ def Pix_TransposeOp : Pix_Op<"transpose", [Pure]> {
 
   // 第 10 章：ODS 只知道两边都是 F32Tensor，"形状必须互为转置"要自己查。
   let hasVerifier = 1;
+
+  // 第 11 章：transpose(transpose(%x)) → %x。返回的是**已有的值**，
+  // 不造任何 op，所以 fold 就够了。
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -95,6 +111,10 @@ def Pix_ReduceOp : Pix_Op<"reduce", [Pure]> {
   let arguments = (ins F32Tensor:$image);
   let results = (outs F32:$result);
   let assemblyFormat = "$image attr-dict `:` type($image) `->` type($result)";
+
+  // 第 11 章：常量图可以在编译期直接求和。这是 fold 返回**Attribute** 的例子
+  // ——真正意义上的"常量折叠"。
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
