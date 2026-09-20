@@ -217,7 +217,64 @@ let assemblyFormat = "attr-dict ($values^ `:` type($values))?";</code></pre>
 </div><p>① 是 <code>pix.scale</code>：只写 <code>type($result)</code> 也能解析回来，因为 <code>AllTypesMatch</code> 告诉解析器 <code>image</code> 的类型与它相同。<strong>约束让 IR 更短，这是声明式的额外红利。</strong></p>
 <p>② 是 <code>pix.transpose</code>：<code>tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;</code>，两个类型都得写，否则无法还原。</p>
 <p>③ 是 <code>pix.yield</code>：有值时打印 <code>pix.yield %t : tensor&lt;4x4xf32&gt;</code>，没值时只打印 <code>pix.yield</code>。</p>
-<div class="warn">
+<p>把 ② 摊开看，格式串的每个元素对应文本里的哪一段，一目了然：</p>
+<div class="concept">
+<svg viewBox="0 0 700 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c8hot" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">一行 assemblyFormat 决定 IR 文本的每一段（以 pix.transpose 为例）</text>
+  <text x="14" y="46" font-size="10" font-weight="bold" fill="#2b6cb0">你在 PixOps.td 里写的</text>
+  <rect x="20" y="52" width="56" height="26" rx="4" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="48" y="69" font-size="11" font-family="monospace" text-anchor="middle" fill="#24292f">$image</text>
+  <rect x="84" y="52" width="76" height="26" rx="4" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="122" y="69" font-size="11" font-family="monospace" text-anchor="middle" fill="#24292f">attr-dict</text>
+  <rect x="168" y="52" width="36" height="26" rx="4" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="186" y="69" font-size="11" font-family="monospace" text-anchor="middle" fill="#24292f">`:`</text>
+  <rect x="212" y="52" width="96" height="26" rx="4" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="260" y="69" font-size="11" font-family="monospace" text-anchor="middle" fill="#24292f">type($image)</text>
+  <rect x="316" y="52" width="44" height="26" rx="4" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="338" y="69" font-size="11" font-family="monospace" text-anchor="middle" fill="#24292f">`to`</text>
+  <rect x="368" y="52" width="102" height="26" rx="4" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="419" y="69" font-size="11" font-family="monospace" text-anchor="middle" fill="#24292f">type($result)</text>
+  <line x1="48" y1="78" x2="48" y2="184" stroke="#9aa4b2" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="122" y1="78" x2="122" y2="184" stroke="#9aa4b2" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="186" y1="78" x2="186" y2="184" stroke="#9aa4b2" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="260" y1="78" x2="260" y2="184" stroke="#9aa4b2" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="338" y1="78" x2="338" y2="184" stroke="#9aa4b2" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="419" y1="78" x2="419" y2="184" stroke="#9aa4b2" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="540" y1="88" x2="540" y2="176" stroke="#e06a3b" stroke-width="1.6" marker-end="url(#c8hot)"/>
+  <line x1="524" y1="176" x2="524" y2="88" stroke="#e06a3b" stroke-width="1.6" marker-end="url(#c8hot)"/>
+  <text x="552" y="118" font-size="10" fill="#e06a3b">print()：照声明顺序写出</text>
+  <text x="552" y="136" font-size="10" fill="#e06a3b">parse()：照同一声明读回</text>
+  <text x="552" y="158" font-size="10" font-weight="bold" fill="#e06a3b">两个函数必然互逆</text>
+  <text x="14" y="176" font-size="10" font-weight="bold" fill="#2f7a45">mlir-opt 打印出来的</text>
+  <rect x="32" y="184" width="32" height="26" rx="4" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="48" y="201" font-size="10" font-family="monospace" text-anchor="middle" fill="#24292f">%a</text>
+  <rect x="94" y="184" width="56" height="26" rx="4" fill="#fff" stroke="#9aa4b2" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="122" y="201" font-size="9" text-anchor="middle" fill="#6b7280">（没属性，</text>
+  <text x="122" y="222" font-size="9" text-anchor="middle" fill="#6b7280">什么都不打印）</text>
+  <rect x="174" y="184" width="24" height="26" rx="4" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="186" y="201" font-size="10" font-family="monospace" text-anchor="middle" fill="#24292f">:</text>
+  <rect x="210" y="184" width="100" height="26" rx="4" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="260" y="201" font-size="10" font-family="monospace" text-anchor="middle" fill="#24292f">tensor&lt;4x8xf32&gt;</text>
+  <rect x="324" y="184" width="28" height="26" rx="4" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="338" y="201" font-size="10" font-family="monospace" text-anchor="middle" fill="#24292f">to</text>
+  <rect x="369" y="184" width="100" height="26" rx="4" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="419" y="201" font-size="10" font-family="monospace" text-anchor="middle" fill="#24292f">tensor&lt;8x4xf32&gt;</text>
+  <rect x="14" y="240" width="330" height="78" rx="6" fill="#fff" stroke="#2b6cb0"/>
+  <text x="26" y="260" font-size="11" font-weight="bold" fill="#2b6cb0">op 名不在 assemblyFormat 里</text>
+  <text x="26" y="278" font-size="10" fill="#24292f">前缀 pix.transpose 由 mnemonic 决定，</text>
+  <text x="26" y="294" font-size="10" fill="#24292f">格式串只管它<tspan font-weight="bold">后面</tspan>那串。所以格式串里</text>
+  <text x="26" y="310" font-size="10" fill="#24292f">找不到 op 名，不是你漏写了。</text>
+  <rect x="356" y="240" width="330" height="78" rx="6" fill="#fff" stroke="#e06a3b"/>
+  <text x="368" y="260" font-size="11" font-weight="bold" fill="#e06a3b">attr-dict 打印出来常常是空的</text>
+  <text x="368" y="278" font-size="10" fill="#24292f">但它必须在。上图这个 op 没挂属性，</text>
+  <text x="368" y="294" font-size="10" fill="#24292f">那一格就是空白——正因为看不见，漏写</text>
+  <text x="368" y="310" font-size="10" fill="#24292f">它的后果才要等到别人挂属性时才炸。</text>
+</svg>
+<div class="caption">图 8-1　assemblyFormat 的每个元素对应 IR 文本的哪一段，以及它换来的那对互逆函数</div>
+</div><div class="warn">
 <strong><code>attr-dict</code> 漏了会怎样</strong>
 <p>不会立刻报错，但任何人给你的 op 挂一个可丢弃属性（第 2 章那种 <code>{my_pass.visited = true}</code>）之后，打印出来就丢了——于是 round-trip 失败，而且失败点离真正的原因很远。<strong>写 <code>assemblyFormat</code> 时先把 <code>attr-dict</code> 放进去</strong>，就像写 C 结构体先想好对齐一样。</p>
 </div><p>什么时候放弃 <code>assemblyFormat</code>？当格式依赖运行时信息、或者你要打印派生出来的东西（比如把 indexing map 渲染成人类可读的形式）。那就改用 <code>let hasCustomAssemblyFormat = 1;</code> 然后在 <code>.cpp</code> 里手写 <code>parse</code>/<code>print</code>。<strong>能用声明式就别手写</strong>——手写的那两个函数必须互为逆运算，出 bug 的方式非常隐蔽。</p>
