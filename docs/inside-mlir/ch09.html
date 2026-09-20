@@ -169,7 +169,62 @@ func.func @kernel_in_signature(%k: !pix.kernel&lt;1 x 5&gt;) -&gt; !pix.kernel&l
   <text x="26" y="328" font-size="10" fill="#24292f">词法分析先把输入切成 token：<tspan font-family="monospace">3x3</tspan> 被切成整数 <tspan font-family="monospace">3</tspan> 和标识符 <tspan font-family="monospace">x3</tspan>，格式里那个字面量 <tspan font-family="monospace">x</tspan> 就永远匹配不上了。</text>
 </svg>
 <div class="caption">图 9-1　自定义类型从 .td 声明到唯一化值，以及它在两种上下文里的不同打印形式</div>
-</div><h2>自定义属性：枚举的两步写法</h2>
+</div><p>图里那两处机关都可以自己戳一戳。下面这段把它们各用十几行模拟出来：上半是唯一化（为什么&quot;同样的参数拿到同一个对象&quot;），下半是词法切分（为什么 <code>&lt;3x3&gt;</code> 解析不了）。点运行，然后试着把 <code>&lt;3 x 3&gt;</code> 换成 <code>&lt;3X3&gt;</code> 或 <code>&lt;3 x3&gt;</code> 看看：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%A4%E4%BB%B6%E4%BA%8B%E5%90%84%2015%20%E8%A1%8C%EF%BC%9A%E2%91%A0%20%E7%B1%BB%E5%9E%8B%E4%B8%BA%E4%BB%80%E4%B9%88%22%E5%90%8C%E6%A0%B7%E7%9A%84%E5%8F%82%E6%95%B0%E6%8B%BF%E5%88%B0%E5%90%8C%E4%B8%80%E4%B8%AA%E5%AF%B9%E8%B1%A1%22%EF%BC%9B%E2%91%A1%20%E4%B8%BA%E4%BB%80%E4%B9%88%203x3%20%E8%A7%A3%E6%9E%90%E4%B8%8D%E4%BA%86%E3%80%82%0A%0A%23%20----------%20%E2%91%A0%20%E5%94%AF%E4%B8%80%E5%8C%96%EF%BC%88%E7%AC%AC%204%20%E7%AB%A0%E7%9A%84%20StorageUniquer%EF%BC%8C%E8%BF%99%E9%87%8C%E7%94%A8%E5%AD%97%E5%85%B8%E6%A8%A1%E6%8B%9F%EF%BC%89%20----------%0Aclass%20Context%3A%0A%20%20%20%20def%20__init__(self)%3A%20self.uniqued%20%3D%20%7B%7D%0A%0Aclass%20KernelType%3A%0A%20%20%20%20def%20__init__(self%2C%20rows%2C%20cols)%3A%20self.rows%2C%20self.cols%20%3D%20rows%2C%20cols%0A%20%20%20%20def%20__repr__(self)%3A%20return%20f%22!pix.kernel%3C%7Bself.rows%7D%20x%20%7Bself.cols%7D%3E%22%0A%20%20%20%20%40staticmethod%0A%20%20%20%20def%20get(ctx%2C%20rows%2C%20cols)%3A%0A%20%20%20%20%20%20%20%20key%20%3D%20(%22kernel%22%2C%20rows%2C%20cols)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8F%82%E6%95%B0%E5%B0%B1%E6%98%AF%E9%94%AE%0A%20%20%20%20%20%20%20%20if%20key%20not%20in%20ctx.uniqued%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20ctx.uniqued%5Bkey%5D%20%3D%20KernelType(rows%2C%20cols)%0A%20%20%20%20%20%20%20%20return%20ctx.uniqued%5Bkey%5D%0A%0Actx%20%3D%20Context()%0Aa%20%3D%20KernelType.get(ctx%2C%203%2C%203)%0Ab%20%3D%20KernelType.get(ctx%2C%203%2C%203)%0Ac%20%3D%20KernelType.get(ctx%2C%201%2C%205)%0Aprint(f%22a%20%3D%20%7Ba%7D%20%20%20b%20%3D%20%7Bb%7D%20%20%20c%20%3D%20%7Bc%7D%22)%0Aprint(f%22a%20is%20b%20%3F%20%7Ba%20is%20b%7D%20%20%20%20%E2%80%94%E2%80%94%20%E5%90%8C%E6%A0%B7%E7%9A%84%E5%8F%82%E6%95%B0%EF%BC%8C%E5%90%8C%E4%B8%80%E4%B8%AA%E5%AF%B9%E8%B1%A1%EF%BC%8C%E6%AF%94%E8%BE%83%E7%B1%BB%E5%9E%8B%E5%8F%AA%E6%98%AF%E6%AF%94%E6%8C%87%E9%92%88%22)%0Aprint(f%22a%20is%20c%20%3F%20%7Ba%20is%20c%7D%20%20%20%20%E2%80%94%E2%80%94%20%E5%8F%82%E6%95%B0%E4%B8%8D%E5%90%8C%EF%BC%8C%E5%8F%A6%E4%B8%80%E4%B8%AA%E5%AF%B9%E8%B1%A1%22)%0Aprint(f%22context%20%E9%87%8C%E4%B8%80%E5%85%B1%E5%AD%98%E4%BA%86%20%7Blen(ctx.uniqued)%7D%20%E4%B8%AA%E7%B1%BB%E5%9E%8B%EF%BC%9A%7Blist(ctx.uniqued)%7D%22)%0Aprint(%22%E8%A6%81%E6%8A%8A%20a%20%E6%94%B9%E6%88%90%201x5%EF%BC%9F%E5%81%9A%E4%B8%8D%E5%88%B0%E2%80%94%E2%80%94%E5%8F%AA%E8%83%BD%20get%20%E4%B8%80%E4%B8%AA%E6%96%B0%E7%9A%84%E3%80%82%E8%BF%99%E5%B0%B1%E6%98%AF%E3%80%8C%E4%B8%8D%E5%8F%AF%E5%8F%98%E5%80%BC%E3%80%8D%E7%9A%84%E5%90%AB%E4%B9%89%E3%80%82%5Cn%22)%0A%0A%23%20----------%20%E2%91%A1%20%E8%AF%8D%E6%B3%95%E5%88%86%E6%9E%90%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BF%85%E9%A1%BB%E5%86%99%20%3C3%20x%203%3E%20----------%0Aimport%20re%0ATOKEN%20%3D%20re.compile(r%22%5Cd%2B%7C%5BA-Za-z_%5D%5Cw*%7C%3C%7C%3E%7C.%22)%0Adef%20lex(s)%3A%20return%20%5Bt%20for%20t%20in%20TOKEN.findall(s)%20if%20t.strip()%5D%0A%0Aprint(f%22%E6%A0%BC%E5%BC%8F%E4%B8%B2%E6%9C%9F%E6%9C%9B%E7%9A%84%20token%EF%BC%9A%3C%20%2C%20%E6%95%B4%E6%95%B0%20%2C%20%E5%AD%97%E9%9D%A2%E9%87%8F%20x%20%2C%20%E6%95%B4%E6%95%B0%20%2C%20%3E%22)%0Afor%20text%20in%20%5B%22%3C3%20x%203%3E%22%2C%20%22%3C3x3%3E%22%5D%3A%0A%20%20%20%20toks%20%3D%20lex(text)%0A%20%20%20%20ok%20%3D%20len(toks)%20%3D%3D%205%20and%20toks%5B2%5D%20%3D%3D%20%22x%22%0A%20%20%20%20print(f%22%20%20%7Btext%3A10%7D%20%E5%88%87%E6%88%90%20%7Btoks%7D%20%20%E2%86%92%20%7B'%E5%8C%B9%E9%85%8D%E5%BE%97%E4%B8%8A'%20if%20ok%20else%20'%E5%8C%B9%E9%85%8D%E4%B8%8D%E4%B8%8A%EF%BC%9A%E7%AC%AC%203%20%E4%B8%AA%20token%20%E4%B8%8D%E6%98%AF%20x'%7D%22)"># 两件事各 15 行：① 类型为什么"同样的参数拿到同一个对象"；② 为什么 3x3 解析不了。
+
+# ---------- ① 唯一化（第 4 章的 StorageUniquer，这里用字典模拟） ----------
+class Context:
+    def __init__(self): self.uniqued = {}
+
+class KernelType:
+    def __init__(self, rows, cols): self.rows, self.cols = rows, cols
+    def __repr__(self): return f"!pix.kernel&lt;{self.rows} x {self.cols}&gt;"
+    @staticmethod
+    def get(ctx, rows, cols):
+        key = ("kernel", rows, cols)              # 参数就是键
+        if key not in ctx.uniqued:
+            ctx.uniqued[key] = KernelType(rows, cols)
+        return ctx.uniqued[key]
+
+ctx = Context()
+a = KernelType.get(ctx, 3, 3)
+b = KernelType.get(ctx, 3, 3)
+c = KernelType.get(ctx, 1, 5)
+print(f"a = {a}   b = {b}   c = {c}")
+print(f"a is b ? {a is b}    —— 同样的参数，同一个对象，比较类型只是比指针")
+print(f"a is c ? {a is c}    —— 参数不同，另一个对象")
+print(f"context 里一共存了 {len(ctx.uniqued)} 个类型：{list(ctx.uniqued)}")
+print("要把 a 改成 1x5？做不到——只能 get 一个新的。这就是「不可变值」的含义。\n")
+
+# ---------- ② 词法分析：为什么必须写 &lt;3 x 3&gt; ----------
+import re
+TOKEN = re.compile(r"\d+|[A-Za-z_]\w*|&lt;|&gt;|.")
+def lex(s): return [t for t in TOKEN.findall(s) if t.strip()]
+
+print(f"格式串期望的 token：&lt; , 整数 , 字面量 x , 整数 , &gt;")
+for text in ["&lt;3 x 3&gt;", "&lt;3x3&gt;"]:
+    toks = lex(text)
+    ok = len(toks) == 5 and toks[2] == "x"
+    print(f"  {text:10} 切成 {toks}  → {'匹配得上' if ok else '匹配不上：第 3 个 token 不是 x'}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">a = !pix.kernel&lt;3 x 3&gt;   b = !pix.kernel&lt;3 x 3&gt;   c = !pix.kernel&lt;1 x 5&gt;
+a is b ? True    —— 同样的参数，同一个对象，比较类型只是比指针
+a is c ? False    —— 参数不同，另一个对象
+context 里一共存了 2 个类型：[('kernel', 3, 3), ('kernel', 1, 5)]
+要把 a 改成 1x5？做不到——只能 get 一个新的。这就是「不可变值」的含义。
+
+格式串期望的 token：&lt; , 整数 , 字面量 x , 整数 , &gt;
+  &lt;3 x 3&gt;    切成 ['&lt;', '3', 'x', '3', '&gt;']  → 匹配得上
+  &lt;3x3&gt;      切成 ['&lt;', '3', 'x3', '&gt;']  → 匹配不上：第 3 个 token 不是 x</code></pre>
+</div><p>下半那行 <code>[&#39;&lt;&#39;, &#39;3&#39;, &#39;x3&#39;, &#39;&gt;&#39;]</code> 就是全部原因：<code>3x3</code> 里的 <code>x3</code> 被当成了一个<strong>标识符</strong>，格式串等的那个字面量 <code>x</code> 永远等不到。内建的 <code>tensor&lt;4x4xf32&gt;</code> 能写得紧凑，是因为它有一套专门的 dimension-list 解析器，不走这条通用路径。</p>
+<h2>自定义属性：枚举的两步写法</h2>
 <p>边界处理方式是典型的枚举：clamp / zero / wrap。写在 <code>include/Pix/PixAttrs.td</code>，分两步。</p>
 <p><strong>第一步，定义枚举本身</strong>（生成一个 C++ <code>enum class BorderMode</code>）：</p>
 <div class="code-block cpp">

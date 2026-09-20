@@ -277,7 +277,86 @@ let assemblyFormat = "attr-dict ($values^ `:` type($values))?";</code></pre>
 </div><div class="warn">
 <strong><code>attr-dict</code> 漏了会怎样</strong>
 <p>不会立刻报错，但任何人给你的 op 挂一个可丢弃属性（第 2 章那种 <code>{my_pass.visited = true}</code>）之后，打印出来就丢了——于是 round-trip 失败，而且失败点离真正的原因很远。<strong>写 <code>assemblyFormat</code> 时先把 <code>attr-dict</code> 放进去</strong>，就像写 C 结构体先想好对齐一样。</p>
-</div><p>什么时候放弃 <code>assemblyFormat</code>？当格式依赖运行时信息、或者你要打印派生出来的东西（比如把 indexing map 渲染成人类可读的形式）。那就改用 <code>let hasCustomAssemblyFormat = 1;</code> 然后在 <code>.cpp</code> 里手写 <code>parse</code>/<code>print</code>。<strong>能用声明式就别手写</strong>——手写的那两个函数必须互为逆运算，出 bug 的方式非常隐蔽。</p>
+</div><p>这个坑值得亲手看一眼。下面这段用<strong>同一份格式串</strong>同时驱动打印和解析——这正是 <code>assemblyFormat</code> 帮你做的事——然后对照&quot;写对了&quot;和&quot;漏了 <code>attr-dict</code>&quot;两种情况：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%94%A8%E4%B8%80%E4%BB%BD%E6%A0%BC%E5%BC%8F%E4%B8%B2%E5%90%8C%E6%97%B6%E9%A9%B1%E5%8A%A8%E6%89%93%E5%8D%B0%E5%92%8C%E8%A7%A3%E6%9E%90%EF%BC%8C%E7%9C%8B%E5%AE%83%E4%BB%AC%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BF%85%E7%84%B6%E4%BA%92%E9%80%86%E2%80%94%E2%80%94%0A%23%20%E4%BB%A5%E5%8F%8A%E6%BC%8F%E6%8E%89%20attr-dict%20%E4%BC%9A%E6%80%8E%E6%A0%B7%E3%80%82%E5%8F%AA%E6%94%AF%E6%8C%81%20%24name%20%2F%20type(%24name)%20%2F%20%60%E5%AD%97%E9%9D%A2%E9%87%8F%60%20%2F%20attr-dict%E3%80%82%0Aimport%20re%0A%0Adef%20tokenize_format(fmt)%3A%0A%20%20%20%20return%20re.findall(r%22%60%5B%5E%60%5D*%60%7Ctype%5C(%5C%24%5Cw%2B%5C)%7C%5C%24%5Cw%2B%7Cattr-dict%22%2C%20fmt)%0A%0Adef%20print_op(fmt%2C%20op)%3A%0A%20%20%20%20out%20%3D%20%5Bop%5B%22name%22%5D%5D%0A%20%20%20%20for%20t%20in%20tokenize_format(fmt)%3A%0A%20%20%20%20%20%20%20%20if%20t.startswith(%22%60%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(t.strip(%22%60%22))%0A%20%20%20%20%20%20%20%20elif%20t%20%3D%3D%20%22attr-dict%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20op%5B%22attrs%22%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20out.append(%22%7B%22%20%2B%20%22%2C%20%22.join(f%22%7Bk%7D%20%3D%20%7Bv%7D%22%20for%20k%2C%20v%20in%20op%5B%22attrs%22%5D.items())%20%2B%20%22%7D%22)%0A%20%20%20%20%20%20%20%20elif%20t.startswith(%22type(%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(op%5B%22types%22%5D%5Bt%5B6%3A-1%5D%5D)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(op%5B%22operands%22%5D%5Bt%5B1%3A%5D%5D)%0A%20%20%20%20return%20%22%20%22.join(out)%0A%0Adef%20parse_op(fmt%2C%20text)%3A%0A%20%20%20%20words%2C%20i%20%3D%20text.split()%2C%200%0A%20%20%20%20op%20%3D%20%7B%22name%22%3A%20words%5Bi%5D%2C%20%22operands%22%3A%20%7B%7D%2C%20%22types%22%3A%20%7B%7D%2C%20%22attrs%22%3A%20%7B%7D%7D%0A%20%20%20%20i%20%2B%3D%201%0A%20%20%20%20for%20t%20in%20tokenize_format(fmt)%3A%0A%20%20%20%20%20%20%20%20if%20t.startswith(%22%60%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20i%20%2B%3D%201%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%AD%97%E9%9D%A2%E9%87%8F%EF%BC%9A%E8%AF%BB%E6%8E%89%EF%BC%8C%E4%B8%8D%E8%AE%B0%0A%20%20%20%20%20%20%20%20elif%20t%20%3D%3D%20%22attr-dict%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20i%20%3C%20len(words)%20and%20words%5Bi%5D.startswith(%22%7B%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20body%20%3D%20%22%20%22.join(words%5Bi%3A%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20body%20%3D%20body%5B1%3Abody.index(%22%7D%22)%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20for%20pair%20in%20body.split(%22%2C%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20k%2C%20v%20%3D%20pair.split(%22%3D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20op%5B%22attrs%22%5D%5Bk.strip()%5D%20%3D%20v.strip()%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20while%20i%20%3C%20len(words)%20and%20%22%7D%22%20not%20in%20words%5Bi%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20i%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20i%20%2B%3D%201%0A%20%20%20%20%20%20%20%20elif%20t.startswith(%22type(%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20op%5B%22types%22%5D%5Bt%5B6%3A-1%5D%5D%20%3D%20words%5Bi%5D%3B%20i%20%2B%3D%201%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20op%5B%22operands%22%5D%5Bt%5B1%3A%5D%5D%20%3D%20words%5Bi%5D.rstrip(%22%2C%22)%3B%20i%20%2B%3D%201%0A%20%20%20%20return%20op%0A%0Aoriginal%20%3D%20%7B%22name%22%3A%20%22pix.transpose%22%2C%20%22operands%22%3A%20%7B%22image%22%3A%20%22%25a%22%7D%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%22types%22%3A%20%7B%22image%22%3A%20%22tensor%3C4x8xf32%3E%22%2C%20%22result%22%3A%20%22tensor%3C8x4xf32%3E%22%7D%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%22attrs%22%3A%20%7B%22my_pass.visited%22%3A%20%22true%22%7D%7D%0A%0AGOOD%20%3D%20%22%24image%20attr-dict%20%60%3A%60%20type(%24image)%20%60to%60%20type(%24result)%22%0ABAD%20%20%3D%20%22%24image%20%60%3A%60%20type(%24image)%20%60to%60%20type(%24result)%22%20%20%20%20%20%20%20%20%23%20%E6%BC%8F%E4%BA%86%20attr-dict%0A%0Afor%20label%2C%20fmt%20in%20%5B(%22%E5%86%99%E5%AF%B9%E4%BA%86%EF%BC%88%E6%9C%89%20attr-dict%EF%BC%89%22%2C%20GOOD)%2C%20(%22%E6%BC%8F%E4%BA%86%20attr-dict%22%2C%20BAD)%5D%3A%0A%20%20%20%20print(f%22%E3%80%90%7Blabel%7D%E3%80%91%E6%A0%BC%E5%BC%8F%E4%B8%B2%EF%BC%9A%7Bfmt%7D%22)%0A%20%20%20%20text%20%3D%20print_op(fmt%2C%20original)%0A%20%20%20%20print(f%22%20%20%E6%89%93%E5%8D%B0%20%E2%86%92%20%7Btext%7D%22)%0A%20%20%20%20back%20%3D%20parse_op(fmt%2C%20text)%0A%20%20%20%20print(f%22%20%20%E8%A7%A3%E6%9E%90%E5%9B%9E%E6%9D%A5%E7%9A%84%E5%B1%9E%E6%80%A7%20%E2%86%92%20%7Bback%5B'attrs'%5D%20or%20'%7B%7D%EF%BC%88%E4%B8%A2%E4%BA%86%EF%BC%81%EF%BC%89'%7D%22)%0A%20%20%20%20same%20%3D%20back%5B%22attrs%22%5D%20%3D%3D%20original%5B%22attrs%22%5D%0A%20%20%20%20print(f%22%20%20round-trip%20%7B'%E6%88%90%E5%8A%9F'%20if%20same%20else%20'%E5%A4%B1%E8%B4%A5%EF%BC%9A%E5%B1%9E%E6%80%A7%E5%9C%A8%E6%89%93%E5%8D%B0%E9%82%A3%E4%B8%80%E6%AD%A5%E5%B0%B1%E6%B2%A1%E4%BA%86'%7D%5Cn%22)"># 用一份格式串同时驱动打印和解析，看它们为什么必然互逆——
+# 以及漏掉 attr-dict 会怎样。只支持 $name / type($name) / `字面量` / attr-dict。
+import re
+
+def tokenize_format(fmt):
+    return re.findall(r"`[^`]*`|type\(\$\w+\)|\$\w+|attr-dict", fmt)
+
+def print_op(fmt, op):
+    out = [op["name"]]
+    for t in tokenize_format(fmt):
+        if t.startswith("`"):
+            out.append(t.strip("`"))
+        elif t == "attr-dict":
+            if op["attrs"]:
+                out.append("{" + ", ".join(f"{k} = {v}" for k, v in op["attrs"].items()) + "}")
+        elif t.startswith("type("):
+            out.append(op["types"][t[6:-1]])
+        else:
+            out.append(op["operands"][t[1:]])
+    return " ".join(out)
+
+def parse_op(fmt, text):
+    words, i = text.split(), 0
+    op = {"name": words[i], "operands": {}, "types": {}, "attrs": {}}
+    i += 1
+    for t in tokenize_format(fmt):
+        if t.startswith("`"):
+            i += 1                                   # 字面量：读掉，不记
+        elif t == "attr-dict":
+            if i &lt; len(words) and words[i].startswith("{"):
+                body = " ".join(words[i:])
+                body = body[1:body.index("}")]
+                for pair in body.split(","):
+                    k, v = pair.split("=")
+                    op["attrs"][k.strip()] = v.strip()
+                while i &lt; len(words) and "}" not in words[i]:
+                    i += 1
+                i += 1
+        elif t.startswith("type("):
+            op["types"][t[6:-1]] = words[i]; i += 1
+        else:
+            op["operands"][t[1:]] = words[i].rstrip(","); i += 1
+    return op
+
+original = {"name": "pix.transpose", "operands": {"image": "%a"},
+            "types": {"image": "tensor&lt;4x8xf32&gt;", "result": "tensor&lt;8x4xf32&gt;"},
+            "attrs": {"my_pass.visited": "true"}}
+
+GOOD = "$image attr-dict `:` type($image) `to` type($result)"
+BAD  = "$image `:` type($image) `to` type($result)"        # 漏了 attr-dict
+
+for label, fmt in [("写对了（有 attr-dict）", GOOD), ("漏了 attr-dict", BAD)]:
+    print(f"【{label}】格式串：{fmt}")
+    text = print_op(fmt, original)
+    print(f"  打印 → {text}")
+    back = parse_op(fmt, text)
+    print(f"  解析回来的属性 → {back['attrs'] or '{}（丢了！）'}")
+    same = back["attrs"] == original["attrs"]
+    print(f"  round-trip {'成功' if same else '失败：属性在打印那一步就没了'}\n")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">【写对了（有 attr-dict）】格式串：$image attr-dict `:` type($image) `to` type($result)
+  打印 → pix.transpose %a {my_pass.visited = true} : tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;
+  解析回来的属性 → {'my_pass.visited': 'true'}
+  round-trip 成功
+
+【漏了 attr-dict】格式串：$image `:` type($image) `to` type($result)
+  打印 → pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;
+  解析回来的属性 → {}（丢了！）
+  round-trip 失败：属性在打印那一步就没了
+</code></pre>
+</div><p>漏掉 <code>attr-dict</code> 的那一版，<strong>打印和解析仍然严格互逆</strong>——两边都不管属性，所以谁都不觉得有问题。属性是在<strong>打印那一步</strong>就没了的，而报错（如果有的话）会出现在很久以后的某次 round-trip 校验里。这就是为什么这个 bug 难查：失败点离原因很远。</p>
+<p>什么时候放弃 <code>assemblyFormat</code>？当格式依赖运行时信息、或者你要打印派生出来的东西（比如把 indexing map 渲染成人类可读的形式）。那就改用 <code>let hasCustomAssemblyFormat = 1;</code> 然后在 <code>.cpp</code> 里手写 <code>parse</code>/<code>print</code>。<strong>能用声明式就别手写</strong>——手写的那两个函数必须互为逆运算，出 bug 的方式非常隐蔽。</p>
 <h2>region 在 ODS 里怎么写</h2>
 <p><code>pix.pipeline</code> 是个容器 op：自己不算任何东西，只把一段处理流程围起来，好让后面的变换把它当整体处理。</p>
 <div class="code-block cpp">

@@ -116,6 +116,84 @@
 <td>需要看 region 内部：terminator 交出什么、region 里有没有必须存在的 op</td>
 </tr>
 </tbody></table>
+<p>「进门时子 op 还没验」这句话的分量，跑一遍就清楚了。下面这段照 <code>Verifier.cpp</code> 的结构走同一棵树，让 <code>pix.pipeline</code> 在<strong>两个钩子里各偷看同一个子 op 一次</strong>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%85%A7%20mlir%2Flib%2FIR%2FVerifier.cpp%20%E7%9A%84%E7%BB%93%E6%9E%84%E8%B5%B0%E4%B8%80%E9%81%8D%EF%BC%9A%E8%BF%9B%E9%97%A8%20%E2%86%92%20%E9%80%92%E5%BD%92%20%E2%86%92%20%E5%87%BA%E9%97%A8%E3%80%82%0A%23%20%E9%87%8D%E7%82%B9%E7%9C%8B%22%E5%9C%A8%20verify()%20%E9%87%8C%E7%A2%B0%E5%B5%8C%E5%A5%97%20op%22%E4%B8%BA%E4%BB%80%E4%B9%88%E5%8D%B1%E9%99%A9%E3%80%82%0A%0Aclass%20Op%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20kids%3D()%2C%20payload%3DNone)%3A%0A%20%20%20%20%20%20%20%20self.name%2C%20self.kids%2C%20self.payload%20%3D%20name%2C%20list(kids)%2C%20payload%0A%20%20%20%20%20%20%20%20self.verified%20%3D%20False%20%20%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E4%B8%AA%20op%20%E8%87%AA%E5%B7%B1%E9%AA%8C%E8%BF%87%E4%BA%86%E5%90%97%0A%0A%20%20%20%20%23%20%E2%91%A0%20%E8%BF%9B%E9%97%A8%EF%BC%9A%E5%8F%AA%E8%AE%B8%E7%9C%8B%E8%87%AA%E5%B7%B1%E3%80%82%E6%AD%A4%E6%97%B6%20self.kids%20%E9%87%8C%E7%9A%84%20op%20%E9%83%BD%E8%BF%98%E6%B2%A1%E9%AA%8C%E3%80%82%0A%20%20%20%20def%20verify(self)%3A%0A%20%20%20%20%20%20%20%20if%20self.name%20%3D%3D%20%22pix.pipeline%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20kid%20%3D%20self.kids%5B-1%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5Bverify%5D%20pix.pipeline%20%E5%81%B7%E7%9C%8B%E4%BA%86%E5%AD%90%20op%20%7Bkid.name%7D%EF%BC%9A%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22verified%3D%7Bkid.verified%7D%EF%BC%8Cpayload%3D%7Bkid.payload!r%7D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20kid.payload%20is%20None%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%95%B8%E5%BD%A2%E6%95%B0%E6%8D%AE%EF%BC%8C%E7%9C%9F%E5%AE%9E%20C%2B%2B%20%E9%87%8C%E8%BF%99%E5%B0%B1%E6%98%AF%E5%B4%A9%E7%82%B9%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20%20%20%5Bverify%5D%20%E2%86%90%20%E5%AE%83%E7%9A%84%20payload%20%E8%BF%98%E6%98%AF%20None%E3%80%82%E7%9C%9F%E5%AE%9E%E4%BB%A3%E7%A0%81%E5%9C%A8%E8%BF%99%E9%87%8C%E8%A7%A3%E5%BC%95%E7%94%A8%E5%B0%B1%E5%B4%A9%E4%BA%86%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22%E8%80%8C%E4%B8%94%E5%B4%A9%E5%9C%A8%E5%92%8C%E7%9C%9F%E6%AD%A3%E9%94%99%E8%AF%AF%E6%97%A0%E5%85%B3%E7%9A%84%E5%9C%B0%E6%96%B9%22)%0A%20%20%20%20%20%20%20%20return%20None%0A%0A%20%20%20%20%23%20%E2%91%A2%20%E5%87%BA%E9%97%A8%EF%BC%9A%E5%AD%90%20op%20%E5%85%A8%E9%AA%8C%E5%AE%8C%E4%BA%86%EF%BC%8C%E8%BF%99%E6%97%B6%E5%80%99%E7%9C%8B%20region%20%E6%98%AF%E5%AE%89%E5%85%A8%E7%9A%84%0A%20%20%20%20def%20verifyRegions(self)%3A%0A%20%20%20%20%20%20%20%20if%20self.name%20%3D%3D%20%22pix.pipeline%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20kid%20%3D%20self.kids%5B-1%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5BverifyRegions%5D%20%E5%90%8C%E4%B8%80%E4%B8%AA%E5%AD%90%20op%EF%BC%9Averified%3D%7Bkid.verified%7D%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22payload%3D%7Bkid.payload!r%7D%20%E2%80%94%E2%80%94%20%E5%B7%B2%E7%BB%8F%E5%8F%AF%E4%BF%A1%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20kid.payload%20!%3D%201%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20return%20%22pix.pipeline%20%E4%BA%A4%E5%87%BA%E7%9A%84%E5%80%BC%E4%B8%AA%E6%95%B0%E4%B8%8D%E5%AF%B9%22%0A%20%20%20%20%20%20%20%20return%20None%0A%0Adef%20run_verifier(op%2C%20depth%3D0)%3A%0A%20%20%20%20pad%20%3D%20%22%20%20%22%20*%20depth%0A%20%20%20%20print(f%22%7Bpad%7D%E2%91%A0%20%E8%BF%9B%E9%97%A8%20%7Bop.name%7D%22)%0A%20%20%20%20if%20(err%20%3A%3D%20op.verify())%3A%0A%20%20%20%20%20%20%20%20return%20err%0A%20%20%20%20for%20kid%20in%20op.kids%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E2%91%A1%20%E9%80%92%E5%BD%92%0A%20%20%20%20%20%20%20%20if%20(err%20%3A%3D%20run_verifier(kid%2C%20depth%20%2B%201))%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20err%0A%20%20%20%20op.payload%20%3D%20op.payload%20if%20op.payload%20is%20not%20None%20else%201%20%20%20%23%20%E5%81%87%E8%A3%85%22%E9%AA%8C%E8%AF%81%E9%A1%BA%E5%B8%A6%E8%A1%A5%E5%85%A8%E4%BA%86%E4%BF%A1%E6%81%AF%22%0A%20%20%20%20op.verified%20%3D%20True%0A%20%20%20%20print(f%22%7Bpad%7D%E2%91%A2%20%E5%87%BA%E9%97%A8%20%7Bop.name%7D%22)%0A%20%20%20%20return%20op.verifyRegions()%0A%0Atree%20%3D%20Op(%22builtin.module%22%2C%20%5B%0A%20%20%20%20Op(%22func.func%22%2C%20%5B%0A%20%20%20%20%20%20%20%20Op(%22pix.pipeline%22%2C%20%5BOp(%22pix.add%22%2C%20payload%3D1)%2C%20Op(%22pix.yield%22)%5D)%20%20%20%23%20yield%20%E7%9A%84%20payload%20%E7%BC%BA%0A%20%20%20%20%5D)%0A%5D)%0A%0Aerr%20%3D%20run_verifier(tree)%0Aprint(%22%5Cn%E9%AA%8C%E8%AF%81%E7%BB%93%E6%9E%9C%EF%BC%9A%22%2C%20err%20or%20%22%E9%80%9A%E8%BF%87%22)%0Aprint(%22%E6%B3%A8%E6%84%8F%E4%B8%A4%E5%A4%84%20%5Bverify%5D%20%2F%20%5BverifyRegions%5D%20%E7%9C%8B%E5%88%B0%E7%9A%84%E6%98%AF%E5%90%8C%E4%B8%80%E4%B8%AA%20pix.yield%EF%BC%8C%22%0A%20%20%20%20%20%20%22%E4%BD%86%E5%8F%AF%E4%BF%A1%E7%A8%8B%E5%BA%A6%E5%AE%8C%E5%85%A8%E4%B8%8D%E5%90%8C%20%E2%80%94%E2%80%94%20%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%A4%E4%B8%AA%E9%92%A9%E5%AD%90%E5%AD%98%E5%9C%A8%E7%9A%84%E5%85%A8%E9%83%A8%E7%90%86%E7%94%B1%E3%80%82%22)"># 照 mlir/lib/IR/Verifier.cpp 的结构走一遍：进门 → 递归 → 出门。
+# 重点看"在 verify() 里碰嵌套 op"为什么危险。
+
+class Op:
+    def __init__(self, name, kids=(), payload=None):
+        self.name, self.kids, self.payload = name, list(kids), payload
+        self.verified = False          # 这个 op 自己验过了吗
+
+    # ① 进门：只许看自己。此时 self.kids 里的 op 都还没验。
+    def verify(self):
+        if self.name == "pix.pipeline":
+            kid = self.kids[-1]
+            print(f"    [verify] pix.pipeline 偷看了子 op {kid.name}："
+                  f"verified={kid.verified}，payload={kid.payload!r}")
+            if kid.payload is None:                  # 畸形数据，真实 C++ 里这就是崩点
+                print("    [verify] ← 它的 payload 还是 None。真实代码在这里解引用就崩了，"
+                      "而且崩在和真正错误无关的地方")
+        return None
+
+    # ③ 出门：子 op 全验完了，这时候看 region 是安全的
+    def verifyRegions(self):
+        if self.name == "pix.pipeline":
+            kid = self.kids[-1]
+            print(f"    [verifyRegions] 同一个子 op：verified={kid.verified}，"
+                  f"payload={kid.payload!r} —— 已经可信")
+            if kid.payload != 1:
+                return "pix.pipeline 交出的值个数不对"
+        return None
+
+def run_verifier(op, depth=0):
+    pad = "  " * depth
+    print(f"{pad}① 进门 {op.name}")
+    if (err := op.verify()):
+        return err
+    for kid in op.kids:                              # ② 递归
+        if (err := run_verifier(kid, depth + 1)):
+            return err
+    op.payload = op.payload if op.payload is not None else 1   # 假装"验证顺带补全了信息"
+    op.verified = True
+    print(f"{pad}③ 出门 {op.name}")
+    return op.verifyRegions()
+
+tree = Op("builtin.module", [
+    Op("func.func", [
+        Op("pix.pipeline", [Op("pix.add", payload=1), Op("pix.yield")])   # yield 的 payload 缺
+    ])
+])
+
+err = run_verifier(tree)
+print("\n验证结果：", err or "通过")
+print("注意两处 [verify] / [verifyRegions] 看到的是同一个 pix.yield，"
+      "但可信程度完全不同 —— 这就是两个钩子存在的全部理由。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">① 进门 builtin.module
+  ① 进门 func.func
+    ① 进门 pix.pipeline
+    [verify] pix.pipeline 偷看了子 op pix.yield：verified=False，payload=None
+    [verify] ← 它的 payload 还是 None。真实代码在这里解引用就崩了，而且崩在和真正错误无关的地方
+      ① 进门 pix.add
+      ③ 出门 pix.add
+      ① 进门 pix.yield
+      ③ 出门 pix.yield
+    ③ 出门 pix.pipeline
+    [verifyRegions] 同一个子 op：verified=True，payload=1 —— 已经可信
+  ③ 出门 func.func
+③ 出门 builtin.module
+
+验证结果： 通过
+注意两处 [verify] / [verifyRegions] 看到的是同一个 pix.yield，但可信程度完全不同 —— 这就是两个钩子存在的全部理由。</code></pre>
+</div><p>同一个 <code>pix.yield</code>：进门时 <code>verified=False</code>、数据还是 <code>None</code>；出门时 <code>verified=True</code>、数据齐了。真实的 C++ 在进门那一刻解引用这种半成品，就是一次崩溃——<strong>而且崩的位置和真正的错误毫无关系</strong>，这是这类 bug 最难查的地方。把模拟器里 <code>verify()</code> 那段挪到 <code>verifyRegions()</code> 里，两个钩子的差别立刻消失，这也正是选对钩子的全部意义。</p>
 <h2>补洞一：手写 <code>verify()</code>（<code>pix.transpose</code>）</h2>
 <p>ODS 里开个开关：</p>
 <div class="code-block cpp">
