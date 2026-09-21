@@ -18,3 +18,6 @@ add_public_tablegen_target(MLIRPixAttrsIncGen)
 # 顺带生成方言文档（.md）。不是必需，但白拿的东西为什么不要。
 add_mlir_doc(PixDialect PixDialect Pix/ -gen-dialect-doc)
 add_mlir_doc(PixOps PixOps Pix/ -gen-op-doc)
+
+# 第 13 章：pass 的 TableGen 在子目录里
+add_subdirectory(Transforms)

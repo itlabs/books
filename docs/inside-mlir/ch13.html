@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li class="active"><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li class="toc-todo"><span>第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</span></li>
+<li class="toc-todo"><span>第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</span></li>
+<li class="toc-todo"><span>第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</span></li>
+<li class="toc-todo"><span>第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</span></li>
+<li class="toc-todo"><span>第 18 章 Transform 方言：把「怎么变换」本身写成 IR</span></li>
+<li class="toc-todo"><span>第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</span></li>
+<li class="toc-todo"><span>第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</span></li>
+<li class="toc-todo"><span>第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</span></li>
+<li class="toc-todo"><span>第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</span></li>
+<li class="toc-todo"><span>第 23 章 vector 方言：向量化、mask 与按目标宽度展开</span></li>
+<li class="toc-todo"><span>第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</span></li>
+<li class="toc-todo"><span>第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</span></li>
+<li class="toc-todo"><span>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</span></li>
+<li class="toc-todo"><span>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</span></li>
+<li class="toc-todo"><span>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第三部分开始。前面五章我们把 pix 造出来了，但一直在用别人的 pass（<code>--canonicalize</code>、<code>--cse</code>）。这一章写 <strong>pix 自己的第一批 pass</strong>，顺便把 MLIR 的 Pass 框架和 LLVM 的新 PassManager 对照着讲清楚。</p>
+<p>三个机制，每个都配了一个专门为它写的 pass。<strong>一、嵌套</strong>：pass manager 的层级和 op 树的层级是一一对应的，<code>builtin.module(func.func(...))</code> 这串括号不是装饰。<strong>二、分析</strong>：MLIR 的分析不用继承任何基类、不用注册，但"什么时候被作废"这件事必须由你显式声明——我们写一个 pass 专门把这件看不见的事<strong>变成 IR 里的一个布尔属性</strong>，然后跑四组对照实验。<strong>三、并发</strong>：函数级 pass 默认是多线程跑的，而它的硬性前提是 <code>IsolatedFromAbove</code>。</p>
+<p>第三条会有一个很解气的实测：第 8 章定义 <code>pix.pipeline</code> 时，我们<strong>故意没给它加</strong> <code>IsolatedFromAbove</code>，当时只说了一句"代价以后再谈"。这一章你会亲眼看到那个代价——在它上面挂 pass manager，框架直接拒绝。</p>
+</div><h2>先把 pass 的骨架搭出来</h2>
+<p>pix 到现在还没有任何 pass 基础设施。新增四个文件，结构照上游方言的惯例：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">include/Pix/Transforms/Passes.td          ← 声明 pass（ODS）
+include/Pix/Transforms/Passes.h           ← 两个 GEN_PASS_* 宏
+include/Pix/Transforms/CostAnalysis.h     ← 我们的第一个分析
+lib/Pix/Transforms/CostPasses.cpp         ← 三个 pass 的实现</code></pre>
+</div><p>ODS 那边异常简单，一个 pass 就是一行 <code>Pass&lt;命令行名字, 作用在哪种 op 上&gt;</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def PixCostReport : Pass&lt;"pix-cost-report", "::mlir::func::FuncOp"&gt; {
+  let summary = "统计本函数的 pix 计算量，写成属性";
+  let description = [{ … }];
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>第二个参数就是这一章的第一个要点：<strong>它决定了框架会把什么交给你</strong>。写 <code>::mlir::func::FuncOp</code> 就是函数级 pass，生成的基类是 <code>OperationPass&lt;func::FuncOp&gt;</code>，<code>getOperation()</code> 的返回类型已经收窄成 <code>func::FuncOp</code>——不用 cast，也不可能拿到别的东西。写 <code>&quot;::mlir::ModuleOp&quot;</code> 就是模块级；两个参数都不给（<code>Pass&lt;&quot;name&quot;&gt;</code>）则是&quot;任意 op&quot;。</p>
+<p><code>Passes.h</code> 里那两个宏和第 7 章的 <code>GET_OP_CLASSES</code> 是同一套把戏：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">#define GEN_PASS_DECL
+#include "Pix/Transforms/Passes.h.inc"        // createXxx() 的声明
+
+#define GEN_PASS_REGISTRATION
+#include "Pix/Transforms/Passes.h.inc"        // registerPixPasses()</code></pre>
+</div><p><code>registerPixPasses()</code> 这个名字来自 CMake 里 <code>-gen-pass-decls -name Pix</code> 的那个 <code>-name</code>。在 <code>pix-opt</code> 里调一次就够了，以后 <code>Passes.td</code> 加了新 pass 会自动包含进来，<strong>不用逐个登记</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">mlir::registerAllPasses();      // 内建的
+mlir::pix::registerPixPasses(); // 我们的</code></pre>
+</div><p>实现文件里，每个 pass 用一个 <code>GEN_PASS_DEF_&lt;全大写名字&gt;</code> 宏切出自己的基类：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">namespace mlir {
+namespace pix {
+#define GEN_PASS_DEF_PIXCOSTREPORT
+#include "Pix/Transforms/Passes.h.inc"
+
+namespace {
+struct PixCostReportPass : impl::PixCostReportBase&lt;PixCostReportPass&gt; {
+  void runOnOperation() override { /* 你只写这个 */ }
+};
+} // namespace
+} // namespace pix
+} // namespace mlir</code></pre>
+</div><p>生成的 <code>impl::XxxBase&lt;DerivedT&gt;</code> 是个 CRTP 模板，替你实现了 <code>getArgument()</code>、<code>getDescription()</code>、<code>getName()</code>、<code>clonePass()</code> 这些样板，<strong>还以 friend 的形式把 <code>createXxx()</code> 也定义好了</strong>。</p>
+<div class="warn">
+<strong>两个我真撞上的编译错误</strong>
+<p><strong>一、别自己写 <code>createXxxPass()</code>。</strong>我照记忆写了三个 create 函数，报错是 <code>'createPixCostReportPass()' should have been declared inside 'mlir::pix'</code>。真相是生成代码里已经有了，名字还和我写的不一样——是 <code>createPixCostReport()</code>（<strong>没有 <code>Pass</code> 后缀</strong>，直接取 ODS 里的 def 名）。翻一眼生成的 <code>.h.inc</code> 比猜快得多。</p>
+<p><strong>二、pass 结构必须放在 <code>mlir::pix</code> 命名空间里。</strong>我一开始把它放在文件作用域，配 <code>using namespace mlir::pix;</code>，报错是 <code>reference to 'impl' is ambiguous</code>——<code>mlir::impl</code> 和 <code>mlir::pix::impl</code> 撞了。而且那个定义 <code>createXxx()</code> 的 friend 也依赖 pass 类在同一命名空间里才找得到。<strong>照上游的写法把整个文件包在 <code>namespace mlir { namespace pix {</code> 里</strong>，两个问题一起没了。</p>
+</div><h2>嵌套：pass manager 的层级就是 op 树的层级</h2>
+<p>这是 MLIR 的 Pass 框架和 LLVM 最不一样的地方。LLVM 里 pass 分 <code>ModulePass</code> / <code>FunctionPass</code> / <code>LoopPass</code> 这几种固定层级；MLIR 里<strong>层级是由你的 op 树决定的</strong>，有多少层嵌套就能有多少层 pass manager。</p>
+<p>命令行上那串括号就是层级：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt input.mlir --pass-pipeline='builtin.module(func.func(pix-cost-report))'</code></pre>
+</div><p>读法是从外到内：顶层 pass manager 锚在 <code>builtin.module</code> 上，里面嵌一个锚在 <code>func.func</code> 上的，<code>pix-cost-report</code> 装在后者里。</p>
+<p>不确定自己写对了没有，让它自己说：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt p13.mlir --pix-cost-report --canonicalize --dump-pass-pipeline</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Pass Manager with 2 passes:
+builtin.module(
+  func.func(
+    pix-cost-report
+  ),
+  canonicalize{cse-between-iterations=false    max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}
+)</code></pre>
+</div><p>两件事一眼看出来。<strong>一</strong>：我在命令行上只写了 <code>--pix-cost-report</code>，框架<strong>自动补上了 <code>builtin.module(func.func(...))</code> 这两层嵌套</strong>——因为它从 pass 的声明里知道这是个函数级 pass。<strong>二</strong>：<code>canonicalize</code> 被展开成了带全部选项的形式，其中 <code>max-num-rewrites=-1</code> 正是第 11 章那个坑的真身——我们当时从源码读到它默认是 <code>kNoLimit</code>，这里它作为 <code>-1</code> 直接摆在眼前。</p>
+<p>写错嵌套会得到相当友好的报错。把函数级 pass 硬塞到模块层：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt p13.mlir --pass-pipeline='builtin.module(pix-cost-report)'</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">&lt;unknown&gt;:0: error: Can't add pass 'PixCostReport' restricted to 'func.func' on a PassManager intended to run on 'builtin.module', did you intend to nest?
+failed to add `pix-cost-report` with options ``</code></pre>
+</div><p>它直接问你&quot;did you intend to nest?&quot;。而完全忘了写锚点：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt p13.mlir --pass-pipeline='pix-cost-report'</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">&lt;unknown&gt;:0: error: expected pass pipeline to be wrapped with the anchor operation type, e.g. 'builtin.module(...)'</code></pre>
+</div><div class="concept">
+<svg viewBox="0 0 700 372" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c13b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c13o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">pass manager 的层级 ↔ op 树的层级 ↔ 分析的作用域</text>
+  <text x="14" y="42" font-size="10" font-weight="bold" fill="#2b6cb0">IR（op 树）</text>
+  <rect x="14" y="50" width="200" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="70" font-size="10" font-family="monospace" fill="#24292f">builtin.module</text>
+  <rect x="36" y="88" width="178" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="46" y="108" font-size="10" font-family="monospace" fill="#24292f">func.func @f</text>
+  <rect x="36" y="126" width="178" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="46" y="146" font-size="10" font-family="monospace" fill="#24292f">func.func @g</text>
+  <rect x="58" y="164" width="156" height="28" rx="5" fill="#fff" stroke="#6b7280" stroke-dasharray="3 2"/>
+  <text x="68" y="183" font-size="9" font-family="monospace" fill="#6b7280">pix.pipeline（不隔离）</text>
+  <line x1="218" y1="103" x2="258" y2="103" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#c13b)"/>
+  <text x="262" y="42" font-size="10" font-weight="bold" fill="#e06a3b">PassManager（层级完全对应）</text>
+  <rect x="262" y="50" width="424" height="106" rx="5" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="272" y="70" font-size="10" font-family="monospace" fill="#24292f">builtin.module(</text>
+  <text x="288" y="88" font-size="10" font-family="monospace" fill="#24292f">func.func(</text>
+  <text x="304" y="106" font-size="10" font-family="monospace" fill="#24292f">pix-cost-report</text>
+  <text x="288" y="124" font-size="10" font-family="monospace" fill="#24292f">),</text>
+  <text x="288" y="142" font-size="10" font-family="monospace" fill="#24292f">canonicalize</text>
+  <text x="272" y="152" font-size="10" font-family="monospace" fill="#24292f">)</text>
+  <text x="262" y="176" font-size="9" fill="#e06a3b">只在命令行写 --pix-cost-report，这两层嵌套是框架按 pass 声明自动补的</text>
+  <line x1="14" y1="196" x2="686" y2="196" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="218" font-size="11" font-weight="bold" fill="#2f7a45">分析按作用域存：每个锚点 op 一份独立的缓存</text>
+  <rect x="14" y="228" width="210" height="62" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="24" y="247" font-size="10" fill="#24292f">module 层的 AnalysisManager</text>
+  <text x="24" y="264" font-size="9" fill="#6b7280">模块级 pass 在这里取分析</text>
+  <text x="24" y="281" font-size="9" fill="#6b7280">（覆盖整个模块）</text>
+  <rect x="236" y="228" width="210" height="62" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="246" y="247" font-size="10" fill="#24292f">@f 的 AnalysisManager</text>
+  <text x="246" y="264" font-size="9" fill="#6b7280">PixCost = 3</text>
+  <text x="246" y="281" font-size="9" fill="#6b7280">只统计 @f 里的 op</text>
+  <rect x="458" y="228" width="228" height="62" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="468" y="247" font-size="10" fill="#24292f">@g 的 AnalysisManager</text>
+  <text x="468" y="264" font-size="9" fill="#6b7280">PixCost = 1　互不影响</text>
+  <text x="468" y="281" font-size="9" fill="#6b7280">所以 @f 和 @g 能并发处理</text>
+  <rect x="14" y="300" width="672" height="60" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="26" y="319" font-size="11" font-weight="bold" fill="#e06a3b">能锚定 pass manager 的 op，必须标 IsolatedFromAbove</text>
+  <text x="26" y="338" font-size="10" fill="#24292f">pix.pipeline 第 8 章故意没加 → 在它上面挂 pass manager 会被直接拒绝。理由也是并发的理由：</text>
+  <text x="26" y="354" font-size="10" fill="#24292f">pass 不许碰当前 op 之上的东西，否则会顺着 use-list 走到它不该动的地方去。</text>
+</svg>
+<div class="caption">图 13-1　三层对应关系：op 树的嵌套决定 pass manager 的嵌套，而每个锚点 op 各有一份独立的分析缓存——这也正是函数之间能并发的根据</div>
+</div><h2>分析：不用继承、不用注册，但要管好失效</h2>
+<p>MLIR 的&quot;分析&quot;轻得出人意料。<strong>没有基类，不用注册</strong>，唯一的约定是：<strong>有一个接受 <code>Operation *</code> 的构造函数</strong>。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">class PixCostAnalysis {
+public:
+  /// 这个构造函数就是全部约定。op 是分析的**作用范围**——
+  /// 函数级 pass 传进来的是那个 func.func，所以统计天然只覆盖本函数。
+  explicit PixCostAnalysis(Operation *op) {
+    op-&gt;walk([&amp;](Operation *nested) {
+      if (nested-&gt;getDialect() != op-&gt;getContext()-&gt;getLoadedDialect("pix"))
+        return;
+      ++numOps;
+      for (Type ty : nested-&gt;getResultTypes())
+        if (auto shaped = dyn_cast&lt;ShapedType&gt;(ty))
+          if (shaped.hasStaticShape())
+            elements += shaped.getNumElements();
+    });
+  }
+  int64_t getNumOps() const { return numOps; }
+  int64_t getElements() const { return elements; }
+private:
+  int64_t numOps = 0;
+  int64_t elements = 0;
+};</code></pre>
+</div><p><code>AnalysisManager</code> 拿<strong>类型本身</strong>（<code>TypeID</code>）当键，第一次 <code>getAnalysis&lt;T&gt;()</code> 时构造一份并缓存。用起来就一行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct PixCostReportPass : impl::PixCostReportBase&lt;PixCostReportPass&gt; {
+  void runOnOperation() override {
+    func::FuncOp fn = getOperation();          // 类型已收窄，不用 cast
+    const PixCostAnalysis &amp;cost = getAnalysis&lt;PixCostAnalysis&gt;();
+
+    OpBuilder b(fn);
+    fn-&gt;setAttr("pix.num_ops", b.getI64IntegerAttr(cost.getNumOps()));
+    fn-&gt;setAttr("pix.elements", b.getI64IntegerAttr(cost.getElements()));
+
+    markAnalysesPreserved&lt;PixCostAnalysis&gt;();  // ← 这一章的重点
+  }
+};</code></pre>
+</div><p>先看它算得对不对：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-cost-report
+func.func @two_ops(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %s = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+  %t = pix.mul %s, %b : tensor&lt;4x4xf32&gt;
+  return %t : tensor&lt;4x4xf32&gt;
+}
+func.func @no_pix(%a: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  return %a : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-cost-report input.mlir</code></div>
+</div><p>运行结果（只看函数头那两行）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @two_ops(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; attributes {pix.elements = 32 : i64, pix.num_ops = 2 : i64} {
+  func.func @no_pix(%arg0: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; attributes {pix.elements = 0 : i64, pix.num_ops = 0 : i64} {</code></pre>
+</div><p>2 个 pix op、两个 4×4 结果共 32 个元素。第二个函数是 0——<strong>分析的作用域是本函数</strong>，不会把上面那个的 2 个 op 算进来。这就是图 13-1 下半部分的意思。</p>
+<h3>把&quot;缓存命中&quot;变成一个可以看见的布尔值</h3>
+<p>分析缓存平时完全不可观察，导致&quot;我这个 pass 到底有没有让分析白算一遍&quot;几乎无法验证。解决办法很土：再写一个 pass，用 <code>getCachedAnalysis</code>（它<strong>不会</strong>在未命中时代劳计算，只返回一个空的 optional），把结果写成属性。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct PixCostRecheckPass : impl::PixCostRecheckBase&lt;PixCostRecheckPass&gt; {
+  void runOnOperation() override {
+    func::FuncOp fn = getOperation();
+    auto cached = getCachedAnalysis&lt;PixCostAnalysis&gt;();   // 不命中就是 nullopt
+    OpBuilder b(fn);
+    fn-&gt;setAttr("pix.cost_cached", b.getBoolAttr(cached.has_value()));
+    markAnalysesPreserved&lt;PixCostAnalysis&gt;();
+  }
+};</code></pre>
+</div><p>现在可以做实验了。三条命令，三个结果：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># ① 只跑 recheck：分析从没算过
+pix-opt p13.mlir --pix-cost-recheck | grep -o "pix.cost_cached = [a-z]*"
+pix.cost_cached = false
+pix.cost_cached = false
+
+# ② report 之后紧跟 recheck
+pix-opt p13.mlir --pix-cost-report --pix-cost-recheck | grep -o "pix.cost_cached = [a-z]*"
+pix.cost_cached = true
+pix.cost_cached = true
+
+# ③ 中间插一个 canonicalize
+pix-opt p13.mlir --pix-cost-report --canonicalize --pix-cost-recheck | grep -o "pix.cost_cached = [a-z]*"
+pix.cost_cached = false
+pix.cost_cached = false</code></pre>
+</div><p>② 之所以是 <code>true</code>，全靠 <code>pix-cost-report</code> 里那一行 <code>markAnalysesPreserved&lt;PixCostAnalysis&gt;()</code>。<strong>把它注释掉重编，② 会变成 <code>false</code></strong>——我试过，两个函数都变。</p>
+<p>为什么需要这一行？因为<strong>框架默认假设你破坏了一切</strong>。这个默认是对的：它没法知道你改了什么。而我们只挂了两个可丢弃属性，op 的构成一点没变，那份统计仍然成立——<strong>这件事只有我们自己知道，所以必须说出来</strong>。</p>
+<p>③ 里 <code>canonicalize</code> 改了 IR、也没有声明保留我们这份分析，于是缓存被作废。这也是对的：函数真的被改了，元素数可能已经不一样了。</p>
+<div class="keypoint">
+<strong>两个"声明保留"的 API，用途完全不同</strong>
+<p><code>markAnalysesPreserved&lt;T&gt;()</code>——"我改了东西，但 <strong>T 这份分析</strong>不受影响"。用在"改动与某个分析无关"的场合，比如我们挂属性。</p>
+<p><code>markAllAnalysesPreserved()</code>——"我<strong>什么都没改</strong>"。任何可能空跑的 pass 都该在空跑的分支上调它。<strong>漏掉它不会有任何报错</strong>，只是把后面所有分析的缓存白白冲掉；这是个纯性能问题，而性能问题不会自己报警。</p>
+</div><h3>把这套机制自己跑一遍</h3>
+<p>上面那些道理，不如自己驱动一遍看得清。下面 50 行是 <code>AnalysisManager</code> 的模型：按作用域存缓存、pass 跑完按声明决定作废什么、并且<strong>统计一共真正遍历了几次 IR</strong>。最后两组对照就是&quot;漏了声明保留&quot;的实际代价：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%2050%20%E8%A1%8C%E7%9A%84%20AnalysisManager%20%E6%A8%A1%E5%9E%8B%E3%80%82%E8%A6%81%E5%BC%84%E6%B8%85%E4%B8%89%E4%BB%B6%E4%BA%8B%EF%BC%9A%0A%23%20%20%201.%20%E5%88%86%E6%9E%90%E6%98%AF**%E6%8C%89%E4%BD%9C%E7%94%A8%E5%9F%9F**%E5%AD%98%E7%9A%84%EF%BC%88module%20%E4%B8%80%E4%BB%BD%EF%BC%8C%E6%AF%8F%E4%B8%AA%20func%20%E5%90%84%E4%B8%80%E4%BB%BD%EF%BC%89%0A%23%20%20%202.%20pass%20%E8%B7%91%E5%AE%8C%E9%BB%98%E8%AE%A4%E5%85%A8%E9%83%A8%E4%BD%9C%E5%BA%9F%EF%BC%9B%E8%A6%81%E7%95%99%E4%B8%8B%E6%9D%A5%E5%BF%85%E9%A1%BB%E6%98%BE%E5%BC%8F%E5%A3%B0%E6%98%8E%0A%23%20%20%203.%20markAllAnalysesPreserved%20%E5%92%8C%20markAnalysesPreserved%3CT%3E%20%E7%9A%84%E5%B7%AE%E5%88%AB%0A%0Aclass%20AnalysisManager%3A%0A%20%20%20%20def%20__init__(self)%3A%0A%20%20%20%20%20%20%20%20self.cache%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20(%E4%BD%9C%E7%94%A8%E5%9F%9F%E5%90%8D%2C%20%E5%88%86%E6%9E%90%E5%90%8D)%20-%3E%20%E5%80%BC%0A%20%20%20%20%20%20%20%20self.computed%20%3D%200%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%9C%9F%E6%AD%A3%E9%81%8D%E5%8E%86%20IR%20%E7%9A%84%E6%AC%A1%E6%95%B0%0A%0A%20%20%20%20def%20get(self%2C%20scope%2C%20name%2C%20compute)%3A%0A%20%20%20%20%20%20%20%20key%20%3D%20(scope%2C%20name)%0A%20%20%20%20%20%20%20%20if%20key%20not%20in%20self.cache%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20self.cache%5Bkey%5D%20%3D%20compute()%0A%20%20%20%20%20%20%20%20%20%20%20%20self.computed%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%7Bname%7D%20%7Bscope%7D%EF%BC%9A%E7%BC%93%E5%AD%98%E6%9C%AA%E5%91%BD%E4%B8%AD%20%E2%86%92%20%E9%81%8D%E5%8E%86%20IR%20%E7%AE%97%E4%B8%80%E6%AC%A1%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%7Bname%7D%20%7Bscope%7D%EF%BC%9A%E5%91%BD%E4%B8%AD%E7%BC%93%E5%AD%98%EF%BC%8C%E7%99%BD%E6%8B%BF%22)%0A%20%20%20%20%20%20%20%20return%20self.cache%5Bkey%5D%0A%0A%20%20%20%20def%20get_cached(self%2C%20scope%2C%20name)%3A%0A%20%20%20%20%20%20%20%20return%20self.cache.get((scope%2C%20name))%20%20%23%20%E4%B8%8D%E5%91%BD%E4%B8%AD%E5%B0%B1%E6%98%AF%20None%EF%BC%8C%E7%BB%9D%E4%B8%8D%E4%BB%A3%E5%8A%B3%E8%AE%A1%E7%AE%97%0A%0A%20%20%20%20def%20invalidate(self%2C%20scope%2C%20preserved)%3A%0A%20%20%20%20%20%20%20%20%22%22%22preserved%3DNone%20%E8%A1%A8%E7%A4%BA%E5%85%A8%E4%BF%9D%E7%95%99%EF%BC%9B%E5%90%A6%E5%88%99%E6%98%AF%E4%BF%9D%E7%95%99%E7%9A%84%E5%88%86%E6%9E%90%E5%90%8D%E9%9B%86%E5%90%88%E3%80%82%22%22%22%0A%20%20%20%20%20%20%20%20if%20preserved%20is%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%EF%BC%88%7Bscope%7D%EF%BC%9A%E5%A3%B0%E6%98%8E%E5%85%A8%E9%83%A8%E4%BF%9D%E7%95%99%EF%BC%8C%E7%BC%93%E5%AD%98%E4%B8%8D%E5%8A%A8%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20return%0A%20%20%20%20%20%20%20%20dropped%20%3D%20%5Bn%20for%20(s%2C%20n)%20in%20list(self.cache)%20if%20s%20%3D%3D%20scope%20and%20n%20not%20in%20preserved%5D%0A%20%20%20%20%20%20%20%20for%20n%20in%20dropped%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20del%20self.cache%5B(scope%2C%20n)%5D%0A%20%20%20%20%20%20%20%20if%20dropped%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%EF%BC%88%7Bscope%7D%EF%BC%9A%E4%BD%9C%E5%BA%9F%20%7Bdropped%7D%EF%BC%9B%E4%BF%9D%E7%95%99%20%7Bsorted(preserved)%20or%20'%E6%97%A0'%7D%EF%BC%89%22)%0A%0AFUNCS%20%3D%20%7B%22%40f%22%3A%203%2C%20%22%40g%22%3A%201%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%87%BD%E6%95%B0%E5%90%8D%20-%3E%20%E9%87%8C%E9%9D%A2%E6%9C%89%E5%87%A0%E4%B8%AA%20pix%20op%0A%0Adef%20run_pipeline(passes%2C%20am)%3A%0A%20%20%20%20for%20name%2C%20behavior%20in%20passes%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20-%7Bname%7D%22)%0A%20%20%20%20%20%20%20%20for%20fn%2C%20n%20in%20FUNCS.items()%3A%20%20%20%20%20%20%20%20%20%20%23%20%E5%87%BD%E6%95%B0%E7%BA%A7%20pass%EF%BC%9A%E6%AF%8F%E4%B8%AA%E5%87%BD%E6%95%B0%E5%90%84%E8%B7%91%E4%B8%80%E6%AC%A1%0A%20%20%20%20%20%20%20%20%20%20%20%20behavior(am%2C%20fn%2C%20n)%0A%0A%23%20%E4%B8%89%E7%A7%8D%20pass%20%E7%9A%84%E8%A1%8C%E4%B8%BA%0Adef%20cost_report(preserve)%3A%0A%20%20%20%20def%20run(am%2C%20fn%2C%20n)%3A%0A%20%20%20%20%20%20%20%20am.get(fn%2C%20%22PixCost%22%2C%20lambda%3A%20n)%0A%20%20%20%20%20%20%20%20am.invalidate(fn%2C%20%7B%22PixCost%22%7D%20if%20preserve%20else%20set())%0A%20%20%20%20return%20run%0A%0Adef%20cost_recheck(am%2C%20fn%2C%20n)%3A%0A%20%20%20%20hit%20%3D%20am.get_cached(fn%2C%20%22PixCost%22)%20is%20not%20None%0A%20%20%20%20print(f%22%20%20%20%20%20%20recheck%20%7Bfn%7D%20%E2%86%92%20pix.cost_cached%20%3D%20%7Bstr(hit).lower()%7D%22)%0A%20%20%20%20am.invalidate(fn%2C%20%7B%22PixCost%22%7D)%0A%0Adef%20cost_user(preserve)%3A%0A%20%20%20%20%22%22%22%E7%9C%9F%E6%AD%A3%E7%94%A8%E5%88%86%E6%9E%90%E7%9A%84%20pass%EF%BC%88%E7%94%A8%20getAnalysis%EF%BC%8C%E4%B8%8D%E5%91%BD%E4%B8%AD%E5%B0%B1%E4%BC%9A%E8%87%AA%E5%B7%B1%E7%AE%97%EF%BC%89%E3%80%82%22%22%22%0A%20%20%20%20def%20run(am%2C%20fn%2C%20n)%3A%0A%20%20%20%20%20%20%20%20am.get(fn%2C%20%22PixCost%22%2C%20lambda%3A%20n)%0A%20%20%20%20%20%20%20%20am.invalidate(fn%2C%20%7B%22PixCost%22%7D%20if%20preserve%20else%20set())%0A%20%20%20%20return%20run%0A%0Adef%20canonicalize(am%2C%20fn%2C%20n)%3A%0A%20%20%20%20am.invalidate(fn%2C%20set())%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%94%B9%E4%BA%86%20IR%EF%BC%8C%E4%BB%80%E4%B9%88%E9%83%BD%E4%B8%8D%E4%BF%9D%E7%95%99%0A%0Afor%20title%2C%20passes%20in%20%5B%0A%20%20%20%20(%22%E2%91%A0%20%E5%8F%AA%E8%B7%91%20recheck%22%2C%20%5B(%22pix-cost-recheck%22%2C%20cost_recheck)%5D)%2C%0A%20%20%20%20(%22%E2%91%A1%20report%20%E5%A3%B0%E6%98%8E%E4%BF%9D%E7%95%99%20%E2%86%92%20recheck%20%E5%91%BD%E4%B8%AD%22%2C%20%5B(%22pix-cost-report%22%2C%20cost_report(True))%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22pix-cost-recheck%22%2C%20cost_recheck)%5D)%2C%0A%20%20%20%20(%22%E2%91%A2%20report%20%E4%B8%8D%E5%A3%B0%E6%98%8E%E4%BF%9D%E7%95%99%22%2C%20%5B(%22pix-cost-report%22%2C%20cost_report(False))%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22pix-cost-recheck%22%2C%20cost_recheck)%5D)%2C%0A%20%20%20%20(%22%E2%91%A3%20%E4%B8%AD%E9%97%B4%E6%8F%92%E4%B8%80%E4%B8%AA%20canonicalize%22%2C%20%5B(%22pix-cost-report%22%2C%20cost_report(True))%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22canonicalize%22%2C%20canonicalize)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22pix-cost-recheck%22%2C%20cost_recheck)%5D)%2C%0A%20%20%20%20(%22%E2%91%A4%20%E4%B8%89%E4%B8%AA%20pass%20%E9%83%BD%E8%A6%81%E8%BF%99%E4%BB%BD%E5%88%86%E6%9E%90%EF%BC%8C%E9%83%BD%E5%A3%B0%E6%98%8E%E4%BF%9D%E7%95%99%22%2C%20%5B(f%22user%7Bi%7D%22%2C%20cost_user(True))%20for%20i%20in%20(1%2C%202%2C%203)%5D)%2C%0A%20%20%20%20(%22%E2%91%A5%20%E5%90%8C%E6%A0%B7%E4%B8%89%E4%B8%AA%20pass%EF%BC%8C%E9%83%BD%E4%B8%8D%E5%A3%B0%E6%98%8E%E4%BF%9D%E7%95%99%22%2C%20%5B(f%22user%7Bi%7D%22%2C%20cost_user(False))%20for%20i%20in%20(1%2C%202%2C%203)%5D)%2C%0A%5D%3A%0A%20%20%20%20am%20%3D%20AnalysisManager()%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91%22)%0A%20%20%20%20run_pipeline(passes%2C%20am)%0A%20%20%20%20print(f%22%20%20%E2%86%92%20%E4%B8%80%E5%85%B1%E9%81%8D%E5%8E%86%20IR%20%7Bam.computed%7D%20%E6%AC%A1%22)"># 一个 50 行的 AnalysisManager 模型。要弄清三件事：
+#   1. 分析是**按作用域**存的（module 一份，每个 func 各一份）
+#   2. pass 跑完默认全部作废；要留下来必须显式声明
+#   3. markAllAnalysesPreserved 和 markAnalysesPreserved&lt;T&gt; 的差别
+
+class AnalysisManager:
+    def __init__(self):
+        self.cache = {}                      # (作用域名, 分析名) -&gt; 值
+        self.computed = 0                    # 真正遍历 IR 的次数
+
+    def get(self, scope, name, compute):
+        key = (scope, name)
+        if key not in self.cache:
+            self.cache[key] = compute()
+            self.computed += 1
+            print(f"      {name} {scope}：缓存未命中 → 遍历 IR 算一次")
+        else:
+            print(f"      {name} {scope}：命中缓存，白拿")
+        return self.cache[key]
+
+    def get_cached(self, scope, name):
+        return self.cache.get((scope, name))  # 不命中就是 None，绝不代劳计算
+
+    def invalidate(self, scope, preserved):
+        """preserved=None 表示全保留；否则是保留的分析名集合。"""
+        if preserved is None:
+            print(f"      （{scope}：声明全部保留，缓存不动）")
+            return
+        dropped = [n for (s, n) in list(self.cache) if s == scope and n not in preserved]
+        for n in dropped:
+            del self.cache[(scope, n)]
+        if dropped:
+            print(f"      （{scope}：作废 {dropped}；保留 {sorted(preserved) or '无'}）")
+
+FUNCS = {"@f": 3, "@g": 1}                   # 函数名 -&gt; 里面有几个 pix op
+
+def run_pipeline(passes, am):
+    for name, behavior in passes:
+        print(f"  -{name}")
+        for fn, n in FUNCS.items():          # 函数级 pass：每个函数各跑一次
+            behavior(am, fn, n)
+
+# 三种 pass 的行为
+def cost_report(preserve):
+    def run(am, fn, n):
+        am.get(fn, "PixCost", lambda: n)
+        am.invalidate(fn, {"PixCost"} if preserve else set())
+    return run
+
+def cost_recheck(am, fn, n):
+    hit = am.get_cached(fn, "PixCost") is not None
+    print(f"      recheck {fn} → pix.cost_cached = {str(hit).lower()}")
+    am.invalidate(fn, {"PixCost"})
+
+def cost_user(preserve):
+    """真正用分析的 pass（用 getAnalysis，不命中就会自己算）。"""
+    def run(am, fn, n):
+        am.get(fn, "PixCost", lambda: n)
+        am.invalidate(fn, {"PixCost"} if preserve else set())
+    return run
+
+def canonicalize(am, fn, n):
+    am.invalidate(fn, set())                 # 改了 IR，什么都不保留
+
+for title, passes in [
+    ("① 只跑 recheck", [("pix-cost-recheck", cost_recheck)]),
+    ("② report 声明保留 → recheck 命中", [("pix-cost-report", cost_report(True)),
+                                          ("pix-cost-recheck", cost_recheck)]),
+    ("③ report 不声明保留", [("pix-cost-report", cost_report(False)),
+                             ("pix-cost-recheck", cost_recheck)]),
+    ("④ 中间插一个 canonicalize", [("pix-cost-report", cost_report(True)),
+                                   ("canonicalize", canonicalize),
+                                   ("pix-cost-recheck", cost_recheck)]),
+    ("⑤ 三个 pass 都要这份分析，都声明保留", [(f"user{i}", cost_user(True)) for i in (1, 2, 3)]),
+    ("⑥ 同样三个 pass，都不声明保留", [(f"user{i}", cost_user(False)) for i in (1, 2, 3)]),
+]:
+    am = AnalysisManager()
+    print(f"\n【{title}】")
+    run_pipeline(passes, am)
+    print(f"  → 一共遍历 IR {am.computed} 次")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【① 只跑 recheck】
+  -pix-cost-recheck
+      recheck @f → pix.cost_cached = false
+      recheck @g → pix.cost_cached = false
+  → 一共遍历 IR 0 次
+
+【② report 声明保留 → recheck 命中】
+  -pix-cost-report
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+  -pix-cost-recheck
+      recheck @f → pix.cost_cached = true
+      recheck @g → pix.cost_cached = true
+  → 一共遍历 IR 2 次
+
+【③ report 不声明保留】
+  -pix-cost-report
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      （@f：作废 ['PixCost']；保留 无）
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+      （@g：作废 ['PixCost']；保留 无）
+  -pix-cost-recheck
+      recheck @f → pix.cost_cached = false
+      recheck @g → pix.cost_cached = false
+  → 一共遍历 IR 2 次
+
+【④ 中间插一个 canonicalize】
+  -pix-cost-report
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+  -canonicalize
+      （@f：作废 ['PixCost']；保留 无）
+      （@g：作废 ['PixCost']；保留 无）
+  -pix-cost-recheck
+      recheck @f → pix.cost_cached = false
+      recheck @g → pix.cost_cached = false
+  → 一共遍历 IR 2 次
+
+【⑤ 三个 pass 都要这份分析，都声明保留】
+  -user1
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+  -user2
+      PixCost @f：命中缓存，白拿
+      PixCost @g：命中缓存，白拿
+  -user3
+      PixCost @f：命中缓存，白拿
+      PixCost @g：命中缓存，白拿
+  → 一共遍历 IR 2 次
+
+【⑥ 同样三个 pass，都不声明保留】
+  -user1
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      （@f：作废 ['PixCost']；保留 无）
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+      （@g：作废 ['PixCost']；保留 无）
+  -user2
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      （@f：作废 ['PixCost']；保留 无）
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+      （@g：作废 ['PixCost']；保留 无）
+  -user3
+      PixCost @f：缓存未命中 → 遍历 IR 算一次
+      （@f：作废 ['PixCost']；保留 无）
+      PixCost @g：缓存未命中 → 遍历 IR 算一次
+      （@g：作废 ['PixCost']；保留 无）
+  → 一共遍历 IR 6 次</code></pre>
+</div><p>⑤ 和 ⑥ 是同样三个 pass、同样的 IR，只差一句声明保留：<strong>2 次遍历 vs 6 次</strong>。pass 越多、分析越贵，这个倍数越难看。而且如前所说，它不会报错——只会让编译慢下来。</p>
+<h2>并发：函数之间是并行跑的</h2>
+<p>MLIR 的 pass manager 在跑嵌套 pass 时，<strong>默认对同一层的多个 op 并发执行</strong>（<code>mlir/lib/Pass/Pass.cpp</code> 里 <code>isMultithreadingEnabled()</code> 为真就走 <code>runOnOperationAsyncImpl</code>）。所以图 13-1 里 <code>@f</code> 和 <code>@g</code> 是可以同时被处理的，各用自己那份 <code>AnalysisManager</code>。</p>
+<p>这件事的硬性前提，就是从第 2 章一路提到现在的 <code>IsolatedFromAbove</code>。准确的规矩不是&quot;并发需要它&quot;，而是更强的一条——<strong>能锚定 pass manager 的 op，必须标 <code>IsolatedFromAbove</code></strong>。源码在 <code>mlir/lib/Pass/Pass.cpp:558</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">if (!opInfo-&gt;hasTrait&lt;OpTrait::IsIsolatedFromAbove&gt;()) {
+  return op-&gt;emitOpError() &lt;&lt; "trying to schedule a pass on an operation not "
+                              "marked as 'IsolatedFromAbove'";
+}</code></pre>
+</div><p>官方文档（<code>mlir/docs/PassManagement.md</code>）给的理由很直白：<em>&quot;Passes are expected not to modify operations at or above the current operation being processed. If the operation is not isolated, it may inadvertently modify or traverse the SSA use-list of an operation it is not supposed to.&quot;</em> 并发只是这条隔离性顺带换来的红利——各自封闭，自然可以同时跑。</p>
+<h3>第 8 章那笔账，现在结了</h3>
+<p>定义 <code>pix.pipeline</code> 时我们<strong>故意没加</strong> <code>IsolatedFromAbove</code>，<code>.td</code> 里的注释写的是&quot;region 内可以直接引用外面的值，代价是不能被直接抽成独立函数&quot;。代价不止那一条。试着在它上面挂个 pass manager：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt pl.mlir --pass-pipeline='builtin.module(func.func(pix.pipeline(canonicalize)))'</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pl.mlir:2:10: error: 'pix.pipeline' op trying to schedule a pass on an operation not marked as 'IsolatedFromAbove'
+  %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
+         ^</code></pre>
+</div><p><strong>直接拒绝。</strong> 所以&quot;要不要加 <code>IsolatedFromAbove</code>&quot;是一个有真实后果的设计决定：加了，region 内不能再直接引用外面的值（得改成显式传参），换来的是能被单独调度 pass、能并发、能被 outlining 成独立函数；不加则反过来。<code>func.func</code> 选了加，<code>scf.for</code> 选了不加——各有各的道理。第 25 章做 GPU kernel outlining 时会再碰到这笔账。</p>
+<p>调试时想关掉并发（比如加了打印语句、输出串成一团），用这个：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt input.mlir --pix-cost-report --mlir-disable-threading</code></pre>
+</div><div class="note">
+<strong>pass 必须是线程安全的</strong>
+<p>既然默认并发，你的 <code>runOnOperation()</code> 就不能有跨调用的共享可变状态——别在 pass 类里放会被改的成员变量当缓存（框架会 <code>clonePass()</code> 出多份，但别指望具体份数），更别用函数内的 <code>static</code>。需要跨函数共享的信息，走<strong>上一层的分析</strong>（模块级 pass 的分析作用域是整个模块），而不是自己攒全局状态。</p>
+</div><h2>顺手写一个真的改 IR 的 pass</h2>
+<p>前两个 pass 都只挂属性，看不出&quot;改动&quot;和&quot;保留&quot;的张力。第三个：把散落的 <code>pix.kernel</code>（<code>ConstantLike</code> 常量）统一提到函数开头。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct PixHoistKernelsPass : impl::PixHoistKernelsBase&lt;PixHoistKernelsPass&gt; {
+  void runOnOperation() override {
+    func::FuncOp fn = getOperation();
+    if (fn.getBody().empty())
+      return;
+    Block &amp;entry = fn.getBody().front();
+
+    // 先收集再移动：边遍历边改 IR 是常见的崩溃来源。
+    SmallVector&lt;KernelOp&gt; kernels;
+    fn.walk([&amp;](KernelOp k) { kernels.push_back(k); });
+
+    // 已经在开头的不算改动。倒序插到最前面，好保持它们之间的原有顺序。
+    bool changed = false;
+    for (KernelOp k : llvm::reverse(kernels)) {
+      if (k-&gt;getBlock() == &amp;entry &amp;&amp; k-&gt;getPrevNode() == nullptr)
+        continue;
+      k-&gt;moveBefore(&amp;entry, entry.begin());
+      changed = true;
+    }
+
+    if (!changed)
+      markAllAnalysesPreserved();   // 什么都没做，就得说一声
+  }
+};</code></pre>
+</div><p>三个细节都是被真实教训逼出来的。<strong>先收集再移动</strong>：<code>walk</code> 的过程中改 IR 结构，行为未定义。<strong>倒序插入</strong>：每次都插到最前面，倒着来才能保持它们原有的相对顺序。<strong>&quot;已经在开头&quot;不算改动</strong>：否则这个 pass 永远声称自己改了 IR，第二次运行照样把缓存冲掉。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-hoist-kernels
+func.func @scattered(%img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %a = pix.add %img, %img : tensor&lt;8x8xf32&gt;
+  %k1 = pix.kernel dense&lt;1.0&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;
+  %c1 = pix.convolve %a, %k1 : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  %k2 = pix.kernel dense&lt;2.0&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;
+  %c2 = pix.convolve %c1, %k2 : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  return %c2 : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-hoist-kernels input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @scattered(%arg0: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %0 = pix.kernel dense&lt;1.000000e+00&gt; : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %1 = pix.kernel dense&lt;2.000000e+00&gt; : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %2 = pix.add %arg0, %arg0 : tensor&lt;8x8xf32&gt;
+    %3 = pix.convolve %2, %0 : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+    %4 = pix.convolve %3, %1 : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+    return %4 : tensor&lt;8x8xf32&gt;
+  }
+}</code></pre>
+</div><p>两个 kernel 都到了最前面，<strong>1.0 仍然在 2.0 前面</strong>。测试里那条&quot;跑两遍结果必须一样&quot;的 RUN 行守的就是幂等性。</p>
+<h2>和 LLVM 的新 PassManager 对照</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>LLVM（新 PM）</th>
+<th>MLIR</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>层级</td>
+<td>固定几种：Module / CGSCC / Function / Loop</td>
+<td><strong>由 op 树决定</strong>，想几层有几层</td>
+</tr>
+<tr>
+<td>pass 作用对象</td>
+<td>预定义的 IR 单位</td>
+<td>任意 op 类型（<code>Pass&lt;&quot;n&quot;, &quot;your.op&quot;&gt;</code>）</td>
+</tr>
+<tr>
+<td>分析</td>
+<td><code>AnalysisManager&lt;IRUnitT&gt;</code>，分析要特化</td>
+<td>任意类 + 一个 <code>Operation*</code> 构造函数</td>
+</tr>
+<tr>
+<td>失效</td>
+<td>返回 <code>PreservedAnalyses</code></td>
+<td>调 <code>markAnalysesPreserved&lt;T&gt;()</code></td>
+</tr>
+<tr>
+<td>并发</td>
+<td>基本没有</td>
+<td><strong>默认并发</strong>跑同层 op</td>
+</tr>
+<tr>
+<td>嵌套的前提</td>
+<td>由 IR 结构固定</td>
+<td>锚点 op 要标 <code>IsolatedFromAbove</code></td>
+</tr>
+</tbody></table>
+<p>抓住一条就够：<strong>LLVM 的层级是语言给定的，MLIR 的层级是你自己设计出来的。</strong> 这既是自由也是负担——你得想清楚&quot;哪些 op 该是隔离的&quot;，而这个决定同时决定了能不能并发、能不能单独调度 pass、能不能被 outlining。</p>
+<h2>动手：给 <code>pix-cost-report</code> 加一个 option</h2>
+<p>pass 可以带命令行选项。在 <code>Passes.td</code> 里给 <code>PixCostReport</code> 加一个：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def PixCostReport : Pass&lt;"pix-cost-report", "::mlir::func::FuncOp"&gt; {
+  let summary = "统计本函数的 pix 计算量，写成属性";
+  let options = [
+    Option&lt;"skipEmpty", "skip-empty", "bool", /*default=*/"false",
+           "pix op 数为 0 的函数就不要挂属性了"&gt;
+  ];
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>重新构建，生成的基类里会多一个 <code>skipEmpty</code> 成员，直接用。然后：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt p13.mlir --pix-cost-report=skip-empty=true</code></pre>
+</div><p><code>@no_pix</code> 那个函数应当不再出现 <code>pix.num_ops</code>。顺手用 <code>--dump-pass-pipeline</code> 看看选项是怎么显示在管线里的（回想前面 <code>canonicalize{...}</code> 那一长串）。</p>
+<p><strong>再改一处</strong>：把 <code>pix-hoist-kernels</code> 里 <code>if (!changed) markAllAnalysesPreserved();</code> 那两行删掉，然后跑</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt p13.mlir --pix-cost-report --pix-hoist-kernels --pix-cost-recheck</code></pre>
+</div><p><code>pix.cost_cached</code> 会从 <code>true</code> 变成 <code>false</code>——即使那两个函数里一个 <code>pix.kernel</code> 都没有、pass 实际什么都没干。这就是&quot;漏一句声明&quot;的真实代价。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>Pass&lt;&quot;命令行名&quot;, &quot;::mlir::func::FuncOp&quot;&gt;</code> 的第二个参数决定<strong>框架把什么交给你</strong>。写了它，<code>getOperation()</code> 的返回类型就已经收窄，不用 cast。</li>
+<li>pass 的骨架全部由 TableGen 生成：<code>GEN_PASS_DECL</code> / <code>GEN_PASS_REGISTRATION</code> 在头文件里，<code>GEN_PASS_DEF_&lt;全大写&gt;</code> 在实现里给出 <code>impl::XxxBase&lt;DerivedT&gt;</code> CRTP 基类。<strong>别自己写 <code>createXxx()</code></strong>（生成代码里已有，且名字没有 <code>Pass</code> 后缀），<strong>pass 结构要放在方言的命名空间里</strong>（否则 <code>impl</code> 有歧义，friend 也找不到你）。</li>
+<li><strong>MLIR 的 pass 层级由 op 树决定</strong>，不像 LLVM 那样固定。<code>builtin.module(func.func(...))</code> 这串括号就是层级；写错了框架会问你&quot;did you intend to nest?&quot;。拿不准就 <code>--dump-pass-pipeline</code>，它还会把每个 pass 的选项展开给你看。</li>
+<li><strong>分析不用继承、不用注册</strong>，只要有一个接受 <code>Operation *</code> 的构造函数。<code>AnalysisManager</code> 用 <code>TypeID</code> 当键，<strong>按作用域</strong>缓存——函数级 pass 拿到的分析只覆盖本函数。</li>
+<li><code>getAnalysis&lt;T&gt;()</code> 不命中就现算；<code>getCachedAnalysis&lt;T&gt;()</code> 不命中就返回空。后者能把&quot;缓存状态&quot;这件看不见的事变成可观察的东西，值得在调试时用。</li>
+<li><strong>框架默认假设你破坏了一切。</strong> 改动与某个分析无关时用 <code>markAnalysesPreserved&lt;T&gt;()</code>；什么都没改时用 <code>markAllAnalysesPreserved()</code>。<strong>漏掉它们没有任何报错</strong>，只是让后面的 pass 白白重算——实测同样三个 pass，声明保留是 2 次遍历，不声明是 6 次。</li>
+<li><strong>同一层的多个 op 默认并发跑</strong>，所以 <code>runOnOperation()</code> 必须线程安全：别在 pass 里攒可变状态，别用函数内 <code>static</code>。调试时 <code>--mlir-disable-threading</code>。</li>
+<li><strong>能锚定 pass manager 的 op 必须标 <code>IsolatedFromAbove</code></strong>（<code>Pass.cpp:558</code>），理由是&quot;pass 不许碰当前 op 之上的东西&quot;。<code>pix.pipeline</code> 没加，所以在它上面挂 pass manager 会被直接拒绝——第 8 章那个决定的代价，到这里才完整显形。</li>
+<li>改 IR 的 pass 三条经验：<strong>先收集再遍历改</strong>、<strong>倒序插入保序</strong>、<strong>&quot;本来就对&quot;不算改动</strong>。</li>
+</ul>
+<p><strong>pix 进度</strong>：有了自己的 pass 基础设施（<code>Transforms/</code> 目录、<code>MLIRPixTransforms</code> 库、<code>registerPixPasses()</code>）与第一个分析 <code>PixCostAnalysis</code>，三个 pass 各演示一个机制。新增 <code>cost_analysis.mlir</code>（四条 RUN 行靠 <code>--check-prefix</code> 做对照实验）与 <code>hoist_kernels.mlir</code>，<code>check-pix</code> 从 8 涨到 10 个文件。</p>
+<p>下一章讲 <strong>Pattern Rewrite 引擎</strong>。第 11 章我们写过 canonicalize pattern，但把它当黑盒用——<code>benefit</code> 怎么排序、<code>PatternRewriter</code> 的通知机制到底通知了谁、greedy driver 的 worklist 里发生了什么。那一章会打开 <code>--debug-only=greedy-rewriter</code> 认真读一遍它的自述，也会解释第 11 章那个&quot;被 erase 的地址立刻被复用&quot;为什么会坑到人。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch12.html">← 第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

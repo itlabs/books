@@ -18,6 +18,10 @@ CE=1 books/inside-mlir/verify/verify-mlir.sh                             # 没�
 
 # 构建 pix 方言项目（code/pix/）并跑 lit 测试
 books/inside-mlir/verify/verify-pix.sh
+
+# 校验正文里**贴出来的运行结果**和实跑一致（第 13 章就是靠它抓到一处漏抄）
+MLIR_BIN=... PIX_OPT=... python3 books/inside-mlir/verify/verify-outputs.py
+MLIR_BIN=... PIX_OPT=... python3 books/inside-mlir/verify/verify-outputs.py ch11 ch13
 MLIR_DIR=~/llvm-project/build/lib/cmake/mlir books/inside-mlir/verify/verify-pix.sh
 BUILD_DIR=/tmp/pix-build books/inside-mlir/verify/verify-pix.sh          # 复用构建目录，增量更快
 NOTEST=1 books/inside-mlir/verify/verify-pix.sh                          # 只编译不跑测试

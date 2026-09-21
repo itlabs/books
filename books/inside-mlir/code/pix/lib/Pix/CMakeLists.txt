@@ -20,3 +20,6 @@ add_mlir_dialect_library(MLIRPix
   MLIRInferTypeOpInterface  # SameOperandsAndResultType 用到
   MLIRSideEffectInterfaces  # Pure 用到
   )
+
+# 第 13 章：pass 库
+add_subdirectory(Transforms)

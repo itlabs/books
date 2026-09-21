@@ -10,7 +10,7 @@
   1. Toy 教程只演示 API 序列，不讲**为什么 MLIR 长这样**、每个设计在解决什么问题。
   2. 真实项目（Triton / IREE / flang / ClangIR）几十个方言、上百个 pass，不知从哪拉线头。
   3. 最难的几块——**Interface、Dialect Conversion、bufferization、Transform 方言**——文档最薄、坑最深。
-- **规格**：28 章 + 3 附录，五部分。每章正文约 250–450 行 markdown，与 `inside-llvm-sycl` 同量级。
+- **规格**：28 章 + 3 附录，五部分。篇幅不设上限（见 §13），实际落在 350–630 行，与 `inside-llvm-sycl` 同量级或略长。
 - **源码锚点**：上游 `llvm/llvm-project` 的 `mlir/` 子树（不是 `intel/llvm`）。真实项目章另锚 `triton-lang/triton`、`iree-org/iree`、`llvm-project/flang`、`llvm/clangir`。
 
 ## 2. 动手前必做
@@ -66,8 +66,9 @@ MLIR 演进快，pass 名、API、目录都会变，所以：
 | ch08 | `pix.mul`、`pix.scale`、`pix.transpose`、`pix.reduce`、`pix.pipeline`+`pix.yield` | ODS：操作数/结果类型不一致的情况、属性、region、builder、`extraClassDeclaration` |
 | ch09 | `!pix.kernel<3x3>`、`#pix.border`、`pix.convolve` | 自定义参数化类型与枚举属性 |
 | ch10 | （不加 op）transpose/convolve/pipeline 的 verifier | 不变式与诊断 |
-| ch11 | （不加 op）folder 与 canonicalizer | 常量折叠、两次转置消去、乘 1 消去 |
-| ch12 | `pix.constant` + 测试体系 | lit/FileCheck、`check-pix` |
+| ch11 | （不加 op）4 组 fold + 2 条 canonicalize pattern；方言加 `dependentDialects`、`materializeConstant` | 两者的分界线、OpFoldResult、不动点、互逆 pattern 挂死 |
+| ch12 | `pix.reduce` 的 `#pix.reduce_kind<sum|max|min>` 枚举；`--pix-simplify` 命名管线 | 给已有 op 加属性的兼容性、lit/FileCheck、`check-pix` |
+| ch13 | `Transforms/` 基础设施、`PixCostAnalysis`、3 个 pass | 嵌套 PassManager、分析缓存与失效、并发与 `IsolatedFromAbove` |
 
 **下降路径（第四部分的主干）**
 ```
@@ -213,7 +214,7 @@ books/inside-mlir/verify/verify-pix.sh                 # 构建 code/pix/ 并跑
 
 ## 12. 写作顺序与批次
 
-照仓库现有节奏，一个部分一个 PR/批次（参考 `clangir-part5` 那次）：
+批次按下表推进，但 **PR 只开一个：全书写完再开**（2026-09-20 定，与 `clangir-part5` 那次一个部分一个 PR 的节奏不同）。所以下面每个批次结束时只提交、不开 PR，分支一路累积到 ch28 + 附录 C 齐活。
 
 | 批次 | 内容 | 前置 |
 | --- | --- | --- |
@@ -235,8 +236,11 @@ books/inside-mlir/verify/verify-pix.sh                 # 构建 code/pix/ 并跑
 - 交叉引用（「第 N 章」）与 `book.json` 一致；与 GPU 书、SYCL 书的交叉引用写明是哪本书。
 - **只用公开信息**：不含任何公司内部代码、内部项目名或未公开信息。
 - 篇幅**不设上限**（2026-09-20 定）：只要每一段都实在就行，别为了凑行数摊平罗列 API，也别为了压行数砍掉讲透一个机制所需的篇幅。参考值 350–550 行，ch02、ch07、ch08、ch11 都在 450 以上，是因为那几章各带了实测出来的坑与可运行模拟器，不是注水。判据是"这一段删掉读者会不会少懂一件事"，不是行数。
-- **每章写完必跑三项自检**（批次 1 全过）：
+- **每章写完必跑四项自检**（批次 1 全过）：
   1. `CE=1 books/inside-mlir/verify/verify-mlir.sh <ch>` —— 所有 MLIR 块过工具；
   2. 抽出 python 块真跑一遍，与正文「运行结果：」逐字节 diff；
-  3. `node build.js inside-mlir` 后检查生成的 HTML：**每章至少 1 张 SVG**、SVG 内没有被误插 `<p>`、CE 按钮和运行按钮数量符合预期。
+  3. `verify/verify-outputs.py` —— 正文里贴出来的**完整**运行结果与实跑逐字节比对。
+     `verify-mlir.sh` 只保证块"能跑"，这个才保证"贴的是真的"；节选输出它会列出来提示人工核。
+     （2026-09-20 加：写 ch13 时靠它抓到一处漏抄了一行输出。）
+  4. `node build.js inside-mlir` 后检查生成的 HTML：**每章至少 1 张 SVG**、SVG 内没有被误插 `<p>`、CE 按钮和运行按钮数量符合预期。
 - **课后题的答案必须自己先跑一遍。** 批次 1 里有三道题的真实报错与初稿的暗示不符（parser 先于 verifier 报错、隐式 terminator、`--convert-to-llvm` 不报错但留下 `scf.for`），都按实测重写了——这类"意料之外"往往是最好的教学点，但前提是你验过。

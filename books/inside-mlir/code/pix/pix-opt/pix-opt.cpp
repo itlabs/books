@@ -14,6 +14,7 @@
 #include "mlir/Transforms/Passes.h"
 
 #include "Pix/PixDialect.h"
+#include "Pix/Transforms/Passes.h"
 
 //===----------------------------------------------------------------------===//
 // 第 12 章：一条命名的 pass 管线
@@ -33,8 +34,10 @@ static void buildPixSimplifyPipeline(mlir::OpPassManager &pm) {
 
 int main(int argc, char **argv) {
   // 1. 注册 pass：内建的那些（--canonicalize、--cse……）拿来就用。
-  //    以后 pix 自己的 pass（第 13 章起）也在这里注册。
   mlir::registerAllPasses();
+  // pix 自己的 pass（第 13 章）。这一个函数由 -gen-pass-decls -name Pix 生成，
+  // Passes.td 里加了新 pass 就自动包含进来，不用在这里逐个登记。
+  mlir::pix::registerPixPasses();
 
   // 我们自己那条管线，注册成 --pix-simplify。
   // 静态对象的构造函数完成注册，所以放在 main 里也行、放全局也行；
