@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li class="active"><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li class="toc-todo"><span>第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</span></li>
+<li class="toc-todo"><span>第 23 章 vector 方言：向量化、mask 与按目标宽度展开</span></li>
+<li class="toc-todo"><span>第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</span></li>
+<li class="toc-todo"><span>第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</span></li>
+<li class="toc-todo"><span>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</span></li>
+<li class="toc-todo"><span>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</span></li>
+<li class="toc-todo"><span>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 20 章把 pix 降到了 <code>linalg</code>，并证明了"降过去才能 tile"。这一章真正去 tile，而且把三件事做实：</p>
+<p><strong>一、串行与并行两种 tiling。</strong><code>tile_using_for</code> 出 <code>scf.for</code>，<code>tile_using_forall</code> 出 <code>scf.forall</code> —— 后者带 <code>shared_outs</code> 和 <code>tensor.parallel_insert_slice</code>，是通往 GPU（第 25 章）的形式。</p>
+<p><strong>二、producer-consumer 融合。</strong>两步逐点运算 <code>add</code> 然后 <code>scale</code>，融合之后<strong>中间那张整图彻底消失</strong>——`scale` 直接吃 `add` 在同一个 tile 里产出的结果。这是第四部分最有价值的一次变换，而我们一行融合逻辑都不用写。</p>
+<p><strong>三、halo。</strong>stencil 运算分块时，输出 tile 是 4×4，输入 tile 必须是 6×6——多出的两圈就是 halo。这一章会给 <code>pix.convolve</code> 写下降（一个 4 维迭代空间的 <code>linalg.generic</code>），然后 tile 它，看那个 <code>6×6</code> 是<strong>怎么被自动算出来的</strong>。halo 是手写 tiling 时最容易错的地方；这里它是 indexing map 的一个推论。</p>
+</div><h2>tiling 的两种形式</h2>
+<p>第 18 章已经见过 <code>tile_using_for</code>：它生成嵌套的 <code>scf.for</code>，循环之间串行，用 <code>iter_args</code> 串起累积的张量。</p>
+<p>并行版本换一个 op：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%tiled, %loop = transform.structured.tile_using_forall %g tile_sizes [4, 4]
+  : (!transform.any_op) -&gt; (!transform.any_op, !transform.any_op)</code></pre>
+</div><p>跑一遍（输入是 <code>pix.add</code> 降下来的 generic）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt fa21.mlir --pix-to-linalg --transform-interpreter --canonicalize</code></pre>
+</div><p>运行结果（函数部分）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @parallel_tile(%arg0: tensor&lt;8x8xf32&gt;, %arg1: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %0 = tensor.empty() : tensor&lt;8x8xf32&gt;
+    %1 = scf.forall (%arg2, %arg3) in (2, 2) shared_outs(%arg4 = %0) -&gt; (tensor&lt;8x8xf32&gt;) {
+      %2 = affine.apply #map(%arg2)
+      %3 = affine.apply #map(%arg3)
+      %extracted_slice = tensor.extract_slice %arg0[%2, %3] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+      %extracted_slice_0 = tensor.extract_slice %arg1[%2, %3] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+      %extracted_slice_1 = tensor.extract_slice %arg4[%2, %3] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+      %4 = linalg.generic {indexing_maps = [#map1, #map1, #map1], iterator_types = ["parallel", "parallel"]} ins(%extracted_slice, %extracted_slice_0 : tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) outs(%extracted_slice_1 : tensor&lt;4x4xf32&gt;) {
+      ^bb0(%in: f32, %in_2: f32, %out: f32):
+        %5 = arith.addf %in, %in_2 : f32
+        linalg.yield %5 : f32
+      } -&gt; tensor&lt;4x4xf32&gt;
+      scf.forall.in_parallel {
+        tensor.parallel_insert_slice %4 into %arg4[%2, %3] [4, 4] [1, 1] : tensor&lt;4x4xf32&gt; into tensor&lt;8x8xf32&gt;
+      }
+    }
+    return %1 : tensor&lt;8x8xf32&gt;
+  }</code></pre>
+</div><p>和 <code>scf.for</code> 版本比，三处不同，每处都有含义：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>scf.for</code> 版</th>
+<th><code>scf.forall</code> 版</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>迭代空间</td>
+<td><code>%c0 to %c8 step %c4</code>（<strong>元素坐标</strong>）</td>
+<td><code>in (2, 2)</code>（<strong>tile 编号</strong>），偏移用 <code>affine.apply</code> 算</td>
+</tr>
+<tr>
+<td>结果怎么传</td>
+<td><code>iter_args</code> 串行累积</td>
+<td><code>shared_outs</code>：所有迭代共享同一个目标</td>
+</tr>
+<tr>
+<td>怎么写回</td>
+<td><code>tensor.insert_slice</code> + <code>scf.yield</code></td>
+<td><code>scf.forall.in_parallel { tensor.parallel_insert_slice }</code></td>
+</tr>
+</tbody></table>
+<p><code>in (2, 2)</code> 那个写法值得注意：<strong><code>scf.forall</code> 的归纳变量是 tile 的编号，不是元素下标</strong>。这让&quot;把每个 tile 映射到一个 GPU block&quot;变成一件自然的事——第 25 章会用到。</p>
+<p><code>tensor.parallel_insert_slice</code> 是它的关键：它声明&quot;这些写入互不重叠&quot;，于是并行是安全的。如果 tile 之间真的有重叠写，verifier 拦不住你，但结果是错的——<strong>这个保证由 tiling 的正确性负责，不由 IR 检查</strong>。</p>
+<div class="note">
+<strong>什么时候用哪个</strong>
+<p>规则很简单：<strong>被切的维度全是 <code>parallel</code> 就能用 <code>forall</code></strong>。归约维不能这么切——多个迭代要累加到同一个位置，`parallel_insert_slice` 的"互不重叠"假设就破了。真实管线里常见的做法是：并行维用 <code>forall</code> 切（映射到线程/块），归约维用 <code>for</code> 切（在每个线程内串行累加）。</p>
+</div><h2>融合：让中间结果不落地</h2>
+<p>这是第四部分最有价值的一次变换。</p>
+<p>考虑两步逐点运算：<code>%s = pix.add %a, %b</code> 然后 <code>%m = pix.scale %s, %f</code>。降到 linalg 之后是两个 <code>linalg.generic</code>，各自跑一遍 8×8 的迭代空间。<strong>中间那个 <code>%s</code> 是一整张 8×8 的图</strong>——要分配、要写满、再读一遍。</p>
+<p>融合的目标：把它们合成<strong>一个</strong>循环嵌套，中间结果只在一个 tile 内存在。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%prod, %cons = transform.split_handle %gs
+  : (!transform.any_op) -&gt; (!transform.any_op, !transform.any_op)
+%fused, %loops:2 = transform.structured.fuse %cons tile_sizes [4, 4]
+  : (!transform.any_op) -&gt; (!transform.any_op, !transform.any_op, !transform.any_op)</code></pre>
+</div><p>读法很重要：<strong><code>fuse</code> 的对象是消费者。</strong> 它先 tile 消费者，然后把生产者&quot;拉进&quot;每个 tile。这个方向不是随意的——见下面那个 keypoint。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt f21.mlir --pix-to-linalg --transform-interpreter --canonicalize --cse</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @two_steps(%arg0: tensor&lt;8x8xf32&gt;, %arg1: tensor&lt;8x8xf32&gt;, %arg2: f32) -&gt; tensor&lt;8x8xf32&gt; {
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c0 = arith.constant 0 : index
+    %0 = tensor.empty() : tensor&lt;8x8xf32&gt;
+    %1 = scf.for %arg3 = %c0 to %c8 step %c4 iter_args(%arg4 = %0) -&gt; (tensor&lt;8x8xf32&gt;) {
+      %2 = scf.for %arg5 = %c0 to %c8 step %c4 iter_args(%arg6 = %arg4) -&gt; (tensor&lt;8x8xf32&gt;) {
+        %extracted_slice = tensor.extract_slice %arg0[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %extracted_slice_0 = tensor.extract_slice %arg1[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %extracted_slice_1 = tensor.extract_slice %0[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %3 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%extracted_slice, %extracted_slice_0 : tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) outs(%extracted_slice_1 : tensor&lt;4x4xf32&gt;) {
+        ^bb0(%in: f32, %in_3: f32, %out: f32):
+          %5 = arith.addf %in, %in_3 : f32
+          linalg.yield %5 : f32
+        } -&gt; tensor&lt;4x4xf32&gt;
+        %extracted_slice_2 = tensor.extract_slice %arg6[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %4 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]} ins(%3 : tensor&lt;4x4xf32&gt;) outs(%extracted_slice_2 : tensor&lt;4x4xf32&gt;) {
+        ^bb0(%in: f32, %out: f32):
+          %5 = arith.mulf %in, %arg2 : f32
+          linalg.yield %5 : f32
+        } -&gt; tensor&lt;4x4xf32&gt;
+        %inserted_slice = tensor.insert_slice %4 into %arg6[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;4x4xf32&gt; into tensor&lt;8x8xf32&gt;
+        scf.yield %inserted_slice : tensor&lt;8x8xf32&gt;
+      }
+      scf.yield %2 : tensor&lt;8x8xf32&gt;
+    }
+    return %1 : tensor&lt;8x8xf32&gt;
+  }</code></pre>
+</div><p>三件事值得逐一确认：</p>
+<p><strong>只有一对 <code>scf.for</code>。</strong> 两个 generic 现在住在同一个循环嵌套里。</p>
+<p><strong><code>%4</code> 的 <code>ins(%3 : tensor&lt;4x4xf32&gt;)</code></strong> —— 消费者直接吃生产者在<strong>这个 tile 内</strong>产出的 4×4 结果。</p>
+<p><strong>那张 8×8 的中间图不见了。</strong> 原来的 <code>%1</code>（整图 add）被 canonicalize 清掉了，因为再没人用它。</p>
+<div class="keypoint">
+<strong>为什么融合是"从消费者往回拉"，而不是"从生产者往前推"</strong>
+<p>因为<strong>只有消费者知道自己需要输入的哪一块</strong>。tile 消费者时，框架用它的 indexing map 算出"这个输出 tile 需要输入的哪个切片"，然后要求生产者只生产那一块。反过来——先 tile 生产者，再问"谁用得上这块"——需要反向求解 map，一般无解。</p>
+<p>这也解释了 <code>transform.structured.fuse</code> 的签名为什么把 tile 大小和融合写在一起：<strong>融合的边界就是 tile 的边界</strong>，两件事本质上是一件事。</p>
+</div><div class="warn">
+<strong><code>transform.structured.fuse</code> 的语法是 <code>tile_sizes [4, 4]</code>，不是属性字典</strong>
+<p>我第一次写成 <code>transform.structured.fuse %cons {tile_sizes = [4, 4]}</code>，得到一句相当误导的报错：</p>
+<p><code>error: 'transform.structured.fuse' op expects 0 loop results</code></p>
+<p>它不是在说 loop 结果数写错了，而是那个属性字典没被当成 <code>tile_sizes</code>（真正的 <code>tile_sizes</code> 是<strong>操作数</strong>加一个 <code>static_tile_sizes</code> 属性，由自定义 assembly 格式拼起来），于是框架认为"没有 tile 大小 → 不产生循环 → 你却声明了两个 loop 结果"。<strong>transform 方言的 op 大量使用自定义 assembly 格式，别照属性字典的直觉写</strong>——去 <code>mlir/test/Dialect/Linalg/transform-op-*.mlir</code> 里找一个真实用例抄，比读 ODS 快。</p>
+</div><h2>halo：stencil 分块的那两圈</h2>
+<p>逐点运算的 tiling 很干净：输出 tile 4×4，输入 tile 也是 4×4。<strong>stencil 不是这样</strong>——算一个输出点要读它周围一圈，所以输入 tile 必须更大。多出来的那部分叫 <strong>halo</strong>（也叫 ghost cells）。</p>
+<p>手写 tiling 时 halo 是最容易错的地方：差一圈就是越界或算错边界。而在 linalg 里，它是 indexing map 的一个<strong>推论</strong>。</p>
+<p>先给 <code>pix.convolve</code> 写下降。关键就是那三个 map：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 四个迭代维：d0/d1 走输出的行列，d2/d3 走卷积核窗口
+auto d0 = getAffineDimExpr(0, ctx), d1 = getAffineDimExpr(1, ctx);
+auto d2 = getAffineDimExpr(2, ctx), d3 = getAffineDimExpr(3, ctx);
+SmallVector&lt;AffineMap&gt; maps{
+    AffineMap::get(4, 0, {d0 + d2, d1 + d3}, ctx), // 输入：**带偏移** → halo 的来源
+    AffineMap::get(4, 0, {d2, d3}, ctx),           // 权重
+    AffineMap::get(4, 0, {d0, d1}, ctx)};          // 输出
+SmallVector&lt;utils::IteratorType&gt; iters{
+    utils::IteratorType::parallel, utils::IteratorType::parallel,
+    utils::IteratorType::reduction, utils::IteratorType::reduction};</code></pre>
+</div><p><strong>输入的下标是 <code>d0 + d2</code></strong>：输出点 <code>(d0, d1)</code> 要读输入的 <code>(d0+d2, d1+d3)</code>，其中 <code>d2, d3</code> 扫过整个卷积核窗口。这一个表达式包含了 stencil 的全部访存信息。</p>
+<p><code>pix.convolve</code> 是 &quot;same&quot; 语义（输入输出同形），所以要先 pad 一圈半径：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 卷积核的尺寸从**类型**里读——第 9 章把尺寸放进 !pix.kernel&lt;R x C&gt; 的回报
+int64_t kr = kty.getRows(), kc = kty.getCols();
+int64_t rr = kr / 2, rc = kc / 2;
+auto pad = tensor::PadOp::create(rewriter, loc, padTy, adaptor.getImage(),
+                                 SmallVector&lt;int64_t&gt;{rr, rc},
+                                 SmallVector&lt;int64_t&gt;{rr, rc},
+                                 ValueRange{}, ValueRange{});</code></pre>
+</div><p>第 9 章决定&quot;把卷积核尺寸放进类型&quot;时，理由是&quot;第 21 章算 halo 时直接读类型就有了&quot;。<strong>现在兑现了</strong>：<code>kty.getRows()</code> 一句话拿到，不必去分析权重数据。</p>
+<p>降完是这样：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-linalg
+func.func @stencil(%img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %k = pix.kernel dense&lt;[[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]]&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;
+  %c = pix.convolve %img, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  return %c : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-linalg input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">#map = affine_map&lt;(d0, d1, d2, d3) -&gt; (d0 + d2, d1 + d3)&gt;
+#map1 = affine_map&lt;(d0, d1, d2, d3) -&gt; (d2, d3)&gt;
+#map2 = affine_map&lt;(d0, d1, d2, d3) -&gt; (d0, d1)&gt;
+module {
+  func.func @stencil(%arg0: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %0 = pix.kernel dense&lt;[[0.000000e+00, 1.000000e+00, 0.000000e+00], [1.000000e+00, -4.000000e+00, 1.000000e+00], [0.000000e+00, 1.000000e+00, 0.000000e+00]]&gt; : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %cst = arith.constant dense&lt;[[0.000000e+00, 1.000000e+00, 0.000000e+00], [1.000000e+00, -4.000000e+00, 1.000000e+00], [0.000000e+00, 1.000000e+00, 0.000000e+00]]&gt; : tensor&lt;3x3xf32&gt;
+    %cst_0 = arith.constant 0.000000e+00 : f32
+    %padded = tensor.pad %arg0 low[1, 1] high[1, 1] {
+    ^bb0(%arg1: index, %arg2: index):
+      tensor.yield %cst_0 : f32
+    } : tensor&lt;8x8xf32&gt; to tensor&lt;10x10xf32&gt;
+    %1 = tensor.empty() : tensor&lt;8x8xf32&gt;
+    %2 = linalg.fill ins(%cst_0 : f32) outs(%1 : tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt;
+    %3 = linalg.generic {indexing_maps = [#map, #map1, #map2], iterator_types = ["parallel", "parallel", "reduction", "reduction"]} ins(%padded, %cst : tensor&lt;10x10xf32&gt;, tensor&lt;3x3xf32&gt;) outs(%2 : tensor&lt;8x8xf32&gt;) {
+    ^bb0(%in: f32, %in_1: f32, %out: f32):
+      %4 = arith.mulf %in, %in_1 : f32
+      %5 = arith.addf %out, %4 : f32
+      linalg.yield %5 : f32
+    } -&gt; tensor&lt;8x8xf32&gt;
+    return %3 : tensor&lt;8x8xf32&gt;
+  }
+}</code></pre>
+</div><p>（那个 <code>pix.kernel</code> 还留着是因为它是 <code>ConstantLike</code> 且没人用了——加个 <code>--canonicalize</code> 就会被 DCE 掉。）</p>
+<p>现在 tile 它。<strong>注意 tile 大小写了四个数</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">// 只切前两维（输出的行列）；归约维写 0 表示不切
+%htiled, %loops:2 = transform.structured.tile_using_for %hg tile_sizes [4, 4, 0, 0]</code></pre>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt halo21.mlir --pix-to-linalg --transform-interpreter --canonicalize</code></pre>
+</div><p>运行结果（只看两个 <code>extract_slice</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">        %extracted_slice = tensor.extract_slice %padded[%arg1, %arg3] [6, 6] [1, 1] : tensor&lt;10x10xf32&gt; to tensor&lt;6x6xf32&gt;
+        %extracted_slice_1 = tensor.extract_slice %arg4[%arg1, %arg3] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;</code></pre>
+</div><p><strong>输出切片 <code>[4, 4]</code>，输入切片 <code>[6, 6]</code>。</strong> 那多出来的两圈就是 halo，而<strong>没有任何一行代码是为 halo 写的</strong>——框架从 <code>(d0+d2, d1+d3)</code> 这个 map 和 <code>d2, d3</code> 的范围（3×3 核）算出来的。</p>
+<div class="keypoint">
+<strong>halo 大小 = 归约维的长度 − 1</strong>
+<p>3×3 核 → 每边多 1 圈，输入 tile 比输出大 2；5×5 核 → 每边多 2 圈，大 4。这个关系直接来自 <code>d0 + d2</code>：<code>d0</code> 走 tile 的 4 个值，<code>d2</code> 走核的 3 个值，合起来覆盖 <code>4 + 3 - 1 = 6</code> 个输入下标。</p>
+<p><strong>把核尺寸放进类型，这一步就是查表；放进数据，就得做分析。</strong>第 9 章那个设计决定在这里收到了回报——这也是"什么该做成类型"的一个具体判据：<strong>后续变换需要在编译期知道的信息，就该在类型里。</strong></p>
+</div><h2>把 halo 与融合的收益算出来</h2>
+<p>两件事都能从 indexing map 直接推。下面这个模型算 halo（结果和真 <code>mlir-opt</code> 的 <code>[6, 6]</code> 对得上），并量化融合省下多少：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20tiling%20%E7%9A%84%E4%B8%A4%E4%BB%B6%E4%BA%8B%E9%83%BD%E8%83%BD%E4%BB%8E%20indexing%20map%20%E7%AE%97%E5%87%BA%E6%9D%A5%EF%BC%9Ahalo%20%E6%9C%89%E5%A4%9A%E5%A4%A7%E3%80%81%E8%9E%8D%E5%90%88%E7%9C%81%E5%A4%9A%E5%B0%91%E5%86%85%E5%AD%98%E3%80%82%0A%23%20%E8%BF%99%E4%B8%AA%E6%A8%A1%E5%9E%8B%E6%8A%8A%E4%B8%A4%E8%80%85%E9%83%BD%E9%87%8F%E5%8C%96%EF%BC%8C%E6%95%B0%E5%AD%97%E5%92%8C%E7%9C%9F%20mlir-opt%20%E7%9A%84%E8%BE%93%E5%87%BA%E5%AF%B9%E5%BE%97%E4%B8%8A%E3%80%82%0A%0Adef%20slice_range(map_exprs%2C%20tile_lo%2C%20tile_hi%2C%20red_extents)%3A%0A%20%20%20%20%22%22%22%E7%BB%99%E5%AE%9A%E4%B8%80%E4%B8%AA%20tile%EF%BC%88%E5%B9%B6%E8%A1%8C%E7%BB%B4%E7%9A%84%E8%8C%83%E5%9B%B4%EF%BC%89%E5%92%8C%E5%BD%92%E7%BA%A6%E7%BB%B4%E7%9A%84%E5%85%A8%E9%95%BF%EF%BC%8C%E7%AE%97%E5%87%BA%E6%9F%90%E4%B8%AA%E6%93%8D%E4%BD%9C%E6%95%B0%E8%A6%81%E5%8F%96%E7%9A%84%E5%88%87%E7%89%87%E3%80%82%0A%20%20%20%20%20%20%20map_exprs%20%E9%87%8C%E6%AF%8F%E9%A1%B9%E6%98%AF%20(%E5%B9%B6%E8%A1%8C%E7%BB%B4%E4%B8%8B%E6%A0%87%20or%20None%2C%20%E5%BD%92%E7%BA%A6%E7%BB%B4%E4%B8%8B%E6%A0%87%20or%20None)%EF%BC%8C%0A%20%20%20%20%20%20%20%E8%A1%A8%E7%A4%BA%E8%BF%99%E4%B8%80%E7%BB%B4%E7%9A%84%E4%B8%8B%E6%A0%87%20%3D%20%E9%82%A3%E4%B8%AA%E5%B9%B6%E8%A1%8C%E7%BB%B4%20%2B%20%E9%82%A3%E4%B8%AA%E5%BD%92%E7%BA%A6%E7%BB%B4%E3%80%82%22%22%22%0A%20%20%20%20lo%2C%20hi%20%3D%20%5B%5D%2C%20%5B%5D%0A%20%20%20%20for%20par%2C%20red%20in%20map_exprs%3A%0A%20%20%20%20%20%20%20%20a%20%3D%20tile_lo%5Bpar%5D%20if%20par%20is%20not%20None%20else%200%0A%20%20%20%20%20%20%20%20b%20%3D%20tile_hi%5Bpar%5D%20if%20par%20is%20not%20None%20else%201%0A%20%20%20%20%20%20%20%20if%20red%20is%20not%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20b%20%2B%3D%20red_extents%5Bred%5D%20-%201%20%20%20%20%20%20%20%20%23%20%E9%82%BB%E5%9F%9F%E6%8A%8A%E4%B8%8A%E7%95%8C%E5%BE%80%E5%A4%96%E6%8E%A8%0A%20%20%20%20%20%20%20%20lo.append(a)%3B%20hi.append(b)%0A%20%20%20%20return%20%5B(l%2C%20h)%20for%20l%2C%20h%20in%20zip(lo%2C%20hi)%5D%0A%0Adef%20show(title%2C%20maps%2C%20tile%2C%20red_extents)%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91tile%20%3D%20%7Btile%7D%EF%BC%8C%E5%BD%92%E7%BA%A6%E7%BB%B4%E9%95%BF%E5%BA%A6%20%3D%20%7Bred_extents%7D%22)%0A%20%20%20%20lo%20%3D%20%5B0%2C%200%5D%3B%20hi%20%3D%20list(tile)%0A%20%20%20%20for%20who%2C%20m%20in%20maps.items()%3A%0A%20%20%20%20%20%20%20%20rng%20%3D%20slice_range(m%2C%20lo%2C%20hi%2C%20red_extents)%0A%20%20%20%20%20%20%20%20size%20%3D%20%5Bh%20-%20l%20for%20l%2C%20h%20in%20rng%5D%0A%20%20%20%20%20%20%20%20extra%20%3D%20%22%22%0A%20%20%20%20%20%20%20%20if%20who%20%3D%3D%20%22%E8%BE%93%E5%85%A5%22%20and%20size%20!%3D%20list(tile)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20halo%20%3D%20%5B(s%20-%20t)%20%2F%2F%202%20for%20s%2C%20t%20in%20zip(size%2C%20tile)%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20extra%20%3D%20f%22%20%20%20%E2%86%90%20%E6%AF%94%E8%BE%93%E5%87%BA%E5%A4%A7%20%7B%5Bs-t%20for%20s%2Ct%20in%20zip(size%2Ctile)%5D%7D%EF%BC%8C%E6%AF%8F%E8%BE%B9%20halo%20%3D%20%7Bhalo%7D%22%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bwho%3A4%7D%20%E5%88%87%E7%89%87%20%7B%5B'%25d%3A%25d'%20%25%20r%20for%20r%20in%20rng%5D%7D%20%E5%B0%BA%E5%AF%B8%20%7Bsize%7D%7Bextra%7D%22)%0A%0A%23%20%E9%80%90%E7%82%B9%EF%BC%9A%E8%BE%93%E5%85%A5%E4%B8%8B%E6%A0%87%E4%B8%8D%E5%90%AB%E5%BD%92%E7%BA%A6%E7%BB%B4%20%E2%86%92%20%E5%88%87%E7%89%87%E5%92%8C%20tile%20%E4%B8%80%E6%A0%B7%E5%A4%A7%0Ashow(%22%E9%80%90%E7%82%B9%20add%EF%BC%9A%E6%97%A0%20halo%22%2C%20%7B%22%E8%BE%93%E5%85%A5%22%3A%20%5B(0%2C%20None)%2C%20(1%2C%20None)%5D%2C%20%22%E8%BE%93%E5%87%BA%22%3A%20%5B(0%2C%20None)%2C%20(1%2C%20None)%5D%7D%2C%0A%20%20%20%20%20(4%2C%204)%2C%20%5B%5D)%0A%23%20stencil%EF%BC%9A%E8%BE%93%E5%85%A5%E4%B8%8B%E6%A0%87%E6%98%AF%20d0%2Bd2%20%E2%86%92%20%E5%88%87%E7%89%87%E8%A2%AB%E6%8E%A8%E5%A4%A7%0Ashow(%22stencil%20convolve%EF%BC%883x3%20%E6%A0%B8%EF%BC%89%EF%BC%9A%E6%9C%89%20halo%22%2C%0A%20%20%20%20%20%7B%22%E8%BE%93%E5%85%A5%22%3A%20%5B(0%2C%200)%2C%20(1%2C%201)%5D%2C%20%22%E8%BE%93%E5%87%BA%22%3A%20%5B(0%2C%20None)%2C%20(1%2C%20None)%5D%7D%2C%20(4%2C%204)%2C%20%5B3%2C%203%5D)%0Ashow(%22%E5%90%8C%E4%B8%80%E4%B8%AA%20stencil%EF%BC%8C%E6%8D%A2%205x5%20%E6%A0%B8%22%2C%20%0A%20%20%20%20%20%7B%22%E8%BE%93%E5%85%A5%22%3A%20%5B(0%2C%200)%2C%20(1%2C%201)%5D%2C%20%22%E8%BE%93%E5%87%BA%22%3A%20%5B(0%2C%20None)%2C%20(1%2C%20None)%5D%7D%2C%20(4%2C%204)%2C%20%5B5%2C%205%5D)%0A%0A%23%20%E8%9E%8D%E5%90%88%E7%9C%81%E5%A4%9A%E5%B0%91%EF%BC%9A%E4%B8%A4%E6%AD%A5%E9%80%90%E7%82%B9%E8%BF%90%E7%AE%97%EF%BC%8C8x8%20%E5%9B%BE%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2060)%0AN%2C%20T%20%3D%208%2C%204%0Aprint(f%22%E8%9E%8D%E5%90%88%E7%9A%84%E6%94%B6%E7%9B%8A%EF%BC%88%7BN%7Dx%7BN%7D%20%E5%9B%BE%EF%BC%8C%E4%B8%A4%E6%AD%A5%E9%80%90%E7%82%B9%E8%BF%90%E7%AE%97%EF%BC%8Ctile%20%7BT%7Dx%7BT%7D%EF%BC%89%EF%BC%9A%22)%0Aprint(f%22%20%20%E4%B8%8D%E8%9E%8D%E5%90%88%EF%BC%9A%E4%B8%AD%E9%97%B4%E7%BB%93%E6%9E%9C%E8%A6%81%E4%B8%80%E6%95%B4%E5%BC%A0%E5%9B%BE%20%20%20%20%20%20%3D%20%7BN*N%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%E7%9A%84%E4%B8%B4%E6%97%B6%E5%AD%98%E5%82%A8%22)%0Aprint(f%22%20%20%E8%9E%8D%E5%90%88%E5%90%8E%EF%BC%9A%E4%B8%AD%E9%97%B4%E7%BB%93%E6%9E%9C%E5%8F%AA%E5%9C%A8%E4%B8%80%E4%B8%AA%20tile%20%E5%86%85%20%3D%20%7BT*T%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%22)%0Aprint(f%22%20%20%E7%9C%81%E4%B8%8B%20%7BN*N%20-%20T*T%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%8C%E6%AF%94%E4%BE%8B%20%7B(1%20-%20T*T%2F(N*N))*100%3A.0f%7D%25%22)%0Aprint(f%22%20%20%E6%9B%B4%E5%85%B3%E9%94%AE%E7%9A%84%E6%98%AF**%E5%B1%80%E9%83%A8%E6%80%A7**%EF%BC%9A%7BT*T%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%E8%83%BD%E5%BE%85%E5%9C%A8%20cache%20%E9%87%8C%EF%BC%8C%7BN*N%7D%20%E4%B8%AA%E6%9C%AA%E5%BF%85%E3%80%82%22)%0Aprint(%22%20%20%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%BA%E4%BB%80%E4%B9%88%E8%9E%8D%E5%90%88%E5%B8%B8%E5%B8%B8%E6%AF%94%E5%8D%95%E7%BA%AF%20tile%20%E6%9B%B4%E6%9C%89%E6%95%88%20%E2%80%94%E2%80%94%20%E5%AE%83%E6%B6%88%E6%8E%89%E7%9A%84%E6%98%AF%E5%86%85%E5%AD%98%E5%BE%80%E8%BF%94%EF%BC%8C%E4%B8%8D%E5%8F%AA%E6%98%AF%E7%A9%BA%E9%97%B4%E3%80%82%22)"># tiling 的两件事都能从 indexing map 算出来：halo 有多大、融合省多少内存。
+# 这个模型把两者都量化，数字和真 mlir-opt 的输出对得上。
+
+def slice_range(map_exprs, tile_lo, tile_hi, red_extents):
+    """给定一个 tile（并行维的范围）和归约维的全长，算出某个操作数要取的切片。
+       map_exprs 里每项是 (并行维下标 or None, 归约维下标 or None)，
+       表示这一维的下标 = 那个并行维 + 那个归约维。"""
+    lo, hi = [], []
+    for par, red in map_exprs:
+        a = tile_lo[par] if par is not None else 0
+        b = tile_hi[par] if par is not None else 1
+        if red is not None:
+            b += red_extents[red] - 1        # 邻域把上界往外推
+        lo.append(a); hi.append(b)
+    return [(l, h) for l, h in zip(lo, hi)]
+
+def show(title, maps, tile, red_extents):
+    print(f"\n【{title}】tile = {tile}，归约维长度 = {red_extents}")
+    lo = [0, 0]; hi = list(tile)
+    for who, m in maps.items():
+        rng = slice_range(m, lo, hi, red_extents)
+        size = [h - l for l, h in rng]
+        extra = ""
+        if who == "输入" and size != list(tile):
+            halo = [(s - t) // 2 for s, t in zip(size, tile)]
+            extra = f"   ← 比输出大 {[s-t for s,t in zip(size,tile)]}，每边 halo = {halo}"
+        print(f"    {who:4} 切片 {['%d:%d' % r for r in rng]} 尺寸 {size}{extra}")
+
+# 逐点：输入下标不含归约维 → 切片和 tile 一样大
+show("逐点 add：无 halo", {"输入": [(0, None), (1, None)], "输出": [(0, None), (1, None)]},
+     (4, 4), [])
+# stencil：输入下标是 d0+d2 → 切片被推大
+show("stencil convolve（3x3 核）：有 halo",
+     {"输入": [(0, 0), (1, 1)], "输出": [(0, None), (1, None)]}, (4, 4), [3, 3])
+show("同一个 stencil，换 5x5 核", 
+     {"输入": [(0, 0), (1, 1)], "输出": [(0, None), (1, None)]}, (4, 4), [5, 5])
+
+# 融合省多少：两步逐点运算，8x8 图
+print("\n" + "=" * 60)
+N, T = 8, 4
+print(f"融合的收益（{N}x{N} 图，两步逐点运算，tile {T}x{T}）：")
+print(f"  不融合：中间结果要一整张图      = {N*N} 个元素的临时存储")
+print(f"  融合后：中间结果只在一个 tile 内 = {T*T} 个元素")
+print(f"  省下 {N*N - T*T} 个元素，比例 {(1 - T*T/(N*N))*100:.0f}%")
+print(f"  更关键的是**局部性**：{T*T} 个元素能待在 cache 里，{N*N} 个未必。")
+print("  这就是为什么融合常常比单纯 tile 更有效 —— 它消掉的是内存往返，不只是空间。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【逐点 add：无 halo】tile = (4, 4)，归约维长度 = []
+    输入   切片 ['0:4', '0:4'] 尺寸 [4, 4]
+    输出   切片 ['0:4', '0:4'] 尺寸 [4, 4]
+
+【stencil convolve（3x3 核）：有 halo】tile = (4, 4)，归约维长度 = [3, 3]
+    输入   切片 ['0:6', '0:6'] 尺寸 [6, 6]   ← 比输出大 [2, 2]，每边 halo = [1, 1]
+    输出   切片 ['0:4', '0:4'] 尺寸 [4, 4]
+
+【同一个 stencil，换 5x5 核】tile = (4, 4)，归约维长度 = [5, 5]
+    输入   切片 ['0:8', '0:8'] 尺寸 [8, 8]   ← 比输出大 [4, 4]，每边 halo = [2, 2]
+    输出   切片 ['0:4', '0:4'] 尺寸 [4, 4]
+
+============================================================
+融合的收益（8x8 图，两步逐点运算，tile 4x4）：
+  不融合：中间结果要一整张图      = 64 个元素的临时存储
+  融合后：中间结果只在一个 tile 内 = 16 个元素
+  省下 48 个元素，比例 75%
+  更关键的是**局部性**：16 个元素能待在 cache 里，64 个未必。
+  这就是为什么融合常常比单纯 tile 更有效 —— 它消掉的是内存往返，不只是空间。</code></pre>
+</div><p>注意第三组：<strong>同一个 stencil，把核换成 5×5，halo 自动变成每边 2 圈</strong>。这就是&quot;halo 是 map 的推论&quot;的意思——换核不用改任何 tiling 代码。</p>
+<p>最后那段关于融合的数字要看清重点：省 75% 的临时存储是次要的，<strong>关键是局部性</strong>。16 个元素能待在 cache 里，64 个未必。融合消掉的是<strong>内存往返</strong>，不只是空间——这也是为什么它常常比单纯 tile 更有效。</p>
+<div class="concept">
+<svg viewBox="0 0 700 404" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c21o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c21g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">halo：输入 tile 比输出 tile 大，而那个差值是 map 算出来的</text>
+  <text x="20" y="40" font-size="10" font-weight="bold" fill="#2b6cb0">输入（已 pad 到 10×10）</text>
+  <rect x="20" y="48" width="150" height="150" fill="#f7f8fa" stroke="#9aa4b2"/>
+  <rect x="20" y="48" width="90" height="90" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2.4"/>
+  <text x="26" y="66" font-size="9" fill="#2b6cb0">6×6 输入切片</text>
+  <rect x="35" y="63" width="60" height="60" fill="#d6e6f7" stroke="#2b6cb0" stroke-dasharray="3 2"/>
+  <text x="41" y="96" font-size="8" fill="#24292f">对应输出的</text>
+  <text x="41" y="107" font-size="8" fill="#24292f">4×4 那一块</text>
+  <text x="20" y="214" font-size="9" fill="#e06a3b">深色外面那一圈 = halo（每边 1）</text>
+  <path d="M 178 120 L 224 120" fill="none" stroke="#3f9b5c" stroke-width="1.8" marker-end="url(#c21g)"/>
+  <text x="180" y="112" font-size="9" fill="#3f9b5c">stencil</text>
+  <text x="232" y="40" font-size="10" font-weight="bold" fill="#2f7a45">输出（8×8）</text>
+  <rect x="232" y="48" width="120" height="120" fill="#f7f8fa" stroke="#9aa4b2"/>
+  <rect x="232" y="48" width="60" height="60" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2.4"/>
+  <text x="238" y="66" font-size="9" fill="#2f7a45">4×4 输出 tile</text>
+  <text x="232" y="184" font-size="9" fill="#6b7280">tile_sizes [4, 4, 0, 0]</text>
+  <text x="232" y="197" font-size="9" fill="#6b7280">（后两个 0 = 归约维不切）</text>
+  <rect x="374" y="44" width="312" height="156" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="386" y="63" font-size="10" font-weight="bold" fill="#2b6cb0">halo 从哪来：就是这个 map</text>
+  <text x="386" y="83" font-size="9" font-family="monospace" fill="#24292f">输入: (d0,d1,d2,d3) → (d0+d2, d1+d3)</text>
+  <text x="386" y="98" font-size="9" font-family="monospace" fill="#24292f">权重: (d0,d1,d2,d3) → (d2, d3)</text>
+  <text x="386" y="113" font-size="9" font-family="monospace" fill="#24292f">输出: (d0,d1,d2,d3) → (d0, d1)</text>
+  <text x="386" y="134" font-size="9" fill="#24292f">d0 走 tile 的 4 个值，d2 走核的 3 个值</text>
+  <text x="386" y="149" font-size="9" font-weight="bold" fill="#e06a3b">→ 覆盖 4 + 3 − 1 = 6 个输入下标</text>
+  <text x="386" y="169" font-size="9" fill="#6b7280">halo 大小 = 归约维长度 − 1。换 5×5 核，</text>
+  <text x="386" y="182" font-size="9" fill="#6b7280">自动变成每边 2 —— 不改一行 tiling 代码。</text>
+  <text x="386" y="196" font-size="9" fill="#3f9b5c">核尺寸来自 !pix.kernel&lt;R x C&gt;（第 9 章那个决定）</text>
+  <line x1="14" y1="220" x2="686" y2="220" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="240" font-size="11" font-weight="bold" fill="#24292f">融合：中间结果从"一整张图"缩到"一个 tile"</text>
+  <rect x="14" y="250" width="330" height="86" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.6"/>
+  <text x="26" y="269" font-size="10" font-weight="bold" fill="#e06a3b">不融合：两个独立的循环嵌套</text>
+  <text x="26" y="288" font-size="9" font-family="monospace" fill="#24292f">generic(add) → 整张 8×8 中间图</text>
+  <text x="26" y="303" font-size="9" font-family="monospace" fill="#24292f">generic(scale) 再读一遍那张图</text>
+  <text x="26" y="322" font-size="9" fill="#e06a3b">64 个元素的临时存储 + 一次完整的内存往返</text>
+  <rect x="356" y="250" width="330" height="86" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="368" y="269" font-size="10" font-weight="bold" fill="#2f7a45">融合后：一对循环，中间结果不落地</text>
+  <text x="368" y="288" font-size="9" font-family="monospace" fill="#24292f">scf.for × 2 { add(4×4); scale(ins=上一步) }</text>
+  <text x="368" y="303" font-size="9" fill="#24292f">整张中间图被 DCE 掉了</text>
+  <text x="368" y="322" font-size="9" fill="#3f9b5c">16 个元素，能待在 cache 里 —— 省的是往返，不只是空间</text>
+  <rect x="14" y="346" width="672" height="50" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="365" font-size="10" fill="#24292f"><tspan font-weight="bold">融合方向是"从消费者往回拉"</tspan>：只有消费者知道自己要输入的哪一块。反过来需要反向求解 map，一般无解。</text>
+  <text x="26" y="383" font-size="10" fill="#24292f">所以 <tspan font-family="monospace">transform.structured.fuse</tspan> 把 tile 大小和融合写在一起 —— <tspan font-weight="bold">融合的边界就是 tile 的边界</tspan>，本质是一件事。</text>
+</svg>
+<div class="caption">图 21-1　halo 如何从 indexing map 推出（换核尺寸自动跟上），以及融合把中间结果从整张图缩到一个 tile</div>
+</div><h2>动手：改 tile 大小，观察 halo 的比例</h2>
+<p>halo 是<strong>开销</strong>：tile 越小，halo 占的比例越高。拿 3×3 核算一下：</p>
+<table>
+<thead>
+<tr>
+<th>tile</th>
+<th>输入 tile</th>
+<th>多读的元素</th>
+<th>冗余比例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>2×2</td>
+<td>4×4</td>
+<td>16 − 4 = 12</td>
+<td>300%</td>
+</tr>
+<tr>
+<td>4×4</td>
+<td>6×6</td>
+<td>36 − 16 = 20</td>
+<td>125%</td>
+</tr>
+<tr>
+<td>8×8</td>
+<td>10×10</td>
+<td>100 − 64 = 36</td>
+<td>56%</td>
+</tr>
+</tbody></table>
+<p>把 <code>tile_sizes</code> 依次改成 <code>[2, 2, 0, 0]</code>、<code>[8, 8, 0, 0]</code>，跑</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt halo21.mlir --pix-to-linalg --transform-interpreter --canonicalize | grep extract_slice</code></pre>
+</div><p>自己确认那张表。<strong>这就是 stencil 的 tile 大小选择为什么和逐点运算完全不同</strong>——逐点运算 tile 越小越贴合 cache，stencil 则要在局部性和 halo 冗余之间折中。</p>
+<p><strong>再改一处</strong>：把 <code>transform.structured.fuse</code> 换成 <code>tile_using_forall</code> + <code>transform.structured.fuse_into_containing_op</code>，看能不能得到并行版的融合。（提示：第 18 章那条 handle 失效的规矩在这里会反复咬你——每一步都要用新 handle。）</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>两种 tiling 形式</strong>：<code>tile_using_for</code> → <code>scf.for</code>（迭代空间是元素坐标，<code>iter_args</code> 串行累积）；<code>tile_using_forall</code> → <code>scf.forall</code>（迭代空间是 <strong>tile 编号</strong>，<code>shared_outs</code> + <code>tensor.parallel_insert_slice</code>）。<strong>被切的维全是 <code>parallel</code> 才能用 <code>forall</code></strong>。</li>
+<li><code>scf.forall</code> 的归纳变量是 tile 编号而不是元素下标，这让&quot;每个 tile 一个 GPU block&quot;变得自然——第 25 章的形式。</li>
+<li><strong>融合是&quot;从消费者往回拉&quot;</strong>，因为只有消费者知道自己需要输入的哪一块（正向用 map 算切片很容易，反向求解一般无解）。所以 <code>transform.structured.fuse</code> 把 tile 大小和融合写在一起：<strong>融合的边界就是 tile 的边界</strong>。</li>
+<li>融合的收益<strong>主要不是省空间，是省内存往返</strong>。中间结果从一整张图缩到一个 tile，于是能待在 cache 里。实测：中间那张 8×8 图在融合后被 DCE 彻底清掉。</li>
+<li><strong>halo = 归约维长度 − 1</strong>。3×3 核 → 输入 tile 比输出大 2（每边 1 圈）；5×5 → 大 4。这个关系直接来自输入 map 里的 <code>d0 + d2</code>，<strong>没有一行代码是为 halo 写的</strong>，换核尺寸也不用改 tiling 代码。</li>
+<li>stencil 的下降关键就是那个 <code>(d0+d2, d1+d3)</code>：四维迭代空间，前两维 <code>parallel</code> 走输出，后两维 <code>reduction</code> 走核窗口。&quot;same&quot; 语义要先 <code>tensor.pad</code> 一圈半径。</li>
+<li><strong>把核尺寸放进类型的回报在这里兑现</strong>：<code>kty.getRows()</code> 一句话，不必分析权重数据。判据可以记住——<strong>后续变换需要在编译期知道的信息，就该在类型里</strong>。</li>
+<li>halo 是<strong>开销</strong>，所以 stencil 的 tile 大小选择和逐点运算完全不同：逐点越小越贴 cache，stencil 要在局部性与 halo 冗余之间折中（2×2 tile 的冗余高达 300%）。</li>
+<li><strong>transform 方言的 op 大量用自定义 assembly 格式</strong>，别照属性字典的直觉写。<code>fuse %op {tile_sizes = [4,4]}</code> 会得到一句毫不相干的 <code>expects 0 loop results</code>。去 <code>mlir/test/Dialect/Linalg/transform-op-*.mlir</code> 抄一个真实用例最快。</li>
+</ul>
+<p><strong>pix 进度</strong>：<code>pix-to-linalg</code> 补上 <code>pix.convolve</code> 的下降（4 维 stencil + <code>tensor.pad</code>），于是 pix 的三类计算（逐点、归约、邻域）全部有了 linalg 形式。新增 <code>tile_fuse.mlir</code>：一段调度同时驱动融合与 halo 两个实验，断言&quot;只有一对循环&quot;和&quot;输入切片 6×6 / 输出切片 4×4&quot;。<code>check-pix</code> 从 17 涨到 18 个文件。</p>
+<p>下一章是第四部分最难的一关：<strong>bufferization</strong>，从 tensor 的值语义走到 memref 的内存语义。难点不在 API，在于这一步要回答三个此前一直被回避的问题——谁拥有这块内存、什么时候能就地更新、别名怎么判。那一章也会解释你在本章输出里看到的那些 <code>tensor.empty</code> 最终变成了什么。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch20.html">← 第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

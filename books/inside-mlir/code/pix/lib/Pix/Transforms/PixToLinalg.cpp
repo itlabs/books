@@ -162,13 +162,105 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
   }
 };
 
+/// pix.convolve → tensor.pad + linalg.generic（4 维迭代空间的 stencil）
+///
+/// 这一条是第 21 章 halo 那一节的素材。要点在 indexing map：
+///   输入图：(d0,d1,d2,d3) -> (d0+d2, d1+d3)   ← **下标带偏移**
+///   权重：  (d0,d1,d2,d3) -> (d2, d3)
+///   输出：  (d0,d1,d2,d3) -> (d0, d1)
+/// iterator_types = [parallel, parallel, reduction, reduction]
+///
+/// 输入下标是 d0+d2，所以一个输出点要读一个 R×C 的邻域。这意味着
+/// **输出 tile 是 4×4 时，输入 tile 必须是 6×6**——那两圈多出来的就是 halo。
+/// pix.convolve 是"same"语义（输入输出同形），所以先 pad 一圈半径。
+struct ConvolveToLinalg : OpConversionPattern<ConvolveOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(ConvolveOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto imgTy = dyn_cast<RankedTensorType>(adaptor.getImage().getType());
+    if (!imgTy || !imgTy.hasStaticShape() || imgTy.getRank() != 2)
+      return rewriter.notifyMatchFailure(op, "需要静态形状的二维图");
+
+    // 卷积核的尺寸从类型里读——这正是第 9 章把尺寸放进类型的回报。
+    auto kty = dyn_cast<KernelType>(op.getKernel().getType());
+    if (!kty)
+      return rewriter.notifyMatchFailure(op, "kernel 操作数不是 !pix.kernel");
+    int64_t kr = kty.getRows(), kc = kty.getCols();
+    if (kr % 2 == 0 || kc % 2 == 0)
+      return rewriter.notifyMatchFailure(op, "只处理奇数边长（有明确中心）");
+
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+    Type elt = imgTy.getElementType();
+
+    // 权重张量：pix.kernel 是 ConstantLike，直接把它的属性拿出来造常量。
+    auto kernelDef = op.getKernel().getDefiningOp<KernelOp>();
+    if (!kernelDef)
+      return rewriter.notifyMatchFailure(op, "kernel 不是直接由 pix.kernel 产出");
+    auto weights = dyn_cast<DenseFPElementsAttr>(kernelDef.getWeights());
+    if (!weights)
+      return rewriter.notifyMatchFailure(op, "权重不是 DenseFPElementsAttr");
+    Value w = arith::ConstantOp::create(
+        rewriter, loc, RankedTensorType::get({kr, kc}, elt), weights);
+
+    Value zero = arith::ConstantOp::create(rewriter, loc,
+                                           rewriter.getZeroAttr(elt));
+
+    // same 语义 → 先 pad 一圈半径。边界值这里固定用 0（对应 #pix.border<zero>）；
+    // clamp / wrap 需要在 pad 的 region 里算下标，留作练习。
+    int64_t rr = kr / 2, rc = kc / 2;
+    SmallVector<int64_t> lo{rr, rc}, hi{rr, rc};
+    auto padTy = RankedTensorType::get(
+        {imgTy.getDimSize(0) + 2 * rr, imgTy.getDimSize(1) + 2 * rc}, elt);
+    auto pad = tensor::PadOp::create(rewriter, loc, padTy, adaptor.getImage(),
+                                     lo, hi, ValueRange{}, ValueRange{});
+    {
+      OpBuilder::InsertionGuard g(rewriter);
+      Block *body = rewriter.createBlock(
+          &pad.getRegion(), pad.getRegion().end(),
+          {rewriter.getIndexType(), rewriter.getIndexType()}, {loc, loc});
+      rewriter.setInsertionPointToStart(body);
+      tensor::YieldOp::create(rewriter, loc, zero);
+    }
+
+    // 累加器初值 0
+    Value empty = tensor::EmptyOp::create(rewriter, loc, imgTy.getShape(), elt);
+    Value init = linalg::FillOp::create(rewriter, loc, ValueRange{zero},
+                                        ValueRange{empty}).getResult(0);
+
+    // 四个迭代维：d0/d1 走输出的行列，d2/d3 走卷积核窗口
+    auto d0 = getAffineDimExpr(0, ctx), d1 = getAffineDimExpr(1, ctx);
+    auto d2 = getAffineDimExpr(2, ctx), d3 = getAffineDimExpr(3, ctx);
+    SmallVector<AffineMap> maps{
+        AffineMap::get(4, 0, {d0 + d2, d1 + d3}, ctx), // 输入：带偏移 → halo 的来源
+        AffineMap::get(4, 0, {d2, d3}, ctx),           // 权重
+        AffineMap::get(4, 0, {d0, d1}, ctx)};          // 输出
+    SmallVector<utils::IteratorType> iters{
+        utils::IteratorType::parallel, utils::IteratorType::parallel,
+        utils::IteratorType::reduction, utils::IteratorType::reduction};
+
+    auto generic = linalg::GenericOp::create(
+        rewriter, loc, TypeRange{imgTy},
+        ValueRange{pad.getResult(), w}, ValueRange{init}, maps, iters,
+        [&](OpBuilder &b, Location nested, ValueRange args) {
+          Value m = arith::MulFOp::create(b, nested, args[0], args[1]);
+          Value s = arith::AddFOp::create(b, nested, args[2], m);
+          linalg::YieldOp::create(b, nested, s);
+        });
+
+    rewriter.replaceOp(op, generic.getResults());
+    return success();
+  }
+};
+
 struct PixToLinalgPass : impl::PixToLinalgBase<PixToLinalgPass> {
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
     ConversionTarget target(*ctx);
     target.addLegalDialect<arith::ArithDialect, linalg::LinalgDialect,
                            tensor::TensorDialect, func::FuncDialect>();
-    target.addIllegalOp<AddOp, MulOp, ScaleOp, ReduceOp>();
+    target.addIllegalOp<AddOp, MulOp, ScaleOp, ReduceOp, ConvolveOp>();
 
     TypeConverter converter;
     converter.addConversion([](Type ty) { return ty; });
@@ -176,7 +268,7 @@ struct PixToLinalgPass : impl::PixToLinalgBase<PixToLinalgPass> {
     RewritePatternSet patterns(ctx);
     patterns.add<PointwiseLowering<AddOp, arith::AddFOp>,
                  PointwiseLowering<MulOp, arith::MulFOp>, ScaleToLinalg,
-                 ReduceToLinalg>(converter, ctx);
+                 ReduceToLinalg, ConvolveToLinalg>(converter, ctx);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
