@@ -27,6 +27,17 @@
    ```
    正文里每个类名、trait 名、接口文件名都要在这份树里 grep 确认过再写。注意 `/tmp` 会被清空，别放那儿。
 
+6. **第五部分的真实项目源码**（写 ch26–28 时按需拉，同样用 sparse checkout）：
+   ```bash
+   # Triton（ch26 已拉，84fa223 / 2026-09-21）
+   git clone --filter=blob:none --sparse --depth=1 \
+     https://github.com/triton-lang/triton.git ~/repos/triton
+   cd ~/repos/triton && git sparse-checkout set include lib python/triton/language
+   ```
+   op 名、属性名、设计动机一律 grep 确认。ch26 的 layout 材料主要来自
+   `include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td`（encoding 定义与自带图示）
+   和 `include/triton/Tools/LinearLayout.h`（linear layout 的设计说明，含作者署名）。
+
 ## 3. 版本基线（已定：LLVM/MLIR 23.1.x）
 
 **基线 = LLVM 23.1.x**（23.1.1 发布于 2026-09-08，本书写作时的最新发布版），已写进附录 A 第 0 节，正文统一按它写。网页代码块跑的是 Compiler Explorer 的 **trunk** 版工具，两者极少数情况下会不一致——这类地方用 `warn` 框提醒读者去 `--help` 核对。

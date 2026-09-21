@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li class="active"><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li class="toc-todo"><span>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</span></li>
+<li class="toc-todo"><span>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第五部分看真实项目。Triton 是 MLIR 上最成功的产品之一——几乎所有现代 LLM 推理栈里都有它编译出来的 kernel。</p>
+<p>这一章<strong>不教 Triton 语言怎么写</strong>（`@triton.jit`、`tl.load`、`tl.dot` 那些，《GPU 编程》讲过）。这一章看的是：<strong>它在 MLIR 上做了什么别人没做的事。</strong></p>
+<p>答案是 <strong>layout 系统</strong>。Triton 的分层（<code>tt</code> → <code>ttg</code> → LLVM）本身很常规，你读完前 25 章就能猜到；真正的原创在于它给张量类型挂了一个 <strong>encoding 属性</strong>，用来精确描述"这个张量的每个元素住在哪个线程的哪个寄存器里"。这个东西前 25 章完全没出现过——我们的 pix 从 <code>tensor</code> 一路降到 PTX，中间**从来没有表达过"数据在线程间怎么分布"**。</p>
+<p>为什么这是性能的钥匙：GPU 上最贵的操作往往不是计算，而是<strong>数据在线程之间搬动</strong>。layout 把这件事变成了类型系统里的信息，于是"两个算子的数据分布是否一致"成了编译器能检查、能优化的事——而不是程序员脑子里的事。</p>
+<p>所有 op 名、属性名、设计动机都锚在 <code>triton-lang/triton</code> 的 <code>84fa223</code>（2026-09-21）上。</p>
+</div><h2>分层：三个方言，前缀就是它们的名字</h2>
+<p>Triton 的方言命名很朴素，<code>let name</code> 直接就是 IR 里的前缀：</p>
+<table>
+<thead>
+<tr>
+<th>方言</th>
+<th>前缀</th>
+<th>管什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Triton</code></td>
+<td><code>tt</code></td>
+<td>与硬件无关的张量计算：<code>tt.load</code>、<code>tt.store</code>、<code>tt.dot</code>、<code>tt.addptr</code></td>
+</tr>
+<tr>
+<td><code>TritonGPU</code></td>
+<td><code>ttg</code></td>
+<td><strong>带 layout 的</strong> GPU 表示：<code>ttg.convert_layout</code>、<code>ttg.local_alloc</code>、异步拷贝</td>
+</tr>
+<tr>
+<td><code>TritonNvidiaGPU</code></td>
+<td><code>ttng</code></td>
+<td>NVIDIA 专有：TMA、TMEM 那些</td>
+</tr>
+<tr>
+<td><code>TritonInstrument</code></td>
+<td><code>tti</code></td>
+<td>插桩/调试</td>
+</tr>
+<tr>
+<td><code>Gluon</code></td>
+<td><code>gluon</code></td>
+<td>较新的一层，暂不展开</td>
+</tr>
+</tbody></table>
+<p>对应两个转换目录：<code>Conversion/TritonToTritonGPU/</code> 和 <code>Conversion/TritonGPUToLLVM/</code>。所以主干是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Python（@triton.jit）→ tt → ttg → LLVM 方言 → PTX</code></pre>
+</div><p><strong>这个分层的形状你应该觉得眼熟</strong>：<code>tt</code> 相当于我们的 pix（领域语义、与硬件无关），<code>ttg</code> 相当于第 25 章 outlining 之后那一层（已经知道 GPU 层级但还没到指令），最后落 LLVM。第 20 章那个&quot;每一步只决定一件事&quot;的原则，Triton 遵守得很彻底。</p>
+<p><strong>但 <code>tt</code> → <code>ttg</code> 这一步做的事和我们完全不同。</strong> 我们那一步（第 20 章 pix → linalg）加的是<strong>迭代空间</strong>；Triton 这一步加的是 <strong>layout</strong>。</p>
+<h2>layout：类型上的一个属性</h2>
+<p>Triton 给张量类型挂了一个 <strong>encoding 属性</strong>。<code>TritonGPUAttrDefs.td</code> 里定义了十几种，分两大类：</p>
+<p><strong>寄存器里的分布</strong>——<code>BlockedEncodingAttr</code>（<code>#ttg.blocked_layout</code>）、<code>NvidiaMmaEncodingAttr</code>、<code>AMDMfmaEncodingAttr</code>、<code>AMDWmmaEncodingAttr</code>、<code>LinearEncodingAttr</code>……</p>
+<p><strong>shared memory 里的布局</strong>——<code>SwizzledSharedEncodingAttr</code>、<code>PaddedSharedEncodingAttr</code>、<code>NVMMASharedEncodingAttr</code>、<code>AMDRotatingSharedEncodingAttr</code>……</p>
+<p>看最基础的 <code>blocked</code>。上游文档里那张图值得原样引用（<code>TritonGPUAttrDefs.td:757</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Example 1, a row-major coalesced layout may partition a 16x16 tensor over 2 warps (i.e. 64 threads) as follows:
+
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+...
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+
+for
+
+#ttg.blocked_layout&lt;{
+  sizePerThread = {2, 2}
+  threadsPerWarp = {8, 4}
+  blocked = {{0, 1}}
+}&gt;</code></pre>
+</div><p><strong>图里的数字是线程号。</strong> 读法：第 0 号线程拥有左上角 2×2 那四个元素（<code>sizePerThread = {2, 2}</code>），一个 warp 的 32 个线程排成 8×4（<code>threadsPerWarp = {8, 4}</code>），第二个 warp（线程 32–63）接着排在右边。</p>
+<p>三个参数的含义（文档原话：&quot;three tuples -- thread tile size, warp tile size, and block tile size&quot;）：<strong>一个线程拥有多少元素、一个 warp 里线程怎么排、一个 CTA 里 warp 怎么排。</strong></p>
+<div class="keypoint">
+<strong>为什么这值得放进<em>类型</em>里</strong>
+<p>因为它决定两件性能上最要紧的事。</p>
+<p><strong>① 访存是否合并（coalescing）。</strong>文档那句 "used to promote memory coalescing in LoadInst and StoreInst" 就是说：相邻线程读相邻地址，一次内存事务能服务整个 warp；layout 排错了，同一个 warp 的 32 个线程可能落在 32 个不同的 cache line 上——带宽利用率掉到 1/32。</p>
+<p><strong>② 能不能直接喂给 tensor core。</strong><code>tt.dot</code> 要用 MMA 指令，而 MMA 对"哪个线程持有哪个元素"有<strong>硬性要求</strong>。这就是 <code>NvidiaMmaEncodingAttr</code> 存在的理由——它不是一种"优化过的布局"，而是"硬件规定的布局"。</p>
+<p>前 25 章我们的 pix 从头到尾没表达过这件事。CPU 上不需要：向量化（第 23 章）只关心"一次算几个元素"，不关心"哪个核持有哪个"。<strong>GPU 上 layout 是一等信息，这是 CPU 与 GPU 编译最本质的差别之一。</strong></p>
+</div><h2><code>ttg.convert_layout</code>：成本被显式化了</h2>
+<p>两个算子要的 layout 不一致怎么办？插一个转换：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">def TTG_ConvertLayoutOp : TTG_Op&lt;"convert_layout",
+                                 [SameOperandsAndResultShape,
+                                  SameOperandsAndResultElementType,
+                                  Pure]&gt; {
+  let summary = "convert layout";
+  let arguments = (ins TT_Tensor:$src, UnitAttr:$force_warp_shuffle);
+  let results = (outs TT_Tensor:$result);
+  let hasVerifier = 1;
+  let hasCanonicalizer = 1;
+}</code></pre>
+</div><p>注意这个 op 的 trait：<code>SameOperandsAndResultShape</code>、<code>SameOperandsAndResultElementType</code>、<code>Pure</code>。<strong>形状一样、元素类型一样、纯函数——从语义上它什么都没做。</strong> 变的只有 encoding。</p>
+<p>但它在运行时是<strong>很贵的</strong>：数据要经过 shared memory 或 warp shuffle 重新分发。那个 <code>force_warp_shuffle</code> 属性就是让你强制走 shuffle 而不是 shared memory。</p>
+<div class="keypoint">
+<strong>Triton 优化的核心命题：消掉 convert_layout</strong>
+<p>把上面几件事连起来，Triton 的性能工程就有了清晰的形状：</p>
+<p><strong>① layout 是类型的一部分</strong>，所以"两个算子的数据分布是否一致"是编译器能<strong>检查</strong>的（<code>hasVerifier = 1</code>）。</p>
+<p><strong>② 不一致的代价被显式化成一个 op</strong>，所以它是编译器能<strong>看见、能计数、能优化</strong>的（<code>hasCanonicalizer = 1</code>）。</p>
+<p><strong>③ 于是优化目标变得可操作</strong>：让相邻算子的 layout 尽量一致，好让 <code>convert_layout</code> 被消掉或至少减少。<code>TritonGPU/Transforms/</code> 下一大批 pass 干的就是这件事。</p>
+<p>对比手写 CUDA：数据分布在你脑子里，"这里要不要走一次 shared memory 重排"靠经验判断，改一处可能破坏另一处。<strong>Triton 把它变成了编译器的工作。</strong>这才是它相对手写 kernel 的真正优势——不是"生成的代码更聪明"，而是<strong>"这类决策能被系统性地优化"</strong>。</p>
+</div><h2>linear layout：把十几种 encoding 统一成一个数学对象</h2>
+<p>十几种 encoding 意味着 N² 级别的两两转换逻辑。Triton 后来的解法很漂亮，在 <code>include/triton/Tools/LinearLayout.h</code> 里。</p>
+<p>头文件开头的注释把思想说得非常清楚（原话）：</p>
+<blockquote>
+<p>In Triton, a linear layout (LL) is a function that maps from a <strong>&quot;hardware location&quot;</strong> to a <strong>&quot;logical tensor index&quot;</strong>.</p>
+<p>For example, suppose we have a 2D tensor T stored in GPU registers. T&#39;s layout (i.e., L) is the function that, given a &quot;hardware location&quot; tuple of (thread-id, warp-id), returns an index (x,y) into T. In other words, if <code>L(t,w) = (x,y)</code> is our linear layout func, then a register in thread t in warp w contains the value <code>T[x,y]</code>.</p>
+</blockquote>
+<p><strong>一个函数：硬件位置 → 逻辑下标。</strong> 所有 encoding 都只是这个函数的不同写法。</p>
+<p>关键的那一步是&quot;linear&quot;：</p>
+<blockquote>
+<p>The key fact about LLs is, the mapping from (t,w) to (x,y) is not arbitrary. We only need to specify the value of L(t,w) at certain special points (namely, the values L(t,0) and L(0,w) where t and w are powers of 2), and from those we can compute all the other values of L.</p>
+</blockquote>
+<p><strong>只需要指定 2 的幂次处的值</strong>，其余全部由线性性推出——而这里的&quot;线性&quot;是 GF(2) 上的，加法就是 <strong>XOR</strong>（源码注释：<em>&quot;All other values of L are computed by xor&#39;ing bases together, using the linearity rule&quot;</em>）。</p>
+<p>一个 4 warp × 4 thread 的布局，只需要四个基向量：<code>L(1,0)</code>、<code>L(2,0)</code>、<code>L(0,1)</code>、<code>L(0,2)</code>。</p>
+<div class="note">
+<strong>这个设计的来源与代价</strong>
+<p>源码注释里点了名：<em>"The idea for linear layouts is due to Adam P. Goucher."</em></p>
+<p>收益是结构性的：<strong>N 种 encoding 的两两转换，从 N² 份特例代码变成了"都转成 LL 再做通用运算"。</strong>LL 之间可以复合、求逆、判等——这些都是纯粹的线性代数，而不是针对每对 layout 手写的逻辑。</p>
+<p>注释里还顺带和 CuTe 做了对比（<code>LinearLayout.h:313</code>）：<em>"CuTe requires a CUDA compiler such as nvcc; LLs do not."</em> LL 是编译器内部的数据结构，不依赖任何厂商工具链。</p>
+<p>代价也要说：<strong>LL 只能表达"2 的幂次 + XOR"这一类布局。</strong>幸运的是 GPU 的硬件布局几乎都是这种形式（warp 大小、tile 尺寸都是 2 的幂），所以这个限制在实践中很少咬人。这是一个"选对了抽象"的漂亮例子——<strong>限制恰好和硬件的实际形状对齐。</strong></p>
+</div><h2>把 layout 与它的代价算出来</h2>
+<p>linear layout 的两件事——XOR 推导规则、以及转换代价——都能直接算。下面这个模型实现了那条推导规则（只给基向量，其余靠 XOR），然后量化&quot;换一种 layout 要搬多少数据&quot;：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20linear%20layout%20%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F%E4%B8%80%E4%B8%AA%E4%BB%8E%E3%80%8C%E7%A1%AC%E4%BB%B6%E4%BD%8D%E7%BD%AE%E3%80%8D%E5%88%B0%E3%80%8C%E9%80%BB%E8%BE%91%E5%BC%A0%E9%87%8F%E4%B8%8B%E6%A0%87%E3%80%8D%E7%9A%84%E5%87%BD%E6%95%B0%E3%80%82%0A%23%20%E5%85%B3%E9%94%AE%E4%BA%8B%E5%AE%9E%EF%BC%88%E5%BC%95%E8%87%AA%20Triton%20%E7%9A%84%20include%2Ftriton%2FTools%2FLinearLayout.h%EF%BC%89%EF%BC%9A%0A%23%20%20%20%E5%8F%AA%E9%9C%80%E6%8C%87%E5%AE%9A%202%20%E7%9A%84%E5%B9%82%E6%AC%A1%E5%A4%84%E7%9A%84%E5%80%BC%EF%BC%8C%E5%85%B6%E4%BD%99%E5%85%A8%E9%83%A8%E7%94%B1%20**XOR%20%E7%BA%BF%E6%80%A7%E6%80%A7**%20%E6%8E%A8%E5%87%BA%E3%80%82%0A%23%20%E8%BF%99%E4%B8%AA%E6%A8%A1%E5%9E%8B%E6%8A%8A%E9%82%A3%E6%9D%A1%E6%8E%A8%E5%AF%BC%E8%A7%84%E5%88%99%E5%AE%9E%E7%8E%B0%E5%87%BA%E6%9D%A5%EF%BC%8C%E4%BA%8E%E6%98%AF%20layout%20%E8%BD%AC%E6%8D%A2%E7%9A%84%E4%BB%A3%E4%BB%B7%E4%B9%9F%E8%83%BD%E7%AE%97%E3%80%82%0A%0Adef%20build(bases%2C%20out_rank%3D2)%3A%0A%20%20%20%20%22%22%22bases%5Bdim%5D%5Bi%5D%20%3D%20L(...%2C%E8%AF%A5%E7%BB%B4%3D2%5Ei%2C...)%E3%80%82%E5%85%B6%E4%BD%99%E4%BD%8D%E7%BD%AE%E7%94%B1%20XOR%20%E7%BB%84%E5%90%88%E5%BE%97%E5%87%BA%E3%80%82%22%22%22%0A%20%20%20%20def%20L(**loc)%3A%0A%20%20%20%20%20%20%20%20acc%20%3D%20%5B0%5D%20*%20out_rank%0A%20%20%20%20%20%20%20%20for%20dim%2C%20v%20in%20loc.items()%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20i%20%3D%200%0A%20%20%20%20%20%20%20%20%20%20%20%20while%20v%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20v%20%26%201%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E4%B8%80%E4%BD%8D%E6%98%AF%201%20%E2%86%92%20%E6%8A%8A%E5%AF%B9%E5%BA%94%E7%9A%84%E5%9F%BA%E5%90%91%E9%87%8F%20XOR%20%E8%BF%9B%E6%9D%A5%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20b%20%3D%20bases%5Bdim%5D%5Bi%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20acc%20%3D%20%5Ba%20%5E%20x%20for%20a%2C%20x%20in%20zip(acc%2C%20b)%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20v%20%3E%3E%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20i%20%2B%3D%201%0A%20%20%20%20%20%20%20%20return%20tuple(acc)%0A%20%20%20%20return%20L%0A%0A%23%20%E4%B8%80%E4%B8%AA%204x4%20%E5%BC%A0%E9%87%8F%EF%BC%8C4%20%E4%B8%AA%20warp%20x%204%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E3%80%82%E5%8F%AA%E9%9C%80%E6%8C%87%E5%AE%9A%204%20%E4%B8%AA%E5%9F%BA%E5%90%91%E9%87%8F%EF%BC%9A%0A%23%20%20%20L(t%3D1%2Cw%3D0)%2C%20L(t%3D2%2Cw%3D0)%2C%20L(t%3D0%2Cw%3D1)%2C%20L(t%3D0%2Cw%3D2)%0Arow_major%20%3D%20build(%7B%22t%22%3A%20%5B(0%2C%201)%2C%20(0%2C%202)%5D%2C%20%20%20%20%20%20%20%23%20%E7%BA%BF%E7%A8%8B%E6%B2%BF%E5%88%97%E8%B5%B0%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22w%22%3A%20%5B(1%2C%200)%2C%20(2%2C%200)%5D%7D)%20%20%20%20%20%20%23%20warp%20%E6%B2%BF%E8%A1%8C%E8%B5%B0%0Acol_major%20%3D%20build(%7B%22t%22%3A%20%5B(1%2C%200)%2C%20(2%2C%200)%5D%2C%20%20%20%20%20%20%20%23%20%E7%BA%BF%E7%A8%8B%E6%B2%BF%E8%A1%8C%E8%B5%B0%20%E2%80%94%E2%80%94%20%E5%8F%AA%E6%8D%A2%E4%BA%86%E8%BF%99%E4%B8%A4%E8%A1%8C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22w%22%3A%20%5B(0%2C%201)%2C%20(0%2C%202)%5D%7D)%0A%0Adef%20dump(name%2C%20L)%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Bname%7D%E3%80%91L(thread%2C%20warp)%20%E2%86%92%20(x%2C%20y)%22)%0A%20%20%20%20print(%22%20%20%20%20%20%20%20%20w%3D0%20%20%20%20%20w%3D1%20%20%20%20%20w%3D2%20%20%20%20%20w%3D3%22)%0A%20%20%20%20for%20t%20in%20range(4)%3A%0A%20%20%20%20%20%20%20%20cells%20%3D%20%5Bf%22%7BL(t%3Dt%2C%20w%3Dw)%7D%22%20for%20w%20in%20range(4)%5D%0A%20%20%20%20%20%20%20%20print(f%22%20%20t%3D%7Bt%7D%20%20%22%20%2B%20%22%20%20%22.join(cells))%0A%0Adump(%22row-major%EF%BC%9A%E7%BA%BF%E7%A8%8B%E6%B2%BF%E5%88%97%E3%80%81warp%20%E6%B2%BF%E8%A1%8C%22%2C%20row_major)%0Adump(%22col-major%EF%BC%9A%E4%B8%A4%E7%BB%84%E5%9F%BA%E5%90%91%E9%87%8F%E5%AF%B9%E8%B0%83%22%2C%20col_major)%0A%0A%23%20layout%20%E8%BD%AC%E6%8D%A2%E7%9A%84%E4%BB%A3%E4%BB%B7%EF%BC%9A%E6%9C%89%E5%A4%9A%E5%B0%91%E5%85%83%E7%B4%A0%E9%9C%80%E8%A6%81%E8%B7%A8%E7%BA%BF%E7%A8%8B%E6%90%AC%E5%8A%A8%EF%BC%9F%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2062)%0Aprint(%22%E4%BB%8E%20row-major%20%E6%8D%A2%E5%88%B0%20col-major%20%E8%A6%81%E4%BB%98%E5%A4%9A%E5%B0%91%E4%BB%A3%E4%BB%B7%EF%BC%9F%22)%0Amoved%20%3D%20same%20%3D%200%0Afor%20t%20in%20range(4)%3A%0A%20%20%20%20for%20w%20in%20range(4)%3A%0A%20%20%20%20%20%20%20%20if%20row_major(t%3Dt%2C%20w%3Dw)%20%3D%3D%20col_major(t%3Dt%2C%20w%3Dw)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20same%20%2B%3D%201%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20moved%20%2B%3D%201%0Aprint(f%22%20%2016%20%E4%B8%AA%20(thread%2C%20warp)%20%E4%BD%8D%E7%BD%AE%E9%87%8C%EF%BC%8C%7Bsame%7D%20%E4%B8%AA%E6%8B%BF%E5%88%B0%E7%9A%84%E8%BF%98%E6%98%AF%E5%90%8C%E4%B8%80%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%8C%22%0A%20%20%20%20%20%20f%22%7Bmoved%7D%20%E4%B8%AA%E5%8F%98%E4%BA%86%22)%0Aprint(f%22%20%20%E2%86%92%20%E8%BF%99%20%7Bmoved%7D%20%E4%B8%AA%E5%B0%B1%E6%98%AF%20ttg.convert_layout%20%E8%A6%81%E7%94%9F%E6%88%90%E7%9A%84%E6%95%B0%E6%8D%AE%E6%90%AC%E8%BF%90%22)%0Aprint(%22%20%20%E6%90%AC%E8%BF%90%E8%B5%B0%20shared%20memory%20%E6%88%96%20warp%20shuffle%EF%BC%8C%E6%98%AF%20Triton%20%E9%87%8C%E6%9C%80%E8%B4%B5%E7%9A%84%E6%93%8D%E4%BD%9C%E4%B9%8B%E4%B8%80%E3%80%82%22)%0Aprint(%22%5Cn%E6%89%80%E4%BB%A5%20Triton%20%E7%9A%84%E4%BC%98%E5%8C%96%E6%A0%B8%E5%BF%83%E6%98%AF%EF%BC%9A**%E5%B0%BD%E9%87%8F%E8%AE%A9%E7%9B%B8%E9%82%BB%E7%AE%97%E5%AD%90%E7%9A%84%20layout%20%E4%B8%80%E8%87%B4**%EF%BC%8C%22)%0Aprint(%22%E5%A5%BD%E8%AE%A9%20convert_layout%20%E8%83%BD%E8%A2%AB%E6%B6%88%E6%8E%89%E3%80%82%E5%AE%83%E7%9A%84%20canonicalizer%20%E5%92%8C%E4%B8%80%E5%A4%A7%E6%89%B9%20pass%22)%0Aprint(%22%E5%B9%B2%E7%9A%84%E5%B0%B1%E6%98%AF%E8%BF%99%E4%BB%B6%E4%BA%8B%20%E2%80%94%E2%80%94%20layout%20%E4%B8%8D%E6%98%AF%E5%85%83%E6%95%B0%E6%8D%AE%EF%BC%8C%E6%98%AF%E6%80%A7%E8%83%BD%E6%9C%AC%E8%BA%AB%E3%80%82%22)"># linear layout 是什么？一个从「硬件位置」到「逻辑张量下标」的函数。
+# 关键事实（引自 Triton 的 include/triton/Tools/LinearLayout.h）：
+#   只需指定 2 的幂次处的值，其余全部由 **XOR 线性性** 推出。
+# 这个模型把那条推导规则实现出来，于是 layout 转换的代价也能算。
+
+def build(bases, out_rank=2):
+    """bases[dim][i] = L(...,该维=2^i,...)。其余位置由 XOR 组合得出。"""
+    def L(**loc):
+        acc = [0] * out_rank
+        for dim, v in loc.items():
+            i = 0
+            while v:
+                if v &amp; 1:                       # 这一位是 1 → 把对应的基向量 XOR 进来
+                    b = bases[dim][i]
+                    acc = [a ^ x for a, x in zip(acc, b)]
+                v &gt;&gt;= 1
+                i += 1
+        return tuple(acc)
+    return L
+
+# 一个 4x4 张量，4 个 warp x 4 个线程。只需指定 4 个基向量：
+#   L(t=1,w=0), L(t=2,w=0), L(t=0,w=1), L(t=0,w=2)
+row_major = build({"t": [(0, 1), (0, 2)],       # 线程沿列走
+                   "w": [(1, 0), (2, 0)]})      # warp 沿行走
+col_major = build({"t": [(1, 0), (2, 0)],       # 线程沿行走 —— 只换了这两行
+                   "w": [(0, 1), (0, 2)]})
+
+def dump(name, L):
+    print(f"\n【{name}】L(thread, warp) → (x, y)")
+    print("        w=0     w=1     w=2     w=3")
+    for t in range(4):
+        cells = [f"{L(t=t, w=w)}" for w in range(4)]
+        print(f"  t={t}  " + "  ".join(cells))
+
+dump("row-major：线程沿列、warp 沿行", row_major)
+dump("col-major：两组基向量对调", col_major)
+
+# layout 转换的代价：有多少元素需要跨线程搬动？
+print("\n" + "=" * 62)
+print("从 row-major 换到 col-major 要付多少代价？")
+moved = same = 0
+for t in range(4):
+    for w in range(4):
+        if row_major(t=t, w=w) == col_major(t=t, w=w):
+            same += 1
+        else:
+            moved += 1
+print(f"  16 个 (thread, warp) 位置里，{same} 个拿到的还是同一个元素，"
+      f"{moved} 个变了")
+print(f"  → 这 {moved} 个就是 ttg.convert_layout 要生成的数据搬运")
+print("  搬运走 shared memory 或 warp shuffle，是 Triton 里最贵的操作之一。")
+print("\n所以 Triton 的优化核心是：**尽量让相邻算子的 layout 一致**，")
+print("好让 convert_layout 能被消掉。它的 canonicalizer 和一大批 pass")
+print("干的就是这件事 —— layout 不是元数据，是性能本身。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【row-major：线程沿列、warp 沿行】L(thread, warp) → (x, y)
+        w=0     w=1     w=2     w=3
+  t=0  (0, 0)  (1, 0)  (2, 0)  (3, 0)
+  t=1  (0, 1)  (1, 1)  (2, 1)  (3, 1)
+  t=2  (0, 2)  (1, 2)  (2, 2)  (3, 2)
+  t=3  (0, 3)  (1, 3)  (2, 3)  (3, 3)
+
+【col-major：两组基向量对调】L(thread, warp) → (x, y)
+        w=0     w=1     w=2     w=3
+  t=0  (0, 0)  (0, 1)  (0, 2)  (0, 3)
+  t=1  (1, 0)  (1, 1)  (1, 2)  (1, 3)
+  t=2  (2, 0)  (2, 1)  (2, 2)  (2, 3)
+  t=3  (3, 0)  (3, 1)  (3, 2)  (3, 3)
+
+==============================================================
+从 row-major 换到 col-major 要付多少代价？
+  16 个 (thread, warp) 位置里，4 个拿到的还是同一个元素，12 个变了
+  → 这 12 个就是 ttg.convert_layout 要生成的数据搬运
+  搬运走 shared memory 或 warp shuffle，是 Triton 里最贵的操作之一。
+
+所以 Triton 的优化核心是：**尽量让相邻算子的 layout 一致**，
+好让 convert_layout 能被消掉。它的 canonicalizer 和一大批 pass
+干的就是这件事 —— layout 不是元数据，是性能本身。</code></pre>
+</div><p>两处值得看：</p>
+<p><strong>row-major 和 col-major 的定义只差两行</strong>——把线程的基向量和 warp 的基向量对调。layout 的表达力就来自这里：改几个基向量就是完全不同的数据分布。</p>
+<p><strong>16 个位置里 12 个变了。</strong> 这 12 个就是 <code>ttg.convert_layout</code> 要生成的数据搬运。<strong>代价是算得出来的</strong>，所以编译器能据此决策——这正是&quot;把成本显式化&quot;的意义。</p>
+<h2>从 Triton 身上该学什么</h2>
+<p>这一章最该带走的不是 Triton 的细节，是三条可迁移的设计经验。</p>
+<p><strong>一、把性能关键的信息放进类型。</strong> layout 影响访存合并和能否用 tensor core——都是数量级级别的影响。放进类型意味着：verifier 能检查、pattern 能匹配、转换代价能显式表达。反过来看我们的 pix：第 9 章把卷积核尺寸放进 <code>!pix.kernel&lt;R x C&gt;</code>，第 21 章算 halo 时直接受益——<strong>同一个道理，小得多的规模。</strong></p>
+<p><strong>二、把隐性成本做成一个 op。</strong> <code>convert_layout</code> 语义上什么都不做（<code>Pure</code>、形状和元素类型都不变），存在的唯一理由是<strong>让代价可见</strong>。这是一个很值得借鉴的手法：如果你的下降过程中有&quot;某些情况下要付一笔额外开销&quot;，<strong>做成 op 比藏在 pattern 里好</strong>——藏起来的成本没法优化。</p>
+<p><strong>三、找一个能统一特例的数学结构。</strong> 从&quot;十几种 encoding 两两转换&quot;到&quot;都转成 linear layout 再做线性代数&quot;，是一次抽象层级的提升。判断这类机会的标志是：<strong>特例数量在平方级增长，而它们看起来都在做同一类事。</strong></p>
+<div class="warn">
+<strong>Triton 也有它的代价，别只看优点</strong>
+<p><strong>layout 的选择很难。</strong>编译器要在"访存合并友好"和"tensor core 要求"之间权衡，而这两者经常冲突（这正是 <code>convert_layout</code> 消不掉的原因）。Triton 有一批启发式 pass 在做这件事，但调不好性能可能差几倍——<strong>它把决策从程序员转给了编译器，但没有消灭决策的难度。</strong></p>
+<p><strong>编译时间。</strong><code>TritonGPU/Transforms/</code> 下那批 pass（<code>Pipeline</code>、<code>ScheduleLoops</code>、<code>AutomaticWarpSpecialization</code>、<code>PartitionLoops</code>……）不便宜。JIT 场景里首次编译的延迟是真实痛点。</p>
+<p><strong>抽象泄漏。</strong><code>ttng</code>（TritonNvidiaGPU）的存在本身说明问题：TMA、TMEM 这些 NVIDIA 专有特性没法塞进通用的 <code>ttg</code>。<strong>"一套 IR 覆盖所有厂商"在最前沿的硬件特性上做不到</strong>——这不是 Triton 的失误，是现实。第 28 章会把这类诚实的观察收拢起来。</p>
+</div><div class="concept">
+<svg viewBox="0 0 700 400" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c26b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c26o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">Triton 的原创不在分层，在 layout 进了类型系统</text>
+  <text x="14" y="40" font-size="10" font-weight="bold" fill="#6b7280">分层（这部分很常规，读完前 25 章你能猜到）</text>
+  <rect x="14" y="48" width="118" height="30" rx="5" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.6"/>
+  <text x="24" y="68" font-size="9" font-family="monospace" fill="#24292f">@triton.jit</text>
+  <path d="M 134 63 L 156 63" fill="none" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c26b)"/>
+  <rect x="158" y="48" width="130" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="168" y="62" font-size="9" font-family="monospace" fill="#24292f">tt（与硬件无关）</text>
+  <text x="168" y="73" font-size="8" fill="#6b7280">≈ 我们的 pix</text>
+  <path d="M 290 63 L 312 63" fill="none" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c26b)"/>
+  <rect x="314" y="48" width="160" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2.2"/>
+  <text x="324" y="62" font-size="9" font-family="monospace" fill="#24292f">ttg（**带 layout**）</text>
+  <text x="324" y="73" font-size="8" fill="#e06a3b">这一步加的是 layout，不是迭代空间</text>
+  <path d="M 476 63 L 498 63" fill="none" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c26b)"/>
+  <rect x="500" y="48" width="186" height="30" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="510" y="62" font-size="9" font-family="monospace" fill="#24292f">LLVM 方言 → PTX</text>
+  <text x="510" y="73" font-size="8" fill="#6b7280">ttng 装 NVIDIA 专有特性</text>
+  <line x1="14" y1="92" x2="686" y2="92" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="110" font-size="11" font-weight="bold" fill="#e06a3b">原创：layout 是类型上的 encoding 属性</text>
+  <rect x="14" y="120" width="330" height="106" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="26" y="138" font-size="9" font-family="monospace" fill="#24292f">#ttg.blocked_layout&lt;{</text>
+  <text x="26" y="151" font-size="9" font-family="monospace" fill="#24292f">  sizePerThread = {2, 2}　一个线程几个元素</text>
+  <text x="26" y="164" font-size="9" font-family="monospace" fill="#24292f">  threadsPerWarp = {8, 4}　warp 内怎么排</text>
+  <text x="26" y="177" font-size="9" font-family="monospace" fill="#24292f">  blocked = {{0, 1}}</text>
+  <text x="26" y="190" font-size="9" font-family="monospace" fill="#24292f">}&gt;</text>
+  <text x="26" y="208" font-size="9" fill="#e06a3b">决定两件数量级级别的事：</text>
+  <text x="26" y="221" font-size="9" fill="#e06a3b">① 访存能否合并　② 能否直接喂 tensor core</text>
+  <rect x="356" y="120" width="330" height="106" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="368" y="138" font-size="10" font-weight="bold" fill="#2b6cb0">ttg.convert_layout：把成本做成 op</text>
+  <text x="368" y="156" font-size="9" fill="#24292f">trait：SameOperandsAndResultShape、</text>
+  <text x="368" y="169" font-size="9" fill="#24292f">SameOperandsAndResultElementType、Pure</text>
+  <text x="368" y="184" font-size="9" fill="#6b7280">→ 语义上什么都没做，只有 encoding 变了</text>
+  <text x="368" y="201" font-size="9" fill="#e06a3b">运行时却很贵：走 shared memory 或 warp shuffle</text>
+  <text x="368" y="217" font-size="9" fill="#3f9b5c">hasVerifier + hasCanonicalizer → 能查、能优化</text>
+  <rect x="14" y="238" width="330" height="76" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="26" y="256" font-size="10" font-weight="bold" fill="#2f7a45">linear layout：统一十几种 encoding</text>
+  <text x="26" y="273" font-size="9" fill="#24292f">L(thread-id, warp-id) → (x, y)　一个函数</text>
+  <text x="26" y="288" font-size="9" fill="#24292f">只需指定 2 的幂次处的基向量，其余靠 <tspan font-weight="bold">XOR</tspan> 推出</text>
+  <text x="26" y="305" font-size="9" fill="#3f9b5c">N² 份两两转换代码 → 通用的线性代数</text>
+  <rect x="356" y="238" width="330" height="76" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="4 3"/>
+  <text x="368" y="256" font-size="10" font-weight="bold" fill="#24292f">代价也要看清</text>
+  <text x="368" y="272" font-size="9" fill="#24292f">· LL 只能表达"2 的幂 + XOR"类布局（但 GPU 恰好都是）</text>
+  <text x="368" y="286" font-size="9" fill="#24292f">· layout 选择本身很难，调不好性能差几倍</text>
+  <text x="368" y="300" font-size="9" fill="#24292f">· ttng 的存在说明"一套 IR 覆盖所有厂商"在前沿特性上做不到</text>
+  <rect x="14" y="324" width="672" height="70" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-dasharray="5 3"/>
+  <text x="26" y="342" font-size="10" font-weight="bold" fill="#2b6cb0">三条可迁移的设计经验：</text>
+  <text x="26" y="359" font-size="10" fill="#24292f">① <tspan font-weight="bold">把性能关键的信息放进类型</tspan>（pix 把核尺寸放进 !pix.kernel&lt;R x C&gt; 是同一个道理，小得多的规模）</text>
+  <text x="26" y="375" font-size="10" fill="#24292f">② <tspan font-weight="bold">把隐性成本做成一个 op</tspan> —— 藏在 pattern 里的成本没法被优化</text>
+  <text x="26" y="390" font-size="10" fill="#24292f">③ <tspan font-weight="bold">找能统一特例的数学结构</tspan>；信号是"特例在平方级增长，而它们都在做同一类事"</text>
+</svg>
+<div class="caption">图 26-1　Triton 的分层很常规，原创在于 layout 进了类型系统、转换成本被做成 op、以及用 linear layout 统一所有特例</div>
+</div><h2>动手：读一段真实的 ttg IR</h2>
+<p>Triton 能把中间 IR 打出来。装好 Triton 之后：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 把各阶段的 IR 都 dump 出来
+MLIR_ENABLE_DUMP=1 python your_kernel.py 2&gt;&amp;1 | head -200
+# 或者只看 ttgir
+TRITON_ALWAYS_COMPILE=1 python -c "
+import triton, triton.language as tl
+@triton.jit
+def add(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    m = offs &lt; n
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=m) + tl.load(y_ptr + offs, mask=m), mask=m)
+print(add.cache_key)
+"</code></pre>
+</div><p>拿到 <code>.ttgir</code> 之后做三件事：<strong>① 数一下有几个 <code>ttg.convert_layout</code></strong>；<strong>② 找出每个张量类型上的 encoding，看相邻算子是否一致</strong>；<strong>③ 把 <code>BLOCK</code> 改成不同的值，看 layout 参数怎么变。</strong></p>
+<p>（对比第 23 章那个实验——我们在 CPU 上改 tile 大小看 mask 数量，这里在 GPU 上改 BLOCK 看 layout。<strong>同一种方法论：改一个参数，数一个可观测量。</strong>）</p>
+<p><strong>再改一处</strong>：写一个带 <code>tl.dot</code> 的 kernel，对比它的 ttgir 和纯逐点 kernel 的。<strong><code>tl.dot</code> 那个会出现 <code>#ttg.nvidia_mma</code> 之类的 encoding，而且前后很可能各有一个 <code>convert_layout</code></strong>——因为 MMA 要求的布局和访存友好的布局不一致。这就是前面说的那个&quot;消不掉的冲突&quot;，亲眼看一次比读十遍解释有用。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>Triton 的<strong>分层很常规</strong>：<code>tt</code>（与硬件无关）→ <code>ttg</code>（带 layout 的 GPU 表示）→ LLVM → PTX，外加 <code>ttng</code> 装 NVIDIA 专有特性。形状和我们的 pix → linalg → LLVM 是同一类。</li>
+<li><strong>原创在于 <code>tt</code> → <code>ttg</code> 这一步加的是 layout，而不是迭代空间。</strong> 我们那一步（第 20 章）加的是 indexing map；Triton 加的是&quot;数据在线程间怎么分布&quot;。</li>
+<li><strong>layout 是类型上的 encoding 属性</strong>。<code>#ttg.blocked_layout&lt;{sizePerThread, threadsPerWarp, blocked}&gt;</code> 三个参数分别说&quot;一个线程几个元素、warp 内怎么排、CTA 内 warp 怎么排&quot;。</li>
+<li><strong>为什么值得进类型</strong>：它决定①访存能否合并（排错了带宽掉到 1/32）②能否直接喂 tensor core（MMA 对布局有硬性要求，这是 <code>NvidiaMmaEncodingAttr</code> 存在的理由）。前 25 章我们的 pix 从没表达过这件事——<strong>CPU 上不需要，GPU 上是一等信息</strong>。</li>
+<li><strong><code>ttg.convert_layout</code> 语义上什么都不做</strong>（<code>Pure</code>，形状和元素类型都不变），存在的唯一理由是<strong>让代价可见</strong>。有 verifier 也有 canonicalizer——能查、能优化。</li>
+<li><strong>Triton 优化的核心命题就是消掉 <code>convert_layout</code></strong>：让相邻算子的 layout 一致。对比手写 CUDA——数据分布在程序员脑子里，改一处可能破坏另一处。<strong>Triton 的优势不是&quot;生成的代码更聪明&quot;，是&quot;这类决策能被系统性优化&quot;。</strong></li>
+<li><strong>linear layout 是一次漂亮的抽象提升</strong>：所有 encoding 都是一个&quot;硬件位置 → 逻辑下标&quot;的函数；<strong>只需指定 2 的幂次处的基向量，其余靠 XOR 推出</strong>。N² 份两两转换代码变成通用线性代数。限制（只能表达 2 的幂 + XOR）恰好和 GPU 硬件的实际形状对齐——<strong>选对抽象的标志</strong>。</li>
+<li>三条可迁移的经验：<strong>把性能关键信息放进类型</strong>（pix 把核尺寸放进 <code>!pix.kernel&lt;R x C&gt;</code> 是同一个道理）；<strong>把隐性成本做成一个 op</strong>（藏在 pattern 里的成本没法优化）；<strong>找能统一特例的数学结构</strong>（信号是特例平方级增长且都在做同一类事）。</li>
+<li>代价也要看清：<strong>layout 选择本身很难</strong>（合并友好与 MMA 要求经常冲突，这正是 <code>convert_layout</code> 消不掉的原因）；<strong>编译时间不便宜</strong>；<strong><code>ttng</code> 的存在说明&quot;一套 IR 覆盖所有厂商&quot;在最前沿特性上做不到</strong>。</li>
+</ul>
+<p>下一章对照两个用法截然不同的项目：<strong>IREE</strong>（flow/stream/hal 分层 + 自带运行时，把 MLIR 用到极致）与 <strong>flang</strong>（fir/hlfir，传统前端只借 MLIR 做中端）。两者都成功，但&quot;造几层方言&quot;的答案完全相反——那一章要从这个对比里提炼出一条判断标准。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch25.html">← 第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
