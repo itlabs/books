@@ -22,4 +22,9 @@ llvm_config.with_environment("PATH", config.llvm_tools_dir, append_path=True)
 
 # 让测试里写 pix-opt / mlir-opt 就能找到对应的可执行文件
 tool_dirs = [config.pix_tools_dir, config.llvm_tools_dir]
-llvm_config.add_tool_substitutions(["pix-opt", "mlir-opt"], tool_dirs)
+llvm_config.add_tool_substitutions(["pix-opt", "mlir-opt", "mlir-runner"], tool_dirs)
+
+# 第 24 章：JIT 测试需要运行时库的路径与平台相关的后缀。
+# %mlir_lib_dir 指向 MLIR 构建目录的 lib/，%shlibext 是 .so / .dylib / .dll。
+config.substitutions.append(("%mlir_lib_dir", config.mlir_lib_dir))
+config.substitutions.append(("%shlibext", config.llvm_shlib_ext))

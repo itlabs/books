@@ -3,6 +3,7 @@
 config.llvm_tools_dir = lit_config.substitute("@LLVM_TOOLS_DIR@")
 config.pix_obj_root = "@PIX_BINARY_DIR@"
 config.llvm_shlib_ext = "@SHLIBEXT@"
+config.mlir_lib_dir = lit_config.substitute("@MLIR_LIB_DIR@")  # 第 24 章：JIT 要用运行时库
 
 import lit.llvm
 lit.llvm.initialize(lit_config, config)
