@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="active"><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>附录 C 源码导览地图：想看某个机制去 <code>mlir/</code> 的哪个目录</h1>
+<h2>这份附录怎么用</h2>
+<div class="goal-box">
+<p>这也是一份<strong>查的</strong>附录。用法是：你想搞清楚某个机制到底怎么工作的（"greedy 驱动器凭什么决定下一个处理谁"、"ODS 那些 <code>let</code> 到底生成了什么代码"），到这里找路径，然后直接读源码。</p>
+<p>为什么强调读源码：这本书写下来最大的一条体会是，<strong>MLIR 的文档说清了"怎么用"，但"为什么会是这个行为"基本只在源码和注释里。</strong>书里那些坑（第 28 章那张表）有一半是靠读 <code>lib/</code> 里的实现和注释定位的，不是靠文档。</p>
+<p>所有路径都在 LLVM <strong>23.1.2</strong> 上核对过。目录结构在大版本之间会动，但下面这个<strong>分层规律</strong>很稳定，规律比路径更值得记。</p>
+</div><h2>一、先记住三条规律，比记路径有用</h2>
+<p>MLIR 的目录布局有强规律，摸清这三条，大部分东西不用查也能猜到。</p>
+<p><strong>规律一：<code>include/</code> 放声明和 <code>.td</code>，<code>lib/</code> 放实现，两边目录名一一对应。</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">mlir/include/mlir/XXX/    &lt;-&gt; mlir/lib/XXX/</code></pre>
+</div><p>想找 <code>DialectConversion</code> 的实现？声明在 <code>include/mlir/Transforms/DialectConversion.h</code>，实现就在 <code>lib/Transforms/Utils/DialectConversion.cpp</code>。（注意 <code>Transforms</code> 下的实现多在 <code>Utils/</code> 子目录里——那里放的是&quot;给别人调用的工具&quot;，<code>lib/Transforms/</code> 根目录下放的是&quot;成品 pass&quot;。这个区分很有用：<code>CSE.cpp</code> 两边都有，一个是可复用的实现，一个是包成 pass 的壳。）</p>
+<p><strong>规律二：一个方言的目录结构是固定的四件套。</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">mlir/include/mlir/Dialect/&lt;名字&gt;/
+    IR/          &lt;- 方言本体：.td 定义、类型、属性、op
+    Transforms/  &lt;- 这个方言自己的 pass
+    Utils/       &lt;- 给别人用的辅助函数
+    TransformOps/  &lt;- 它给 transform 方言贡献的 op（第 18 章）</code></pre>
+</div><p>不是每个方言四件套都全（<code>TransformOps/</code> 只有 16 个方言有）。另外 pass 声明的位置有一个要留意的例外：<strong>通常在 <code>&lt;方言&gt;/Transforms/Passes.td</code>（28 个方言是这样），但 <code>Linalg</code> 和 <code>Async</code> 放在 <code>&lt;方言&gt;/Passes.td</code>。</strong> 找不到就往上一级看。</p>
+<p>看到一个陌生方言，直接进 <code>IR/</code> 找那个 <code>.td</code>，<code>let summary</code> 和 <code>let description</code> 通常是最好的入口——第 26、27 章那些设计动机全是从这里读来的。</p>
+<p><strong>规律三：跨方言的转换在 <code>Conversion/</code>，不在任何一个方言下面。</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">mlir/lib/Conversion/&lt;源&gt;To&lt;目标&gt;/</code></pre>
+</div><p>第 24 章那条管线上每一步都能这么找到：<code>SCFToControlFlow/</code>、<code>ArithToLLVM/</code>、<code>MemRefToLLVM/</code>、<code>FuncToLLVM/</code>。命名格式就是 <code>XToY</code>，<strong>这是找下降实现最快的方式</strong>——不用猜是放在源方言还是目标方言下面，答案是两者都不是。</p>
+<h2>二、核心基础设施：<code>include/mlir/IR/</code></h2>
+<p>这是全书最该熟的一个目录。看到文件名就知道该读哪个：</p>
+<table>
+<thead>
+<tr>
+<th>你想知道</th>
+<th>文件</th>
+<th>书里讲在</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>op 到底是什么数据结构</td>
+<td><code>Operation.h</code>、<code>OperationSupport.h</code></td>
+<td>第 3 章</td>
+</tr>
+<tr>
+<td>值、use-def 链怎么组织</td>
+<td><code>Value.h</code>、<code>UseDefLists.h</code>、<code>ValueRange.h</code></td>
+<td>第 3 章</td>
+</tr>
+<tr>
+<td>Block 与 Region</td>
+<td><code>Block.h</code>、<code>Region.h</code>、<code>RegionKindInterface.h</code></td>
+<td>第 4 章</td>
+</tr>
+<tr>
+<td>属性与类型的存储、唯一化</td>
+<td><code>Attributes.h</code>、<code>Types.h</code>、<code>StorageUniquerSupport.h</code></td>
+<td>第 5 章</td>
+</tr>
+<tr>
+<td>内建类型/属性有哪些</td>
+<td><code>BuiltinTypes.td</code>、<code>BuiltinAttributes.td</code></td>
+<td>第 5 章</td>
+</tr>
+<tr>
+<td><strong>ODS 的全部可用写法</strong></td>
+<td><strong><code>OpBase.td</code></strong></td>
+<td>第 9 章</td>
+</tr>
+<tr>
+<td>trait 清单</td>
+<td><code>OpDefinition.h</code>、<code>Traits.td</code></td>
+<td>第 10 章</td>
+</tr>
+<tr>
+<td><code>fold</code> / <code>OpFoldResult</code> 的定义</td>
+<td><code>OpDefinition.h</code></td>
+<td>第 11 章</td>
+</tr>
+<tr>
+<td>pattern 的基类与 rewriter</td>
+<td><code>PatternMatch.h</code></td>
+<td>第 11、14 章</td>
+</tr>
+<tr>
+<td><code>m_Constant</code> 之类的匹配器</td>
+<td><code>Matchers.h</code></td>
+<td>第 11 章</td>
+</tr>
+<tr>
+<td>支配关系</td>
+<td><code>Dominance.h</code></td>
+<td>第 19 章</td>
+</tr>
+<tr>
+<td>方言注册、<code>dependentDialects</code> 的机制</td>
+<td><code>Dialect.h</code>、<code>DialectRegistry.h</code></td>
+<td>第 11、16 章</td>
+</tr>
+<tr>
+<td><strong><code>ExternalModel</code> / <code>attachInterface</code></strong></td>
+<td><code>Interfaces.td</code>（配 <code>mlir/docs/Interfaces.md</code>）</td>
+<td>第 28 章</td>
+</tr>
+<tr>
+<td>报错、<code>emitError</code> 那一套</td>
+<td><code>Diagnostics.h</code></td>
+<td>第 12 章</td>
+</tr>
+<tr>
+<td><code>loc(...)</code> 是什么</td>
+<td><code>Location.h</code>、<code>BuiltinLocationAttributes.td</code></td>
+<td>第 12 章</td>
+</tr>
+<tr>
+<td>verifier 什么时候跑</td>
+<td><code>Verifier.h</code></td>
+<td>第 11 章</td>
+</tr>
+</tbody></table>
+<p><code>OpBase.td</code> 那一行我加粗了，因为它是<strong>整本第 9 章最有价值的参考</strong>。ODS 文档写了常用的那些，但 <code>OpBase.td</code> 是唯一的完整清单——所有 <code>*Attr</code> 约束、所有 trait、所有 <code>Op</code> 可用的 <code>let</code>。写 <code>.td</code> 卡住的时候在这个文件里 <code>grep</code>，比搜文档快。</p>
+<h2>三、按机制查：从书里的章节回到源码</h2>
+<p>下面这张表是这份附录的主体。左边是书里讲过的机制，右边是去读哪个文件。</p>
+<h3>变换与 pattern</h3>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>路径</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>greedy 驱动器</strong>（<code>maxIterations</code>、<code>maxNumRewrites</code>、worklist 顺序）</td>
+<td><code>lib/Transforms/Utils/GreedyPatternRewriteDriver.cpp</code></td>
+<td>14</td>
+</tr>
+<tr>
+<td>另一种驱动器：只走一遍，不到不动点</td>
+<td><code>lib/Transforms/Utils/WalkPatternRewriteDriver.cpp</code></td>
+<td>14</td>
+</tr>
+<tr>
+<td><strong>Dialect Conversion</strong>（四态合法性、<code>TypeConverter</code>、materialization）</td>
+<td><code>lib/Transforms/Utils/DialectConversion.cpp</code></td>
+<td>17</td>
+</tr>
+<tr>
+<td>常量折叠的实现、<code>materializeConstant</code> 怎么被调用</td>
+<td><code>lib/Transforms/Utils/FoldUtils.cpp</code></td>
+<td>11</td>
+</tr>
+<tr>
+<td>canonicalize pass 本身</td>
+<td><code>lib/Transforms/Canonicalizer.cpp</code></td>
+<td>11</td>
+</tr>
+<tr>
+<td>CSE 怎么判断两个 op 等价</td>
+<td><code>lib/Transforms/CSE.cpp</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>死代码消除的判据</td>
+<td><code>lib/Transforms/TrivialDeadCodeElimination.cpp</code>、<code>RemoveDeadValues.cpp</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>循环不变量提升</td>
+<td><code>lib/Transforms/Utils/LoopInvariantCodeMotionUtils.cpp</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>内联器</td>
+<td><code>lib/Transforms/Utils/Inliner.cpp</code>、<code>InliningUtils.cpp</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td><code>cf</code> 反推回 <code>scf</code>（<strong>下降不总是单向的</strong>）</td>
+<td><code>lib/Transforms/Utils/CFGToSCF.cpp</code></td>
+<td>24</td>
+</tr>
+</tbody></table>
+<p><code>GreedyPatternRewriteDriver.cpp</code> 值得专门读一遍。第 14 章那个&quot;互逆 pattern 会挂住而不是报不收敛&quot;的结论，就是从这个文件里 <code>processWorklist</code> 的注释确认的——文档没说这件事。</p>
+<h3>Pass 与分析</h3>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>路径</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Pass</code>/<code>OperationPass</code> 的定义</td>
+<td><code>include/mlir/Pass/Pass.h</code></td>
+<td>13</td>
+</tr>
+<tr>
+<td><strong>写 pass 的 <code>.td</code> 有哪些字段</strong></td>
+<td><code>include/mlir/Pass/PassBase.td</code></td>
+<td>13</td>
+</tr>
+<tr>
+<td>嵌套 PassManager、并行怎么调度</td>
+<td><code>include/mlir/Pass/PassManager.h</code>、<code>lib/Pass/Pass.cpp</code></td>
+<td>13</td>
+</tr>
+<tr>
+<td><strong>分析缓存与失效</strong>（<code>markAnalysesPreserved</code>）</td>
+<td><code>include/mlir/Pass/AnalysisManager.h</code></td>
+<td>13</td>
+</tr>
+<tr>
+<td><code>--mlir-timing</code> 的实现</td>
+<td><code>lib/Pass/PassTiming.cpp</code></td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>--mlir-print-ir-after-all</code> 的实现</td>
+<td><code>lib/Pass/IRPrinting.cpp</code></td>
+<td>12</td>
+</tr>
+<tr>
+<td>崩溃时自动缩减复现</td>
+<td><code>lib/Pass/PassCrashRecovery.cpp</code></td>
+<td>12</td>
+</tr>
+<tr>
+<td>pass 选项怎么解析（那些带引号的参数）</td>
+<td><code>include/mlir/Pass/PassOptions.h</code></td>
+<td>16</td>
+</tr>
+<tr>
+<td>副作用查询（<code>isPure</code>/<code>isMemoryEffectFree</code>/<code>wouldOpBeTriviallyDead</code>）</td>
+<td><code>include/mlir/Interfaces/SideEffectInterfaces.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td><strong>数据流框架</strong>（solver、lattice、传播）</td>
+<td><code>include/mlir/Analysis/DataFlowFramework.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>稀疏/稠密分析基类</td>
+<td><code>include/mlir/Analysis/DataFlow/SparseAnalysis.h</code>、<code>DenseAnalysis.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>可达性分析（几乎所有稀疏分析的前提）</td>
+<td><code>include/mlir/Analysis/DataFlow/DeadCodeAnalysis.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>一个现成的完整分析，照着抄最省事</td>
+<td><code>include/mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>别名分析</td>
+<td><code>include/mlir/Analysis/AliasAnalysis.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>活跃性</td>
+<td><code>include/mlir/Analysis/Liveness.h</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>切片（找一个值的前向/后向依赖）</td>
+<td><code>include/mlir/Analysis/SliceAnalysis.h</code></td>
+<td>19</td>
+</tr>
+</tbody></table>
+<p><code>AnalysisManager.h</code> 要读，因为第 13 章那个区分——<code>markAnalysesPreserved&lt;T&gt;()</code> 只保住 <code>T</code>，<code>markAllAnalysesPreserved()</code> 保住全部——写错了不会报错，只会让后面的 pass 拿到过期结果。这个语义只在这个头文件的注释里说清楚。</p>
+<h3>接口（第 10 章那句话的实现）</h3>
+<p>第 10 章讲 trait 和 interface 的区别，第 28 章看到它在生产规模上兑现。想知道某个&quot;通用变换&quot;凭什么能作用于你的 op，答案都在 <code>include/mlir/Interfaces/</code>：</p>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>它让你白拿什么</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SideEffectInterfaces.h</code></td>
+<td>CSE、DCE、LICM 全都认它</td>
+<td>19</td>
+</tr>
+<tr>
+<td><strong><code>TilingInterface.h</code></strong></td>
+<td>tile 和融合（第 21 章那整章）</td>
+<td>21</td>
+</tr>
+<tr>
+<td><code>DestinationStyleOpInterface.h</code></td>
+<td>destination-passing style，bufferization 靠它</td>
+<td>20、22</td>
+</tr>
+<tr>
+<td><code>IndexingMapOpInterface.h</code></td>
+<td>indexing map 的通用查询</td>
+<td>20</td>
+</tr>
+<tr>
+<td><code>LoopLikeInterface.h</code></td>
+<td>循环相关的通用变换（LICM 等）</td>
+<td>19</td>
+</tr>
+<tr>
+<td><code>ControlFlowInterfaces.h</code></td>
+<td><code>RegionBranchOpInterface</code> 在这里——第 11 章踩的那个坑</td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>CallInterfaces.h</code></td>
+<td>内联器认它</td>
+<td>19</td>
+</tr>
+<tr>
+<td><code>InferTypeOpInterface.h</code></td>
+<td>结果类型自动推导</td>
+<td>9</td>
+</tr>
+<tr>
+<td><code>ViewLikeInterface.h</code>、<code>SubsetOpInterface.h</code></td>
+<td><code>extract_slice</code> 那类 op 的通用处理</td>
+<td>21、22</td>
+</tr>
+<tr>
+<td><code>VectorInterfaces.h</code></td>
+<td>向量化相关</td>
+<td>23</td>
+</tr>
+<tr>
+<td><code>ParallelCombiningOpInterface.h</code></td>
+<td><code>scf.forall</code> 的 <code>parallel_insert_slice</code> 靠它</td>
+<td>21</td>
+</tr>
+<tr>
+<td><code>ValueBoundsOpInterface.h</code></td>
+<td>推导&quot;这个下标不会越界&quot;——<code>in_bounds</code> 的来源</td>
+<td>23</td>
+</tr>
+<tr>
+<td><code>DataLayoutInterfaces.h</code></td>
+<td>目标的数据布局（对齐、指针宽度）</td>
+<td>24</td>
+</tr>
+</tbody></table>
+<p><code>ValueBoundsOpInterface.h</code> 是个容易被忽略但很有用的：第 23 章 <code>transfer_read</code> 上那个 <code>in_bounds</code> 属性能不能设成 <code>true</code>，判断逻辑就走这套。</p>
+<h3>方言：44 个，怎么挑</h3>
+<p>上游 <code>include/mlir/Dialect/</code> 下有 46 个目录，其中 <code>Utils/</code> 和 <code>OpenACCMPCommon/</code> 不是独立方言，所以实际是 <strong>44 个方言</strong>。按&quot;什么时候需要看它&quot;分组：</p>
+<p><strong>几乎一定会用到的</strong></p>
+<table>
+<thead>
+<tr>
+<th>方言</th>
+<th>管什么</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Func</code></td>
+<td>函数与调用</td>
+<td>全书</td>
+</tr>
+<tr>
+<td><code>Arith</code></td>
+<td>标量算术、<code>arith.constant</code></td>
+<td>16</td>
+</tr>
+<tr>
+<td><code>Tensor</code></td>
+<td>值语义张量、<code>extract_slice</code>/<code>pad</code>/<code>empty</code></td>
+<td>20、21</td>
+</tr>
+<tr>
+<td><code>MemRef</code></td>
+<td>内存语义缓冲</td>
+<td>22、24</td>
+</tr>
+<tr>
+<td><code>SCF</code></td>
+<td>结构化控制流（<code>for</code>/<code>if</code>/<code>forall</code>）</td>
+<td>21、24</td>
+</tr>
+<tr>
+<td><code>ControlFlow</code></td>
+<td>基本块与分支（<code>cf</code>）</td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>LLVMIR</code></td>
+<td>最后那一层</td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>Linalg</code></td>
+<td>迭代空间显式化</td>
+<td>20、21</td>
+</tr>
+<tr>
+<td><code>Vector</code></td>
+<td>向量化、mask</td>
+<td>23</td>
+</tr>
+<tr>
+<td><code>Bufferization</code></td>
+<td>值语义 → 内存语义</td>
+<td>22</td>
+</tr>
+<tr>
+<td><code>Transform</code></td>
+<td>把调度写成 IR</td>
+<td>18</td>
+</tr>
+</tbody></table>
+<p><strong>做 GPU 才看的</strong>：<code>GPU</code>、<code>NVVM</code>、<code>ROCDL</code>（在 <code>LLVMIR/</code> 下）、<code>SPIRV</code>、<code>AMDGPU</code>、<code>NVGPU</code>、<code>XeGPU</code>（第 25 章）。</p>
+<p><strong>做 CPU 向量化才看的</strong>：<code>ArmNeon</code>、<code>ArmSVE</code>、<code>ArmSME</code>、<code>X86</code>（第 23 章）。</p>
+<p><strong>写 pattern 才看的</strong>：<code>PDL</code>、<code>PDLInterp</code>（第 15 章）。</p>
+<p><strong>特定领域</strong>：<code>Tosa</code>（框架前端）、<code>SparseTensor</code>、<code>Quant</code>、<code>Complex</code>、<code>Math</code>、<code>Shape</code>、<code>Async</code>、<code>EmitC</code>（生成 C 代码）、<code>OpenMP</code>/<code>OpenACC</code>（第 27、28 章那条共享线）、<code>MPI</code>、<code>Shard</code>（分布式）、<code>SMT</code>、<code>WasmSSA</code>、<code>IRDL</code>（在 IR 里定义方言）。</p>
+<p><strong>读方言源码的入口固定是这三个文件</strong>：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">&lt;方言&gt;/IR/&lt;方言&gt;Base.td 或 &lt;方言&gt;Dialect.td   &lt;- let summary / let description，设计动机
+&lt;方言&gt;/IR/&lt;方言&gt;Ops.td                        &lt;- op 清单
+&lt;方言&gt;/Transforms/Passes.td                   &lt;- 它提供哪些 pass（Linalg/Async 在上一级）</code></pre>
+</div><p>第 26、27、28 章所有对 Triton/IREE/flang/ClangIR 的判断，都是从这三类文件读出来的。<strong><code>let description</code> 是被严重低估的资源</strong>——很多方言的作者把设计取舍写在了里面（第 27 章引用的 <code>stream</code> 那段、ClangIR <code>cir</code> 那段关于 <code>hasConstantMaterializer</code> 的注释，都是这么来的）。</p>
+<h3>转换：<code>lib/Conversion/</code></h3>
+<p>按 <code>XToY</code> 命名，第 24、25 章那两条管线上每一步都在这里：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">lib/Conversion/
+    SCFToControlFlow/      &lt;- 结构化控制流压平（不可逆的那一步）
+    ArithToLLVM/
+    MemRefToLLVM/          &lt;- memref 描述符怎么变成 { ptr, ptr, i64, [N], [N] }
+    FuncToLLVM/            &lt;- 函数签名与调用约定
+    ControlFlowToLLVM/     &lt;- 第 24 章那个 "Dialect 'cf' not found" 的解药
+    VectorToLLVM/
+    GPUToNVVM/ GPUToROCDL/ GPUToSPIRV/   &lt;- 第 25 章三个出口
+    TosaToLinalg/          &lt;- 框架前端进来的入口</code></pre>
+</div><p><code>MemRefToLLVM/</code> 特别值得读：第 24 章那个描述符结构（<code>{ ptr, ptr, i64, [N x i64], [N x i64] }</code>）不是文档里的示意图，它就是这里的代码定的。想知道为什么 JIT 的调用约定长那样，答案在这个目录。</p>
+<h3>落地与执行</h3>
+<table>
+<thead>
+<tr>
+<th>想知道</th>
+<th>路径</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MLIR 的 <code>llvm</code> 方言怎么变成真的 LLVM IR</td>
+<td><code>lib/Target/LLVMIR/</code></td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>registerAllToLLVMIRTranslations</code> 到底注册了什么</td>
+<td><code>include/mlir/Target/LLVMIR/Dialect/</code></td>
+<td>25</td>
+</tr>
+<tr>
+<td>JIT 怎么起来的、<code>mlir_runner_utils</code> 是什么</td>
+<td><code>lib/ExecutionEngine/</code></td>
+<td>24</td>
+</tr>
+<tr>
+<td>生成 SPIR-V 二进制</td>
+<td><code>lib/Target/SPIRV/</code></td>
+<td>25</td>
+</tr>
+</tbody></table>
+<h3>工具本身</h3>
+<p><code>mlir/tools/</code> 下面这些，有几个值得知道存在：</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>用途</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>mlir-opt</code></td>
+<td>主力</td>
+<td>全书</td>
+</tr>
+<tr>
+<td><code>mlir-translate</code></td>
+<td>IR ↔ 外部格式（出 LLVM IR 用它）</td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>mlir-runner</code></td>
+<td>JIT 执行</td>
+<td>24</td>
+</tr>
+<tr>
+<td><strong><code>mlir-tblgen</code></strong></td>
+<td><code>.td</code> → C++，见下</td>
+<td>9</td>
+</tr>
+<tr>
+<td><code>mlir-pdll</code></td>
+<td>PDLL 编译器</td>
+<td>15</td>
+</tr>
+<tr>
+<td><code>mlir-reduce</code></td>
+<td>把一个崩溃的用例自动缩到最小</td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>mlir-query</code></td>
+<td>交互式查询 IR（像 clang-query）</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>mlir-rewrite</code></td>
+<td>批量改写 IR 文本</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>mlir-lsp-server</code> / <code>tblgen-lsp-server</code></td>
+<td>编辑器里补全 <code>.mlir</code> 和 <code>.td</code></td>
+<td>附录 A</td>
+</tr>
+</tbody></table>
+<p><code>mlir-query</code> 和 <code>mlir-rewrite</code> 这两个书里没用上，但值得知道：调查一个大模块&quot;哪些 op 满足某个条件&quot;时比写 pass 快得多。</p>
+<h2>四、想知道 ODS 到底生成了什么</h2>
+<p>这是第 9 到 11 章最容易卡住的地方：你在 <code>.td</code> 里写了几行 <code>let</code>，生成的 C++ 长什么样？</p>
+<p><strong>第一招，直接看生成的代码。</strong> 构建目录里就有：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">&lt;build&gt;/tools/mlir/include/mlir/Dialect/&lt;方言&gt;/IR/*.h.inc
+&lt;你的项目 build&gt;/include/Pix/PixOps.h.inc      &lt;- 我们自己的</code></pre>
+</div><p><code>.h.inc</code>/<code>.cpp.inc</code> 是纯文本，可读。想知道 <code>hasFolder = 1</code> 生成了什么声明，<code>grep fold</code> 就看到了。</p>
+<p><strong>第二招，自己跑一遍 <code>mlir-tblgen</code>。</strong> 想看某个 <code>.td</code> 生成什么，不必构建整个项目：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">mlir-tblgen --gen-op-decls -I &lt;mlir的include&gt; your.td
+mlir-tblgen --gen-op-defs  -I &lt;mlir的include&gt; your.td</code></pre>
+</div><p><strong>第三招，读生成器本身。</strong> 这是最硬但最彻底的办法，<code>mlir/tools/mlir-tblgen/</code> 下按功能分得很清楚：</p>
+<table>
+<thead>
+<tr>
+<th>你想知道</th>
+<th>生成器</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>op 的 C++ 类是怎么拼出来的（accessor、builder、verifier）</td>
+<td><code>OpDefinitionsGen.cpp</code></td>
+</tr>
+<tr>
+<td><strong>自定义 assembly（<code>assemblyFormat</code>）的全部语法</strong></td>
+<td><code>OpFormatGen.cpp</code></td>
+</tr>
+<tr>
+<td>类型/属性的自定义格式</td>
+<td><code>AttrTypeFormatGen.cpp</code></td>
+</tr>
+<tr>
+<td>接口生成的那些 <code>Adaptor</code>、<code>Model</code> 类</td>
+<td><code>OpInterfacesGen.cpp</code></td>
+</tr>
+<tr>
+<td>类型与属性的类怎么生成</td>
+<td><code>AttrOrTypeDefGen.cpp</code></td>
+</tr>
+<tr>
+<td><strong>DRR（<code>Pat&lt;&gt;</code>）到底变成了什么 C++</strong></td>
+<td><code>RewriterGen.cpp</code></td>
+</tr>
+<tr>
+<td>pass 的样板（<code>impl::XxxBase</code>）</td>
+<td><code>PassGen.cpp</code></td>
+</tr>
+<tr>
+<td>枚举属性</td>
+<td><code>EnumsGen.cpp</code></td>
+</tr>
+</tbody></table>
+<p><code>OpFormatGen.cpp</code> 那一行值得记：<code>assemblyFormat</code> 的可用指令（<code>$operands</code>、<code>attr-dict</code>、<code>type($result)</code>、<code>custom&lt;...&gt;</code>……）散落在文档各处，但这个文件里有完整的解析逻辑。第 9 章写 <code>pix.convolve</code> 那个格式时我就是在这里查的。</p>
+<p><code>RewriterGen.cpp</code> 对应第 15 章：DRR 报的那些错（&quot;argument number mismatch&quot;、&quot;referencing unbound symbol&quot;）都是这个文件发出来的，<code>grep</code> 报错原文就能直接定位到判断逻辑，比猜快得多。</p>
+<h2>五、文档：哪几篇值得完整读</h2>
+<p><code>mlir/docs/</code> 下有二十多篇。大部分是查的，但有几篇<strong>值得完整读一遍</strong>，因为它们讲的是&quot;为什么&quot;而不只是&quot;怎么用&quot;：</p>
+<table>
+<thead>
+<tr>
+<th>文档</th>
+<th>为什么值得读</th>
+<th>对应章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>LangRef.md</code></td>
+<td>MLIR 的语言规范。读完前 8 章之后回头看这篇，很多事会对上</td>
+<td>1–8</td>
+</tr>
+<tr>
+<td><strong><code>Canonicalization.md</code></strong></td>
+<td><code>fold</code> 和 canonicalize pattern 的分工准则，写得很清楚</td>
+<td>11</td>
+</tr>
+<tr>
+<td><strong><code>DialectConversion.md</code></strong></td>
+<td>四态合法性、materialization 的完整语义。第 17 章那些坑基本都在这篇里有交代</td>
+<td>17</td>
+</tr>
+<tr>
+<td><code>PatternRewriter.md</code></td>
+<td>pattern 与 rewriter 的约定（什么时候必须用 rewriter 而不能直接改 IR）</td>
+<td>11、14</td>
+</tr>
+<tr>
+<td><strong><code>Interfaces.md</code></strong></td>
+<td>包括第 28 章补讲的 <code>ExternalModel</code>、<code>attachInterface</code>、<code>declarePromisedInterface</code></td>
+<td>10、28</td>
+</tr>
+<tr>
+<td><code>PassManagement.md</code></td>
+<td>嵌套、并行、分析失效的完整规则</td>
+<td>13</td>
+</tr>
+<tr>
+<td><code>Bufferization.md</code></td>
+<td>One-Shot Bufferize 的 in-place 分析怎么工作</td>
+<td>22</td>
+</tr>
+<tr>
+<td><code>DeclarativeRewrites.md</code></td>
+<td>DRR 的完整语法</td>
+<td>15</td>
+</tr>
+<tr>
+<td><code>PDLL.md</code></td>
+<td>PDLL 语法</td>
+<td>15</td>
+</tr>
+<tr>
+<td><code>TargetLLVMIR.md</code></td>
+<td>memref 描述符、调用约定的规范说明</td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>Diagnostics.md</code></td>
+<td>怎么写出好的报错（自己造方言时用）</td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>Passes.md</code></td>
+<td>上游所有 pass 的清单，<code>--help</code> 的可读版</td>
+<td>全书</td>
+</tr>
+</tbody></table>
+<p>加粗那三篇是投入产出比最高的。如果时间只够读三篇文档，读 <code>Canonicalization.md</code>、<code>DialectConversion.md</code>、<code>Interfaces.md</code>。</p>
+<h2>六、最后一条建议：怎么读一个陌生方言</h2>
+<p>这本书第五部分（Triton、IREE、flang、ClangIR）用的就是下面这个固定流程，四个项目都是这么拆开的。放在这里当模板：</p>
+<ol>
+<li><p><strong>先数方言，再数层。</strong> <code>ls</code> 那个项目的方言目录，然后判断哪几个是真正的&quot;层&quot;、哪几个是横切基础设施或上游扩展。第 27 章数 IREE 时，九个目录里只有四个是分层决策——<strong>直接数目录会高估复杂度</strong>。</p>
+</li>
+<li><p><strong>读每个方言的 <code>let summary</code> 和 <code>let description</code>。</strong> 这一步的信息密度最高。作者经常把设计动机、和相邻层的分工、甚至架构图（<code>stream</code> 那个 ASCII 图）写在这里。</p>
+</li>
+<li><p><strong>列 pass 清单，分成&quot;下降&quot;和&quot;层内优化&quot;两类。</strong> 层内优化的数量就是这一层的价值——第 27 章数 HLFIR 的 12 个 pass，8 个是层内优化，那 8 个就是加这一层的全部理由。</p>
+</li>
+<li><p><strong>找那个&quot;压平&quot;的 pass。</strong> 几乎每个项目都有一步&quot;结构化控制流 → 基本块&quot;，找到它就知道这个项目的&quot;不可逆分界线&quot;在哪。上游是 <code>SCFToControlFlow</code>，ClangIR 是 <code>cir-flatten-cfg</code>。</p>
+</li>
+<li><p><strong>看默认值。</strong> 第 28 章那条教训：<code>cir</code> 在树里，但 <code>UseClangIRPipeline(false)</code>。<strong>&quot;在不在树里&quot;说明不了成熟度，默认值才说明。</strong> 找项目的 options 结构体或者驱动层的默认参数。</p>
+</li>
+<li><p><strong>找它的 <code>MissingFeatures</code> 等价物。</strong> 不一定叫这个名字，但成熟项目通常有——一份明码标价的缺口清单。没有这个的项目，缺口不是不存在，只是没人写下来。</p>
+</li>
+<li><p><strong>最后才读实现。</strong> 前六步下来你已经知道该读哪个文件了。反过来（一上来就读 <code>.cpp</code>）会淹死。</p>
+</li>
+</ol>
+<p>这个流程对你自己的项目也成立——反过来用，就是第 27 章那四个问题的落地检查表。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-b.html">← 附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
