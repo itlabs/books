@@ -295,4 +295,30 @@ def Pix_FromKernelOp : Pix_Op<"from_kernel", [Pure]> {
   let assemblyFormat = "$kernel attr-dict `:` type($kernel) `->` type($result)";
 }
 
+//===----------------------------------------------------------------------===//
+// 第 19 章新增：一个**有副作用**的 op
+//
+// 前面所有 pix op 都是 Pure，于是 CSE/DCE 白拿。这个 op 故意不是——
+// 它把一张图"打出来"，对外部世界有可观察的影响。有了它才能演示
+// "副作用建模是变换的前提"：编译器不敢合并、不敢删除它，
+// 而这个"不敢"完全来自我们在 ODS 里写的那一行声明。
+//===----------------------------------------------------------------------===//
+
+def Pix_TraceOp : Pix_Op<"trace", [MemoryEffects<[MemWrite]>]> {
+  let summary = "把一张图输出出去（调试用），有可观察的副作用";
+  let description = [{
+    声明 `MemWrite` 的后果是实打实的：
+
+    - `--cse` 不会合并两个一模一样的 `pix.trace`（顺序和次数都是语义的一部分）
+    - DCE 不会删掉结果没人用的 `pix.trace`
+    - 任何"想把它挪个位置"的变换都得先问副作用
+
+    对比 `pix.add`：它是 `Pure`，以上三件事全都会发生。
+    **区别只在 ODS 里那一行。**
+  }];
+
+  let arguments = (ins F32Tensor:$image);
+  let assemblyFormat = "$image attr-dict `:` type($image)";
+}
+
 #endif // PIX_OPS

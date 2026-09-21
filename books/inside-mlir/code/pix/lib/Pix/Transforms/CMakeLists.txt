@@ -15,6 +15,7 @@ add_mlir_dialect_library(MLIRPixTransforms
   RewriteAdd.cpp
   DRRPass.cpp
   PixToArith.cpp
+  AnalyzePass.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PIX_SOURCE_DIR}/include/Pix/Transforms
@@ -31,4 +32,5 @@ add_mlir_dialect_library(MLIRPixTransforms
   MLIRArithDialect           # 第 14 章的 pattern 要造 arith.constant
   MLIRTransformUtils         # applyPatternsGreedily
   MLIRTensorDialect          # 第 16 章：tensor.splat
+  MLIRAnalysis               # 第 19 章：DominanceInfo / DataFlowSolver
   )

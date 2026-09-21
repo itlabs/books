@@ -126,4 +126,19 @@ def PixToArith : Pass<"pix-to-arith", "::mlir::ModuleOp"> {
   ];
 }
 
+def PixAnalyze : Pass<"pix-analyze", "::mlir::func::FuncOp"> {
+  let summary = "第 19 章：用 MLIR 自带的三样分析，结果写成属性";
+  let description = [{
+    第 13 章那个分析是我们自己遍历数出来的。这个 pass 用现成的：
+
+    - `DominanceInfo` —— 有多少 pix op 支配着所有其他 pix op
+    - 副作用查询 —— `isPure` / `isMemoryEffectFree` / `wouldOpBeTriviallyDead`
+      三者各计一个数，因为它们问的是**三件不同的事**
+    - `DataFlowSolver` + 一个真的稀疏前向分析 —— 有多少个值"已知是全零图"
+
+    结果全写成函数属性，好用 FileCheck 断言。
+  }];
+  let dependentDialects = ["::mlir::arith::ArithDialect"];
+}
+
 #endif // PIX_TRANSFORMS_PASSES
