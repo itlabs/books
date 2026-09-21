@@ -74,4 +74,16 @@ def PixRewriteAdd : Pass<"pix-rewrite-add", "::mlir::func::FuncOp"> {
   ];
 }
 
+def PixDRR : Pass<"pix-drr", "::mlir::func::FuncOp"> {
+  let summary = "第 15 章：跑一套用 DRR（TableGen）声明出来的 pattern";
+  let description = [{
+    这个 pass 一条 C++ pattern 都没写，全部来自 `PixPatterns.td` 里的
+    `Pat<>`，由 `mlir-tblgen -gen-rewriters` 生成，用
+    `populateWithGenerated(patterns)` 一句装进来。
+
+    和第 14 章的 `pix-rewrite-add` 对照着看：同样的改写，一个写在 C++ 里、
+    一个写在 TableGen 里，各自的舒服与难受都在第 15 章正文里摊开。
+  }];
+}
+
 #endif // PIX_TRANSFORMS_PASSES
