@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li class="active"><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li class="toc-todo"><span>第 23 章 vector 方言：向量化、mask 与按目标宽度展开</span></li>
+<li class="toc-todo"><span>第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</span></li>
+<li class="toc-todo"><span>第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</span></li>
+<li class="toc-todo"><span>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</span></li>
+<li class="toc-todo"><span>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</span></li>
+<li class="toc-todo"><span>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>到现在为止，pix 降下来的 IR 一直在 <code>tensor</code> 上：<strong>值语义</strong>——每个 <code>tensor</code> 是一个不可变的值，"写"总是产生一个新值。这非常适合做变换（第 21 章那些 tile 和融合能成立，很大程度靠它），但机器不是这么工作的。</p>
+<p>这一章走那一步：<strong>tensor → memref</strong>。难点不在 API——<code>--one-shot-bufferize</code> 一个 pass 的事。难在它要回答三个此前一直被回避的问题：<strong>谁拥有这块内存、什么时候能就地覆盖、别名怎么判。</strong></p>
+<p>核心是**原地分析（in-place analysis）**。我们会用实测数字把它的价值钉死：同一份 tile+融合后的 IR，开分析是 <strong>2 个 alloc、1 次 copy</strong>，用 <code>copy-before-write=true</code> 跳过分析是 <strong>6 个 alloc、4 次 copy</strong>——而那些 copy 在循环里，是每次迭代都要付的。</p>
+<p>还会回答第 20、21 章留下的问题：那些 <code>tensor.empty</code> 最终变成了什么？<code>tensor.extract_slice</code> 会不会真的拷数据？（答案：<strong>不会</strong>，它变成 <code>memref.subview</code>，一个零拷贝的视图。）</p>
+</div><h2>为什么不能直接把类型换掉</h2>
+<p>先说清难在哪。天真的想法是&quot;把所有 <code>tensor&lt;8x8xf32&gt;</code> 替换成 <code>memref&lt;8x8xf32&gt;</code> 就完了&quot;。看一段 IR 就知道不行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%1 = pix.add %a, %a : tensor&lt;8x8xf32&gt;
+%2 = pix.scale %1, %f : tensor&lt;8x8xf32&gt;
+%3 = pix.add %1, %2 : tensor&lt;8x8xf32&gt;   // ← %1 又被读了</code></pre>
+</div><p>值语义下这段代码毫无歧义：<code>%1</code> 是一个值，谁都可以读它。换成 memref 之后，问题立刻出来了——<strong><code>%2</code> 的计算能不能就地写在 <code>%1</code> 的 buffer 上？</strong> 不能，因为 <code>%1</code> 后面还要被读。可如果第三行不存在，就地写是安全的，还省一次分配。</p>
+<p><strong>这个判断需要活跃性分析</strong>，而不是类型替换。这就是 bufferization 的实质。</p>
+<p>MLIR 的答案叫 <strong>One-Shot Bufferize</strong>：一次 pass 里同时做分析和改写（&quot;one-shot&quot;就是这个意思，相对于早期那种&quot;每个方言各自 bufferize、中间靠 cast 拼&quot;的做法）。</p>
+<h2>先看结果</h2>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-linalg --one-shot-bufferize="bufferize-function-boundaries=true" --canonicalize
+func.func @two_steps(%a: tensor&lt;8x8xf32&gt;, %b: tensor&lt;8x8xf32&gt;, %f: f32) -&gt; tensor&lt;8x8xf32&gt; {
+  %s = pix.add %a, %b : tensor&lt;8x8xf32&gt;
+  %m = pix.scale %s, %f : tensor&lt;8x8xf32&gt;
+  return %m : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-linalg --one-shot-bufferize="bufferize-function-boundaries=true" --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">#map = affine_map&lt;(d0, d1) -&gt; (d0, d1)&gt;
+module {
+  func.func @two_steps(%arg0: memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;, %arg1: memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;, %arg2: f32) -&gt; memref&lt;8x8xf32&gt; {
+    %alloc = memref.alloc() {alignment = 64 : i64} : memref&lt;8x8xf32&gt;
+    linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%arg0, %arg1 : memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;, memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;) outs(%alloc : memref&lt;8x8xf32&gt;) {
+    ^bb0(%in: f32, %in_1: f32, %out: f32):
+      %0 = arith.addf %in, %in_1 : f32
+      linalg.yield %0 : f32
+    }
+    %alloc_0 = memref.alloc() {alignment = 64 : i64} : memref&lt;8x8xf32&gt;
+    linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]} ins(%alloc : memref&lt;8x8xf32&gt;) outs(%alloc_0 : memref&lt;8x8xf32&gt;) {
+    ^bb0(%in: f32, %out: f32):
+      %0 = arith.mulf %in, %arg2 : f32
+      linalg.yield %0 : f32
+    }
+    return %alloc_0 : memref&lt;8x8xf32&gt;
+  }
+}</code></pre>
+</div><p>四处变化，每处都有讲究：</p>
+<p><strong>一、<code>tensor.empty</code> 变成了 <code>memref.alloc()</code>。</strong> 第 20 章那些&quot;目标张量&quot;原来就是分配请求——destination-passing style 在这里兑现了：<strong>bufferization 不用猜&quot;结果该放哪&quot;，<code>outs</code> 已经告诉它了。</strong></p>
+<p><strong>二、<code>linalg.generic</code> 不再有返回值。</strong> 看那一行末尾没有 <code>-&gt; tensor&lt;8x8xf32&gt;</code> 了。它现在直接写进 <code>outs</code> 指向的 memref。这是值语义变成内存语义最直观的标志。</p>
+<p><strong>三、函数入参带上了布局：<code>memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;</code>。</strong> 那个 <code>strided&lt;...&gt;</code> 说&quot;我接受任何步长和偏移的视图&quot;——因为调用者可能传进来一块大 buffer 的子视图。这是 <code>bufferize-function-boundaries=true</code> 的结果；不开这个选项，函数边界会保持 tensor，中间插 cast。</p>
+<p><strong>四、返回的是 <code>memref&lt;8x8xf32&gt;</code>（没有布局）</strong>，因为它是我们自己 alloc 的，布局确定。</p>
+<div class="warn">
+<strong>那个 alloc 谁来释放？</strong>
+<p>这段输出里 <code>memref.alloc</code> 没有配对的 <code>memref.dealloc</code>——它被 return 出去了，所有权交给了调用者。这是 bufferization 之后一个真实的问题：<strong>它只负责放置分配，不负责释放</strong>。</p>
+<p>释放由另一个 pass 管：<code>--buffer-deallocation-pipeline</code>（老版本叫 <code>-buffer-deallocation</code>）。真实管线里它紧跟在 bufferization 后面。这一章不展开，但要知道<strong>缺了那一步就是内存泄漏</strong>——而且 IR 看起来完全正常，不会有任何报错。</p>
+</div><h2>原地分析：这一章的核心</h2>
+<p>把第 21 章那份 tile + 融合过的 IR 拿来 bufferize，才看得出分析的分量：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt f21.mlir --pix-to-linalg --transform-interpreter --canonicalize --cse \
+  --one-shot-bufferize="bufferize-function-boundaries=true" --canonicalize</code></pre>
+</div><p>运行结果（函数部分）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @two_steps(%arg0: memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;, %arg1: memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;, %arg2: f32) -&gt; memref&lt;8x8xf32&gt; {
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c0 = arith.constant 0 : index
+    %alloc = memref.alloc() {alignment = 64 : i64} : memref&lt;8x8xf32&gt;
+    scf.for %arg3 = %c0 to %c8 step %c4 {
+      scf.for %arg4 = %c0 to %c8 step %c4 {
+        %subview = memref.subview %arg0[%arg3, %arg4] [4, 4] [1, 1] : memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt; to memref&lt;4x4xf32, strided&lt;[?, ?], offset: ?&gt;&gt;
+        %subview_0 = memref.subview %arg1[%arg3, %arg4] [4, 4] [1, 1] : memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt; to memref&lt;4x4xf32, strided&lt;[?, ?], offset: ?&gt;&gt;
+        %alloc_1 = memref.alloc() {alignment = 64 : i64} : memref&lt;4x4xf32&gt;
+        linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%subview, %subview_0 : memref&lt;4x4xf32, strided&lt;[?, ?], offset: ?&gt;&gt;, memref&lt;4x4xf32, strided&lt;[?, ?], offset: ?&gt;&gt;) outs(%alloc_1 : memref&lt;4x4xf32&gt;) {
+        ^bb0(%in: f32, %in_4: f32, %out: f32):
+          %0 = arith.addf %in, %in_4 : f32
+          linalg.yield %0 : f32
+        }
+        %subview_2 = memref.subview %alloc[%arg3, %arg4] [4, 4] [1, 1] : memref&lt;8x8xf32&gt; to memref&lt;4x4xf32, strided&lt;[8, 1], offset: ?&gt;&gt;
+        linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]} ins(%alloc_1 : memref&lt;4x4xf32&gt;) outs(%subview_2 : memref&lt;4x4xf32, strided&lt;[8, 1], offset: ?&gt;&gt;) {
+        ^bb0(%in: f32, %out: f32):
+          %0 = arith.mulf %in, %arg2 : f32
+          linalg.yield %0 : f32
+        }
+        %subview_3 = memref.subview %alloc[%arg3, %arg4] [4, 4] [1, 1] : memref&lt;8x8xf32&gt; to memref&lt;4x4xf32, strided&lt;[8, 1], offset: ?&gt;&gt;
+        memref.copy %subview_2, %subview_3 : memref&lt;4x4xf32, strided&lt;[8, 1], offset: ?&gt;&gt; to memref&lt;4x4xf32, strided&lt;[8, 1], offset: ?&gt;&gt;
+      }
+    }
+    return %alloc : memref&lt;8x8xf32&gt;
+  }</code></pre>
+</div><p>这段输出值得逐条读：</p>
+<p><strong>循环携带的张量变成了循环外的一个 <code>memref.alloc()</code>。</strong> 第 21 章那个 <code>iter_args(%arg4 = %0)</code> 在值语义下是&quot;每次迭代产生一个新的 8×8 张量&quot;；bufferize 之后变成&quot;一块 buffer，循环体直接往里写&quot;。<strong>每次迭代零分配。</strong></p>
+<p><strong><code>tensor.extract_slice</code> → <code>memref.subview</code>。</strong> 这是关键：<code>subview</code> 是一个<strong>视图</strong>，不拷数据。第 21 章你可能担心过&quot;每个 tile 都 extract 一次，是不是要拷来拷去&quot;——不会。</p>
+<p><strong><code>tensor.insert_slice</code> → 直接写进 <code>%subview_2</code>。</strong> 没有 copy。这是原地分析做的决定：那块 buffer 之后没人再读旧值，所以可以覆盖。</p>
+<p><strong>唯一的 per-iteration 分配是那个 4×4 的中间结果</strong>（<code>%alloc_1</code>）——融合把它从 8×8 缩到了 4×4，这正是第 21 章那笔账的兑现。</p>
+<h3>用数字说话</h3>
+<p>把 <code>copy-before-write=true</code> 打开（跳过分析，每次写都先拷一份），同一份输入：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>alloc</code></th>
+<th><code>copy</code></th>
+<th><code>subview</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>有原地分析（默认）</td>
+<td><strong>2</strong></td>
+<td><strong>1</strong></td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>copy-before-write=true</code></td>
+<td>6</td>
+<td>4</td>
+<td>3</td>
+</tr>
+</tbody></table>
+<p><strong>3 倍的分配、4 倍的拷贝。</strong> 而且那些 copy 在循环体里——是每次迭代都付的代价。</p>
+<div class="keypoint">
+<strong>原地分析判的是什么：一条规则</strong>
+<p><strong>把写操作就地做在某块 buffer 上，当且仅当那块 buffer 之后没人再读旧值。</strong></p>
+<p>这就是读后写（RaW）冲突检测。它需要的信息是"活跃性"——而值语义的 IR 恰好把这件事表达得很清楚：<code>tensor</code> 的 def-use 链就是活跃性。<strong>这也解释了为什么 MLIR 选择"先在 tensor 上做完所有变换，最后一步才 bufferize"</strong>：越晚 bufferize，分析的信息越完整、越准。</p>
+<p>反过来说也成立：<strong>bufferization 之后就很难再做 tiling 和融合了</strong>——那时别名信息已经丢进 memref 里，要重新分析出来非常贵。所以第 21 章那些变换必须在这一章之前做完，顺序不是随意的。</p>
+</div><h3>它不是&quot;一律原地&quot;</h3>
+<p>分析会拒绝不安全的就地写。两个函数对照：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">// %a 被写之后还要被读 → 不能就地
+func.func @must_copy(%a: tensor&lt;8x8xf32&gt;) -&gt; (tensor&lt;8x8xf32&gt;, tensor&lt;8x8xf32&gt;) {
+  %c = arith.constant dense&lt;1.0&gt; : tensor&lt;4x4xf32&gt;
+  %ins = tensor.insert_slice %c into %a[0, 0] [4, 4] [1, 1] : tensor&lt;4x4xf32&gt; into tensor&lt;8x8xf32&gt;
+  return %ins, %a : tensor&lt;8x8xf32&gt;, tensor&lt;8x8xf32&gt;
+}
+// %a 写完之后没人再读 → 可以就地
+func.func @can_inplace(%a: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %c = arith.constant dense&lt;1.0&gt; : tensor&lt;4x4xf32&gt;
+  %ins = tensor.insert_slice %c into %a[0, 0] [4, 4] [1, 1] : tensor&lt;4x4xf32&gt; into tensor&lt;8x8xf32&gt;
+  return %ins : tensor&lt;8x8xf32&gt;
+}</code></pre>
+</div><p>运行结果（只看分配与拷贝相关的行）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @must_copy(%arg0: memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;) -&gt; (memref&lt;8x8xf32&gt;, memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;) {
+    %alloc = memref.alloc() {alignment = 64 : i64} : memref&lt;8x8xf32&gt;
+    memref.copy %arg0, %alloc : memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt; to memref&lt;8x8xf32&gt;
+    %subview = memref.subview %alloc[0, 0] [4, 4] [1, 1] : memref&lt;8x8xf32&gt; to memref&lt;4x4xf32, strided&lt;[8, 1]&gt;&gt;
+    memref.copy %0, %subview : memref&lt;4x4xf32&gt; to memref&lt;4x4xf32, strided&lt;[8, 1]&gt;&gt;
+  func.func @can_inplace(%arg0: memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt;) -&gt; memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt; {
+    %subview = memref.subview %arg0[0, 0] [4, 4] [1, 1] : memref&lt;8x8xf32, strided&lt;[?, ?], offset: ?&gt;&gt; to memref&lt;4x4xf32, strided&lt;[?, ?], offset: ?&gt;&gt;
+    memref.copy %0, %subview : memref&lt;4x4xf32&gt; to memref&lt;4x4xf32, strided&lt;[?, ?], offset: ?&gt;&gt;</code></pre>
+</div><p>差别一目了然：</p>
+<ul>
+<li><code>@must_copy</code>：先 <code>memref.alloc</code> 一块 8×8，再 <code>memref.copy %arg0, %alloc</code> <strong>把整张图拷进去</strong>，然后在副本上写。</li>
+<li><code>@can_inplace</code>：<strong>没有 alloc、没有整图 copy</strong>，直接 <code>memref.subview %arg0</code> 然后往里写。</li>
+</ul>
+<p><strong>两个函数的 tensor 代码几乎一样，差别只在&quot;返回值里还有没有 <code>%a</code>&quot;。</strong> 分析读出了这个差别。</p>
+<div class="note">
+<strong>那个小 <code>memref.copy %0, %subview</code> 是什么</strong>
+<p>两个函数里都有它——那是把 4×4 的常量数据写进目标位置，是<strong>必要的数据搬运</strong>，不是分析失败。要分清两种 copy：<strong>整块 buffer 的防御性拷贝</strong>（分析失败的代价，<code>@must_copy</code> 里那个 8×8 的）和<strong>真正要搬的数据</strong>（这个 4×4 的）。看 <code>memref.copy</code> 的尺寸就能区分。</p>
+</div><h2>三个此前被回避的问题</h2>
+<p>这一章开头说 bufferization 要回答三个问题。现在逐个收尾。</p>
+<p><strong>谁拥有这块内存？</strong> destination-passing style 回答了一半：<code>outs</code> 指向哪，结果就写哪。剩下的一半是&quot;新分配的 buffer 归谁&quot;——bufferization 放置 <code>memref.alloc</code>，但所有权（谁 dealloc）交给后续的 deallocation pass。<strong>这是 MLIR 有意的分工</strong>：分配位置是数据流问题，释放是控制流问题。</p>
+<p><strong>什么时候能就地更新？</strong> 上面那条规则：之后没人读旧值。实现上靠遍历 tensor 的 use 链做 RaW 检测。</p>
+<p><strong>别名怎么判？</strong> 这是最微妙的。<code>memref.subview</code> 创造别名——两个 memref 指向重叠的内存。One-Shot Bufferize 在 tensor 层面维护&quot;别名集合&quot;（alias set），把&quot;这两个 tensor 会不会落到同一块 buffer&quot;算清楚，再据此决定拷不拷。想看它算出了什么，有个专门的调试开关：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-opt input.mlir --one-shot-bufferize="dump-alias-sets" ...</code></pre>
+</div><p>它会把别名集合作为属性标注在 IR 上。<strong>调&quot;为什么这里多了一次拷贝&quot;时，这是第一个该看的东西。</strong></p>
+<div class="concept">
+<svg viewBox="0 0 700 404" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c22b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c22o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c22g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">bufferization 不是类型替换，是一次活跃性分析</text>
+  <text x="14" y="40" font-size="10" font-weight="bold" fill="#2b6cb0">tensor（值语义）</text>
+  <rect x="14" y="48" width="200" height="104" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="67" font-size="9" font-family="monospace" fill="#24292f">%1 = add(%a, %a)</text>
+  <text x="24" y="82" font-size="9" font-family="monospace" fill="#24292f">%2 = scale(%1, %f)</text>
+  <text x="24" y="97" font-size="9" font-family="monospace" fill="#24292f">%3 = add(%1, %2)</text>
+  <text x="24" y="117" font-size="9" fill="#6b7280">每个 tensor 是不可变的值，</text>
+  <text x="24" y="130" font-size="9" fill="#6b7280">"写"总是产生新值 —— 毫无歧义</text>
+  <text x="24" y="146" font-size="9" fill="#3f9b5c">def-use 链 = 活跃性信息</text>
+  <path d="M 218 100 L 264 100" fill="none" stroke="#e06a3b" stroke-width="1.8" marker-end="url(#c22o)"/>
+  <text x="222" y="94" font-size="9" fill="#e06a3b">要回答三个问题</text>
+  <rect x="268" y="48" width="418" height="104" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="280" y="67" font-size="10" font-weight="bold" fill="#e06a3b">① 谁拥有这块内存</text>
+  <text x="290" y="81" font-size="9" fill="#24292f">destination-passing style 答一半（outs 指向哪就写哪）；</text>
+  <text x="290" y="93" font-size="9" fill="#24292f">释放归后续的 deallocation pass —— 缺了它就是泄漏，且无报错</text>
+  <text x="280" y="110" font-size="10" font-weight="bold" fill="#e06a3b">② 什么时候能就地覆盖</text>
+  <text x="290" y="123" font-size="9" fill="#24292f">当且仅当那块 buffer 之后<tspan font-weight="bold">没人再读旧值</tspan>（RaW 检测）</text>
+  <text x="280" y="140" font-size="10" font-weight="bold" fill="#e06a3b">③ 别名怎么判</text>
+  <text x="290" y="150" font-size="9" fill="#24292f">在 tensor 层面维护 alias set；调试用 dump-alias-sets</text>
+  <line x1="14" y1="168" x2="686" y2="168" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="188" font-size="11" font-weight="bold" fill="#24292f">实测：同一份 tile+融合后的 IR，分析开与不开</text>
+  <rect x="14" y="198" width="330" height="92" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="26" y="217" font-size="10" font-weight="bold" fill="#2f7a45">有原地分析（默认）</text>
+  <text x="26" y="236" font-size="9" fill="#24292f">alloc = <tspan font-weight="bold">2</tspan>　copy = <tspan font-weight="bold">1</tspan>　subview = 4</text>
+  <text x="26" y="253" font-size="9" fill="#24292f">循环携带张量 → 循环外一个 alloc</text>
+  <text x="26" y="266" font-size="9" fill="#24292f">extract_slice → memref.subview（零拷贝视图）</text>
+  <text x="26" y="279" font-size="9" fill="#24292f">insert_slice → 直接写进子视图，无 copy</text>
+  <rect x="356" y="198" width="330" height="92" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="368" y="217" font-size="10" font-weight="bold" fill="#e06a3b">copy-before-write=true（跳过分析）</text>
+  <text x="368" y="236" font-size="9" fill="#24292f">alloc = <tspan font-weight="bold">6</tspan>　copy = <tspan font-weight="bold">4</tspan>　subview = 3</text>
+  <text x="368" y="253" font-size="9" fill="#e06a3b">3 倍分配、4 倍拷贝</text>
+  <text x="368" y="270" font-size="9" fill="#e06a3b">而且那些 copy <tspan font-weight="bold">在循环体里</tspan>——</text>
+  <text x="368" y="283" font-size="9" fill="#e06a3b">每次迭代都要付</text>
+  <rect x="14" y="300" width="672" height="96" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="319" font-size="11" font-weight="bold" fill="#24292f">由此得到一条管线顺序上的硬约束：</text>
+  <text x="26" y="339" font-size="10" fill="#24292f">值语义的 def-use 链<tspan font-weight="bold">就是</tspan>活跃性信息，所以<tspan font-weight="bold">越晚 bufferize，分析越准</tspan>。</text>
+  <text x="26" y="357" font-size="10" fill="#24292f">反过来：bufferize 之后别名信息已经埋进 memref，重新分析出来非常贵 ——</text>
+  <text x="26" y="375" font-size="10" fill="#e06a3b">所以第 20、21 章那些 tiling 与融合<tspan font-weight="bold">必须在这一步之前做完</tspan>。顺序不是习惯，是约束。</text>
+  <text x="26" y="391" font-size="9" fill="#6b7280">这也是 MLIR 把 tensor 和 memref 分成两层、而不是一开始就用 memref 的根本原因。</text>
+</svg>
+<div class="caption">图 22-1　bufferization 要回答的三个问题、原地分析的实测收益，以及由此决定的管线顺序约束</div>
+</div><h2>把判定规则自己跑一遍</h2>
+<p>那条规则（&quot;之后没人读旧值才能就地&quot;）跑一遍就清楚了。下面这个模型对三种 IR 各判一次，并对比&quot;跳过分析&quot;的代价：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20One-Shot%20Bufferize%20%E7%9A%84%E5%8E%9F%E5%9C%B0%E5%88%86%E6%9E%90%E5%9C%A8%E5%88%A4%E4%BB%80%E4%B9%88%EF%BC%9F%E4%B8%80%E6%9D%A1%E8%A7%84%E5%88%99%EF%BC%9A%0A%23%20%20%20%E6%8A%8A%E5%86%99%E6%93%8D%E4%BD%9C%E5%B0%B1%E5%9C%B0%E5%81%9A%E5%9C%A8%E6%9F%90%E5%9D%97%20buffer%20%E4%B8%8A%EF%BC%8C%E5%BD%93%E4%B8%94%E4%BB%85%E5%BD%93**%E9%82%A3%E5%9D%97%20buffer%20%E4%B9%8B%E5%90%8E%E6%B2%A1%E4%BA%BA%E5%86%8D%E8%AF%BB%E6%97%A7%E5%80%BC**%E3%80%82%0A%23%20%E8%BF%99%E4%B8%AA%E6%A8%A1%E5%9E%8B%E6%8A%8A%E5%88%A4%E5%AE%9A%E8%BF%87%E7%A8%8B%E6%89%93%E5%87%BA%E6%9D%A5%EF%BC%8C%E5%B9%B6%E7%BB%9F%E8%AE%A1%E7%9C%81%E4%B8%8B%E5%A4%9A%E5%B0%91%E6%8B%B7%E8%B4%9D%E3%80%82%0A%0Aclass%20Tensor%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20buf)%3A%20self.name%2C%20self.buf%20%3D%20name%2C%20buf%0A%0Adef%20analyze(ops%2C%20steps_desc%2C%20copy_before_write%3DFalse)%3A%0A%20%20%20%20%22%22%22ops%3A%20(%E7%BB%93%E6%9E%9C%E5%90%8D%2C%20%E8%A2%AB%E5%86%99%E7%9A%84%E5%BC%A0%E9%87%8F%E5%90%8D%20or%20None%2C%20%E8%AF%BB%E5%88%B0%E7%9A%84%E5%BC%A0%E9%87%8F%E5%90%8D%E5%88%97%E8%A1%A8)%22%22%22%0A%20%20%20%20live_after%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%BC%A0%E9%87%8F%E5%90%8D%20-%3E%20%E5%AE%83%E6%9C%80%E5%90%8E%E4%B8%80%E6%AC%A1%E8%A2%AB%E8%AF%BB%E7%9A%84%E6%AD%A5%E5%8F%B7%0A%20%20%20%20for%20i%2C%20(_%2C%20_%2C%20reads)%20in%20enumerate(ops)%3A%0A%20%20%20%20%20%20%20%20for%20r%20in%20reads%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20live_after%5Br%5D%20%3D%20i%0A%20%20%20%20buffers%2C%20decisions%2C%20allocs%2C%20copies%20%3D%20%7B%7D%2C%20%5B%5D%2C%200%2C%200%0A%20%20%20%20for%20i%2C%20(res%2C%20written%2C%20reads)%20in%20enumerate(ops)%3A%0A%20%20%20%20%20%20%20%20if%20written%20is%20None%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%BA%AF%E4%BA%A7%E5%87%BA%EF%BC%88%E5%AF%B9%E5%BA%94%20tensor.empty%20%2B%20%E5%86%99%E6%BB%A1%EF%BC%89%0A%20%20%20%20%20%20%20%20%20%20%20%20allocs%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20buffers%5Bres%5D%20%3D%20f%22buf%7Ballocs%7D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20decisions.append(f%22%20%20%7Bsteps_desc%5Bi%5D%7D%EF%BC%9A%E6%96%B0%20buffer%20%7Bbuffers%5Bres%5D%7D%EF%BC%88alloc%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%23%20%E8%A6%81%E5%B0%B1%E5%9C%B0%E5%86%99%20%60written%60%E3%80%82%E5%88%A4%E6%8D%AE%EF%BC%9Awritten%20%E5%9C%A8%E6%9C%AC%E6%AD%A5%E4%B9%8B%E5%90%8E%E8%BF%98%E4%BC%9A%E8%A2%AB%E8%AF%BB%E5%90%97%EF%BC%9F%0A%20%20%20%20%20%20%20%20later%20%3D%20live_after.get(written%2C%20-1)%20%3E%20i%0A%20%20%20%20%20%20%20%20if%20copy_before_write%20or%20later%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20allocs%20%2B%3D%201%3B%20copies%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20buffers%5Bres%5D%20%3D%20f%22buf%7Ballocs%7D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20why%20%3D%20%22%E8%B7%B3%E8%BF%87%E5%88%86%E6%9E%90%EF%BC%8C%E4%B8%80%E5%BE%8B%E5%85%88%E6%8B%B7%22%20if%20copy_before_write%20else%20%5C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22%7Bwritten%7D%20%E5%9C%A8%E7%AC%AC%20%7Blive_after%5Bwritten%5D%7D%20%E6%AD%A5%E8%BF%98%E8%A6%81%E8%A2%AB%E8%AF%BB%20%E2%86%92%20%E4%B8%8D%E8%83%BD%E8%A6%86%E7%9B%96%22%0A%20%20%20%20%20%20%20%20%20%20%20%20decisions.append(f%22%20%20%7Bsteps_desc%5Bi%5D%7D%EF%BC%9A%E6%8B%B7%E4%B8%80%E4%BB%BD%E5%86%8D%E5%86%99%EF%BC%88alloc%2Bcopy%EF%BC%89%E2%80%94%E2%80%94%20%7Bwhy%7D%22)%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20buffers%5Bres%5D%20%3D%20buffers.get(written%2C%20%22%E5%85%A5%E5%8F%82%20buffer%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20decisions.append(f%22%20%20%7Bsteps_desc%5Bi%5D%7D%EF%BC%9A%3C%3C%E5%B0%B1%E5%9C%B0%E5%86%99%20%7Bbuffers%5Bres%5D%7D%3E%3E%EF%BC%8C%E9%9B%B6%E6%8B%B7%E8%B4%9D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22%20%E2%80%94%E2%80%94%20%7Bwritten%7D%20%E4%B9%8B%E5%90%8E%E6%B2%A1%E4%BA%BA%E5%86%8D%E8%AF%BB%E6%97%A7%E5%80%BC%22)%0A%20%20%20%20return%20decisions%2C%20allocs%2C%20copies%0A%0ACASES%20%3D%20%5B%0A%20%20%20%20(%22%E4%B8%89%E6%AD%A5%E9%93%BE%E5%BC%8F%EF%BC%88%E6%AF%8F%E6%AD%A5%E9%83%BD%E4%BA%A7%E5%87%BA%E6%96%B0%E5%BC%A0%E9%87%8F%EF%BC%89%22%2C%0A%20%20%20%20%20%5B(%22%251%22%2C%20None%2C%20%5B%22%25a%22%5D)%2C%20(%22%252%22%2C%20None%2C%20%5B%22%251%22%5D)%2C%20(%22%253%22%2C%20None%2C%20%5B%22%252%22%5D)%5D%2C%0A%20%20%20%20%20%5B%22%251%20%3D%20add(%25a%2C%25a)%22%2C%20%22%252%20%3D%20scale(%251)%22%2C%20%22%253%20%3D%20mul(%252%2C%252)%22%5D)%2C%0A%20%20%20%20(%22%E5%86%99%E5%85%A5%E4%B9%8B%E5%90%8E%E6%97%A7%E5%80%BC%E8%BF%98%E8%A6%81%E8%A2%AB%E8%AF%BB%20%E2%86%92%20%E5%BF%85%E9%A1%BB%E6%8B%B7%22%2C%0A%20%20%20%20%20%5B(%22%25ins%22%2C%20%22%25a%22%2C%20%5B%22%25a%22%5D)%2C%20(%22ret%22%2C%20None%2C%20%5B%22%25ins%22%2C%20%22%25a%22%5D)%5D%2C%0A%20%20%20%20%20%5B%22%25ins%20%3D%20insert_slice(..%20into%20%25a)%22%2C%20%22return%20%25ins%2C%20%25a%22%5D)%2C%0A%20%20%20%20(%22%E5%86%99%E5%85%A5%E4%B9%8B%E5%90%8E%E6%97%A7%E5%80%BC%E6%B2%A1%E4%BA%BA%E8%A6%81%20%E2%86%92%20%E5%8F%AF%E4%BB%A5%E5%B0%B1%E5%9C%B0%22%2C%0A%20%20%20%20%20%5B(%22%25ins%22%2C%20%22%25a%22%2C%20%5B%22%25a%22%5D)%2C%20(%22ret%22%2C%20None%2C%20%5B%22%25ins%22%5D)%5D%2C%0A%20%20%20%20%20%5B%22%25ins%20%3D%20insert_slice(..%20into%20%25a)%22%2C%20%22return%20%25ins%22%5D)%2C%0A%5D%0Afor%20title%2C%20ops%2C%20desc%20in%20CASES%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91%22)%0A%20%20%20%20for%20cbw%20in%20(False%2C%20True)%3A%0A%20%20%20%20%20%20%20%20d%2C%20a%2C%20c%20%3D%20analyze(ops%2C%20desc%2C%20cbw)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7B'%E8%B7%B3%E8%BF%87%E5%88%86%E6%9E%90'%20if%20cbw%20else%20'%E6%9C%89%E5%8E%9F%E5%9C%B0%E5%88%86%E6%9E%90'%7D%EF%BC%9Aalloc%3D%7Ba%7D%20copy%3D%7Bc%7D%22)%0A%20%20%20%20%20%20%20%20if%20not%20cbw%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20for%20line%20in%20d%3A%20print(%22%20%20%22%20%2B%20line)%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2062)%0Aprint(%22%E4%B8%80%E5%8F%A5%E8%AF%9D%EF%BC%9Abufferization%20%E7%9A%84%E9%9A%BE%E7%82%B9%E4%B8%8D%E6%98%AF%E3%80%8C%E6%8A%8A%20tensor%20%E6%8D%A2%E6%88%90%20memref%E3%80%8D%EF%BC%8C%22)%0Aprint(%22%E8%80%8C%E6%98%AF%E3%80%8C%E8%B0%81%E6%8B%A5%E6%9C%89%E8%BF%99%E5%9D%97%E5%86%85%E5%AD%98%E3%80%81%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E8%83%BD%E8%A6%86%E7%9B%96%E3%80%8D%E3%80%82%E5%89%8D%E8%80%85%E6%98%AF%E7%B1%BB%E5%9E%8B%E6%9B%BF%E6%8D%A2%EF%BC%8C%E5%90%8E%E8%80%85%E8%A6%81%E6%B4%BB%E8%B7%83%E6%80%A7%E5%88%86%E6%9E%90%E3%80%82%22)"># One-Shot Bufferize 的原地分析在判什么？一条规则：
+#   把写操作就地做在某块 buffer 上，当且仅当**那块 buffer 之后没人再读旧值**。
+# 这个模型把判定过程打出来，并统计省下多少拷贝。
+
+class Tensor:
+    def __init__(self, name, buf): self.name, self.buf = name, buf
+
+def analyze(ops, steps_desc, copy_before_write=False):
+    """ops: (结果名, 被写的张量名 or None, 读到的张量名列表)"""
+    live_after = {}                         # 张量名 -&gt; 它最后一次被读的步号
+    for i, (_, _, reads) in enumerate(ops):
+        for r in reads:
+            live_after[r] = i
+    buffers, decisions, allocs, copies = {}, [], 0, 0
+    for i, (res, written, reads) in enumerate(ops):
+        if written is None:                 # 纯产出（对应 tensor.empty + 写满）
+            allocs += 1
+            buffers[res] = f"buf{allocs}"
+            decisions.append(f"  {steps_desc[i]}：新 buffer {buffers[res]}（alloc）")
+            continue
+        # 要就地写 `written`。判据：written 在本步之后还会被读吗？
+        later = live_after.get(written, -1) &gt; i
+        if copy_before_write or later:
+            allocs += 1; copies += 1
+            buffers[res] = f"buf{allocs}"
+            why = "跳过分析，一律先拷" if copy_before_write else \
+                  f"{written} 在第 {live_after[written]} 步还要被读 → 不能覆盖"
+            decisions.append(f"  {steps_desc[i]}：拷一份再写（alloc+copy）—— {why}")
+        else:
+            buffers[res] = buffers.get(written, "入参 buffer")
+            decisions.append(f"  {steps_desc[i]}：&lt;&lt;就地写 {buffers[res]}&gt;&gt;，零拷贝"
+                             f" —— {written} 之后没人再读旧值")
+    return decisions, allocs, copies
+
+CASES = [
+    ("三步链式（每步都产出新张量）",
+     [("%1", None, ["%a"]), ("%2", None, ["%1"]), ("%3", None, ["%2"])],
+     ["%1 = add(%a,%a)", "%2 = scale(%1)", "%3 = mul(%2,%2)"]),
+    ("写入之后旧值还要被读 → 必须拷",
+     [("%ins", "%a", ["%a"]), ("ret", None, ["%ins", "%a"])],
+     ["%ins = insert_slice(.. into %a)", "return %ins, %a"]),
+    ("写入之后旧值没人要 → 可以就地",
+     [("%ins", "%a", ["%a"]), ("ret", None, ["%ins"])],
+     ["%ins = insert_slice(.. into %a)", "return %ins"]),
+]
+for title, ops, desc in CASES:
+    print(f"\n【{title}】")
+    for cbw in (False, True):
+        d, a, c = analyze(ops, desc, cbw)
+        print(f"  {'跳过分析' if cbw else '有原地分析'}：alloc={a} copy={c}")
+        if not cbw:
+            for line in d: print("  " + line)
+print("\n" + "=" * 62)
+print("一句话：bufferization 的难点不是「把 tensor 换成 memref」，")
+print("而是「谁拥有这块内存、什么时候能覆盖」。前者是类型替换，后者要活跃性分析。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【三步链式（每步都产出新张量）】
+  有原地分析：alloc=3 copy=0
+    %1 = add(%a,%a)：新 buffer buf1（alloc）
+    %2 = scale(%1)：新 buffer buf2（alloc）
+    %3 = mul(%2,%2)：新 buffer buf3（alloc）
+  跳过分析：alloc=3 copy=0
+
+【写入之后旧值还要被读 → 必须拷】
+  有原地分析：alloc=2 copy=1
+    %ins = insert_slice(.. into %a)：拷一份再写（alloc+copy）—— %a 在第 1 步还要被读 → 不能覆盖
+    return %ins, %a：新 buffer buf2（alloc）
+  跳过分析：alloc=2 copy=1
+
+【写入之后旧值没人要 → 可以就地】
+  有原地分析：alloc=1 copy=0
+    %ins = insert_slice(.. into %a)：&lt;&lt;就地写 入参 buffer&gt;&gt;，零拷贝 —— %a 之后没人再读旧值
+    return %ins：新 buffer buf1（alloc）
+  跳过分析：alloc=2 copy=1
+
+==============================================================
+一句话：bufferization 的难点不是「把 tensor 换成 memref」，
+而是「谁拥有这块内存、什么时候能覆盖」。前者是类型替换，后者要活跃性分析。</code></pre>
+</div><p>注意第三组：<strong>同样的 IR，有分析是 1 个 alloc 0 次 copy，跳过分析是 2 个 alloc 1 次 copy</strong>——和真 <code>mlir-opt</code> 在 <code>@can_inplace</code> / <code>@must_copy</code> 上的行为一致。前两组则完全相同，说明分析不是无条件省，它只在&quot;确实安全&quot;时才省。</p>
+<h2>常见问题与它们的成因</h2>
+<p>bufferization 是 MLIR 里最容易卡住的一步。几个高频问题：</p>
+<table>
+<thead>
+<tr>
+<th>症状</th>
+<th>成因</th>
+<th>怎么查</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>op was not bufferized</code></td>
+<td>那个 op 没实现 <code>BufferizableOpInterface</code></td>
+<td>加 <code>allow-unknown-ops=true</code> 先跑通，再看是谁</td>
+</tr>
+<tr>
+<td>多了很多 <code>memref.copy</code></td>
+<td>原地分析判定不安全</td>
+<td><code>dump-alias-sets</code> 看别名集合；检查是不是有多余的 use</td>
+</tr>
+<tr>
+<td>函数边界还是 tensor</td>
+<td>忘了 <code>bufferize-function-boundaries=true</code></td>
+<td>默认是关的（选项名后面标着 experimental）</td>
+</tr>
+<tr>
+<td>内存泄漏</td>
+<td>只做了 bufferization，没跑 deallocation</td>
+<td>管线里补 <code>--buffer-deallocation-pipeline</code></td>
+</tr>
+<tr>
+<td>结果不对，但 IR 看着正常</td>
+<td>就地写了不该写的地方</td>
+<td>先用 <code>copy-before-write=true</code> 跑一遍——<strong>如果结果变对了，就是分析或你的 op 接口实现有问题</strong></td>
+</tr>
+</tbody></table>
+<p>最后那一行是很实用的二分法：<strong><code>copy-before-write=true</code> 是 bufferization 的&quot;安全模式&quot;</strong>。它性能差但语义保守，用它来判断&quot;问题在分析还是在别处&quot;，能省很多时间。</p>
+<div class="keypoint">
+<strong>自定义 op 要参与 bufferization，得实现 <code>BufferizableOpInterface</code></strong>
+<p>pix 在这一章没遇到这个问题，因为我们在 bufferize 之前就把所有 pix op 降成了 linalg——<strong>而 linalg 已经实现了那个接口</strong>。这是个值得学的策略：<strong>让自己的方言尽早降到已经接好生态的方言上，就能白拿一整条下降链。</strong></p>
+<p>如果确实需要让某个 pix op 直接 bufferize（比如它有独特的内存语义），那就要实现 <code>bufferize()</code>、<code>bufferizesToMemoryRead/Write()</code>、<code>getAliasingValues()</code> 这几个方法，告诉框架"我读什么、写什么、我的结果和哪个操作数共享 buffer"。第 27 章看 IREE 时会见到大量这种实现。</p>
+</div><h2>动手：找出那唯一一次拷贝</h2>
+<p>前面那张表里，&quot;有原地分析&quot;那一栏还剩 <strong>1 次 copy</strong>。把它找出来：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt f21.mlir --pix-to-linalg --transform-interpreter --canonicalize --cse \
+  --one-shot-bufferize="bufferize-function-boundaries=true" --canonicalize \
+  | grep -B3 -A1 memref.copy</code></pre>
+</div><p>看清它拷的是什么尺寸、在什么位置，然后想清楚：<strong>它是&quot;分析失败的代价&quot;还是&quot;必要的数据搬运&quot;？</strong>（提示：看它在不在循环里。）</p>
+<p><strong>再改一处</strong>：把 tile 大小从 <code>[4, 4]</code> 改成 <code>[8, 8]</code>（整张图一个 tile），重新跑整条管线并数 alloc。<strong>alloc 数会变吗？为什么？</strong> 这个实验能让你对&quot;融合的收益来自哪里&quot;有更准的感觉——tile 变大之后中间 buffer 也变大，融合省下的绝对量没变，但局部性变差了。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>bufferization <strong>不是把 <code>tensor</code> 换成 <code>memref</code></strong>，是一次活跃性分析。类型替换是结果，判断&quot;能不能覆盖&quot;才是内容。</li>
+<li><strong>一条规则</strong>：把写操作就地做在某块 buffer 上，当且仅当<strong>那块 buffer 之后没人再读旧值</strong>（读后写冲突检测）。</li>
+<li><strong>值语义的 def-use 链就是活跃性信息</strong>，所以越晚 bufferize，分析越准。反过来——bufferize 之后别名信息已经埋进 memref，重新分析非常贵。<strong>所以第 20、21 章那些 tiling 与融合必须在这一步之前做完：管线顺序是约束，不是习惯。</strong> 这也是 MLIR 把 tensor / memref 分成两层的根本原因。</li>
+<li>实测收益：同一份 tile+融合后的 IR，有分析是 <strong>2 alloc / 1 copy</strong>，<code>copy-before-write=true</code> 是 <strong>6 alloc / 4 copy</strong>——3 倍分配、4 倍拷贝，而且那些 copy 在循环体里。</li>
+<li><strong><code>tensor.empty</code> → <code>memref.alloc</code></strong>，<strong><code>tensor.extract_slice</code> → <code>memref.subview</code>（零拷贝视图）</strong>，<strong><code>tensor.insert_slice</code> → 直接写进子视图</strong>（分析允许的话）。<code>linalg.generic</code> 不再有返回值。</li>
+<li>destination-passing style 在这里兑现：<strong>bufferization 不用猜&quot;结果放哪&quot;，<code>outs</code> 已经告诉它了。</strong> 第 20 章那个看起来啰嗦的设计，价值在这一章显形。</li>
+<li><strong>bufferization 只放置分配，不负责释放</strong>。缺了 <code>--buffer-deallocation-pipeline</code> 就是内存泄漏，而 IR 看起来完全正常、没有任何报错。</li>
+<li>要分清两种 <code>memref.copy</code>：<strong>整块 buffer 的防御性拷贝</strong>（分析失败的代价）和<strong>真正要搬的数据</strong>。看尺寸和位置就能区分。</li>
+<li><strong><code>copy-before-write=true</code> 是安全模式</strong>：性能差但语义保守。&quot;结果不对但 IR 看着正常&quot;时先用它跑一遍——结果变对了说明问题在分析或你的接口实现。</li>
+<li><strong>让自己的方言尽早降到已接好生态的方言（如 linalg），就能白拿整条下降链。</strong> pix 在这一章没碰到 <code>BufferizableOpInterface</code>，正是因为它已经变成 linalg 了。</li>
+</ul>
+<p><strong>pix 进度</strong>：这一章不给 pix 加 op，但把管线接通了一段关键的路：<code>pix → linalg → tile/fuse → memref</code>。新增 <code>bufferize.mlir</code>，两条 RUN 行对照&quot;有分析&quot;与&quot;跳过分析&quot;。<code>check-pix</code> 从 18 涨到 19 个文件。</p>
+<p>下一章讲<strong>向量化</strong>：从 <code>memref</code> 上的循环走到 <code>vector</code> 方言。会看到两条路（linalg vectorizer 与手写 pattern）、<code>vector.transfer_read/write</code> 为什么要有 mask、以及&quot;按目标寄存器宽度 unroll&quot;这件事为什么必须发生在向量化之后——那也是第 24 章真正跑出结果之前的最后一层抽象。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch21.html">← 第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
