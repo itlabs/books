@@ -16,6 +16,7 @@ add_mlir_dialect_library(MLIRPixTransforms
   DRRPass.cpp
   PixToArith.cpp
   AnalyzePass.cpp
+  PixToLinalg.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PIX_SOURCE_DIR}/include/Pix/Transforms
@@ -33,4 +34,5 @@ add_mlir_dialect_library(MLIRPixTransforms
   MLIRTransformUtils         # applyPatternsGreedily
   MLIRTensorDialect          # 第 16 章：tensor.splat
   MLIRAnalysis               # 第 19 章：DominanceInfo / DataFlowSolver
+  MLIRLinalgDialect          # 第 20 章：linalg.generic
   )

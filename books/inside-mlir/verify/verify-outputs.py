@@ -11,9 +11,11 @@
     …… 末尾可以带章名，只查指定章：ch11 ch13
 
 规则：
-  · 只比对**完整**输出（以 `module {` 开头的那种）。正文里常有"只看那两行"
+  · 只比对**完整**输出（以 `module {` 或 `#alias =` 开头的那种）。正文里常有"只看那两行"
     式的节选，那种没法机械比对，会被列出来提示人工核。
   · 尾随换行不计：mlir-opt 的输出末尾带一个空行，那是格式不是内容。
+  · `loc("文件":行:列)` 里的位置会被规范化掉——临时文件名和行号必然和正文不同，
+    但 IR 的结构仍然逐行比对。
   · 工具与参数取自块首的 `// RUN:` 行（和 build.js、verify-mlir.sh 同一套约定）；
     `|` 之后的部分（比如 FileCheck）由 lit 测试负责，这里只跑前半段。
 """
@@ -65,7 +67,10 @@ def main():
         for m in BLOCK_RE.finditer(open(path, encoding="utf-8").read()):
             code, expected = m.group(1), m.group(2)
             total += 1
-            if not expected.lstrip().startswith("module {"):
+            # 完整输出的两种开头：module {，或者 affine map / 类型别名声明
+            # （#map = affine_map<...>）—— 第四部分的输出大多是后者。
+            head = expected.lstrip()
+            if not (head.startswith("module {") or head.startswith("#")):
                 partial += 1
                 print(f"  － {name}: 节选输出，跳过自动比对（请人工核）")
                 continue
@@ -78,7 +83,12 @@ def main():
                 f.write(code)
             run = subprocess.run([exe, "/tmp/_verify_outputs.mlir", *args],
                                  capture_output=True, text=True)
-            got, want = run.stdout.rstrip("\n"), expected.rstrip("\n")
+            # 位置信息里的"文件名:行:列"必然对不上（临时文件名不同、RUN 行
+            # 还占掉一行），但那不是内容。把它规范化掉，结构仍然被校验。
+            def norm(t):
+                return re.sub(r'loc\("[^"]*":\d+:\d+\)', 'loc(<pos>)', t)
+            got = norm(run.stdout.rstrip("\n"))
+            want = norm(expected.rstrip("\n"))
             if got == want:
                 exact += 1
                 print(f"  ✓ {name}: 逐字节一致  [{tool} {' '.join(args)}]")

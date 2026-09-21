@@ -141,4 +141,20 @@ def PixAnalyze : Pass<"pix-analyze", "::mlir::func::FuncOp"> {
   let dependentDialects = ["::mlir::arith::ArithDialect"];
 }
 
+def PixToLinalg : Pass<"pix-to-linalg", "::mlir::ModuleOp"> {
+  let summary = "第 20 章：把 pix 降到 linalg（保留迭代空间，于是可 tile 可融合）";
+  let description = [{
+    和第 16 章的 `pix-to-arith` 对照着看：那条路最短，但把迭代空间丢了——
+    `arith.addf` 在 tensor 上是一个不透明的"整张图加整张图"。
+    这条路把迭代空间显式写出来（`indexing_maps` + `iterator_types`），
+    于是第 18 章学的 transform 调度、以及第 21 章的 tiling/融合，
+    从此都能作用在 pix 降下来的 IR 上。
+  }];
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::linalg::LinalgDialect",
+    "::mlir::tensor::TensorDialect"
+  ];
+}
+
 #endif // PIX_TRANSFORMS_PASSES
