@@ -7,6 +7,7 @@
 
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -52,6 +53,13 @@ int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::pix::PixDialect>();
   mlir::registerAllDialects(registry);
+
+  // 第 18 章补的一行。transform 方言的**大部分 op 住在扩展里**，不在方言本体里：
+  // transform.structured.match / tile_using_for 由 linalg 的 transform 扩展提供。
+  // 只注册方言不注册扩展，写那些 op 会得到
+  //   error: custom op 'transform.structured.match' is unknown
+  // 这个报错很容易被误读成"版本里没这个 op"。
+  mlir::registerAllExtensions(registry);
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "pix optimizer driver\n", registry));
