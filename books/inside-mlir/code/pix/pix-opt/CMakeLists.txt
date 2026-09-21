@@ -5,6 +5,7 @@ set(LIBS
   MLIRRegisterAllDialects   # 注册全部内建方言，好让 pix 能和它们混用
   MLIRRegisterAllPasses     # 注册全部内建 pass，--canonicalize 等直接可用
   MLIRRegisterAllExtensions # 第 18 章：transform 方言的 op 住在扩展里
+  MLIRToLLVMIRTranslationRegistration # 第 25 章：翻译成 LLVM IR / 出 PTX
   )
 
 add_llvm_executable(pix-opt pix-opt.cpp)

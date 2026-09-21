@@ -11,6 +11,7 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -60,6 +61,14 @@ int main(int argc, char **argv) {
   //   error: custom op 'transform.structured.match' is unknown
   // 这个报错很容易被误读成"版本里没这个 op"。
   mlir::registerAllExtensions(registry);
+
+  // 第 25 章：把 MLIR 方言翻译成 LLVM IR 需要另一套接口注册
+  // （LLVMTranslationDialectInterface）。--gpu-module-to-binary 这类
+  // "要真的生成机器码"的 pass 依赖它；少了它报的是
+  //   missing `LLVMTranslationDialectInterface` registration for dialect
+  //   for op: gpu.module
+  // 注意它和 registerAllDialects / registerAllExtensions 是三件不同的事。
+  mlir::registerAllToLLVMIRTranslations(registry);
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "pix optimizer driver\n", registry));
