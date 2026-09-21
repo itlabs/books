@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li class="active"><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>最后一章有三件事要做。</p>
+<p>第一件，看 <strong>ClangIR</strong>。前面几章的项目都在做"新东西"——AI 编译栈、GPU kernel、Fortran 前端。ClangIR 要做的事性质完全不同：<strong>给 C/C++ 加一个 MLIR 层，而 C/C++ 已经有一个二十年高度成熟、且完全没打算让位的现有实现。</strong>这是 MLIR 迄今遇到的最硬的一块地，看它怎么落地比看它成不成功更有价值。</p>
+<p>第二件，把这本书的<strong>主线还上</strong>。第 10 章讲 trait 和 interface 的区别时，用的是我们自己那个玩具 <code>pix</code>，"接口让不相关的方言共享变换"这句话当时只能靠信。这一章有一个真实到不能更真实的例子：<strong>flang 和 ClangIR——Fortran 和 C++，两套毫无关系的类型系统——共用同一份 OpenACC 实现，耦合点就是一个类型接口。</strong>而且这一章要补讲一个全书还没出现过的机制：<code>ExternalModel</code>，也就是"给不是你写的类型挂上接口"。</p>
+<p>第三件，<strong>把账还掉</strong>：MLIR 还没解决的问题，以及什么情况下你不该用它。前面二十七章基本都在讲它能干什么，这一节讲另一半。ClangIR 自己的代码库里正好有一份现成的、极其诚实的清单——<code>MissingFeatures.h</code>，<strong>252 条</strong>。</p>
+<p>所有内容锚在 LLVM <strong>23.1.2</strong>：<code>clang/include/clang/CIR/</code>、<code>mlir/docs/Interfaces.md</code>。<code>acc</code> 那几段是用 <code>mlir-opt</code> 真跑出来的。</p>
+</div><h2>ClangIR 的处境：一块特别硬的地</h2>
+<p>先把 ClangIR 和前面几章的项目区分开。</p>
+<p>Triton、IREE 都是<strong>新建的</strong>：以前没有一个&quot;Python DSL 到 PTX&quot;的标准答案，也没有一个&quot;端到端 AI 部署栈&quot;的既有实现在那儿挡着。flang 也算新建——<code>f18</code> 是从头写的 Fortran 前端。</p>
+<p>ClangIR 不是。C/C++ 的 clang → LLVM IR 这条路走了二十年，<code>clang/lib/CodeGen/</code> 里那些代码经过了天量的实战检验，性能、正确性、边角情况全都磨过。ClangIR 要往这条路中间<strong>插一层</strong>。</p>
+<p>所以它面临一个前面几章都没有的约束：<strong>它必须和既有实现输出等价的结果，而且不能要求用户改任何东西。</strong> 这个约束有多硬，从几个源码事实就能看出来。</p>
+<p>它确实已经在树里了（LLVM 23.1.2 的 <code>clang/include/clang/CIR/</code>），方言名很朴素：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">$ grep -rhoE 'let name = "[a-z]+"' clang/include/clang/CIR/Dialect/IR/CIRDialect.td
+let name = "cir"</code></pre>
+</div><p><code>summary</code> 值得读一遍，因为它比&quot;C++ 的 MLIR 方言&quot;这个说法准确得多：</p>
+<blockquote>
+<p>&quot;A high-level dialect for analyzing and optimizing <strong>Clang supported languages</strong>&quot;</p>
+</blockquote>
+<p>复数——不是只为 C++，是为 clang 支持的所有语言（C、C++、Objective-C/C++、以及 CUDA/OpenCL 这些方言；<code>CIRCUDAAttrs.td</code>、<code>CIROpenCLAttrs.td</code> 这两个文件就在那儿）。</p>
+<p>而<strong>默认是关着的</strong>。<code>clang/include/clang/Frontend/FrontendOptions.h</code> 的构造函数初始化列表里写得很清楚：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiRW1pdFByZXR0eVN5bWJvbEdyYXBocyhmYWxzZSksIEdlblJlZHVjZWRCTUkoZmFsc2UpLFxuVXNlQ2xhbmdJUlBpcGVsaW5lKGZhbHNlKSwgQ2xhbmdJUkRpc2FibGVQYXNzZXMoZmFsc2UpLFxuQ2xhbmdJUkRpc2FibGVDSVJWZXJpZmllcihmYWxzZSksIENsYW5nSVJFbmFibGVJZGlvbVJlY29nbml6ZXIoZmFsc2UpLFxuQ2xhbmdJUkxpYk9wdEVuYWJsZWQoZmFsc2UpLCBUaW1lVHJhY2VHcmFudWxhcml0eSg1MDApLCIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">EmitPrettySymbolGraphs(false), GenReducedBMI(false),
+UseClangIRPipeline(false), ClangIRDisablePasses(false),
+ClangIRDisableCIRVerifier(false), ClangIREnableIdiomRecognizer(false),
+ClangIRLibOptEnabled(false), TimeTraceGranularity(500),</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>UseClangIRPipeline(false)</code>——你不给 <code>-fclangir</code>，走的还是二十年那条老路。而且注意后面两个：<code>ClangIREnableIdiomRecognizer(false)</code>、<code>ClangIRLibOptEnabled(false)</code>——<strong>即便你开了 CIR，那两个最有意思的 pass（下面会讲，它们是 CIR 存在的核心理由）也还是默认关着的。</strong></p>
+<p>这不是 bug，是一个插在成熟实现中间的项目该有的样子。但它也说明：<strong>读一个项目&quot;在不在树里&quot;远不足以判断它的成熟度，要读它的默认值。</strong></p>
+<h2>它保留了什么：LLVM IR 里问不出来的那些问题</h2>
+<p>那 CIR 到底图什么？把它的 op 名列出来，答案就自己浮出来了。<code>CIROps.td</code> 里有 125 个 op 定义，挑出跟 C++ 相关的那些，按主题分组：</p>
+<p><strong>继承与虚函数</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">cir.base_class_addr        cir.derived_class_addr
+cir.base_data_member       cir.derived_data_member
+cir.base_method            cir.derived_method
+cir.get_method             cir.get_runtime_member
+cir.vtable.get_vptr        cir.vtable.address_point
+cir.vtable.get_virtual_fn_addr    cir.vtable.get_type_info
+cir.vtt.address_point      cir.dyn_cast</code></pre>
+</div><p><strong>异常</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">cir.try                  cir.alloc.exception      cir.begin_catch
+cir.end_catch            cir.catch_param          cir.construct_catch_param
+cir.init_catch_param     cir.eh.dispatch          cir.eh.initiate
+cir.eh.inflight_exception  cir.eh.typeid          cir.eh.terminate
+cir.resume               cir.cleanup.scope        cir.begin_cleanup
+cir.end_cleanup</code></pre>
+</div><p><strong>对象生命周期</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">cir.array.ctor    cir.array.dtor    cir.delete_array
+cir.local_init    cir.lifetime.start  cir.lifetime.end  cir.launder</code></pre>
+</div><p>（<code>cir.launder</code> 就是 <code>std::launder</code>——连这个都有一个 op。）</p>
+<p><strong>协程</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">cir.await    cir.co_return    cir.coro.body</code></pre>
+</div><p><strong>结构化控制流</strong></p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">cir.if  cir.switch  cir.scope  cir.break  cir.continue
+cir.ternary  cir.condition  cir.yield  cir.goto  cir.label</code></pre>
+</div><p>看到 <code>cir.if</code>、<code>cir.scope</code> 这一组，你应该立刻想到第 24 章。那一章我们把 <code>scf.for</code> 降成 <code>cf.br</code>——<strong>结构化控制流降成基本块</strong>，而且讲了那一步是不可逆的：降完之后&quot;这是一个循环&quot;这件事只能靠分析重新推，推不一定准。</p>
+<p>CIR 里也有完全对应的一步。看它的 pass 列表：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">$ grep -oE 'def [A-Za-z]+ : Pass&lt;"[a-z-]+"' clang/include/clang/CIR/Dialect/Passes.td
+CIRCanonicalize      -&gt; cir-canonicalize
+CIRSimplify          -&gt; cir-simplify
+HoistAllocas         -&gt; cir-hoist-allocas
+CIRFlattenCFG        -&gt; cir-flatten-cfg
+GotoSolver           -&gt; cir-goto-solver
+CXXABILowering       -&gt; cir-cxxabi-lowering
+TargetLowering       -&gt; cir-target-lowering
+CIREHABILowering     -&gt; cir-eh-abi-lowering
+LoweringPrepare      -&gt; cir-lowering-prepare
+IdiomRecognizer      -&gt; cir-idiom-recognizer
+LibOpt               -&gt; cir-lib-opt
+CallConvLowering     -&gt; cir-call-conv-lowering</code></pre>
+</div><p><code>cir-flatten-cfg</code>——就是我们的 <code>scf</code> → <code>cf</code>。而且 op 列表里那两个带 <code>.flat</code> 后缀的（<code>cir.switch.flat</code>、<code>cir.resume.flat</code>）就是<strong>压平之后的形式</strong>：同一个方言里同时存在结构化版本和压平版本，用后缀区分。这正是第 27 章讲 <code>stream.tensor.*</code>/<code>stream.async.*</code>/<code>stream.cmd.*</code> 时说的那件事——<strong>同一方言内用 op 名分层</strong>，因为类型系统没变。</p>
+<p>现在可以回答&quot;CIR 图什么&quot;了。把这些 op 翻成&quot;它保留了哪些 LLVM IR 里已经问不出来的问题&quot;：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%AC%AC%2028%20%E7%AB%A0%E4%B8%A4%E4%BB%B6%E4%BA%8B%EF%BC%9A%E2%91%A0%20%E4%B8%BA%E4%BB%80%E4%B9%88%20C%2B%2B%20%E5%80%BC%E5%BE%97%E4%B8%80%E4%B8%AA%E6%96%B9%E8%A8%80%20%E2%91%A1%20%E6%8E%A5%E5%8F%A3%E5%A6%82%E4%BD%95%E8%AE%A9%E4%B8%80%E5%A5%97%E5%AE%9E%E7%8E%B0%E6%9C%8D%E5%8A%A1%E4%B8%A4%E4%B8%AA%E5%89%8D%E7%AB%AF%0A%0Aprint(%22%3D%22%20*%2066)%0Aprint(%22%E2%91%A0%20C%2B%2B%20%E7%9A%84%E5%93%AA%E4%BA%9B%E8%AF%AD%E4%B9%89%E6%B4%BB%E5%88%B0%E4%BA%86%E5%93%AA%E4%B8%80%E5%B1%82%22)%0Aprint(%22%3D%22%20*%2066)%0A%23%20%E6%AF%8F%E8%A1%8C%EF%BC%9A%E8%BF%99%E6%9D%A1%20C%2B%2B%20%E4%BA%8B%E5%AE%9E%EF%BC%8C%E5%9C%A8%20cir%20%2F%20LLVM%20IR%20%E9%87%8C%E8%BF%98%E7%9C%8B%E5%BE%97%E8%A7%81%E5%90%97%0AFACTS%20%3D%20%5B%0A%20%20%20%20(%22%E8%BF%99%E6%AC%A1%E8%B0%83%E7%94%A8%E6%98%AF%E8%99%9A%E8%B0%83%E7%94%A8%22%2C%20%20%20%20%20%20%20%20%22cir.vtable.get_virtual_fn_addr%22%2C%20%22GEP%20%2B%20load%EF%BC%8C%E5%92%8C%E6%99%AE%E9%80%9A%E9%97%B4%E6%8E%A5%E8%B0%83%E7%94%A8%E6%B2%A1%E5%8C%BA%E5%88%AB%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E4%B8%AA%E8%BD%AC%E6%8D%A2%E6%98%AF%20dynamic_cast%22%2C%20%22cir.dyn_cast%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22%E5%AF%B9%E8%BF%90%E8%A1%8C%E6%97%B6%E5%87%BD%E6%95%B0%E7%9A%84%E4%B8%80%E6%AC%A1%20call%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E9%87%8C%E5%9C%A8%E6%9E%90%E6%9E%84%E4%B8%80%E4%B8%AA%E6%95%B0%E7%BB%84%22%2C%20%20%20%20%20%20%22cir.array.dtor%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22%E4%B8%80%E4%B8%AA%E5%BE%AA%E7%8E%AF%20%2B%20%E4%B8%80%E6%AC%A1%20call%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E6%98%AF%E5%9F%BA%E7%B1%BB%E5%AD%90%E5%AF%B9%E8%B1%A1%E7%9A%84%E5%9C%B0%E5%9D%80%22%2C%20%20%20%20%22cir.base_class_addr%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%22%E4%B8%80%E6%AC%A1%E5%B8%B8%E9%87%8F%E5%81%8F%E7%A7%BB%E7%9A%84%20GEP%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E4%B8%AA%E4%BD%9C%E7%94%A8%E5%9F%9F%E5%9C%A8%E9%80%80%E6%A0%88%E6%97%B6%E6%B8%85%E7%90%86%22%2C%20%20%22cir.cleanup.scope%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22landingpad%20%2B%20%E8%8B%A5%E5%B9%B2%E5%9F%BA%E6%9C%AC%E5%9D%97%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E6%98%AF%E5%8D%8F%E7%A8%8B%E7%9A%84%E4%B8%80%E4%B8%AA%20await%20%E7%82%B9%22%2C%20%22cir.await%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22%E5%B7%B2%E8%A2%AB%E6%8B%86%E6%88%90%E7%8A%B6%E6%80%81%E6%9C%BA%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E4%B8%AA%20if%20%E6%98%AF%E6%BA%90%E7%A0%81%E9%87%8C%E7%9A%84%20if%22%2C%20%20%20%22cir.if%EF%BC%88%E5%B8%A6%20region%EF%BC%89%22%2C%20%20%20%20%20%20%20%20%20%20%20%20%22%E5%9B%9B%E4%B8%AA%E5%9F%BA%E6%9C%AC%E5%9D%97%E5%92%8C%E4%B8%A4%E6%9D%A1%20br%22)%2C%0A%5D%0Afor%20fact%2C%20in_cir%2C%20in_llvm%20in%20FACTS%3A%0A%20%20%20%20print(f%22%5Cn%20%20%E3%80%8C%7Bfact%7D%E3%80%8D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20cir%20%E9%87%8C%20%20%20%20%20%EF%BC%9A%7Bin_cir%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20LLVM%20IR%20%E9%87%8C%20%EF%BC%9A%7Bin_llvm%7D%22)%0Aprint(%22%5Cn%20%20%E7%BB%93%E8%AE%BA%EF%BC%9ALLVM%20IR%20%E4%B8%8D%E6%98%AF%E3%80%8E%E4%BF%A1%E6%81%AF%E5%B0%91%E4%B8%80%E7%82%B9%E3%80%8F%EF%BC%8C%E6%98%AF%E8%BF%99%E4%BA%9B%E9%97%AE%E9%A2%98**%E9%97%AE%E4%B8%8D%E5%87%BA%E6%9D%A5**%E4%BA%86%E3%80%82%22)%0Aprint(%22%20%20%E6%83%B3%E5%9C%A8%20C%2B%2B%20%E8%AF%AD%E4%B9%89%E5%B1%82%E9%9D%A2%E5%81%9A%E5%88%86%E6%9E%90%E6%88%96%E4%BC%98%E5%8C%96%EF%BC%8C%E5%B0%B1%E5%BE%97%E6%9C%89%E4%B8%80%E5%B1%82%E8%BF%98%E7%95%99%E7%9D%80%E8%BF%99%E4%BA%9B%E4%BF%A1%E6%81%AF%E3%80%82%22)%0A%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2066)%0Aprint(%22%E2%91%A1%20%E4%B8%80%E5%A5%97%20OpenACC%20%E5%AE%9E%E7%8E%B0%EF%BC%8C%E4%B8%A4%E4%B8%AA%E5%89%8D%E7%AB%AF%EF%BC%9A%E9%9D%A0%E7%9A%84%E6%98%AF%E6%8E%A5%E5%8F%A3%EF%BC%8C%E4%B8%8D%E6%98%AF%E5%85%AC%E5%85%B1%E7%B1%BB%E5%9E%8B%22)%0Aprint(%22%3D%22%20*%2066)%0A%0A%23%20acc%20%E6%96%B9%E8%A8%80%E5%8F%AA%E8%AE%A4%E6%8E%A5%E5%8F%A3%E3%80%82%E4%B8%A4%E4%B8%AA%E5%89%8D%E7%AB%AF%E5%90%84%E8%87%AA%E7%BB%99%E8%87%AA%E5%B7%B1%E7%9A%84%E7%B1%BB%E5%9E%8B%E6%8C%82%E4%B8%8A%E5%90%8C%E4%B8%80%E4%B8%AA%E6%8E%A5%E5%8F%A3%E7%9A%84%20ExternalModel%E3%80%82%0Aclass%20PointerLikeType%3A%0A%20%20%20%20%22%22%22%E4%B8%8A%E6%B8%B8%20mlir%3A%3Aacc%3A%3APointerLikeType%20%E2%80%94%E2%80%94%20acc%20%E6%96%B9%E8%A8%80%E5%94%AF%E4%B8%80%E8%AE%A4%E8%AF%86%E7%9A%84%E4%B8%9C%E8%A5%BF%22%22%22%0A%20%20%20%20registry%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%23%20%E7%B1%BB%E5%9E%8B%E5%90%8D%20-%3E%20%E5%AE%9E%E7%8E%B0%EF%BC%88attachInterface%20%E8%A3%85%E8%BF%9B%E6%9D%A5%E7%9A%84%EF%BC%89%0A%20%20%20%20%40classmethod%0A%20%20%20%20def%20attach(cls%2C%20type_name%2C%20model)%3A%0A%20%20%20%20%20%20%20%20cls.registry%5Btype_name%5D%20%3D%20model%0A%20%20%20%20%40classmethod%0A%20%20%20%20def%20get(cls%2C%20type_name)%3A%0A%20%20%20%20%20%20%20%20return%20cls.registry.get(type_name)%0A%0A%23%20flang%20%E4%BE%A7%EF%BC%9AFIROpenACCTypeInterfaces.h%0APointerLikeType.attach(%22!fir.ref%3C!fir.array%3C10xf32%3E%3E%22%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%7B%22owner%22%3A%20%22flang%22%2C%20%22elem%22%3A%20%22!fir.array%3C10xf32%3E%22%7D)%0A%23%20ClangIR%20%E4%BE%A7%EF%BC%9ACIROpenACCTypeInterfaces.h%0APointerLikeType.attach(%22!cir.ptr%3C!cir.array%3Cf32%20x%2010%3E%3E%22%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%7B%22owner%22%3A%20%22ClangIR%22%2C%20%22elem%22%3A%20%22!cir.array%3Cf32%20x%2010%3E%22%7D)%0A%23%20%E4%B8%8A%E6%B8%B8%E8%87%AA%E5%B7%B1%E7%9A%84%E4%B8%A4%E4%B8%AA%EF%BC%8C%E6%9C%AC%E7%AB%A0%E7%94%A8%20mlir-opt%20%E7%9C%9F%E8%B7%91%E8%BF%87%0APointerLikeType.attach(%22memref%3C10xf32%3E%22%2C%20%7B%22owner%22%3A%20%22%E4%B8%8A%E6%B8%B8%22%2C%20%22elem%22%3A%20%22f32%22%7D)%0APointerLikeType.attach(%22!llvm.ptr%22%2C%20%20%20%20%20%20%7B%22owner%22%3A%20%22%E4%B8%8A%E6%B8%B8%22%2C%20%22elem%22%3A%20%22%EF%BC%88%E4%B8%8D%E9%80%8F%E6%98%8E%EF%BC%8C%E9%9C%80%E6%98%BE%E5%BC%8F%20varType%EF%BC%89%22%7D)%0A%0Adef%20acc_copyin(var_type)%3A%0A%20%20%20%20%22%22%22acc.copyin%20%E7%9A%84%20verifier%20%2B%20lowering%20%E6%83%B3%E7%9F%A5%E9%81%93%E7%9A%84%E4%BA%8B%E3%80%82%E5%AE%83%E4%B8%8D%E8%AE%A4%E8%AF%86%E4%BB%BB%E4%BD%95%E5%85%B7%E4%BD%93%E7%B1%BB%E5%9E%8B%E3%80%82%22%22%22%0A%20%20%20%20model%20%3D%20PointerLikeType.get(var_type)%0A%20%20%20%20if%20model%20is%20None%3A%0A%20%20%20%20%20%20%20%20return%20f%22%20%20%E2%9C%97%20%7Bvar_type%3A%3C32%7D%20%E8%A2%AB%E6%8B%92%E7%BB%9D%EF%BC%9Amust%20be%20any%20pointer%20or%20mappable%22%0A%20%20%20%20return%20(f%22%20%20%E2%9C%93%20%7Bvar_type%3A%3C32%7D%20%E5%85%83%E7%B4%A0%E7%B1%BB%E5%9E%8B%20%3D%20%7Bmodel%5B'elem'%5D%7D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20f%22%20%20%20%EF%BC%88%E6%8E%A5%E5%8F%A3%E7%94%B1%20%7Bmodel%5B'owner'%5D%7D%20%E6%8C%82%E4%B8%8A%EF%BC%89%22)%0A%0Aprint(%22%5Cnacc.copyin%20%E5%AF%B9%E5%90%84%E7%A7%8D%E7%B1%BB%E5%9E%8B%E7%9A%84%E5%8F%8D%E5%BA%94%EF%BC%9A%22)%0Afor%20t%20in%20%5B%22memref%3C10xf32%3E%22%2C%20%22!llvm.ptr%22%2C%0A%20%20%20%20%20%20%20%20%20%20%22!fir.ref%3C!fir.array%3C10xf32%3E%3E%22%2C%20%22!cir.ptr%3C!cir.array%3Cf32%20x%2010%3E%3E%22%2C%20%22i32%22%5D%3A%0A%20%20%20%20print(acc_copyin(t))%0A%0Aprint(%22%5Cn%20%20%E6%B3%A8%E6%84%8F%20acc_copyin%20%E9%87%8C%E6%B2%A1%E6%9C%89%E4%B8%80%E5%A4%84%20if%20%E5%9C%A8%E5%88%A4%E6%96%AD%E5%85%B7%E4%BD%93%E7%B1%BB%E5%9E%8B%E3%80%82%22)%0Aprint(%22%20%20%E5%8A%A0%E4%B8%80%E4%B8%AA%E6%96%B0%E5%89%8D%E7%AB%AF%20%3D%20%E5%86%99%E4%B8%80%E4%B8%AA%20ExternalModel%20%2B%20attachInterface%20%E4%B8%80%E6%AC%A1%EF%BC%8C%22)%0Aprint(%22%20%20acc%20%E9%82%A3%E8%BE%B9%E4%B8%80%E8%A1%8C%E9%83%BD%E4%B8%8D%E7%94%A8%E6%94%B9%E3%80%82%E8%BF%99%E5%B0%B1%E6%98%AF%E6%8E%A5%E5%8F%A3%E5%92%8C%20trait%20%E7%9A%84%E6%A0%B9%E6%9C%AC%E5%8C%BA%E5%88%AB%EF%BC%88%E7%AC%AC%2010%20%E7%AB%A0%EF%BC%89%E3%80%82%22)%0Aprint(%22%5Cn%20%20%E8%80%8C%E6%BC%8F%E4%BA%86%E9%82%A3%E6%AC%A1%20attachInterface%EF%BC%8C%E7%97%87%E7%8A%B6%E6%98%AF%20verifier%20%E8%AF%B4%E3%80%8E%E8%BF%99%E4%B8%AA%E7%B1%BB%E5%9E%8B%E4%B8%8D%E8%A1%8C%E3%80%8F%E2%80%94%E2%80%94%22)%0Aprint(%22%20%20%E5%92%8C%E7%AC%AC%2018%20%E7%AB%A0%E6%BC%8F%E4%BA%86%20registerAllExtensions%20%E6%97%B6%E3%80%8E%E8%BF%99%E4%B8%AA%20op%20%E4%B8%8D%E8%AE%A4%E8%AF%86%E3%80%8F%E4%B8%80%E6%A8%A1%E4%B8%80%E6%A0%B7%E3%80%82%22)"># 第 28 章两件事：① 为什么 C++ 值得一个方言 ② 接口如何让一套实现服务两个前端
+
+print("=" * 66)
+print("① C++ 的哪些语义活到了哪一层")
+print("=" * 66)
+# 每行：这条 C++ 事实，在 cir / LLVM IR 里还看得见吗
+FACTS = [
+    ("这次调用是虚调用",        "cir.vtable.get_virtual_fn_addr", "GEP + load，和普通间接调用没区别"),
+    ("这个转换是 dynamic_cast", "cir.dyn_cast",                   "对运行时函数的一次 call"),
+    ("这里在析构一个数组",      "cir.array.dtor",                 "一个循环 + 一次 call"),
+    ("这是基类子对象的地址",    "cir.base_class_addr",            "一次常量偏移的 GEP"),
+    ("这个作用域在退栈时清理",  "cir.cleanup.scope",              "landingpad + 若干基本块"),
+    ("这是协程的一个 await 点", "cir.await",                      "已被拆成状态机"),
+    ("这个 if 是源码里的 if",   "cir.if（带 region）",            "四个基本块和两条 br"),
+]
+for fact, in_cir, in_llvm in FACTS:
+    print(f"\n  「{fact}」")
+    print(f"     cir 里     ：{in_cir}")
+    print(f"     LLVM IR 里 ：{in_llvm}")
+print("\n  结论：LLVM IR 不是『信息少一点』，是这些问题**问不出来**了。")
+print("  想在 C++ 语义层面做分析或优化，就得有一层还留着这些信息。")
+
+print("\n" + "=" * 66)
+print("② 一套 OpenACC 实现，两个前端：靠的是接口，不是公共类型")
+print("=" * 66)
+
+# acc 方言只认接口。两个前端各自给自己的类型挂上同一个接口的 ExternalModel。
+class PointerLikeType:
+    """上游 mlir::acc::PointerLikeType —— acc 方言唯一认识的东西"""
+    registry = {}          # 类型名 -&gt; 实现（attachInterface 装进来的）
+    @classmethod
+    def attach(cls, type_name, model):
+        cls.registry[type_name] = model
+    @classmethod
+    def get(cls, type_name):
+        return cls.registry.get(type_name)
+
+# flang 侧：FIROpenACCTypeInterfaces.h
+PointerLikeType.attach("!fir.ref&lt;!fir.array&lt;10xf32&gt;&gt;",
+                       {"owner": "flang", "elem": "!fir.array&lt;10xf32&gt;"})
+# ClangIR 侧：CIROpenACCTypeInterfaces.h
+PointerLikeType.attach("!cir.ptr&lt;!cir.array&lt;f32 x 10&gt;&gt;",
+                       {"owner": "ClangIR", "elem": "!cir.array&lt;f32 x 10&gt;"})
+# 上游自己的两个，本章用 mlir-opt 真跑过
+PointerLikeType.attach("memref&lt;10xf32&gt;", {"owner": "上游", "elem": "f32"})
+PointerLikeType.attach("!llvm.ptr",      {"owner": "上游", "elem": "（不透明，需显式 varType）"})
+
+def acc_copyin(var_type):
+    """acc.copyin 的 verifier + lowering 想知道的事。它不认识任何具体类型。"""
+    model = PointerLikeType.get(var_type)
+    if model is None:
+        return f"  ✗ {var_type:&lt;32} 被拒绝：must be any pointer or mappable"
+    return (f"  ✓ {var_type:&lt;32} 元素类型 = {model['elem']}"
+            f"   （接口由 {model['owner']} 挂上）")
+
+print("\nacc.copyin 对各种类型的反应：")
+for t in ["memref&lt;10xf32&gt;", "!llvm.ptr",
+          "!fir.ref&lt;!fir.array&lt;10xf32&gt;&gt;", "!cir.ptr&lt;!cir.array&lt;f32 x 10&gt;&gt;", "i32"]:
+    print(acc_copyin(t))
+
+print("\n  注意 acc_copyin 里没有一处 if 在判断具体类型。")
+print("  加一个新前端 = 写一个 ExternalModel + attachInterface 一次，")
+print("  acc 那边一行都不用改。这就是接口和 trait 的根本区别（第 10 章）。")
+print("\n  而漏了那次 attachInterface，症状是 verifier 说『这个类型不行』——")
+print("  和第 18 章漏了 registerAllExtensions 时『这个 op 不认识』一模一样。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">==================================================================
+① C++ 的哪些语义活到了哪一层
+==================================================================
+
+  「这次调用是虚调用」
+     cir 里     ：cir.vtable.get_virtual_fn_addr
+     LLVM IR 里 ：GEP + load，和普通间接调用没区别
+
+  「这个转换是 dynamic_cast」
+     cir 里     ：cir.dyn_cast
+     LLVM IR 里 ：对运行时函数的一次 call
+
+  「这里在析构一个数组」
+     cir 里     ：cir.array.dtor
+     LLVM IR 里 ：一个循环 + 一次 call
+
+  「这是基类子对象的地址」
+     cir 里     ：cir.base_class_addr
+     LLVM IR 里 ：一次常量偏移的 GEP
+
+  「这个作用域在退栈时清理」
+     cir 里     ：cir.cleanup.scope
+     LLVM IR 里 ：landingpad + 若干基本块
+
+  「这是协程的一个 await 点」
+     cir 里     ：cir.await
+     LLVM IR 里 ：已被拆成状态机
+
+  「这个 if 是源码里的 if」
+     cir 里     ：cir.if（带 region）
+     LLVM IR 里 ：四个基本块和两条 br
+
+  结论：LLVM IR 不是『信息少一点』，是这些问题**问不出来**了。
+  想在 C++ 语义层面做分析或优化，就得有一层还留着这些信息。
+
+==================================================================
+② 一套 OpenACC 实现，两个前端：靠的是接口，不是公共类型
+==================================================================
+
+acc.copyin 对各种类型的反应：
+  ✓ memref&lt;10xf32&gt;                   元素类型 = f32   （接口由 上游 挂上）
+  ✓ !llvm.ptr                        元素类型 = （不透明，需显式 varType）   （接口由 上游 挂上）
+  ✓ !fir.ref&lt;!fir.array&lt;10xf32&gt;&gt;     元素类型 = !fir.array&lt;10xf32&gt;   （接口由 flang 挂上）
+  ✓ !cir.ptr&lt;!cir.array&lt;f32 x 10&gt;&gt;   元素类型 = !cir.array&lt;f32 x 10&gt;   （接口由 ClangIR 挂上）
+  ✗ i32                              被拒绝：must be any pointer or mappable
+
+  注意 acc_copyin 里没有一处 if 在判断具体类型。
+  加一个新前端 = 写一个 ExternalModel + attachInterface 一次，
+  acc 那边一行都不用改。这就是接口和 trait 的根本区别（第 10 章）。
+
+  而漏了那次 attachInterface，症状是 verifier 说『这个类型不行』——
+  和第 18 章漏了 registerAllExtensions 时『这个 op 不认识』一模一样。</code></pre>
+</div><h3>一个往上抬抽象的 pass</h3>
+<p>前面那 12 个 pass 里，有两个和其他的性质不一样。<code>IdiomRecognizer</code> 的 <code>summary</code>：</p>
+<blockquote>
+<p>&quot;<strong>Raise</strong> calls to C/C++ libraries to CIR operations&quot;</p>
+</blockquote>
+<p><strong>Raise</strong>，不是 lower。整本书我们一直在往下降；这个 pass 往上抬。它的 <code>description</code>：</p>
+<blockquote>
+<p>&quot;This pass recognizes idiomatic C++ usage and captures information about C++ standard library containers, library functions calls, and types into CIR operations, attributes and types.&quot;</p>
+</blockquote>
+<p>然后 <code>LibOpt</code> 在那个抬高的表示上做优化：</p>
+<blockquote>
+<p>&quot;This pass applies transformations on C/C++ standard library idioms, such as library function calls and structs raised to CIR operations using the <code>cir-idiom-recognize</code> pass.&quot;</p>
+</blockquote>
+<p>这两个 pass 是 CIR 最有说服力的理由，因为它们做的事<strong>在 LLVM IR 上根本没法做</strong>。一个 <code>std::find</code> 在 LLVM IR 里是什么？内联展开之后的一堆指针比较和分支，<code>std::vector</code> 的三个指针成员也早被 SROA 拆散了。&quot;这段代码在做 <code>std::find</code>&quot;这个信息在 LLVM IR 里不是&quot;难恢复&quot;，是<strong>已经没有了</strong>。</p>
+<p>而在 CIR 那一层，类型还在、调用还在，所以&quot;认出这是 <code>std::find</code>，把它换成一次 <code>memchr</code>&quot;是可写的。</p>
+<p>这就是&quot;高层表示值得存在&quot;的最一般形式。第 20 章我们让 <code>pix.convolve</code> 降到 <code>linalg.generic</code> 而不是直接降到循环，理由是一样的：<strong>一旦降下去，那个决策就再也做不了了。</strong> CIR 把这个道理用在了 C++ 标准库上。</p>
+<p>不过前面提过——这两个 pass 默认是关着的。<strong>&quot;这件事原理上做得到&quot;和&quot;这件事现在默认在做&quot;之间，还有很长的路。</strong> 这一点在整本书里都成立，第五部分看的每个项目都有这样的空隙。</p>
+<svg viewBox="0 0 740 420" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <style>
+    .t { font-size: 13px; }
+    .s { font-size: 11px; fill: #555; }
+    .h { font-size: 14px; font-weight: bold; }
+    .ifc { fill: #ede9fe; stroke: #7c3aed; stroke-width: 2; }
+    .fe { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; }
+    .up { fill: #f3f4f6; stroke: #9ca3af; stroke-width: 1.5; }
+    .no { fill: #fee2e2; stroke: #dc2626; stroke-width: 1.5; }
+    .a { stroke: #7c3aed; stroke-width: 1.8; marker-end: url(#m28); fill: none; }
+    .ax { stroke: #dc2626; stroke-width: 1.8; marker-end: url(#m28x); fill: none; stroke-dasharray: 5 3; }
+  </style>
+  <defs>
+    <marker id="m28" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="m28x" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <text x="370" y="24" class="h" text-anchor="middle">一套 OpenACC 实现服务两个前端：耦合点是接口，不是公共类型</text>
+  <rect x="255" y="48" width="230" height="56" rx="6" class="ifc"/>
+  <text x="370" y="70" class="t" text-anchor="middle" font-weight="bold">上游 acc 方言</text>
+  <text x="370" y="88" class="s" text-anchor="middle">只认 acc::PointerLikeType / MappableType</text>
+  <text x="370" y="128" class="s" text-anchor="middle">↑ 这四种类型互不相关，但都实现了那个接口</text>
+  <rect x="30" y="150" width="150" height="62" rx="5" class="fe"/>
+  <text x="105" y="170" class="t" text-anchor="middle">!fir.ref&lt;…&gt;</text>
+  <text x="105" y="187" class="s" text-anchor="middle">flang（Fortran）</text>
+  <text x="105" y="203" class="s" text-anchor="middle">FIROpenACCTypeInterfaces.h</text>
+  <rect x="196" y="150" width="150" height="62" rx="5" class="fe"/>
+  <text x="271" y="170" class="t" text-anchor="middle">!cir.ptr&lt;…&gt;</text>
+  <text x="271" y="187" class="s" text-anchor="middle">ClangIR（C/C++）</text>
+  <text x="271" y="203" class="s" text-anchor="middle">CIROpenACCTypeInterfaces.h</text>
+  <rect x="362" y="150" width="150" height="62" rx="5" class="up"/>
+  <text x="437" y="170" class="t" text-anchor="middle">memref&lt;10xf32&gt;</text>
+  <text x="437" y="187" class="s" text-anchor="middle">上游</text>
+  <text x="437" y="203" class="s" text-anchor="middle">本章 mlir-opt 真跑过</text>
+  <rect x="528" y="150" width="150" height="62" rx="5" class="up"/>
+  <text x="603" y="170" class="t" text-anchor="middle">!llvm.ptr</text>
+  <text x="603" y="187" class="s" text-anchor="middle">上游</text>
+  <text x="603" y="203" class="s" text-anchor="middle">不透明，需显式 varType</text>
+  <path d="M105 150 L300 104" class="a"/>
+  <path d="M271 150 L340 104" class="a"/>
+  <path d="M437 150 L400 104" class="a"/>
+  <path d="M603 150 L440 104" class="a"/>
+  <rect x="255" y="250" width="230" height="50" rx="5" class="no"/>
+  <text x="370" y="270" class="t" text-anchor="middle">i32</text>
+  <text x="370" y="288" class="s" text-anchor="middle">没有实现那个接口</text>
+  <path d="M370 250 L370 190" class="ax" transform="translate(0,0)"/>
+  <text x="500" y="228" class="s" fill="#dc2626">verifier 直接拒绝 ↙</text>
+  <rect x="60" y="322" width="620" height="74" rx="5" fill="#fefce8" stroke="#ca8a04" stroke-width="1"/>
+  <text x="370" y="344" class="t" text-anchor="middle">真实报错原文（本章 mlir-opt 跑出来的）：</text>
+  <text x="370" y="366" class="t" text-anchor="middle" font-family="monospace" font-size="11.5">'acc.copyin' op operand #0 must be any pointer or mappable, but got 'i32'</text>
+  <text x="370" y="386" class="s" text-anchor="middle">"any pointer or mappable"——约束是按接口写的，不是一张类型清单。这就是第 10 章那句话的实证。</text>
+</svg><h2>补讲一个机制：ExternalModel</h2>
+<p>上面那张图里有一件事前面二十七章没讲过，现在必须补上：<strong><code>!fir.ref</code> 和 <code>!cir.ptr</code> 这两个类型，都不是 <code>acc</code> 方言定义的。<code>acc</code> 也不是 flang 或 ClangIR 定义的。那接口是怎么挂上去的？</strong></p>
+<p>第 10 章讲接口时，我们给 <code>pix</code> 的 op 加接口的方式是在 <code>.td</code> 里写 <code>DeclareOpInterfaceMethods&lt;...&gt;</code>——那是&quot;我拥有这个 op，我在它的定义里声明实现了这个接口&quot;。但 <code>acc::PointerLikeType</code> 是上游的接口，<code>!fir.ref</code> 是 flang 的类型，两边谁也不能改对方的定义。</p>
+<p>MLIR 的答案是 <strong><code>ExternalModel</code></strong>：把接口的实现从类型定义里<strong>分离出来</strong>，单独写成一个类，运行时挂上去。<code>mlir/docs/Interfaces.md</code> 的措辞：</p>
+<blockquote>
+<p>&quot;External interface implementation for a concrete class. <strong>This does not require modifying the definition of the type class itself.</strong>&quot;</p>
+</blockquote>
+<p>用法分两步。第一步，写一个 model 类：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiLy8g5pGY6IeqIG1saXIvZG9jcy9JbnRlcmZhY2VzLm1kIOeahOekuuS%2Bi1xuc3RydWN0IEV4dGVybmFsTW9kZWxFeGFtcGxlXG4gICAgOiBwdWJsaWMgRXhhbXBsZVR5cGVJbnRlcmZhY2U6OkV4dGVybmFsTW9kZWw8RXh0ZXJuYWxNb2RlbEV4YW1wbGUsXG4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgSW50ZWdlclR5cGU%2BIHtcbiAgc3RhdGljIHVuc2lnbmVkIGV4YW1wbGVTdGF0aWNJbnRlcmZhY2VIb29rKCkge1xuICAgIC8vIEltcGxlbWVudGF0aW9uIGlzIHByb3ZpZGVkIGhlcmUuXG4gICAgcmV0dXJuIEludGVnZXJUeXBlOjpzb21lU3RhdGljTWV0aG9kKCk7XG4gIH1cbiAgLy8gTm8gbmVlZCB0byBkZWZpbmUgYGV4YW1wbGVJbnRlcmZhY2VIb29rYCB0aGF0IGhhcyBhIGRlZmF1bHQgaW1wbGVtZW50YXRpb25cbiAgLy8gaW4gYEV4dGVybmFsTW9kZWxgLiBCdXQgaXQgY2FuIGJlIG92ZXJyaWRkZW4gaWYgZGVzaXJlZC5cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">// 摘自 mlir/docs/Interfaces.md 的示例
+struct ExternalModelExample
+    : public ExampleTypeInterface::ExternalModel&lt;ExternalModelExample,
+                                                 IntegerType&gt; {
+  static unsigned exampleStaticInterfaceHook() {
+    // Implementation is provided here.
+    return IntegerType::someStaticMethod();
+  }
+  // No need to define `exampleInterfaceHook` that has a default implementation
+  // in `ExternalModel`. But it can be overridden if desired.
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>第二步，在 context 里挂上：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiaW50IG1haW4oKSB7XG4gIE1MSVJDb250ZXh0IGNvbnRleHQ7XG4gIC8qIC4uLiAqLztcblxuICAvLyBBdHRhY2ggdGhlIGludGVyZmFjZSBtb2RlbCB0byB0aGUgdHlwZSBpbiB0aGUgZ2l2ZW4gY29udGV4dCBiZWZvcmVcbiAgLy8gdXNpbmcgaXQuIFRoZSBkaWFsZWN0IGNvbnRhaW5pbmcgdGhlIHR5cGUgaXMgZXhwZWN0ZWQgdG8gaGF2ZSBiZWVuIGxvYWRlZFxuICAvLyBhdCB0aGlzIHBvaW50LlxuICBJbnRlZ2VyVHlwZTo6YXR0YWNoSW50ZXJmYWNlPEV4dGVybmFsTW9kZWxFeGFtcGxlPihjb250ZXh0KTtcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">int main() {
+  MLIRContext context;
+  /* ... */;
+
+  // Attach the interface model to the type in the given context before
+  // using it. The dialect containing the type is expected to have been loaded
+  // at this point.
+  IntegerType::attachInterface&lt;ExternalModelExample&gt;(context);
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>这两段就是 flang 和 ClangIR 干的事。两边的文件名甚至是对称的：</p>
+<table>
+<thead>
+<tr>
+<th>前端</th>
+<th>文件</th>
+<th>挂了什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>flang</td>
+<td><code>flang/include/flang/Optimizer/OpenACC/Support/FIROpenACCTypeInterfaces.h</code></td>
+<td><code>OpenACCPointerLikeModel</code>、<code>OpenACCMappableModel</code></td>
+</tr>
+<tr>
+<td>ClangIR</td>
+<td><code>clang/include/clang/CIR/Dialect/OpenACC/CIROpenACCTypeInterfaces.h</code></td>
+<td><code>OpenACCPointerLikeModel</code></td>
+</tr>
+</tbody></table>
+<p>两个 <code>struct</code> <strong>同名</strong>，都继承 <code>mlir::acc::PointerLikeType::ExternalModel&lt;...&gt;</code>。这显然是一边照着另一边写的——而这正是共享基础设施该有的样子。</p>
+<p>（顺带一个诚实的细节：ClangIR 那边目前只有 <code>PointerLikeModel</code>，<code>MappableModel</code> 还没有——flang 两个都有。又一处&quot;CIR 更年轻&quot;的证据。）</p>
+<p>挂的动作走的是<strong>扩展注册</strong>机制，和第 18 章那个坑同源：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoibmFtZXNwYWNlIGNpcjo6YWNjIHtcbnZvaWQgcmVnaXN0ZXJPcGVuQUNDRXh0ZW5zaW9ucyhtbGlyOjpEaWFsZWN0UmVnaXN0cnkgJnJlZ2lzdHJ5KTtcbn0gLy8gbmFtZXNwYWNlIGNpcjo6YWNjIiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">namespace cir::acc {
+void registerOpenACCExtensions(mlir::DialectRegistry &amp;registry);
+} // namespace cir::acc</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>还记得第 18 章我卡住的那个错误吗——<code>custom op &#39;transform.structured.match&#39; is unknown</code>，原因是漏了 <code>registerAllExtensions</code>。<code>ExternalModel</code> 的失败模式是同一类，而且文档专门警告过：</p>
+<blockquote>
+<p>&quot;<strong>Forgetting to register an external model can lead to bugs which are hard to track down.</strong> The <code>declarePromisedInterface</code> function can be used to declare that an external model implementation for an operation must eventually be provided.&quot;</p>
+</blockquote>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoidm9pZCBNeURpYWxlY3Q6OmluaXRpYWxpemUoKSB7XG4gIGRlY2xhcmVQcm9taXNlZEludGVyZmFjZTxTb21lSW50ZXJmYWNlLCBTb21lT3A%2BKCk7XG4gICAuLi5cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9XSwiZXhlY3V0b3JzIjpbeyJjb21waWxlciI6eyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifSwid3JhcCI6dHJ1ZX1dfV19" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">void MyDialect::initialize() {
+  declarePromisedInterface&lt;SomeInterface, SomeOp&gt;();
+   ...
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p><code>declarePromisedInterface</code> 是把&quot;你忘了注册&quot;从一个诡异的运行时行为变成一条明确的错误信息。<strong>这个 API 存在本身就说明这个坑踩的人足够多了。</strong> 如果你要用 <code>ExternalModel</code>，把它一起用上。</p>
+<p>文档还有一条设计建议，值得原文引用：</p>
+<blockquote>
+<p>&quot;It is strongly encouraged to only use this mechanism if you <strong>&#39;own&#39; the interface</strong> being externally applied. This prevents a situation where neither the owner of the dialect containing the object nor the owner of the interface are aware of an interface implementation, which can lead to duplicate or diverging implementations.&quot;</p>
+</blockquote>
+<p>也就是说：外部挂接口这件事，最好由<strong>接口的拥有者</strong>来做，而不是随便第三方。OpenACC 这个案例里，<code>acc</code> 方言在上游、FIR/CIR 的类型在各自前端，两边是同一批人在协作维护的，所以这是那条建议说的正当用法，不是钻空子。</p>
+<h3>用真工具验一遍</h3>
+<p>上面所有话都可以用 <code>mlir-opt</code> 当场验证——上游的 <code>acc</code> 方言就在我们的构建里。</p>
+<p>正面：两个毫无关系的类型都能作为 <code>varPtr</code>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXNcbi8vIOS4iua4uCBhY2Mg55qEIHZhclB0ciDnuqbmnZ%2FmmK8qKuaOpeWPoyoq77yM5LiN5piv57G75Z6L5riF5Y2V77yabWVtcmVmIOWSjCAhbGx2bS5wdHJcbi8vIOi%2FmeS4pOS4quavq%2BaXoOWFs%2Bezu%2BeahOexu%2BWei%2BmDveiDveeUqO%2B8jOWboOS4uuWug%2BS7rOmDveWunueOsOS6hiBhY2M6OlBvaW50ZXJMaWtlVHlwZeOAglxuLy8gZmxhbmcg57uZICFmaXIucmVmIOaMguS6huWQjOS4gOS4quaOpeWPo%2B%2B8jENsYW5nSVIg57uZICFjaXIucHRyIOaMguS6huWQjOS4gOS4quaOpeWPo%2BKAlOKAlFxuLy8g5LqO5piv5LiA5aWXIE9wZW5BQ0Mg5a6e546w5ZCM5pe25pyN5YqhIEZvcnRyYW4g5ZKMIEMrKyDkuKTkuKrliY3nq6%2FjgIJcbmZ1bmMuZnVuYyBAb25fbWVtcmVmKCVwOiBtZW1yZWY8MTB4ZjMyPikge1xuICAlZCA9IGFjYy5jb3B5aW4gdmFyUHRyKCVwIDogbWVtcmVmPDEweGYzMj4pIC0%2BIG1lbXJlZjwxMHhmMzI%2BXG4gIGFjYy5wYXJhbGxlbCBkYXRhT3BlcmFuZHMoJWQgOiBtZW1yZWY8MTB4ZjMyPikge1xuICAgIGFjYy55aWVsZFxuICB9XG4gIHJldHVyblxufVxuZnVuYy5mdW5jIEBvbl9sbHZtX3B0ciglcDogIWxsdm0ucHRyKSB7XG4gIC8vICFsbHZtLnB0ciDmmK%2FkuI3pgI%2FmmI7mjIfpkojvvIzoh6rlt7HkuI3luKblhYPntKDnsbvlnovvvIzmiYDku6XopoHmmL7lvI%2Fnu5kgdmFyVHlwZVxuICAlZCA9IGFjYy5jb3B5aW4gdmFyUHRyKCVwIDogIWxsdm0ucHRyKSB2YXJUeXBlKGYzMikgLT4gIWxsdm0ucHRyXG4gIGFjYy5wYXJhbGxlbCBkYXRhT3BlcmFuZHMoJWQgOiAhbGx2bS5wdHIpIHtcbiAgICBhY2MueWllbGRcbiAgfVxuICByZXR1cm5cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6IiJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s
+// 上游 acc 的 varPtr 约束是**接口**，不是类型清单：memref 和 !llvm.ptr
+// 这两个毫无关系的类型都能用，因为它们都实现了 acc::PointerLikeType。
+// flang 给 !fir.ref 挂了同一个接口，ClangIR 给 !cir.ptr 挂了同一个接口——
+// 于是一套 OpenACC 实现同时服务 Fortran 和 C++ 两个前端。
+func.func @on_memref(%p: memref&lt;10xf32&gt;) {
+  %d = acc.copyin varPtr(%p : memref&lt;10xf32&gt;) -&gt; memref&lt;10xf32&gt;
+  acc.parallel dataOperands(%d : memref&lt;10xf32&gt;) {
+    acc.yield
+  }
+  return
+}
+func.func @on_llvm_ptr(%p: !llvm.ptr) {
+  // !llvm.ptr 是不透明指针，自己不带元素类型，所以要显式给 varType
+  %d = acc.copyin varPtr(%p : !llvm.ptr) varType(f32) -&gt; !llvm.ptr
+  acc.parallel dataOperands(%d : !llvm.ptr) {
+    acc.yield
+  }
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @on_memref(%arg0: memref&lt;10xf32&gt;) {
+    %0 = acc.copyin varPtr(%arg0 : memref&lt;10xf32&gt;) -&gt; memref&lt;10xf32&gt;
+    acc.parallel dataOperands(%0 : memref&lt;10xf32&gt;) {
+      acc.yield
+    }
+    return
+  }
+  func.func @on_llvm_ptr(%arg0: !llvm.ptr) {
+    %0 = acc.copyin varPtr(%arg0 : !llvm.ptr) varType(f32) -&gt; !llvm.ptr
+    acc.parallel dataOperands(%0 : !llvm.ptr) {
+      acc.yield
+    }
+    return
+  }
+}</code></pre>
+</div><p>反面更能说明问题。换一个没实现那个接口的类型：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbm90IG1saXItb3B0ICVzIDI%2BJjEgfCBGaWxlQ2hlY2sgJXNcbi8vIOe6puadn%2BS4jeaYr1wi6ZqP5L6%2F5LuA5LmI57G75Z6L6YO96KGMXCLjgIJpMzIg5rKh5a6e546wIFBvaW50ZXJMaWtlVHlwZS9NYXBwYWJsZVR5cGXvvIxcbi8vIHZlcmlmaWVyIOebtOaOpeaLkue7neKAlOKAlOiAjOS4lOaKpemUmeWOn%2BaWh%2BWwseaYr%2BaMieaOpeWPo%2BaOqui%2BnueahOOAglxuLy8g5byA5aS06YKj5LiqIG5vdCDmmK8gbGl0IOeahOaDr%2BS%2Bi%2B%2B8mui%2FmeS4gOWdlyoq5bqU6K%2Bl5aSx6LSlKirvvIzmiJHku6zopoHmlq3oqIDnmoTmraPmmK%2FmiqXplJnmnKzouqvjgIJcbi8vIENIRUNLOiBtdXN0IGJlIGFueSBwb2ludGVyIG9yIG1hcHBhYmxlLCBidXQgZ290ICdpMzInXG5mdW5jLmZ1bmMgQG9uX2kzMiglcDogaTMyKSB7XG4gICVkID0gYWNjLmNvcHlpbiB2YXJQdHIoJXAgOiBpMzIpIC0%2BIGkzMlxuICByZXR1cm5cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6IjI%2BJjEifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: not mlir-opt %s 2&gt;&amp;1 | FileCheck %s
+// 约束不是"随便什么类型都行"。i32 没实现 PointerLikeType/MappableType，
+// verifier 直接拒绝——而且报错原文就是按接口措辞的。
+// 开头那个 not 是 lit 的惯例：这一块**应该失败**，我们要断言的正是报错本身。
+// CHECK: must be any pointer or mappable, but got 'i32'
+func.func @on_i32(%p: i32) {
+  %d = acc.copyin varPtr(%p : i32) -&gt; i32
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt 2&gt;&amp;1 input.mlir</code></div>
+</div><p>实跑的报错原文：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">acc3.mlir:2:8: error: 'acc.copyin' op operand #0 must be any pointer or mappable, but got 'i32'
+  %d = acc.copyin varPtr(%p : i32) -&gt; i32
+       ^</code></pre>
+</div><blockquote>
+<p><strong>&quot;must be any pointer or mappable&quot;</strong></p>
+</blockquote>
+<p>这句报错就是第 10 章那段论证的实证。<code>acc.copyin</code> 的操作数约束<strong>不是一张类型清单</strong>，而是&quot;实现了这两个接口之一&quot;。你加一个新前端，写一个 <code>ExternalModel</code>、<code>attachInterface</code> 一次，<code>acc</code> 那边一行都不用改。</p>
+<p>这是整本书最想让你带走的那件事，在最高层级上的一次兑现：</p>
+<blockquote>
+<p><strong>MLIR 的可扩展性不在&quot;你可以定义新 op&quot;上——那只是语法。真正的可扩展性在&quot;不相关的方言可以通过接口共享变换&quot;上。</strong></p>
+</blockquote>
+<p>想想这件事的规模：<strong>OpenACC 的整套语义（数据子句、<code>parallel</code>/<code>kernels</code> 区域、归约、异步队列）实现一遍，同时给 Fortran 和 C++ 用。</strong> 在传统编译器架构里，这两个前端之间不可能共享这种层次的东西——gcc 的 Fortran 和 C++ 前端各自实现 OpenACC，能共享的只有最后那点运行时库。</p>
+<p>而且注意这条链是怎么接上的：第 27 章说过 flang 把上游投入放在了 <code>omp</code>/<code>acc</code> 而不是 tensor/linalg 栈。<strong>flang 为自己的需求推动上游建的那个 <code>acc</code> 方言，现在 ClangIR 直接拿来用了。</strong> 这是&quot;上游共享层&quot;这个模式真正生效的样子——第一个用户付了大部分成本，第二个用户几乎白拿。</p>
+<p>顺便解释一个可能让你意外的事实。<code>clang/include/clang/Basic/DiagnosticDriverKinds.td</code> 里有这么一条警告：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def warn_drv_openacc_without_cir
+    : Warning&lt;"OpenACC directives will result in no runtime behavior; use "
+              "-fclangir to enable runtime effect"&gt;,
+      InGroup&lt;SourceUsesOpenACC&gt;;</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>翻过来：<strong>clang 里的 OpenACC，不开 <code>-fclangir</code> 就没有运行时效果。</strong> 也就是说 CIR 已经有一个&quot;老路做不到&quot;的真实功能了——这比任何架构论证都更有说服力，也解释了 CIR 为什么能进树：<strong>它不只是&quot;把老路重做一遍更漂亮&quot;，它带来了老路给不了的东西。</strong></p>
+<h2>还账：MLIR 没解决的问题</h2>
+<p>前面二十七章基本在讲 MLIR 能干什么。这一节讲另一半。我尽量只说有证据的，不做预测。</p>
+<h3>一、&quot;完成一个前端&quot;的工作量被严重低估</h3>
+<p>ClangIR 自己的代码库里有一份现成的证据。<code>clang/include/clang/CIR/MissingFeatures.h</code>，头部注释：</p>
+<blockquote>
+<p>&quot;As a way to track features that haven&#39;t yet been implemented this class explicitly contains a list of static fns that will return false that you can guard against. If and when a feature becomes implemented simply changing this return to true will cause compilation to fail at all the points in which we noted that we needed to address. <strong>This is a much more explicit way to handle &quot;TODO&quot;s.</strong>&quot;</p>
+</blockquote>
+<p>这个技巧本身值得学——<strong>把 TODO 变成一个返回 <code>false</code> 的函数</strong>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoic3RydWN0IE1pc3NpbmdGZWF0dXJlcyB7XG4gIC8vIEFkZHJlc3Mgc3BhY2UgcmVsYXRlZFxuICBzdGF0aWMgYm9vbCBhZGRyZXNzU3BhY2UoKSB7IHJldHVybiBmYWxzZTsgfVxuXG4gIC8vIFVuaGFuZGxlZCBnbG9iYWwvbGlua2FnZSBpbmZvcm1hdGlvbi5cbiAgc3RhdGljIGJvb2wgb3BHbG9iYWxUaHJlYWRMb2NhbCgpIHsgcmV0dXJuIGZhbHNlOyB9XG4gIHN0YXRpYyBib29sIG9wR2xvYmFsV2Vha1JlZigpIHsgcmV0dXJuIGZhbHNlOyB9XG4gIHN0YXRpYyBib29sIG9wR2xvYmFsVW5uYW1lZEFkZHIoKSB7IHJldHVybiBmYWxzZTsgfVxuICBzdGF0aWMgYm9vbCBvcEdsb2JhbFZpc2liaWxpdHkoKSB7IHJldHVybiBmYWxzZTsgfVxuICBzdGF0aWMgYm9vbCBvcEdsb2JhbERMTEltcG9ydEV4cG9ydCgpIHsgcmV0dXJuIGZhbHNlOyB9XG4gIC4uLiIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">struct MissingFeatures {
+  // Address space related
+  static bool addressSpace() { return false; }
+
+  // Unhandled global/linkage information.
+  static bool opGlobalThreadLocal() { return false; }
+  static bool opGlobalWeakRef() { return false; }
+  static bool opGlobalUnnamedAddr() { return false; }
+  static bool opGlobalVisibility() { return false; }
+  static bool opGlobalDLLImportExport() { return false; }
+  ...</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>好在哪？把它改成 <code>return true</code> 的那一天，<strong>编译器会在所有需要处理这件事的地方报错</strong>——不用靠 <code>grep TODO</code>，也不用靠记性。</p>
+<p>数一下有多少条：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">$ grep -cE '^\s*static bool' clang/include/clang/CIR/MissingFeatures.h
+252</code></pre>
+</div><p><strong>252 条。</strong> 分类覆盖了基本上每一个角落：address space、linkage、load/store 属性、<code>alloca</code>/<code>func</code>/<code>call</code> 的处理、<code>RecordType</code>、协程、CXXABI、atomic、全局构造函数、调用约定……</p>
+<p>这个数字是这一章最实在的一条信息。它不是说 ClangIR 做得不好——恰恰相反，能把 252 个缺口这样明码标出来的项目是靠得住的。它说的是<strong>另一件事</strong>：</p>
+<blockquote>
+<p><strong>&quot;我用 MLIR 给我的语言做一个前端&quot;这句话，在 C++ 这种复杂度的语言上，工作量是四位数的工时起。</strong></p>
+</blockquote>
+<p>MLIR 帮你省掉的是 IR 基础设施（数据结构、pass 框架、pattern 引擎、打印解析、verifier 框架），那部分确实省得很多。但<strong>语言语义本身的复杂度，一分都不会因为换了 IR 框架而减少。</strong> 这是所有&quot;用了 MLIR 一切都会简单&quot;的说法里最大的水分。</p>
+<h3>二、方言碎片化，而且这个问题没有技术解</h3>
+<p>MLIR 的设计前提是&quot;人人都能造方言&quot;。好处整本书都在讲。代价是：</p>
+<ul>
+<li>到这一章我们已经数过：上游几十个方言，IREE 九个，Triton 三个，flang 两个，ClangIR 一个。加上各家私有的，总数无从统计。</li>
+<li><strong>同一件事在不同方言里被表达了多遍。</strong> 最清楚的例子是&quot;结构化控制流降成基本块&quot;这一步：上游是 <code>scf</code> → <code>cf</code>（第 24 章），ClangIR 是 <code>cir-flatten-cfg</code>，两边做的是同一类变换、各写一遍。</li>
+<li><strong>降下去的路径不是唯一的，选哪条很难判断。</strong> 我们自己书里就有两条：第 16 章 <code>pix</code> → <code>arith</code>，第 20 章 <code>pix</code> → <code>linalg</code>。哪条对？取决于你后面要不要 tile——而这件事你在写第一条降级 pattern 的那天往往还不知道。</li>
+</ul>
+<p>而这个问题<strong>没有技术解</strong>，因为它是那个设计前提的直接后果。你不可能既要&quot;人人都能造方言&quot;又要&quot;方言不碎片化&quot;。能缓解的只有社会性手段：往上游推、复用接口（这一章的 OpenACC 就是好例子）、写清文档。</p>
+<p>第 27 章那四个问题的价值也在这里：<strong>它不能消除碎片化，但能让你不去贡献新的碎片。</strong></p>
+<h3>三、编译时间</h3>
+<p>这件事上游自己的工具链里就有痕迹。我们第 12 章讲过的调试手段——<code>--mlir-print-ir-after-all</code>、<code>--mlir-timing</code>——之所以存在得这么完备，是因为 MLIR 管线真的会长到需要它们。</p>
+<p>成本来自哪里，前面各章都遇到过：</p>
+<ul>
+<li><strong>每一层转换都有开销</strong>：pattern 匹配要遍历、<code>applyPatternsGreedily</code> 要跑到不动点（第 14 章讲过 <code>maxIterations</code> 和 <code>maxNumRewrites</code> 两个上限，以及不收敛时会挂住）。</li>
+<li><strong>verifier 默认在每个 pass 后都跑</strong>。这是好事（第 11 章那些错误全是 verifier 抓到的），但不免费。</li>
+<li><strong>层数乘以 pass 数</strong>。一条九层的管线，每层十几个 pass，那是上百个 pass。</li>
+</ul>
+<p>上游给了一些工具（<code>--mlir-disable-threading</code> 之类的开关、pass 级别的并行），但**&quot;MLIR 管线容易变慢&quot;这件事是结构性的**，不是某个实现问题。</p>
+<h3>四、调试体验仍然是个坑</h3>
+<p>这一点我在写这本书的过程中反复吃到，而且都写进了对应章节：</p>
+<table>
+<thead>
+<tr>
+<th>症状</th>
+<th>真实原因</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>arith.constant created with unregistered dialect</code> 然后 abort</td>
+<td>Dialect 或 Pass 少了 <code>dependentDialects</code>——<strong>两个不同机制</strong></td>
+<td>11、16</td>
+</tr>
+<tr>
+<td>fold 返回了属性但 IR 没变，无任何提示</td>
+<td>少了 <code>hasConstantMaterializer</code></td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>custom op &#39;transform.structured.match&#39; is unknown</code></td>
+<td>漏了 <code>registerAllExtensions</code>，<strong>不是版本问题</strong></td>
+<td>18</td>
+</tr>
+<tr>
+<td>pattern 互逆时<strong>挂住</strong>，而不是报&quot;没收敛&quot;</td>
+<td><code>maxNumRewrites</code> 默认无上限</td>
+<td>14</td>
+</tr>
+<tr>
+<td><code>expects 0 loop results</code>（和真正的错误完全无关）</td>
+<td><code>tile_sizes = [4,4]</code> 写错了，正确是 <code>tile_sizes [4, 4]</code></td>
+<td>21</td>
+</tr>
+<tr>
+<td><code>Dialect &#39;cf&#39; not found</code> 出现在 <strong>JIT 的解析阶段</strong></td>
+<td>管线里少了 <code>--convert-cf-to-llvm</code></td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>missing &#39;LLVMTranslationDialectInterface&#39; registration</code></td>
+<td>少了 <code>registerAllToLLVMIRTranslations</code></td>
+<td>25</td>
+</tr>
+<tr>
+<td>匿名命名空间里的分析类直接 abort</td>
+<td>要 <code>MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td><code>RegionBranchOpInterface</code> 编译通过但<strong>行为静默错误</strong></td>
+<td>默认实现返回空，必须显式列进 <code>DeclareOpInterfaceMethods</code></td>
+<td>11</td>
+</tr>
+</tbody></table>
+<p>把这张表看成一个整体，能看出一个共同的形状：<strong>这些错误信息说的都不是真正的原因。</strong> 有几条甚至根本不报错（fold 静默失效、接口默认实现静默返回空）——那两种最难查。</p>
+<p>MLIR 在这方面比几年前好了很多（<code>declarePromisedInterface</code> 就是一个专门为此加的 API，本章前面刚讲过），但离&quot;报错直接告诉你该改哪一行&quot;还差得远。<strong>这本书里那么多篇幅花在&quot;我踩了什么坑&quot;上，不是我偏好写坑，是这些坑至今仍然要靠人记。</strong></p>
+<h3>五、什么情况下你不该用 MLIR</h3>
+<p>也得说清楚。下面这几种情况，MLIR 大概是负担而不是帮助：</p>
+<ul>
+<li><strong>你只要做一个简单的解释器或字节码 VM。</strong> MLIR 的全部价值在&quot;多层表示之间的变换&quot;，你只有一层的话，构建时间和学习成本全是白付的。</li>
+<li><strong>你的语言语义和 LLVM IR 差得不多。</strong> 那直接生成 LLVM IR，省掉一整层。</li>
+<li><strong>你要优化的信息在 LLVM IR 里还在。</strong> 这条是第 27 章 flang 的那个判断标准反过来用：先问&quot;我想做的优化，在现有的 IR 上问得出来吗&quot;。问得出来就不需要新一层。</li>
+<li><strong>你的团队规模撑不住。</strong> 一个方言的完整配套（<code>.td</code>、verifier、自定义 assembly、canonicalization、conversion pattern、类型转换、lit 测试）我们在第 9 到 11 章走过一遍。乘以你打算造的层数，再乘以长期维护。ClangIR 那 252 条是有一个活跃社区在推的情况下的数字。</li>
+<li><strong>你需要的东西上游已经有了。</strong> 这条最容易被忽略，因为造一个新方言比读懂一个现有方言有意思得多。</li>
+</ul>
+<p>反过来，值得用的信号很集中：<strong>你有一个领域特定的高层表示，它带着的信息在通用 IR 里会丢掉，而且你要在那个信息上做多轮变换。</strong> 这句话正好是这本书里 <code>pix</code> 存在的全部理由——<code>!pix.kernel&lt;3x3&gt;</code> 把核尺寸放进类型（第 9 章），第 21 章 tile 的时候那个尺寸决定了 halo 是几圈。降到循环之后，这个信息只能靠分析去猜。</p>
+<h2>这本书讲完了什么</h2>
+<p>最后把二十八章串一遍，不是复述目录，而是把那条主线拎出来。</p>
+<p><strong>第一部分（1–8 章）讲的是&quot;MLIR 是什么&quot;。</strong> 核心是三件事：一切都是 op（有 region、有属性、有类型），一切都可扩展，以及<strong>渐进式下降</strong>——不要一步从源码跳到机器码，每一步只解决一类问题。</p>
+<p><strong>第二部分（9–14 章）讲的是&quot;怎么造一个方言&quot;。</strong> 从 ODS 写 op，到 trait 与 interface 的区别（第 10 章那句&quot;接口让不相关的方言共享变换&quot;在这一章兑现了），到 fold 与 canonicalize 的分工，到 pass 与分析的框架，到 pattern 引擎的工作方式。</p>
+<p><strong>第三部分（15–19 章）讲的是&quot;变换&quot;。</strong> DRR 和 PDLL 让 pattern 变成声明式的，Dialect Conversion 的四态合法性和类型转换是跨方言下降的骨架，Transform 方言把&quot;调度&quot;本身变成了 IR，MLIR 自带的那几样分析（支配、副作用、数据流）是这一切的前提。</p>
+<p><strong>第四部分（20–25 章）讲的是&quot;落地&quot;。</strong> <code>linalg</code> 的 indexing map 把迭代空间显式化，于是 tiling 和融合能通用地实现；bufferization 把值语义换成内存语义；vector 处理宽度和 mask；最后落到 LLVM 真的 JIT 跑出 <code>[[22, 44], [66, 88]]</code>，或者落到 PTX。</p>
+<p><strong>第五部分（26–28 章）讲的是&quot;真实世界&quot;。</strong> Triton 把性能关键信息（layout）放进类型，并把隐性成本（<code>convert_layout</code>）做成一个可优化的 op；IREE 和 flang 给出了&quot;造几层方言&quot;的两个相反答案，以及判断标准；ClangIR 证明了这套东西能用在最硬的地方，同时用 252 条缺口诚实地标出了代价。</p>
+<p>如果只能留一句话：</p>
+<blockquote>
+<p><strong>MLIR 的价值不是&quot;又一个 IR&quot;，是&quot;让你能在恰当的抽象层级上表达每一个决策，并且让这些决策能被系统性地优化&quot;。</strong></p>
+</blockquote>
+<p>这句话的每一个部分在这本书里都有具体的兑现。&quot;恰当的层级&quot;——第 20 章 <code>pix</code> → <code>linalg</code> 而不是 → <code>arith</code>；&quot;表达决策&quot;——第 26 章 Triton 把 layout 放进类型、把转换成本做成 op；&quot;系统性优化&quot;——第 18 章 Transform 方言把调度变成 IR，第 21 章 tile 和融合对所有实现了 <code>TilingInterface</code> 的 op 一视同仁。</p>
+<p>至于代价：<strong>层是有成本的，方言是会碎的，管线是会慢的，错误信息是会骗人的。</strong> 这些不是将来会消失的过渡问题，是这个设计的另一面。知道它们，是用好它的前提。</p>
+<p>接下来该做什么？附录 C 是一张源码导览地图——想看某个机制去 <code>mlir/</code> 的哪个目录。但更实际的建议是：<strong>挑一个你自己的领域，按第 9 到 11 章的路子造一个最小方言，写三个 op、两个 fold、一条 canonicalize pattern，让 lit 测试跑绿。</strong> 这本书里所有的坑你都会重新踩一遍，但那时候你手上有一张写着它们的表。</p>
+<h2>小结</h2>
+<ul>
+<li><strong>ClangIR 的处境和前面几章的项目性质不同</strong>：C/C++ 已经有一条走了二十年的成熟路，它是往中间插一层，所以必须和既有实现输出等价、不能要求用户改任何东西。看它怎么落地比看它成不成功有价值。</li>
+<li><strong>读默认值，不要只读&quot;在不在树里&quot;</strong>。<code>cir</code> 方言在 LLVM 23.1.2 的树里，但 <code>FrontendOptions.h</code> 的初始化列表是 <code>UseClangIRPipeline(false)</code>；而且即便开了 <code>-fclangir</code>，<code>ClangIREnableIdiomRecognizer(false)</code>、<code>ClangIRLibOptEnabled(false)</code>——<strong>那两个最能体现 CIR 价值的 pass 也还默认关着</strong>。</li>
+<li><strong>CIR 的 125 个 op 说明了它图什么</strong>：<code>cir.vtable.get_virtual_fn_addr</code>、<code>cir.dyn_cast</code>、<code>cir.array.dtor</code>、<code>cir.base_class_addr</code>、<code>cir.cleanup.scope</code>、<code>cir.await</code>、<code>cir.if</code>——这些 C++ 层面的事实到了 LLVM IR <strong>不是&quot;信息少一点&quot;，是问不出来了</strong>（虚调用变成 GEP + load，<code>dynamic_cast</code> 变成一次 call，源码的 <code>if</code> 变成四个基本块）。</li>
+<li><strong><code>cir-flatten-cfg</code> 就是我们的 <code>scf</code> → <code>cf</code>（第 24 章）</strong>，而 <code>cir.switch.flat</code>/<code>cir.resume.flat</code> 这两个 <code>.flat</code> 后缀是压平后的形式——同一个方言里用 op 名分层，和第 27 章 <code>stream.tensor/async/cmd</code> 是同一手法（类型系统没变，就不必分方言）。</li>
+<li><strong><code>cir-idiom-recognizer</code> 是一个往上抬抽象的 pass</strong>（<code>summary</code> 用的词是 &quot;<strong>Raise</strong>&quot;），把 <code>std::</code> 容器和库调用认回成 CIR op，再由 <code>cir-lib-opt</code> 优化。这在 LLVM IR 上做不了：内联和 SROA 之后，&quot;这是 <code>std::find</code>&quot;这个信息<strong>已经没有了</strong>，不是难恢复。这是&quot;高层表示值得存在&quot;的最一般形式——和第 20 章不直接降到循环是同一个理由。</li>
+<li><strong>本书最重要的兑现：flang 和 ClangIR 共用同一份 OpenACC 实现，耦合点是一个类型接口。</strong> 两边的文件对称（<code>FIROpenACCTypeInterfaces.h</code> / <code>CIROpenACCTypeInterfaces.h</code>），<code>struct</code> 甚至同名（<code>OpenACCPointerLikeModel</code>），都继承 <code>mlir::acc::PointerLikeType::ExternalModel&lt;...&gt;</code>。第 10 章&quot;接口让不相关的方言共享变换&quot;在这里落地——而且是在<strong>两个生产级前端</strong>的规模上。</li>
+<li><strong>补讲的机制是 <code>ExternalModel</code></strong>：把接口实现从类型定义里分离出来，<code>Type::attachInterface&lt;Model&gt;(context)</code> 运行时挂上，&quot;<strong>does not require modifying the definition of the type class itself</strong>&quot;。这是&quot;上游的接口 + 你的类型&quot;这种组合唯一的接法。配套用 <code>declarePromisedInterface</code>——文档明说&quot;forgetting to register an external model can lead to bugs which are hard to track down&quot;，失败模式和第 18 章漏 <code>registerAllExtensions</code> 同源。文档也建议这个机制最好由<strong>接口的拥有者</strong>来用。</li>
+<li><strong>约束按接口措辞，有真实报错为证</strong>：<code>&#39;acc.copyin&#39; op operand #0 **must be any pointer or mappable**, but got &#39;i32&#39;</code>。<code>memref&lt;10xf32&gt;</code> 和 <code>!llvm.ptr</code> 这两个毫无关系的类型都能当 <code>varPtr</code>（本章 <code>mlir-opt</code> 跑过），<code>i32</code> 被拒。加一个新前端只需写一个 <code>ExternalModel</code>，<code>acc</code> 那边一行不改。</li>
+<li><strong><code>-fclangir</code> 已经带来了老路给不了的东西</strong>：<code>warn_drv_openacc_without_cir</code> 明说 clang 的 OpenACC 不开 CIR 就&quot;no runtime behavior&quot;。这解释了 CIR 为什么能进树——它不是&quot;把老路重做一遍更漂亮&quot;。而这条链的上游正是第 27 章说的：flang 为自己推动建了 <code>acc</code> 方言，ClangIR 几乎白拿。</li>
+<li><strong>&quot;用 MLIR 做一个前端&quot;的工作量被系统性低估</strong>。<code>MissingFeatures.h</code> 有 <strong>252</strong> 条 <code>static bool ... { return false; }</code>，覆盖 address space、linkage、协程、CXXABI、atomic、全局构造函数、调用约定。MLIR 省掉的是 IR 基础设施；<strong>语言语义本身的复杂度一分不减</strong>。（这个技巧本身也值得抄：改成 <code>return true</code> 的那天，编译器会在所有需要处理的地方报错，比 <code>grep TODO</code> 可靠得多。）</li>
+<li><strong>方言碎片化没有技术解</strong>，它是&quot;人人都能造方言&quot;的直接后果。最清楚的证据是&quot;结构化控制流压平&quot;这件事上游和 ClangIR 各写了一遍。能缓解的只有社会性手段——往上游推、复用接口（本章 OpenACC 就是好例子）。第 27 章那四个问题不能消除碎片化，但能让你不去贡献新的碎片。</li>
+<li><strong>编译时间和调试体验是结构性的坑</strong>。层数乘 pass 数、pattern 要跑到不动点、verifier 默认每个 pass 后都跑。调试那张表里九条真实错误的共同形状是：<strong>报错说的都不是真正的原因</strong>，其中两种（fold 静默失效、接口默认实现静默返回空）根本不报错。</li>
+<li><strong>不该用 MLIR 的信号</strong>：只有一层（简单解释器/字节码 VM）；语义和 LLVM IR 差不多；<strong>你要优化的信息在现有 IR 里还在</strong>；团队撑不住一整套方言配套的长期维护；上游已经有了。反过来值得用的信号很集中：<strong>有一个领域特定的高层表示，它带的信息在通用 IR 里会丢，而且你要在那个信息上做多轮变换</strong>——这正是 <code>!pix.kernel&lt;3x3&gt;</code>（第 9 章把核尺寸放进类型）到第 21 章 halo 那条线的全部理由。</li>
+<li><strong>全书一句话</strong>：MLIR 的价值不是&quot;又一个 IR&quot;，是<strong>让你能在恰当的抽象层级上表达每一个决策，并且让这些决策能被系统性地优化</strong>。代价是：层有成本、方言会碎、管线会慢、错误信息会骗人——这些是设计的另一面，不是会消失的过渡问题。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch27.html">← 第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a>
+  <a class="nav-next" href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

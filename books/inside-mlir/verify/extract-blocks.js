@@ -35,11 +35,15 @@ function runInfo(code) {
   const line = m[1].split("|")[0];
   const named = /\b(pix-opt|mlir-translate|mlir-opt)\b/.exec(line);
   const actual = named ? named[1] : tool;
+  // lit 的惯例：`RUN: not mlir-opt ...` 表示这一块**应该失败**（第 28 章那个
+  // 反面用例就是靠它——我们要断言的正是 verifier 的报错本身）。
+  const xfail = /\bRUN:\s*not\b/.test(m[0]);
   const args = line
     .replace(/%\w+\b/g, "")
+    .replace(/\b2>&1\b/g, "") // 重定向由外层脚本负责，不能当成工具参数
     .replace(new RegExp("^.*\\b" + actual + "\\b"), "")
     .trim();
-  return { tool: actual, args };
+  return { tool: actual, args, xfail };
 }
 
 const idx = {};
@@ -58,7 +62,10 @@ for (const mdPath of files) {
     const outPath = path.join(outDir, fname);
     fs.writeFileSync(outPath, code);
     const info = runInfo(code);
-    manifest.push([outPath, info.tool, info.args].join("\t"));
+    // 注意字段顺序：bash 的 read 以 tab 为 IFS 时会折叠连续 tab（tab 属于
+    // IFS 空白），所以可能为空的 args 必须放最后，且 xfail 列永不为空。
+    manifest.push([outPath, info.tool, info.xfail ? "xfail" : "run", info.args].join("\t"));
+    
   }
 }
 process.stdout.write(manifest.join("\n") + (manifest.length ? "\n" : ""));

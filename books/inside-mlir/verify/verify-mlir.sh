@@ -94,7 +94,7 @@ for lang in mlir mlir-lower mlir-translate; do
     mlir-translate) defargs="--mlir-to-llvmir";   bin="$TRANSLATE"; ceid="mlirtranslatetrunk" ;;
   esac
 
-  while IFS=$'\t' read -r f blocktool args; do
+  while IFS=$'\t' read -r f blocktool xfail args; do
     [ -z "$f" ] && continue
     b="$(basename "$f")"
     [ -z "$args" ] && args="$defargs"
@@ -124,6 +124,18 @@ for lang in mlir mlir-lower mlir-translate; do
     else
       # shellcheck disable=SC2086
       "$runner" "${argv[@]}" "$f" >"$out" 2>"$err"; rc=$?
+    fi
+    # `RUN: not <tool>` 的块**应该失败**——第 28 章那个反面用例要断言的正是
+    # verifier 的报错本身。所以对这种块把成败反过来判。
+    if [ "$xfail" = "xfail" ]; then
+      if [ "$rc" -ne 0 ]; then
+        echo "  ✓ $b  [not $blocktool $args]（按预期失败）"; ok=$((ok+1))
+        [ "$VERBOSE" = "1" ] && sed 's/^/      /' "$err"
+      else
+        echo "  ✗ $b  [not $blocktool $args] 本该失败，却成功了"
+        fail=1
+      fi
+      continue
     fi
     if [ "$rc" -eq 0 ]; then
       echo "  ✓ $b  [$blocktool $args]"; ok=$((ok+1))
