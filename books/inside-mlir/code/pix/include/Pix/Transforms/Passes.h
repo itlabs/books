@@ -10,7 +10,11 @@
 #ifndef PIX_TRANSFORMS_PASSES_H
 #define PIX_TRANSFORMS_PASSES_H
 
+// 第 16 章：Passes.td 里写了 dependentDialects，生成代码会引用这些方言类，
+// 所以要在 include 生成代码之前把它们的头带进来（和第 11 章方言那次同理）。
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {

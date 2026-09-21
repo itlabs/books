@@ -86,4 +86,38 @@ def PixDRR : Pass<"pix-drr", "::mlir::func::FuncOp"> {
   }];
 }
 
+def PixToArith : Pass<"pix-to-arith", "::mlir::ModuleOp"> {
+  let summary = "第 16 章：把能下降的 pix op 换成 arith/tensor（部分转换）";
+  let description = [{
+    Dialect Conversion 的四个部件在这一个 pass 里都能看到：
+
+    - `ConversionTarget` —— 声明什么合法。arith/tensor/func 合法；
+      `pix.add` / `pix.mul` / `pix.scale` 非法（必须换掉）；
+      `pix.reduce` / `pix.convolve` / `pix.pipeline` **仍然合法**，因为这一章
+      还没有它们的下降路径——这正是"部分转换"的意义。
+    - `TypeConverter` —— 大部分类型原样保留（必须显式写这条身份规则！），
+      外加 `!pix.kernel<R x C>` → `tensor<RxCxf32>`。
+    - `ConversionPattern` —— 和普通 RewritePattern 差在多一个 adaptor 参数，
+      给的是**已经转换过的操作数**。
+    - driver —— `applyPartialConversion`；`full=true` 时换成
+      `applyFullConversion`，于是 pix.reduce 这种没人管的 op 会让整个转换失败，
+      报错信息正是第 17 章要教你读的那种。
+  }];
+  // 第 16 章的坑：这个 pass 会**造** arith 和 tensor 的 op，必须声明出来。
+  // 注意和第 11 章那次的区别：那次是方言的 canonicalizer 在造 op，声明写在
+  // Dialect 上；这次是 pass 在造，就写在 Pass 上（PassBase.td 里的注释很准确：
+  // "A list of dialects this pass may produce entities in"）。
+  // 漏了它同样是 LLVM ERROR + abort，不是诊断。
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::tensor::TensorDialect"
+  ];
+  let options = [
+    Option<"full", "full", "bool", /*default=*/"false",
+           "用 applyFullConversion 代替 applyPartialConversion">,
+    Option<"lowerKernels", "lower-kernels", "bool", /*default=*/"false",
+           "顺带把 pix.kernel 降成 tensor 常量（会暴露第 17 章要讲的物化问题）">
+  ];
+}
+
 #endif // PIX_TRANSFORMS_PASSES

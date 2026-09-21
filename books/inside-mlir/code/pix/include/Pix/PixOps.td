@@ -217,6 +217,13 @@ def Pix_KernelOp : Pix_Op<"kernel", [Pure, ConstantLike]> {
 
   // 第 10 章：权重的形状必须与 !pix.kernel<R x C> 里的 R、C 一致。
   let hasVerifier = 1;
+
+  // 第 16 章补的一个真 bug：`ConstantLike` 是个**契约**，MLIR 断言这种 op
+  // 必须 `fold()` 成功（`mlir/include/mlir/IR/Matchers.h:93`：
+  // "expected ConstantLike op to be foldable"）。第 9 章加上这个 trait 时
+  // 没配 folder，一直没人碰到——直到第 16 章的 dialect conversion 走到
+  // 常量折叠那条路上，直接断言失败。
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

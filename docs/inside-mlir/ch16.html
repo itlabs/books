@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li class="active"><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li class="toc-todo"><span>第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</span></li>
+<li class="toc-todo"><span>第 18 章 Transform 方言：把「怎么变换」本身写成 IR</span></li>
+<li class="toc-todo"><span>第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</span></li>
+<li class="toc-todo"><span>第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</span></li>
+<li class="toc-todo"><span>第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</span></li>
+<li class="toc-todo"><span>第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</span></li>
+<li class="toc-todo"><span>第 23 章 vector 方言：向量化、mask 与按目标宽度展开</span></li>
+<li class="toc-todo"><span>第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</span></li>
+<li class="toc-todo"><span>第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</span></li>
+<li class="toc-todo"><span>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</span></li>
+<li class="toc-todo"><span>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</span></li>
+<li class="toc-todo"><span>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>Dialect Conversion 是 MLIR 最难也最躲不开的一块——所有"从高层方言降到低层方言"的工作都走它。它和第 14 章那个 pattern 引擎是**两套东西**，别混：后者是"把 IR 改得更好"，前者是"把 IR 改成另一套方言能表达的样子"，多出了<strong>类型转换</strong>和<strong>合法性</strong>这两个维度。</p>
+<p>这一章拆开它的四个部件，各配一段真代码：<strong>ConversionTarget</strong>（什么算合法）、<strong>TypeConverter</strong>（类型怎么换）、<strong>ConversionPattern</strong>（和普通 pattern 差在哪）、以及 <strong>driver</strong>（partial 还是 full）。落地物是一个 <code>pix-to-arith</code> pass：把 <code>pix.add</code>/<code>pix.mul</code>/<code>pix.scale</code> 降成 <code>arith</code> 和 <code>tensor</code> 的 op。</p>
+<p>三个容易搞错的点会被实测钉住。<strong>一</strong>：合法性不是"合法/非法"两态，而是<strong>四态</strong>，多出来的 <code>Unknown</code> 才是 partial 与 full 的真正分界。<strong>二</strong>：<code>TypeConverter</code> 必须显式写"其他类型原样保留"这条身份规则，否则连 <code>tensor&lt;4x4xf32&gt;</code> 都过不去。<strong>三</strong>：写 pattern 时要用 <code>adaptor</code> 给的操作数，不能用 <code>op.getLhs()</code>。</p>
+<p>结尾我们会故意制造一次失败，得到那句臭名昭著的报错——<code>failed to legalize unresolved materialization</code>。它就是第 17 章的入口。</p>
+</div><h2>它和普通 pattern 差在哪</h2>
+<p>先把边界划清楚，否则后面全是混乱：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>greedy pattern（第 14 章）</th>
+<th>dialect conversion</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>目的</td>
+<td>把 IR 改得更好</td>
+<td>把 IR 改成另一套方言</td>
+</tr>
+<tr>
+<td>什么时候停</td>
+<td>到达不动点（没人能再改）</td>
+<td>达到&quot;全部合法&quot;（由 target 定义）</td>
+</tr>
+<tr>
+<td>类型能变吗</td>
+<td>基本不变</td>
+<td><strong>这是它的核心能力</strong></td>
+</tr>
+<tr>
+<td>失败长什么样</td>
+<td>不会失败，只是没改动</td>
+<td><strong>会失败</strong>，而且报错很难读</td>
+</tr>
+<tr>
+<td>driver</td>
+<td><code>applyPatternsGreedily</code></td>
+<td><code>applyPartialConversion</code> / <code>applyFullConversion</code></td>
+</tr>
+</tbody></table>
+<p>最后一行的差别很实在：greedy driver 没有&quot;失败&quot;这个概念——pattern 都不匹配就是 IR 没变。而 conversion driver 有明确的成功条件，达不到就整个 pass 失败。<strong>这也是它报错难读的根源：失败是在&quot;全局检查&quot;那一步发现的，离真正的原因很远。</strong></p>
+<h2>部件一：<code>ConversionTarget</code> —— 合法性是四态</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">ConversionTarget target(*ctx);
+target.addLegalDialect&lt;arith::ArithDialect, tensor::TensorDialect,
+                       func::FuncDialect&gt;();
+
+// 只把**有下降路径**的那几个标成非法。
+target.addIllegalOp&lt;AddOp, MulOp, ScaleOp&gt;();</code></pre>
+</div><p>注意我对 <code>pix.reduce</code>、<code>pix.convolve</code>、<code>pix.pipeline</code> <strong>一个字都没说</strong>。它们既没被标合法、也没被标非法——这是第四种状态。<code>mlir/include/mlir/Transforms/DialectConversion.h:1265</code> 那段注释说得很清楚：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">/// Note: Legality is actually a 4-state: Legal(recursive=true),
+/// Legal(recursive=false), Illegal or Unknown, where Unknown is treated
+/// either as Legal or Illegal depending on context.</code></pre>
+</div><p><strong><code>Unknown</code> 视上下文当作合法或非法</strong>——而那个&quot;上下文&quot;就是你选了 partial 还是 full。官方文档（<code>mlir/docs/DialectConversion.md:20</code>）对 partial 的定义是：&quot;will allow pre-existing operations that were <strong>not explicitly marked as illegal</strong> to remain unconverted.&quot;</p>
+<p>把这四态记住，<code>failed to legalize</code> 里一半的困惑就没了。</p>
+<p>四种声明方式，各有用途：</p>
+<table>
+<thead>
+<tr>
+<th>写法</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>addLegalDialect&lt;D&gt;()</code> / <code>addLegalOp&lt;Op&gt;()</code></td>
+<td>静态合法</td>
+</tr>
+<tr>
+<td><code>addIllegalDialect&lt;D&gt;()</code> / <code>addIllegalOp&lt;Op&gt;()</code></td>
+<td>静态非法，<strong>必须</strong>被换掉</td>
+</tr>
+<tr>
+<td><code>addDynamicallyLegalOp&lt;Op&gt;(回调)</code></td>
+<td>逐个实例问回调。<strong>下降到一半的中间状态全靠它</strong></td>
+</tr>
+<tr>
+<td>什么都不说</td>
+<td><code>Unknown</code></td>
+</tr>
+</tbody></table>
+<p>第三种最值得留意。真实下降里经常需要&quot;这个 op 合不合法取决于它的操作数类型&quot;——比如 <code>func.func</code> 在签名还没转换完之前非法、转换完之后合法。第 17 章会大量用到它。</p>
+<h2>部件二：<code>TypeConverter</code> —— 第一条规则最容易漏</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">class PixTypeConverter : public TypeConverter {
+public:
+  PixTypeConverter() {
+    // ① 身份规则：默认原样保留。必须有。
+    addConversion([](Type ty) { return ty; });
+
+    // ② !pix.kernel&lt;R x C&gt; → tensor&lt;RxCxf32&gt;
+    addConversion([](KernelType kty) -&gt; std::optional&lt;Type&gt; {
+      return RankedTensorType::get({kty.getRows(), kty.getCols()},
+                                   Float32Type::get(kty.getContext()));
+    });
+  }
+};</code></pre>
+</div><div class="warn">
+<strong><code>TypeConverter</code> 默认什么都不认</strong>
+<p>漏掉第一条身份规则，<code>tensor&lt;4x4xf32&gt;</code> 这种<strong>你根本没打算换</strong>的类型也会被判成"无法转换"，于是连函数签名都过不去，报错指向一个完全无辜的地方。<strong>写 <code>TypeConverter</code> 的第一件事就是补上 <code>addConversion([](Type ty) { return ty; });</code></strong>，然后才轮到你真正关心的那几条。</p>
+<p>另外注意返回值的三种含义：返回一个 <code>Type</code> = 换成它；返回 <code>std::nullopt</code> = "我不管这个类型"（交给别的规则）；返回**空** <code>Type{}</code> = "这个类型转换失败"。<code>nullopt</code> 和空 Type 完全不同，混了会得到很难查的行为。</p>
+</div><p>规则是<strong>后注册的先试</strong>（像栈一样），所以特化的规则要放在身份规则之后。</p>
+<h2>部件三：<code>ConversionPattern</code> —— 必须用 adaptor</h2>
+<p>和 <code>OpRewritePattern</code> 比，签名只多一样东西：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct AddLowering : OpConversionPattern&lt;AddOp&gt; {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(AddOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &amp;rewriter) const override {
+    rewriter.replaceOpWithNewOp&lt;arith::AddFOp&gt;(op, adaptor.getLhs(),
+                                               adaptor.getRhs());
+    return success();
+  }
+};</code></pre>
+</div><p>那个 <strong><code>adaptor</code></strong> 是这一章第二个要点。它装的是<strong>已经被转换过的操作数</strong>。</p>
+<div class="keypoint">
+<strong>用 <code>adaptor.getLhs()</code>，不要用 <code>op.getLhs()</code></strong>
+<p>转换是<strong>逐步</strong>进行的：当 driver 处理你这个 op 时，它的操作数可能已经被别的 pattern 换成了新类型的值。<code>op.getLhs()</code> 给你的是<strong>旧</strong>的那个（类型还是旧的、甚至已经准备被删掉），<code>adaptor.getLhs()</code> 给你的是<strong>当前该用的</strong>。</p>
+<p>这是 conversion pattern 最高频的错误来源，而且症状很隐蔽：类型没变的地方两者一样，所以代码"看起来能跑"，直到某天类型真的变了才炸。<strong>养成习惯：在 conversion pattern 里永远只碰 adaptor</strong>，`op` 只用来取位置、属性和"要替换谁"。</p>
+</div><p>一个 pix op 变成两个 op 完全正常：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// pix.scale %img, %f → arith.mulf %img, tensor.splat %f
+struct ScaleLowering : OpConversionPattern&lt;ScaleOp&gt; {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(ScaleOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &amp;rewriter) const override {
+    auto ty = dyn_cast&lt;RankedTensorType&gt;(adaptor.getImage().getType());
+    if (!ty)
+      return rewriter.notifyMatchFailure(op, "图不是有阶张量，splat 不出来");
+
+    Value splat = tensor::SplatOp::create(rewriter, op.getLoc(), ty,
+                                         adaptor.getFactor());
+    rewriter.replaceOpWithNewOp&lt;arith::MulFOp&gt;(op, adaptor.getImage(), splat);
+    return success();
+  }
+};</code></pre>
+</div><p>（<code>arith</code> 的浮点运算在 tensor 上就是逐点的，所以 <code>pix.add</code> → <code>arith.addf</code> 这么直接。这一步不需要 <code>linalg</code>——那是第 20 章为了 tiling 才需要的。）</p>
+<h2>部件四：driver —— partial 还是 full</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">if (full) {
+  if (failed(applyFullConversion(getOperation(), target, std::move(patterns))))
+    signalPassFailure();
+  return;
+}
+if (failed(applyPartialConversion(getOperation(), target, std::move(patterns))))
+  signalPassFailure();</code></pre>
+</div><p>跑 partial：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-arith
+func.func @lowerable(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;, %s: f32) -&gt; tensor&lt;4x4xf32&gt; {
+  %0 = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+  %1 = pix.mul %0, %b : tensor&lt;4x4xf32&gt;
+  %2 = pix.scale %1, %s : tensor&lt;4x4xf32&gt;
+  return %2 : tensor&lt;4x4xf32&gt;
+}
+func.func @has_reduce(%a: tensor&lt;4x4xf32&gt;) -&gt; f32 {
+  %0 = pix.add %a, %a : tensor&lt;4x4xf32&gt;
+  %1 = pix.reduce %0 : tensor&lt;4x4xf32&gt; -&gt; f32
+  return %1 : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-arith input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @lowerable(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;, %arg2: f32) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = arith.addf %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    %1 = arith.mulf %0, %arg1 : tensor&lt;4x4xf32&gt;
+    %splat = tensor.splat %arg2 : tensor&lt;4x4xf32&gt;
+    %2 = arith.mulf %1, %splat : tensor&lt;4x4xf32&gt;
+    return %2 : tensor&lt;4x4xf32&gt;
+  }
+  func.func @has_reduce(%arg0: tensor&lt;4x4xf32&gt;) -&gt; f32 {
+    %0 = arith.addf %arg0, %arg0 : tensor&lt;4x4xf32&gt;
+    %1 = pix.reduce %0 : tensor&lt;4x4xf32&gt; -&gt; f32
+    return %1 : f32
+  }
+}</code></pre>
+</div><p>第一个函数全换掉了。第二个函数里 <code>pix.add</code> 换了，<strong><code>pix.reduce</code> 原样留着，而且这不算失败</strong>——它是 <code>Unknown</code>，partial 放它过去。</p>
+<p>换成 full：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt c16.mlir --pix-to-arith=full=true</code></pre>
+</div><p>运行结果（截取）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">c16.mlir:0:0: error: failed to legalize operation 'builtin.module'</code></pre>
+</div><p><strong>报错挂在最外层的 <code>builtin.module</code> 上</strong>，而不是那个真正有问题的 <code>pix.reduce</code>。这个&quot;报错离现场很远&quot;的毛病是 dialect conversion 最招人恨的地方，第 17 章会给一套系统的排查法。</p>
+<div class="keypoint">
+<strong>绝大多数真实下降都该用 partial</strong>
+<p>理由不是"partial 更宽松"，而是<strong>下降天生是分阶段的</strong>。一条完整的下降管线（第四部分那条 pix → linalg → memref → vector → llvm）由十几个 pass 接力，每个 pass 只负责搬走自己认识的那部分 op。每一步都要求"全体合法"是不可能的。</p>
+<p><code>full</code> 的正当用途只有一处：<strong>管线的最后一棒</strong>。到那时你确实需要保证"IR 里再没有任何非目标方言的东西"，一个漏网的 op 就意味着后面的代码生成会崩。把它当一道验收闸门用，别当成日常工具。</p>
+</div><div class="concept">
+<svg viewBox="0 0 700 392" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c16b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c16o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c16g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">四个部件与那条判定链</text>
+  <rect x="14" y="30" width="200" height="88" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="49" font-size="10" font-weight="bold" fill="#2b6cb0">① ConversionTarget</text>
+  <text x="24" y="67" font-size="9" fill="#24292f">addLegalDialect / addLegalOp</text>
+  <text x="24" y="81" font-size="9" fill="#24292f">addIllegalOp　← 必须换掉</text>
+  <text x="24" y="95" font-size="9" fill="#24292f">addDynamicallyLegalOp(回调)</text>
+  <text x="24" y="111" font-size="9" font-weight="bold" fill="#e06a3b">什么都不说 = Unknown（第四态）</text>
+  <rect x="228" y="30" width="200" height="88" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="238" y="49" font-size="10" font-weight="bold" fill="#e06a3b">② TypeConverter</text>
+  <text x="238" y="67" font-size="9" font-family="monospace" fill="#24292f">addConversion([](Type t){</text>
+  <text x="238" y="80" font-size="9" font-family="monospace" fill="#24292f">  return t; })　← 必须有！</text>
+  <text x="238" y="97" font-size="9" fill="#24292f">返回 Type=换 / nullopt=不管 /</text>
+  <text x="238" y="111" font-size="9" fill="#24292f">空 Type=转换失败（三者不同）</text>
+  <rect x="442" y="30" width="244" height="88" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="452" y="49" font-size="10" font-weight="bold" fill="#2f7a45">③ ConversionPattern</text>
+  <text x="452" y="67" font-size="9" font-family="monospace" fill="#24292f">matchAndRewrite(op, adaptor, rw)</text>
+  <text x="452" y="84" font-size="9" fill="#24292f">只碰 <tspan font-family="monospace" font-weight="bold">adaptor</tspan> 给的操作数——</text>
+  <text x="452" y="98" font-size="9" fill="#24292f">op.getLhs() 是<tspan font-weight="bold">旧</tspan>值，类型可能已变</text>
+  <text x="452" y="112" font-size="9" fill="#6b7280">这是本章最高频的错误来源</text>
+  <line x1="350" y1="124" x2="350" y2="146" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c16b)"/>
+  <text x="358" y="140" font-size="9" fill="#2b6cb0">④ driver 逐个 op 判定</text>
+  <text x="14" y="168" font-size="11" font-weight="bold" fill="#24292f">driver 对每个 op 问一次"你什么状态"，四种答案对应四种处理：</text>
+  <rect x="14" y="178" width="162" height="62" rx="5" fill="#f0f8f2" stroke="#3f9b5c"/>
+  <text x="24" y="197" font-size="10" font-weight="bold" fill="#2f7a45">LEGAL</text>
+  <text x="24" y="214" font-size="9" fill="#24292f">不动</text>
+  <text x="24" y="230" font-size="9" fill="#6b7280">递归合法还会跳过整个子树</text>
+  <rect x="184" y="178" width="162" height="62" rx="5" fill="#fdf1ec" stroke="#e06a3b"/>
+  <text x="194" y="197" font-size="10" font-weight="bold" fill="#e06a3b">ILLEGAL</text>
+  <text x="194" y="214" font-size="9" fill="#24292f">必须有 pattern 能换掉</text>
+  <text x="194" y="230" font-size="9" fill="#6b7280">换不掉 → 转换失败</text>
+  <rect x="354" y="178" width="162" height="62" rx="5" fill="#eef4fb" stroke="#2b6cb0"/>
+  <text x="364" y="197" font-size="10" font-weight="bold" fill="#2b6cb0">DYNAMIC</text>
+  <text x="364" y="214" font-size="9" fill="#24292f">逐个实例问回调</text>
+  <text x="364" y="230" font-size="9" fill="#6b7280">下降到一半的中间态全靠它</text>
+  <rect x="524" y="178" width="162" height="62" rx="5" fill="#fff" stroke="#e06a3b" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="534" y="197" font-size="10" font-weight="bold" fill="#e06a3b">UNKNOWN</text>
+  <text x="534" y="214" font-size="9" fill="#24292f">partial：当合法，放过</text>
+  <text x="534" y="230" font-size="9" fill="#24292f">full：当非法，失败</text>
+  <line x1="14" y1="256" x2="686" y2="256" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <rect x="14" y="270" width="672" height="112" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="290" font-size="11" font-weight="bold" fill="#24292f">类型变了怎么办：driver 自己插一个 cast</text>
+  <text x="26" y="310" font-size="10" fill="#24292f">pattern 把 <tspan font-family="monospace">pix.kernel</tspan> 的结果从 <tspan font-family="monospace">!pix.kernel&lt;3 x 3&gt;</tspan> 变成了 <tspan font-family="monospace">tensor&lt;3x3xf32&gt;</tspan>，可下游 <tspan font-family="monospace">pix.convolve</tspan> 还在等旧类型。</text>
+  <text x="26" y="328" font-size="10" fill="#24292f">driver 不会立刻报错，而是插一个 <tspan font-family="monospace" font-weight="bold">builtin.unrealized_conversion_cast</tspan> 占位，等有人来"物化"它。</text>
+  <text x="26" y="348" font-size="10" fill="#e06a3b">没人物化 → <tspan font-family="monospace">failed to legalize unresolved materialization … that remained live after conversion</tspan></text>
+  <text x="26" y="368" font-size="10" fill="#6b7280">这句报错是第 17 章的全部内容：谁来物化、怎么注册、以及怎么读懂它指的位置。</text>
+</svg>
+<div class="caption">图 16-1　四个部件的分工，以及 driver 对每个 op 的四态判定。右下角那条"插 cast 等物化"的路径，是第 17 章的起点</div>
+</div><h2>把判定链自己跑一遍</h2>
+<p>四态判定和 partial/full 的差别，用一个小模型跑最清楚。下面这个 driver 模型会把&quot;UNKNOWN 在两种模式下的不同命运&quot;直接打出来：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%2050%20%E8%A1%8C%E7%9A%84%20conversion%20driver%20%E6%A8%A1%E5%9E%8B%E3%80%82%E8%A6%81%E5%BC%84%E6%B8%85%E4%B8%89%E4%BB%B6%E4%BA%8B%EF%BC%9A%0A%23%20%20%201.%20%22%E5%90%88%E6%B3%95%22%E6%9C%89%E4%B8%89%E7%A7%8D%EF%BC%9A%E9%9D%99%E6%80%81%E5%90%88%E6%B3%95%E3%80%81%E9%9D%99%E6%80%81%E9%9D%9E%E6%B3%95%E3%80%81%E5%8A%A8%E6%80%81%E5%90%88%E6%B3%95%EF%BC%88%E7%9C%8B%E4%B8%80%E4%B8%AA%E5%9B%9E%E8%B0%83%EF%BC%89%0A%23%20%20%202.%20partial%20%E4%B8%8E%20full%20%E7%9A%84%E5%B7%AE%E5%88%AB%E5%8F%AA%E5%9C%A8%E6%9C%80%E5%90%8E%E9%82%A3%E4%B8%80%E6%AD%A5%E6%A3%80%E6%9F%A5%0A%23%20%20%203.%20%E7%B1%BB%E5%9E%8B%E5%8F%98%E4%BA%86%E8%80%8C%E4%B8%8B%E6%B8%B8%E6%B2%A1%E8%B7%9F%E4%B8%8A%E6%97%B6%EF%BC%8Cdriver%20%E4%BC%9A%E6%8F%92%E4%B8%80%E4%B8%AA%20cast%20%E2%80%94%E2%80%94%20%E8%A7%A3%E4%B8%8D%E6%8E%89%E5%B0%B1%E6%8A%A5%E9%94%99%0A%0Aclass%20Target%3A%0A%20%20%20%20%22%22%22%E5%90%88%E6%B3%95%E6%80%A7%E6%98%AF**%E5%9B%9B%E6%80%81**%EF%BC%8C%E4%B8%8D%E6%98%AF%E4%B8%A4%E6%80%81%EF%BC%88%E8%A7%81%20DialectConversion.h%3A1265%EF%BC%89%EF%BC%9A%0A%20%20%20%20%20%20%20LEGAL%20%2F%20ILLEGAL%20%2F%20DYNAMIC%20%2F%20UNKNOWN%E3%80%82%0A%20%20%20%20%20%20%20UNKNOWN%20%E7%9A%84%E5%90%AB%E4%B9%89%E9%9A%8F%E4%B8%8A%E4%B8%8B%E6%96%87%E8%80%8C%E5%8F%98%EF%BC%9Apartial%20%E5%BD%93%E5%AE%83%E5%90%88%E6%B3%95%EF%BC%8Cfull%20%E5%BD%93%E5%AE%83%E9%9D%9E%E6%B3%95%E3%80%82%0A%20%20%20%20%20%20%20%E8%BF%99%E6%98%AF%20partial%20%E4%B8%8E%20full%20%E7%9A%84**%E5%94%AF%E4%B8%80**%E5%AE%9E%E8%B4%A8%E5%8C%BA%E5%88%AB%E3%80%82%22%22%22%0A%20%20%20%20def%20__init__(self)%3A%0A%20%20%20%20%20%20%20%20self.legal_dialects%2C%20self.illegal_ops%2C%20self.dynamic%20%3D%20set()%2C%20set()%2C%20%7B%7D%0A%20%20%20%20def%20legal_dialect(self%2C%20*ds)%3A%20self.legal_dialects.update(ds)%3B%20return%20self%0A%20%20%20%20def%20illegal_op(self%2C%20*ops)%3A%20self.illegal_ops.update(ops)%3B%20return%20self%0A%20%20%20%20def%20dynamically_legal(self%2C%20op%2C%20fn)%3A%20self.dynamic%5Bop%5D%20%3D%20fn%3B%20return%20self%0A%0A%20%20%20%20def%20action(self%2C%20op)%3A%0A%20%20%20%20%20%20%20%20if%20op.name%20in%20self.dynamic%3A%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%8A%A8%E6%80%81%EF%BC%9A%E9%80%90%E4%B8%AA%20op%20%E9%97%AE%E5%9B%9E%E8%B0%83%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20%22LEGAL%22%20if%20self.dynamic%5Bop.name%5D(op)%20else%20%22ILLEGAL%22%0A%20%20%20%20%20%20%20%20if%20op.name%20in%20self.illegal_ops%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20%22ILLEGAL%22%0A%20%20%20%20%20%20%20%20if%20op.name.split(%22.%22)%5B0%5D%20in%20self.legal_dialects%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20%22LEGAL%22%0A%20%20%20%20%20%20%20%20return%20%22UNKNOWN%22%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%BB%80%E4%B9%88%E9%83%BD%E6%B2%A1%E8%AF%B4%0A%0A%20%20%20%20def%20is_legal(self%2C%20op%2C%20full)%3A%0A%20%20%20%20%20%20%20%20a%20%3D%20self.action(op)%0A%20%20%20%20%20%20%20%20return%20a%20%3D%3D%20%22LEGAL%22%20or%20(a%20%3D%3D%20%22UNKNOWN%22%20and%20not%20full)%0A%0Aclass%20Op%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20result_type%3D%22tensor%22%2C%20operand_types%3D())%3A%0A%20%20%20%20%20%20%20%20self.name%2C%20self.result_type%20%3D%20name%2C%20result_type%0A%20%20%20%20%20%20%20%20self.operand_types%20%3D%20list(operand_types)%0A%20%20%20%20def%20__repr__(self)%3A%20return%20f%22%7Bself.name%7D%3A%7Bself.result_type%7D%22%0A%0Adef%20convert(ops%2C%20target%2C%20patterns%2C%20full)%3A%0A%20%20%20%20out%2C%20casts%20%3D%20%5B%5D%2C%20%5B%5D%0A%20%20%20%20for%20op%20in%20ops%3A%0A%20%20%20%20%20%20%20%20act%20%3D%20target.action(op)%0A%20%20%20%20%20%20%20%20if%20act%20%3D%3D%20%22LEGAL%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%EF%BC%9ALEGAL%EF%BC%8C%E4%B8%8D%E5%8A%A8%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(op)%3B%20continue%0A%20%20%20%20%20%20%20%20if%20act%20%3D%3D%20%22UNKNOWN%22%20and%20op.name%20not%20in%20patterns%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%EF%BC%9AUNKNOWN%EF%BC%88partial%20%E6%94%BE%E8%BF%87%EF%BC%8Cfull%20%E5%88%A4%E5%A4%B1%E8%B4%A5%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(op)%3B%20continue%0A%20%20%20%20%20%20%20%20if%20op.name%20not%20in%20patterns%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%EF%BC%9AILLEGAL%20%E4%BD%86%E6%B2%A1%E6%9C%89%20pattern%20%E2%86%92%20%E4%B8%80%E5%AE%9A%E5%A4%B1%E8%B4%A5%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20out.append(op)%3B%20continue%0A%20%20%20%20%20%20%20%20new%20%3D%20patterns%5Bop.name%5D(op)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%20%E2%86%92%20%7Bnew%7D%22)%0A%20%20%20%20%20%20%20%20%23%20%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B%E5%8F%98%E4%BA%86%EF%BC%9F%E4%B8%8B%E6%B8%B8%E8%BF%98%E7%AD%89%E6%97%A7%E7%B1%BB%E5%9E%8B%E7%9A%84%E8%AF%9D%EF%BC%8Cdriver%20%E8%A6%81%E6%8F%92%E4%B8%80%E4%B8%AA%20cast%0A%20%20%20%20%20%20%20%20if%20new.result_type%20!%3D%20op.result_type%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20casts.append((new.result_type%2C%20op.result_type))%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%20%E7%B1%BB%E5%9E%8B%E5%8F%98%E4%BA%86%EF%BC%9A%E6%8F%92%E4%B8%80%E4%B8%AA%20unrealized_conversion_cast%20%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22%7Bnew.result_type%7D%20%E2%86%92%20%7Bop.result_type%7D%22)%0A%20%20%20%20%20%20%20%20out.append(new)%0A%0A%20%20%20%20%23%20%E6%9C%80%E5%90%8E%E4%B8%80%E6%AD%A5%EF%BC%9Apartial%20%E5%8F%AA%E5%85%B3%E5%BF%83%22%E8%BF%98%E6%9C%89%E6%B2%A1%E6%9C%89%E6%B2%A1%E8%A7%A3%E5%86%B3%E7%9A%84%20cast%22%EF%BC%9Bfull%20%E8%BF%98%E8%A6%81%E6%B1%82%E5%85%A8%E4%BD%93%E5%90%88%E6%B3%95%0A%20%20%20%20leftovers%20%3D%20%5Bop%20for%20op%20in%20out%20if%20not%20target.is_legal(op%2C%20full)%5D%0A%20%20%20%20if%20casts%3A%0A%20%20%20%20%20%20%20%20return%20out%2C%20f%22%E5%A4%B1%E8%B4%A5%EF%BC%9A%7Blen(casts)%7D%20%E4%B8%AA%20cast%20%E6%B2%A1%E4%BA%BA%E7%89%A9%E5%8C%96%EF%BC%88%E7%AC%AC%2017%20%E7%AB%A0%E7%9A%84%E4%B8%BB%E9%A2%98%EF%BC%89%22%0A%20%20%20%20if%20full%20and%20leftovers%3A%0A%20%20%20%20%20%20%20%20return%20out%2C%20f%22%E5%A4%B1%E8%B4%A5%EF%BC%9Afull%20%E6%A8%A1%E5%BC%8F%E4%B8%8B%20%7Bleftovers%7D%20%E6%98%AF%20UNKNOWN%EF%BC%8C%E8%A2%AB%E5%BD%93%E4%BD%9C%E9%9D%9E%E6%B3%95%22%0A%20%20%20%20if%20leftovers%3A%0A%20%20%20%20%20%20%20%20return%20out%2C%20f%22%E6%88%90%E5%8A%9F%EF%BC%9Apartial%20%E6%A8%A1%E5%BC%8F%E6%8A%8A%20UNKNOWN%20%E5%BD%93%E5%90%88%E6%B3%95%EF%BC%8C%7Bleftovers%7D%20%E5%8E%9F%E6%A0%B7%E7%95%99%E4%B8%8B%22%0A%20%20%20%20return%20out%2C%20%22%E6%88%90%E5%8A%9F%EF%BC%9A%E5%85%A8%E9%83%A8%E5%90%88%E6%B3%95%22%0A%0Atarget%20%3D%20(Target().legal_dialect(%22arith%22%2C%20%22tensor%22%2C%20%22func%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20.illegal_op(%22pix.add%22%2C%20%22pix.mul%22%2C%20%22pix.scale%22))%0Apatterns%20%3D%20%7B%0A%20%20%20%20%22pix.add%22%3A%20%20%20lambda%20op%3A%20Op(%22arith.addf%22%2C%20op.result_type)%2C%0A%20%20%20%20%22pix.mul%22%3A%20%20%20lambda%20op%3A%20Op(%22arith.mulf%22%2C%20op.result_type)%2C%0A%20%20%20%20%22pix.scale%22%3A%20lambda%20op%3A%20Op(%22arith.mulf%22%2C%20op.result_type)%2C%0A%20%20%20%20%23%20%E8%BF%99%E6%9D%A1%E4%BC%9A%E6%94%B9%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B%EF%BC%9A!pix.kernel%20%E2%86%92%20tensor%0A%20%20%20%20%22pix.kernel%22%3A%20lambda%20op%3A%20Op(%22arith.constant%22%2C%20%22tensor%3C3x3%3E%22)%2C%0A%7D%0A%0ACASES%20%3D%20%5B%0A%20%20%20%20(%22%E5%85%A8%E9%83%A8%E5%8F%AF%E9%99%8D%22%2C%20%5BOp(%22pix.add%22)%2C%20Op(%22pix.mul%22)%2C%20Op(%22func.return%22)%5D%2C%20False)%2C%0A%20%20%20%20(%22%E6%9C%89%20pix.reduce%EF%BC%88%E6%B2%A1%E6%A0%87%E9%9D%9E%E6%B3%95%EF%BC%8C%E4%B9%9F%E6%B2%A1%20pattern%EF%BC%89%22%2C%20%5BOp(%22pix.add%22)%2C%20Op(%22pix.reduce%22%2C%20%22f32%22)%2C%20Op(%22func.return%22)%5D%2C%20False)%2C%0A%20%20%20%20(%22%E5%90%8C%E6%A0%B7%E7%9A%84%E8%BE%93%E5%85%A5%E6%8D%A2%20full%20%E6%A8%A1%E5%BC%8F%22%2C%20%5BOp(%22pix.add%22)%2C%20Op(%22pix.reduce%22%2C%20%22f32%22)%2C%20Op(%22func.return%22)%5D%2C%20True)%2C%0A%5D%0Afor%20title%2C%20ops%2C%20full%20in%20CASES%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91mode%3D%7B'full'%20if%20full%20else%20'partial'%7D%22)%0A%20%20%20%20_%2C%20verdict%20%3D%20convert(ops%2C%20target%2C%20patterns%2C%20full)%0A%20%20%20%20print(f%22%20%20%E2%86%92%20%7Bverdict%7D%22)%0A%0Aprint(%22%5Cn%E3%80%90%E7%B1%BB%E5%9E%8B%E5%8F%98%E4%BA%86%E8%80%8C%E4%B8%8B%E6%B8%B8%E6%B2%A1%E8%B7%9F%E4%B8%8A%E3%80%91mode%3Dpartial%22)%0At2%20%3D%20(Target().legal_dialect(%22arith%22%2C%20%22tensor%22%2C%20%22func%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20.illegal_op(%22pix.kernel%22))%0A_%2C%20verdict%20%3D%20convert(%5BOp(%22pix.kernel%22%2C%20%22!pix.kernel%3C3x3%3E%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20Op(%22pix.convolve%22%2C%20%22tensor%22%2C%20%5B%22!pix.kernel%3C3x3%3E%22%5D)%5D%2C%20t2%2C%20patterns%2C%20False)%0Aprint(f%22%20%20%E2%86%92%20%7Bverdict%7D%22)"># 一个 50 行的 conversion driver 模型。要弄清三件事：
+#   1. "合法"有三种：静态合法、静态非法、动态合法（看一个回调）
+#   2. partial 与 full 的差别只在最后那一步检查
+#   3. 类型变了而下游没跟上时，driver 会插一个 cast —— 解不掉就报错
+
+class Target:
+    """合法性是**四态**，不是两态（见 DialectConversion.h:1265）：
+       LEGAL / ILLEGAL / DYNAMIC / UNKNOWN。
+       UNKNOWN 的含义随上下文而变：partial 当它合法，full 当它非法。
+       这是 partial 与 full 的**唯一**实质区别。"""
+    def __init__(self):
+        self.legal_dialects, self.illegal_ops, self.dynamic = set(), set(), {}
+    def legal_dialect(self, *ds): self.legal_dialects.update(ds); return self
+    def illegal_op(self, *ops): self.illegal_ops.update(ops); return self
+    def dynamically_legal(self, op, fn): self.dynamic[op] = fn; return self
+
+    def action(self, op):
+        if op.name in self.dynamic:            # 动态：逐个 op 问回调
+            return "LEGAL" if self.dynamic[op.name](op) else "ILLEGAL"
+        if op.name in self.illegal_ops:
+            return "ILLEGAL"
+        if op.name.split(".")[0] in self.legal_dialects:
+            return "LEGAL"
+        return "UNKNOWN"                       # 什么都没说
+
+    def is_legal(self, op, full):
+        a = self.action(op)
+        return a == "LEGAL" or (a == "UNKNOWN" and not full)
+
+class Op:
+    def __init__(self, name, result_type="tensor", operand_types=()):
+        self.name, self.result_type = name, result_type
+        self.operand_types = list(operand_types)
+    def __repr__(self): return f"{self.name}:{self.result_type}"
+
+def convert(ops, target, patterns, full):
+    out, casts = [], []
+    for op in ops:
+        act = target.action(op)
+        if act == "LEGAL":
+            print(f"    {op.name}：LEGAL，不动")
+            out.append(op); continue
+        if act == "UNKNOWN" and op.name not in patterns:
+            print(f"    {op.name}：UNKNOWN（partial 放过，full 判失败）")
+            out.append(op); continue
+        if op.name not in patterns:
+            print(f"    {op.name}：ILLEGAL 但没有 pattern → 一定失败")
+            out.append(op); continue
+        new = patterns[op.name](op)
+        print(f"    {op.name} → {new}")
+        # 结果类型变了？下游还等旧类型的话，driver 要插一个 cast
+        if new.result_type != op.result_type:
+            casts.append((new.result_type, op.result_type))
+            print(f"       类型变了：插一个 unrealized_conversion_cast "
+                  f"{new.result_type} → {op.result_type}")
+        out.append(new)
+
+    # 最后一步：partial 只关心"还有没有没解决的 cast"；full 还要求全体合法
+    leftovers = [op for op in out if not target.is_legal(op, full)]
+    if casts:
+        return out, f"失败：{len(casts)} 个 cast 没人物化（第 17 章的主题）"
+    if full and leftovers:
+        return out, f"失败：full 模式下 {leftovers} 是 UNKNOWN，被当作非法"
+    if leftovers:
+        return out, f"成功：partial 模式把 UNKNOWN 当合法，{leftovers} 原样留下"
+    return out, "成功：全部合法"
+
+target = (Target().legal_dialect("arith", "tensor", "func")
+                  .illegal_op("pix.add", "pix.mul", "pix.scale"))
+patterns = {
+    "pix.add":   lambda op: Op("arith.addf", op.result_type),
+    "pix.mul":   lambda op: Op("arith.mulf", op.result_type),
+    "pix.scale": lambda op: Op("arith.mulf", op.result_type),
+    # 这条会改结果类型：!pix.kernel → tensor
+    "pix.kernel": lambda op: Op("arith.constant", "tensor&lt;3x3&gt;"),
+}
+
+CASES = [
+    ("全部可降", [Op("pix.add"), Op("pix.mul"), Op("func.return")], False),
+    ("有 pix.reduce（没标非法，也没 pattern）", [Op("pix.add"), Op("pix.reduce", "f32"), Op("func.return")], False),
+    ("同样的输入换 full 模式", [Op("pix.add"), Op("pix.reduce", "f32"), Op("func.return")], True),
+]
+for title, ops, full in CASES:
+    print(f"\n【{title}】mode={'full' if full else 'partial'}")
+    _, verdict = convert(ops, target, patterns, full)
+    print(f"  → {verdict}")
+
+print("\n【类型变了而下游没跟上】mode=partial")
+t2 = (Target().legal_dialect("arith", "tensor", "func")
+              .illegal_op("pix.kernel"))
+_, verdict = convert([Op("pix.kernel", "!pix.kernel&lt;3x3&gt;"),
+                      Op("pix.convolve", "tensor", ["!pix.kernel&lt;3x3&gt;"])], t2, patterns, False)
+print(f"  → {verdict}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【全部可降】mode=partial
+    pix.add → arith.addf:tensor
+    pix.mul → arith.mulf:tensor
+    func.return：LEGAL，不动
+  → 成功：全部合法
+
+【有 pix.reduce（没标非法，也没 pattern）】mode=partial
+    pix.add → arith.addf:tensor
+    pix.reduce：UNKNOWN（partial 放过，full 判失败）
+    func.return：LEGAL，不动
+  → 成功：全部合法
+
+【同样的输入换 full 模式】mode=full
+    pix.add → arith.addf:tensor
+    pix.reduce：UNKNOWN（partial 放过，full 判失败）
+    func.return：LEGAL，不动
+  → 失败：full 模式下 [pix.reduce:f32] 是 UNKNOWN，被当作非法
+
+【类型变了而下游没跟上】mode=partial
+    pix.kernel → arith.constant:tensor&lt;3x3&gt;
+       类型变了：插一个 unrealized_conversion_cast tensor&lt;3x3&gt; → !pix.kernel&lt;3x3&gt;
+    pix.convolve：UNKNOWN（partial 放过，full 判失败）
+  → 失败：1 个 cast 没人物化（第 17 章的主题）</code></pre>
+</div><p>注意第二组和第三组：<strong>输入完全相同、pattern 完全相同，只换了 driver</strong>，结果一个成功一个失败。差别的全部来源就是 <code>pix.reduce</code> 那个 <code>UNKNOWN</code> 的解释方式。</p>
+<p>最后一组就是下一章的入口。</p>
+<h2>顺手补掉一个真 bug：<code>ConstantLike</code> 是个契约</h2>
+<p>写这一章时我打开了 <code>lower-kernels</code> 那个选项（把 <code>pix.kernel</code> 也降成 <code>arith.constant</code>），结果 <code>pix-opt</code> 直接断言失败：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pix-opt: mlir/include/mlir/IR/Matchers.h:93: bool mlir::detail::constant_op_binder&lt;...&gt;::match(Operation *):
+Assertion `succeeded(result) &amp;&amp; "expected ConstantLike op to be foldable"' failed.</code></pre>
+</div><p>原因在第 9 章。当时给 <code>pix.kernel</code> 加了 <code>ConstantLike</code> 这个 trait，只当它是&quot;声明我是个常量&quot;，没配 folder。而 <code>Matchers.h:93</code> 那段代码说明它是个<strong>契约</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">if (!op-&gt;hasTrait&lt;OpTrait::ConstantLike&gt;())
+  return false;
+// Fold the constant to an attribute.
+SmallVector&lt;OpFoldResult, 1&gt; foldedOp;
+LogicalResult result = op-&gt;fold(/*operands=*/{}, foldedOp);
+assert(succeeded(result) &amp;&amp; "expected ConstantLike op to be foldable");</code></pre>
+</div><p><strong>任何标了 <code>ConstantLike</code> 的 op 都必须 <code>fold()</code> 成功</strong>，否则谁用 <code>m_Constant</code> 匹配它就谁崩。补一行就好：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 它不"化简"任何东西，纯粹是为了满足契约——让 m_Constant 这类匹配器
+// 能从一个 pix.kernel 上取出常量值。
+OpFoldResult KernelOp::fold(FoldAdaptor adaptor) { return getWeights(); }</code></pre>
+</div><p>这个 bug 从第 9 章一直潜伏到第 16 章，<strong>因为直到 dialect conversion 才有人走那条常量折叠的路</strong>。它是个很好的提醒：<strong>trait 不只是标签，多数 trait 背后都有一条你必须履行的义务</strong>——<code>ConstantLike</code> 要 foldable，<code>Terminator</code> 要在块尾，<code>IsolatedFromAbove</code> 要真的不引用外面（第 13 章那笔账）。加 trait 前先去看它的文档和断言。</p>
+<h2>动手：给 <code>pix.reduce</code> 一条动态合法规则</h2>
+<p>现在 <code>pix.reduce</code> 是 <code>Unknown</code>，full 模式下必然失败。改成&quot;只有当它的输入还是 <code>pix</code> 方言产出的时候才算非法&quot;——这是真实下降里 <code>addDynamicallyLegalOp</code> 最常见的用法：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">target.addDynamicallyLegalOp&lt;ReduceOp&gt;([](ReduceOp op) {
+  // 输入已经是 arith/tensor 产出的 → 我们暂时认它合法
+  Operation *def = op.getImage().getDefiningOp();
+  return !def || def-&gt;getDialect()-&gt;getNamespace() != "pix";
+});</code></pre>
+</div><p>加完跑 <code>--pix-to-arith=full=true</code>，看那句 <code>failed to legalize</code> 有没有变。</p>
+<p><strong>再改一处</strong>：把 <code>PixTypeConverter</code> 里那条身份规则 <code>addConversion([](Type ty) { return ty; });</code> 注释掉，重新构建，跑 <code>--pix-to-arith</code>。你会得到一个指向函数签名、和 <code>pix.add</code> 毫无关系的报错——<strong>亲手撞一次，以后写 <code>TypeConverter</code> 第一行就不会忘</strong>。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>dialect conversion 和 greedy pattern 是两套东西</strong>：后者追求不动点、不会失败；前者追求&quot;全体合法&quot;、会失败，而且多了类型转换这个维度。</li>
+<li><strong>合法性是四态，不是两态</strong>：<code>Legal(递归)</code> / <code>Legal(非递归)</code> / <code>Illegal</code> / <strong><code>Unknown</code></strong>（<code>DialectConversion.h:1265</code>）。<strong><code>Unknown</code> 的解释方式就是 partial 与 full 的唯一实质区别</strong>——partial 当它合法放过，full 当它非法失败。</li>
+<li><code>addDynamicallyLegalOp</code> 是&quot;下降到一半&quot;这种中间状态的唯一表达方式，真实管线里用得极多。</li>
+<li><strong><code>TypeConverter</code> 的第一条必须是身份规则</strong> <code>addConversion([](Type ty) { return ty; })</code>。漏了它，连你根本没打算换的类型都过不去，而报错会指向一个无辜的地方。</li>
+<li><code>addConversion</code> 回调的三种返回值含义不同：<code>Type</code> = 换成它，<code>std::nullopt</code> = 我不管，<strong>空 <code>Type{}</code> = 转换失败</strong>。规则是后注册的先试。</li>
+<li><strong>conversion pattern 里永远用 <code>adaptor</code> 取操作数</strong>，不要用 <code>op.getXxx()</code>。后者给的是旧值。类型没变时两者相同，所以这个错误&quot;看起来能跑&quot;，直到类型真的变了才炸。</li>
+<li><strong>绝大多数真实下降用 partial</strong>，因为下降天生分阶段。<code>full</code> 的正当用途只有&quot;管线的最后一棒&quot;，当验收闸门用。</li>
+<li><strong><code>failed to legalize operation &#39;builtin.module&#39;</code> 这种报错会挂在最外层</strong>，离真正的原因很远。第 17 章专门讲怎么读。</li>
+<li><strong>trait 多数是契约，不只是标签</strong>。<code>ConstantLike</code> 要求 op 必须 <code>fold()</code> 成功（<code>Matchers.h:93</code> 的断言），我们从第 9 章欠到这一章才补上。加 trait 前先看它的文档和断言。</li>
+</ul>
+<p><strong>pix 进度</strong>：新增 <code>pix-to-arith</code>（四个部件各一段，外加 <code>full</code> 与 <code>lower-kernels</code> 两个选项）与 <code>to_arith.mlir</code>（partial 成功 + full 失败两条 RUN 行，用 <code>not</code> 断言失败并检查报错内容）。顺带给 <code>pix.kernel</code> 补上 <code>ConstantLike</code> 欠的那个 folder。<code>check-pix</code> 从 12 涨到 13 个文件。</p>
+<p>下一章是<strong>全书最实用的一章</strong>。我们会把这一章故意留下的那个 <code>unrealized_conversion_cast</code> 解决掉：<code>addSourceMaterialization</code> / <code>addTargetMaterialization</code> 各管什么、1:N 类型展开（一个值变成好几个）怎么写、<code>SignatureConversion</code> 怎么改函数签名，以及一套读 <code>failed to legalize</code> 的系统方法——<strong>从报错反推是四态里哪一态出了问题</strong>。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch15.html">← 第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

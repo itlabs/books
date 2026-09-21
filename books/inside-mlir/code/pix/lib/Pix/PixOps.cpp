@@ -162,6 +162,11 @@ OpFoldResult ReduceOp::fold(FoldAdaptor adaptor) {
   return FloatAttr::get(getResult().getType(), acc);
 }
 
+// ConstantLike 要求的 folder：把自己折成那份权重属性。
+// 它不"化简"任何东西，纯粹是为了满足契约——让 m_Constant 这类匹配器
+// 能从一个 pix.kernel 上取出常量值。
+OpFoldResult KernelOp::fold(FoldAdaptor adaptor) { return getWeights(); }
+
 OpFoldResult ScaleOp::fold(FoldAdaptor adaptor) {
   // 系数是常量 1.0 → 整个 op 等于它的输入图
   if (auto f = dyn_cast_or_null<FloatAttr>(adaptor.getFactor()))
