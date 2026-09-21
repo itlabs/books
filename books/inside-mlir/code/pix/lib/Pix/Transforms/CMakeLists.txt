@@ -2,6 +2,7 @@
 # 只想用方言（比如做个解析器）的人不必链进所有变换代码。
 add_mlir_dialect_library(MLIRPixTransforms
   CostPasses.cpp
+  RewriteAdd.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PIX_SOURCE_DIR}/include/Pix/Transforms
@@ -14,4 +15,6 @@ add_mlir_dialect_library(MLIRPixTransforms
   MLIRFuncDialect           # pass 作用在 func.func 上
   MLIRIR
   MLIRPass
+  MLIRArithDialect           # 第 14 章的 pattern 要造 arith.constant
+  MLIRTransformUtils         # applyPatternsGreedily
   )

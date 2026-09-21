@@ -53,4 +53,25 @@ def PixHoistKernels : Pass<"pix-hoist-kernels", "::mlir::func::FuncOp"> {
   }];
 }
 
+def PixRewriteAdd : Pass<"pix-rewrite-add", "::mlir::func::FuncOp"> {
+  let summary = "第 14 章：两条都能匹配 pix.add 的 pattern，靠 benefit 决出胜者";
+  let description = [{
+    两条 pattern 都匹配 `pix.add %x, %x`，但改写成不同的东西：
+
+    - `AddSelfToScale` → `pix.scale %x, 2.0`
+    - `AddSelfToMul`   → `pix.mul %x, <全 2 的图>`
+
+    `benefit` 高的先试，成功了后面的就不再试。`swap` 选项把两条的 benefit
+    对调，于是同一份输入会得到两种不同的输出——benefit 的作用一眼可见。
+
+    这个 pass 还装了一个 `RewriterBase::Listener`，把 driver 发出的通知
+    （插入 / 替换 / 擦除 / 原地修改）计数后写成函数属性，让"通知机制"
+    这件平时看不见的事变得可观察、可测试。
+  }];
+  let options = [
+    Option<"swap", "swap", "bool", /*default=*/"false",
+           "把两条 pattern 的 benefit 对调">
+  ];
+}
+
 #endif // PIX_TRANSFORMS_PASSES

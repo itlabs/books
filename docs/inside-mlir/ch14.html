@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li class="active"><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li class="toc-todo"><span>第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</span></li>
+<li class="toc-todo"><span>第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</span></li>
+<li class="toc-todo"><span>第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</span></li>
+<li class="toc-todo"><span>第 18 章 Transform 方言：把「怎么变换」本身写成 IR</span></li>
+<li class="toc-todo"><span>第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</span></li>
+<li class="toc-todo"><span>第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</span></li>
+<li class="toc-todo"><span>第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</span></li>
+<li class="toc-todo"><span>第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</span></li>
+<li class="toc-todo"><span>第 23 章 vector 方言：向量化、mask 与按目标宽度展开</span></li>
+<li class="toc-todo"><span>第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</span></li>
+<li class="toc-todo"><span>第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</span></li>
+<li class="toc-todo"><span>第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</span></li>
+<li class="toc-todo"><span>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</span></li>
+<li class="toc-todo"><span>第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li class="toc-todo"><span>附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</span></li></ul></nav>
+<main>
+<article>
+<h1>第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 11 章我们写过 canonicalize pattern，但把引擎当黑盒用了：<code>benefit</code> 没提、<code>PatternRewriter</code> 那些 <code>notify*</code> 回调没提、worklist 里到底发生了什么也只从调试输出瞥了一眼。这一章把它打开。</p>
+<p>做法还是老办法——<strong>把看不见的东西变成可观察的</strong>。我们写一个 pass，里面装<strong>两条匹配完全相同输入、但结果不同</strong>的 pattern，靠 <code>benefit</code> 决胜负；再挂一个 <code>RewriterBase::Listener</code>，把 driver 发出的每一类通知（插入 / 替换 / 擦除 / 原地修改 / 试了几条 pattern / 赢了几条）计数后写成函数属性。于是"引擎在干什么"变成了 IR 里一串可以用 FileCheck 断言的数字。</p>
+<p>你会看到三个反直觉的观察，全部有实测：<strong>高 benefit 的 pattern 成功后，低的根本不会被试</strong>（<code>tried = 1</code> 而不是 2）；<strong>一个 op 上没有以它为根的 pattern 时，一条都不会试</strong>（<code>tried = 0</code>，所以注册几百条 pattern 不会拖慢无关的 op）；以及第 11 章那个"被 erase 的地址立刻被复用"到底会怎么坑到你。</p>
+</div><h2>三种写 pattern 的方式，先分清</h2>
+<table>
+<thead>
+<tr>
+<th>写法</th>
+<th>匹配什么</th>
+<th>什么时候用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>OpRewritePattern&lt;MyOp&gt;</code></td>
+<td>根 op 是 <code>MyOp</code></td>
+<td>绝大多数情况。类型已收窄，<code>matchAndRewrite(MyOp op, ...)</code></td>
+</tr>
+<tr>
+<td><code>OpInterfaceRewritePattern&lt;MyInterface&gt;</code></td>
+<td>任何实现了该接口的 op</td>
+<td>想一次覆盖一批 op（第 5 章那种&quot;面向接口变换&quot;）</td>
+</tr>
+<tr>
+<td><code>RewritePattern</code>（裸基类）</td>
+<td>自己给 <code>MatchAnyOpTypeTag</code> 或一个 op 名列表</td>
+<td>少用。丧失了按根 op 名索引的好处（见下）</td>
+</tr>
+</tbody></table>
+<p>本章两条都是第一种：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct AddSelfToScale : OpRewritePattern&lt;AddOp&gt; {
+  // benefit 从构造函数传进来。OpRewritePattern 的第二个参数就是它，
+  // 默认值是 1——这也是为什么"都不写 benefit"的 pattern 之间顺序不确定。
+  AddSelfToScale(MLIRContext *ctx, PatternBenefit benefit)
+      : OpRewritePattern&lt;AddOp&gt;(ctx, benefit) {}
+
+  LogicalResult matchAndRewrite(AddOp op,
+                                PatternRewriter &amp;rewriter) const override {
+    if (op.getLhs() != op.getRhs())
+      return rewriter.notifyMatchFailure(op, "两个操作数不是同一个值");
+
+    Value two = arith::ConstantOp::create(rewriter, op.getLoc(),
+                                          rewriter.getF32FloatAttr(2.0));
+    rewriter.replaceOpWithNewOp&lt;ScaleOp&gt;(op, op.getLhs(), two);
+    return success();
+  }
+};</code></pre>
+</div><p><code>AddSelfToMul</code> 只有结果不同（改写成 <code>pix.mul %x, &lt;全 2 的图&gt;</code>），<strong>匹配条件一模一样</strong>。两条同时注册，谁赢？</p>
+<div class="note">
+<strong><code>return rewriter.notifyMatchFailure(op, "理由")</code> 值得养成习惯</strong>
+<p>它返回的就是 <code>failure()</code>，所以写法上不多一个字，但那句理由会出现在 <code>--debug-only=greedy-rewriter</code> 的输出里（本章后面有实拍）。调"这条 pattern 为什么没匹配上"的时候，有没有这句话是两种体验——**没有它，你只能看到"failed to match"四个字**。</p>
+</div><h2><code>benefit</code>：谁先被试</h2>
+<p><code>PatternBenefit</code> 就是个小整数（<code>mlir/include/mlir/IR/PatternMatch.h:34</code>，内部用 65535 当&quot;不可能匹配&quot;的哨兵）。driver 拿它给 pattern 排序，<strong>高的先试</strong>。</p>
+<p>pass 里把 benefit 做成可切换的，好做对照：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct PixRewriteAddPass : impl::PixRewriteAddBase&lt;PixRewriteAddPass&gt; {
+  using Base::Base;
+
+  void runOnOperation() override {
+    func::FuncOp fn = getOperation();
+    MLIRContext *ctx = &amp;getContext();
+
+    // swap=false：scale 那条 benefit 2，赢；swap=true：反过来。
+    PatternBenefit scaleBenefit = swap ? PatternBenefit(1) : PatternBenefit(2);
+    PatternBenefit mulBenefit = swap ? PatternBenefit(2) : PatternBenefit(1);
+
+    RewritePatternSet patterns(ctx);
+    patterns.add&lt;AddSelfToScale&gt;(ctx, scaleBenefit);
+    patterns.add&lt;AddSelfToMul&gt;(ctx, mulBenefit);
+
+    CountingListener listener;
+    GreedyRewriteConfig config;
+    config.setListener(&amp;listener);
+
+    if (failed(applyPatternsGreedily(fn, std::move(patterns), config)))
+      return signalPassFailure();
+    // …把 listener 的计数写成属性
+  }
+};</code></pre>
+</div><p>注意这里是 <strong><code>applyPatternsGreedily</code></strong> 显式驱动，不是靠 <code>--canonicalize</code>。区别很实在：第 11 章那些是挂在 op 上的 canonicalizer，<strong>全局生效</strong>，谁跑 <code>--canonicalize</code> 都会用上；这一套只在这个 pass 里生效。<strong>要做&quot;只在某个阶段才该发生&quot;的改写，就得用这条路。</strong></p>
+<p>跑起来：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-rewrite-add
+func.func @self_add(%img: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %r = pix.add %img, %img : tensor&lt;4x4xf32&gt;
+  return %r : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-rewrite-add input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @self_add(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; attributes {pix.erased = 1 : i64, pix.inserted = 2 : i64, pix.modified = 1 : i64, pix.patterns_tried = 1 : i64, pix.patterns_won = 1 : i64, pix.replaced = 1 : i64} {
+    %cst = arith.constant 2.000000e+00 : f32
+    %0 = pix.scale %arg0, %cst : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p><code>pix.scale</code> 赢了。把 benefit 对调：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt b14.mlir --pix-rewrite-add=swap=true</code></pre>
+</div><p>运行结果（只看那一行）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    %0 = pix.mul %arg0, %cst : tensor&lt;4x4xf32&gt;</code></pre>
+</div><p>同一份输入、同一套 pattern，只改了两个整数，结果不同。<strong>benefit 不是&quot;提示&quot;，是决定性的。</strong></p>
+<h3><code>tried = 1</code>：成功即短路</h3>
+<p>上面那串属性里最值得盯的是 <strong><code>pix.patterns_tried = 1</code></strong>。我们注册了两条，却只试了一条——因为高 benefit 那条成功了，<strong>driver 不会再试剩下的</strong>。</p>
+<p>这不是猜的。换一个两条都匹配不上的输入做对照：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-rewrite-add
+func.func @two_operands(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %r = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+  return %r : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-rewrite-add input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @two_operands(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; attributes {pix.erased = 0 : i64, pix.inserted = 0 : i64, pix.modified = 0 : i64, pix.patterns_tried = 2 : i64, pix.patterns_won = 0 : i64, pix.replaced = 0 : i64} {
+    %0 = pix.add %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p><code>tried = 2, won = 0</code>。两条都试了、都失败了。<strong>和上一个例子对照，才能确认 <code>tried = 1</code> 不是因为&quot;只注册了一条&quot;。</strong></p>
+<h3><code>tried = 0</code>：无关的 op 一条都不问</h3>
+<p>再换一个函数，里面只有 <code>pix.mul</code>，没有 <code>pix.add</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt b14.mlir --pix-rewrite-add | grep untouched</code></pre>
+</div><p>实测 <code>pix.patterns_tried = 0</code>。</p>
+<p>原因是 <strong>pattern 按&quot;根 op 名&quot;分桶索引</strong>。driver 处理一个 op 时，只从那个 op 名对应的桶里取 pattern；桶是空的，就一条都不问。这件事的实际意义不小：<strong>一个大型方言注册几百条 pattern，不会让无关的 op 变慢</strong>——代价是 O(桶里的条数)，不是 O(全部 pattern)。</p>
+<p>（这也是上面那张表里&quot;裸 <code>RewritePattern</code> 少用&quot;的理由：用 <code>MatchAnyOpTypeTag</code> 的 pattern 进不了任何一个具体桶，每个 op 都得试它一遍。）</p>
+<div class="concept">
+<svg viewBox="0 0 700 388" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c14b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c14o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c14g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">greedy driver 处理一个 op 的全过程</text>
+  <rect x="14" y="32" width="150" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="50" font-size="10" fill="#24292f">从 worklist 取一个 op</text>
+  <text x="24" y="65" font-size="9" font-family="monospace" fill="#6b7280">pix.add %x, %x</text>
+  <line x1="166" y1="52" x2="204" y2="52" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#c14b)"/>
+  <rect x="206" y="32" width="200" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="216" y="50" font-size="10" fill="#24292f">按<tspan font-weight="bold">根 op 名</tspan>找到那个桶</text>
+  <text x="216" y="65" font-size="9" fill="#6b7280">桶空 → 一条都不试（tried=0）</text>
+  <line x1="408" y1="52" x2="446" y2="52" stroke="#2b6cb0" stroke-width="1.5" marker-end="url(#c14b)"/>
+  <rect x="448" y="32" width="238" height="40" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="458" y="50" font-size="10" fill="#24292f">桶内按 <tspan font-family="monospace">benefit</tspan> <tspan font-weight="bold">降序</tspan>逐条试</text>
+  <text x="458" y="65" font-size="9" fill="#6b7280">benefit 相同时顺序不确定，别依赖</text>
+  <rect x="448" y="86" width="238" height="30" rx="5" fill="#fff" stroke="#e06a3b"/>
+  <text x="458" y="105" font-size="10" fill="#24292f">AddSelfToScale　benefit = 2　先试</text>
+  <rect x="448" y="120" width="238" height="30" rx="5" fill="#fff" stroke="#9aa4b2" stroke-dasharray="4 3"/>
+  <text x="458" y="139" font-size="10" fill="#6b7280">AddSelfToMul　benefit = 1　可能<tspan font-weight="bold">轮不到</tspan></text>
+  <line x1="567" y1="152" x2="567" y2="176" stroke="#3f9b5c" stroke-width="1.6" marker-end="url(#c14g)"/>
+  <text x="575" y="170" font-size="9" fill="#3f9b5c">成功 → 立刻 break</text>
+  <rect x="380" y="180" width="306" height="52" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="390" y="199" font-size="10" font-weight="bold" fill="#2f7a45">matchAndRewrite 里改 IR</text>
+  <text x="390" y="216" font-size="9" fill="#24292f">每个动作都发一条通知（下方），driver 靠它们维护 worklist</text>
+  <line x1="378" y1="206" x2="342" y2="206" stroke="#3f9b5c" stroke-width="1.6" marker-end="url(#c14g)"/>
+  <rect x="140" y="180" width="196" height="52" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="150" y="199" font-size="10" fill="#24292f">受影响的 op <tspan font-weight="bold">重新入队</tspan></text>
+  <text x="150" y="216" font-size="9" fill="#6b7280">于是回到左上角，直到队列排空</text>
+  <path d="M 150 206 L 89 206 L 89 76" fill="none" stroke="#2b6cb0" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#c14b)"/>
+  <line x1="14" y1="248" x2="686" y2="248" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="268" font-size="11" font-weight="bold" fill="#e06a3b">RewriterBase::Listener 的回调 —— 挂上它，以上全部可观察</text>
+  <rect x="14" y="278" width="330" height="100" rx="6" fill="#fff" stroke="#2b6cb0"/>
+  <text x="26" y="297" font-size="10" font-weight="bold" fill="#2b6cb0">改 IR 的动作</text>
+  <text x="26" y="315" font-size="9" font-family="monospace" fill="#24292f">notifyOperationInserted(op, prev)</text>
+  <text x="26" y="330" font-size="9" font-family="monospace" fill="#24292f">notifyOperationReplaced(op, values)</text>
+  <text x="26" y="345" font-size="9" font-family="monospace" fill="#24292f">notifyOperationErased(op)</text>
+  <text x="26" y="360" font-size="9" font-family="monospace" fill="#24292f">notifyOperationModified(op)</text>
+  <text x="26" y="374" font-size="9" font-family="monospace" fill="#24292f">notifyBlockInserted / notifyBlockErased</text>
+  <rect x="356" y="278" width="330" height="100" rx="6" fill="#fff" stroke="#e06a3b"/>
+  <text x="368" y="297" font-size="10" font-weight="bold" fill="#e06a3b">pattern 的生命周期</text>
+  <text x="368" y="315" font-size="9" font-family="monospace" fill="#24292f">notifyPatternBegin(pattern, op)</text>
+  <text x="368" y="330" font-size="9" font-family="monospace" fill="#24292f">notifyPatternEnd(pattern, status)</text>
+  <text x="368" y="345" font-size="9" font-family="monospace" fill="#24292f">notifyMatchFailure(loc, reason)</text>
+  <text x="368" y="362" font-size="9" fill="#6b7280">Begin/End 数出 tried；End 的 status 数出 won；</text>
+  <text x="368" y="375" font-size="9" fill="#6b7280">MatchFailure 就是 --debug-only 里那行理由</text>
+</svg>
+<div class="caption">图 14-1　driver 处理一个 op 的完整路径：按根 op 名分桶 → 桶内按 benefit 降序 → 成功即 break → 受影响的 op 重新入队。右下角那组回调让整条路径可观察</div>
+</div><h2>通知机制：driver 和 pattern 之间的那条线</h2>
+<p><code>PatternRewriter</code> 的每一个改 IR 的方法，背后都会发一条通知。driver 就是靠这些通知知道&quot;该把谁重新入队&quot;的——第 11 章那句&quot;新 op 重新入队&quot;，底层就是 <code>notifyOperationInserted</code>。</p>
+<p>接口在 <code>mlir/include/mlir/IR/PatternMatch.h:370</code>（<code>RewriterBase::Listener</code>，继承自 <code>OpBuilder::Listener</code>），完整回调见图 14-1 右下。挂一个上去就能全部数出来：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct CountingListener : public RewriterBase::Listener {
+  int64_t inserted = 0, replaced = 0, erased = 0, modified = 0;
+  int64_t patternsTried = 0, patternsWon = 0;
+
+  void notifyOperationInserted(Operation *, OpBuilder::InsertPoint) override {
+    ++inserted;
+  }
+  void notifyOperationReplaced(Operation *, ValueRange) override { ++replaced; }
+  void notifyOperationErased(Operation *) override { ++erased; }
+  void notifyOperationModified(Operation *) override { ++modified; }
+  void notifyPatternBegin(const Pattern &amp;, Operation *) override {
+    ++patternsTried;
+  }
+  void notifyPatternEnd(const Pattern &amp;, LogicalResult status) override {
+    if (succeeded(status))
+      ++patternsWon;
+  }
+};</code></pre>
+</div><p>回头看 <code>@self_add</code> 那串计数，每个数字都对得上一件具体的事：</p>
+<table>
+<thead>
+<tr>
+<th>计数</th>
+<th>值</th>
+<th>谁造成的</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>inserted</code></td>
+<td>2</td>
+<td>新建的 <code>arith.constant</code> 和 <code>pix.scale</code></td>
+</tr>
+<tr>
+<td><code>replaced</code></td>
+<td>1</td>
+<td><code>replaceOpWithNewOp</code> 把 <code>pix.add</code> 的结果换掉</td>
+</tr>
+<tr>
+<td><code>erased</code></td>
+<td>1</td>
+<td>被换掉的 <code>pix.add</code> 随后被删</td>
+</tr>
+<tr>
+<td><code>modified</code></td>
+<td>1</td>
+<td><code>func.return</code> 的操作数被改成新值</td>
+</tr>
+<tr>
+<td><code>patterns_tried</code></td>
+<td>1</td>
+<td>高 benefit 那条一次就成了</td>
+</tr>
+<tr>
+<td><code>patterns_won</code></td>
+<td>1</td>
+<td>同上</td>
+</tr>
+</tbody></table>
+<p><code>modified = 1</code> 那一条特别说明问题：<strong>我们没写任何代码去改 <code>func.return</code></strong>，是 <code>replaceOpWithNewOp</code> 顺着 def-use 链把用户全改了。这正是第 2 章那条 <code>OpOperand</code> 双向链表在干活。</p>
+<div class="warn">
+<strong><code>InsertPoint</code> 要写全限定名</strong>
+<p><code>notifyOperationInserted</code> 的第二个参数类型是 <code>OpBuilder::InsertPoint</code>（<code>Builders.h:329</code> 里是 <code>OpBuilder</code> 的嵌套类）。我照文档上的签名写了裸 <code>InsertPoint</code>，得到 <code>'InsertPoint' has not been declared</code> 外加一句 <code>marked 'override', but does not override</code>——后半句才是真正的线索：<strong>参数类型不对，就不是覆盖，而是新增了一个同名函数</strong>，编译器只在你写了 <code>override</code> 时才会提醒你。没写 <code>override</code> 的话，这会变成一个静默失效的回调。<strong>覆盖虚函数一律写 <code>override</code></strong>。</p>
+</div><h2><code>--debug-only=greedy-rewriter</code>：读懂它的自述</h2>
+<p>前面那些计数告诉你&quot;发生了多少次&quot;，调试时你还想知道&quot;具体在哪一步、为什么&quot;。开断言的本地构建上：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt b14c.mlir --pix-rewrite-add --debug-only=greedy-rewriter</code></pre>
+</div><p>运行结果（<code>pix.add %a, %b</code> 那一段）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[greedy-rewriter:1] Processing operation : 'pix.add'(0x59142ff5ad80) {
+[greedy-rewriter:1]   %0 = "pix.add"(%arg0, %arg1) : (tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt;
+[greedy-rewriter:1]
+[greedy-rewriter:1]   * Pattern mlir::pix::{anonymous}::AddSelfToScale : 'pix.add -&gt; ()' {
+[greedy-rewriter:1]     ** Match Failure : 两个操作数不是同一个值
+[greedy-rewriter:1]   } -&gt; failure : pattern failed to match
+[greedy-rewriter:1]
+[greedy-rewriter:1]   * Pattern mlir::pix::{anonymous}::AddSelfToMul : 'pix.add -&gt; ()' {
+[greedy-rewriter:1]     ** Match Failure : 两个操作数不是同一个值
+[greedy-rewriter:1]   } -&gt; failure : pattern failed to match
+[greedy-rewriter:1] } -&gt; failure : all patterns failed to match</code></pre>
+</div><p>三件事一次看全：<strong>顺序</strong>——<code>AddSelfToScale</code>（benefit 2）确实排在 <code>AddSelfToMul</code>（benefit 1）前面；<strong>理由</strong>——我们 <code>notifyMatchFailure</code> 里写的那句话原样出现在 <code>** Match Failure</code> 后面；<strong>结论</strong>——<code>all patterns failed to match</code>。</p>
+<p><code>&#39;pix.add -&gt; ()&#39;</code> 这个记号是&quot;根 op → 产出的 op 名&quot;，我们没声明产出（可以用 ODS 或构造函数声明），所以是空的。声明了的话 driver 能做更多静态检查。</p>
+<div class="warn">
+<strong>别用地址判断"是不是同一个 op"</strong>
+<p>第 11 章那段 ping-pong 输出里，被 erase 的 <code>pix.add</code> 的地址立刻被新建的 op 复用了——MLIR 的分配器就是这么工作的。所以调试时看到两行相同的地址，<strong>不能</strong>推断它们是同一个 op。真要跟踪某个 op 的一生，用 <code>--mlir-print-ir-after-each-pattern</code> 之类看 IR 内容，或者在 Listener 里按内容记录，<strong>别记指针</strong>。<code>notifyOperationErased</code> 之后那个指针就是悬垂的，连打印都不安全。</p>
+</div><h2>把引擎自己跑一遍</h2>
+<p>上面三个观察（成功即短路、按根 op 名分桶、benefit 降序）都可以在一个小模型里复现。下面 55 行的 driver 会打出和真 pix-opt <strong>完全一致</strong>的 tried/won 计数：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%2055%20%E8%A1%8C%E7%9A%84%20greedy%20driver%EF%BC%8C%E8%BF%99%E6%AC%A1%E6%8A%8A%20benefit%20%E6%8E%92%E5%BA%8F%E3%80%81%E6%8C%89%E6%A0%B9%20op%20%E5%90%8D%E7%B4%A2%E5%BC%95%E3%80%81%0A%23%20%E6%88%90%E5%8A%9F%E5%8D%B3%E7%9F%AD%E8%B7%AF%E3%80%81%E4%BB%A5%E5%8F%8A%E9%80%9A%E7%9F%A5%E6%9C%BA%E5%88%B6%E9%83%BD%E6%94%BE%E8%BF%9B%E6%9D%A5%E2%80%94%E2%80%94%E5%AF%B9%E7%9D%80%E7%AC%AC%2014%20%E7%AB%A0%E6%AD%A3%E6%96%87%E9%82%A3%E5%87%A0%E7%BB%84%E5%AE%9E%E6%B5%8B%E7%9C%8B%E3%80%82%0A%0Aclass%20Pattern%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20root%2C%20benefit%2C%20rewrite)%3A%0A%20%20%20%20%20%20%20%20self.name%2C%20self.root%2C%20self.benefit%2C%20self.rewrite%20%3D%20name%2C%20root%2C%20benefit%2C%20rewrite%0A%0Aclass%20Op%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20operands%3D())%3A%0A%20%20%20%20%20%20%20%20self.name%2C%20self.operands%20%3D%20name%2C%20list(operands)%0A%20%20%20%20def%20__repr__(self)%3A%20return%20f%22%7Bself.name%7D(%7B'%2C%20'.join(self.operands)%7D)%22%0A%0Aclass%20Driver%3A%0A%20%20%20%20def%20__init__(self%2C%20patterns)%3A%0A%20%20%20%20%20%20%20%20%23%20%E5%85%B3%E9%94%AE%E4%B8%80%E6%AD%A5%EF%BC%9A%E6%8C%89%E6%A0%B9%20op%20%E5%90%8D%E5%88%86%E6%A1%B6%EF%BC%8C%E6%A1%B6%E5%86%85%E6%8C%89%20benefit%20**%E9%99%8D%E5%BA%8F**%E3%80%82%0A%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E4%B8%A4%E4%BB%B6%E4%BA%8B%E8%A7%A3%E9%87%8A%E4%BA%86%E6%AD%A3%E6%96%87%E9%87%8C%E4%B8%A4%E4%B8%AA%E8%A7%82%E5%AF%9F%EF%BC%9A%E6%97%A0%E5%85%B3%20op%20%E4%B8%80%E6%9D%A1%20pattern%20%E9%83%BD%E4%B8%8D%E4%BC%9A%E8%AF%95%EF%BC%9B%0A%20%20%20%20%20%20%20%20%23%20benefit%20%E9%AB%98%E7%9A%84%E5%85%88%E8%AF%95%E3%80%82%0A%20%20%20%20%20%20%20%20self.by_root%20%3D%20%7B%7D%0A%20%20%20%20%20%20%20%20for%20p%20in%20patterns%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20self.by_root.setdefault(p.root%2C%20%5B%5D).append(p)%0A%20%20%20%20%20%20%20%20for%20bucket%20in%20self.by_root.values()%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20bucket.sort(key%3Dlambda%20p%3A%20-p.benefit)%0A%20%20%20%20%20%20%20%20self.tried%20%3D%20self.won%20%3D%20self.inserted%20%3D%20self.replaced%20%3D%200%0A%0A%20%20%20%20def%20process(self%2C%20ops)%3A%0A%20%20%20%20%20%20%20%20worklist%20%3D%20list(range(len(ops)))%0A%20%20%20%20%20%20%20%20while%20worklist%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20i%20%3D%20worklist.pop(0)%0A%20%20%20%20%20%20%20%20%20%20%20%20op%20%3D%20ops%5Bi%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20bucket%20%3D%20self.by_root.get(op.name%2C%20%5B%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20not%20bucket%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%EF%BC%9A%E6%B2%A1%E6%9C%89%E4%BB%A5%E5%AE%83%E4%B8%BA%E6%A0%B9%E7%9A%84%20pattern%EF%BC%8C%E4%B8%80%E6%9D%A1%E9%83%BD%E4%B8%8D%E8%AF%95%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%20%20%20%20for%20p%20in%20bucket%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%B7%B2%E6%8C%89%20benefit%20%E9%99%8D%E5%BA%8F%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20self.tried%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20new%20%3D%20p.rewrite(op)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20new%20is%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%20%E2%86%90%20%7Bp.name%7D(benefit%3D%7Bp.benefit%7D)%20%E5%8C%B9%E9%85%8D%E5%A4%B1%E8%B4%A5%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20self.won%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20self.inserted%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20self.replaced%20%2B%3D%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20ops%5Bi%5D%20%3D%20new%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bop.name%7D%20%E2%86%90%20%7Bp.name%7D(benefit%3D%7Bp.benefit%7D)%20%E6%88%90%E5%8A%9F%20%E2%86%92%20%7Bnew%7D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%20%E5%90%8E%E9%9D%A2%20benefit%20%E6%9B%B4%E4%BD%8E%E7%9A%84%20%7Blen(bucket)%20-%20bucket.index(p)%20-%201%7D%20%E6%9D%A1**%E4%B8%8D%E5%86%8D%E8%AF%95**%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20worklist.append(i)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%96%B0%20op%20%E9%87%8D%E6%96%B0%E5%85%A5%E9%98%9F%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20break%0A%20%20%20%20%20%20%20%20return%20ops%0A%0Adef%20add_self_to(target)%3A%0A%20%20%20%20def%20rewrite(op)%3A%0A%20%20%20%20%20%20%20%20if%20op.name%20!%3D%20%22pix.add%22%20or%20len(set(op.operands))%20!%3D%201%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20None%0A%20%20%20%20%20%20%20%20return%20Op(target%2C%20%5Bop.operands%5B0%5D%2C%20%22%25two%22%5D)%0A%20%20%20%20return%20rewrite%0A%0Adef%20build(swap)%3A%0A%20%20%20%20return%20%5BPattern(%22AddSelfToScale%22%2C%20%22pix.add%22%2C%201%20if%20swap%20else%202%2C%20add_self_to(%22pix.scale%22))%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20Pattern(%22AddSelfToMul%22%2C%20%20%20%22pix.add%22%2C%202%20if%20swap%20else%201%2C%20add_self_to(%22pix.mul%22))%5D%0A%0Afor%20title%2C%20swap%2C%20ops%20in%20%5B%0A%20%20%20%20(%22%E9%BB%98%E8%AE%A4%EF%BC%9Ascale%20%E7%9A%84%20benefit%20%E9%AB%98%22%2C%20False%2C%20%5BOp(%22pix.add%22%2C%20%5B%22%25x%22%2C%20%22%25x%22%5D)%5D)%2C%0A%20%20%20%20(%22swap%EF%BC%9Amul%20%E7%9A%84%20benefit%20%E9%AB%98%22%2C%20%20True%2C%20%20%5BOp(%22pix.add%22%2C%20%5B%22%25x%22%2C%20%22%25x%22%5D)%5D)%2C%0A%20%20%20%20(%22%E6%93%8D%E4%BD%9C%E6%95%B0%E4%B8%8D%E5%90%8C%EF%BC%9A%E4%B8%A4%E6%9D%A1%E9%83%BD%E5%A4%B1%E8%B4%A5%22%2C%20%20%20%20False%2C%20%5BOp(%22pix.add%22%2C%20%5B%22%25a%22%2C%20%22%25b%22%5D)%5D)%2C%0A%20%20%20%20(%22%E6%B2%A1%E6%9C%89%20pix.add%EF%BC%9A%E4%B8%80%E6%9D%A1%E9%83%BD%E4%B8%8D%E8%AF%95%22%2C%20%20False%2C%20%5BOp(%22pix.mul%22%2C%20%5B%22%25x%22%2C%20%22%25x%22%5D)%5D)%2C%0A%5D%3A%0A%20%20%20%20d%20%3D%20Driver(build(swap))%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91%22)%0A%20%20%20%20result%20%3D%20d.process(list(ops))%0A%20%20%20%20print(f%22%20%20%E7%BB%93%E6%9E%9C%20IR%EF%BC%9A%7Bresult%7D%22)%0A%20%20%20%20print(f%22%20%20tried%3D%7Bd.tried%7D%20won%3D%7Bd.won%7D%20inserted%3D%7Bd.inserted%7D%20replaced%3D%7Bd.replaced%7D%22)"># 一个 55 行的 greedy driver，这次把 benefit 排序、按根 op 名索引、
+# 成功即短路、以及通知机制都放进来——对着第 14 章正文那几组实测看。
+
+class Pattern:
+    def __init__(self, name, root, benefit, rewrite):
+        self.name, self.root, self.benefit, self.rewrite = name, root, benefit, rewrite
+
+class Op:
+    def __init__(self, name, operands=()):
+        self.name, self.operands = name, list(operands)
+    def __repr__(self): return f"{self.name}({', '.join(self.operands)})"
+
+class Driver:
+    def __init__(self, patterns):
+        # 关键一步：按根 op 名分桶，桶内按 benefit **降序**。
+        # 这两件事解释了正文里两个观察：无关 op 一条 pattern 都不会试；
+        # benefit 高的先试。
+        self.by_root = {}
+        for p in patterns:
+            self.by_root.setdefault(p.root, []).append(p)
+        for bucket in self.by_root.values():
+            bucket.sort(key=lambda p: -p.benefit)
+        self.tried = self.won = self.inserted = self.replaced = 0
+
+    def process(self, ops):
+        worklist = list(range(len(ops)))
+        while worklist:
+            i = worklist.pop(0)
+            op = ops[i]
+            bucket = self.by_root.get(op.name, [])
+            if not bucket:
+                print(f"    {op.name}：没有以它为根的 pattern，一条都不试")
+                continue
+            for p in bucket:                       # 已按 benefit 降序
+                self.tried += 1
+                new = p.rewrite(op)
+                if new is None:
+                    print(f"    {op.name} ← {p.name}(benefit={p.benefit}) 匹配失败")
+                    continue
+                self.won += 1
+                self.inserted += 1
+                self.replaced += 1
+                ops[i] = new
+                print(f"    {op.name} ← {p.name}(benefit={p.benefit}) 成功 → {new}")
+                print(f"       后面 benefit 更低的 {len(bucket) - bucket.index(p) - 1} 条**不再试**")
+                worklist.append(i)                 # 新 op 重新入队
+                break
+        return ops
+
+def add_self_to(target):
+    def rewrite(op):
+        if op.name != "pix.add" or len(set(op.operands)) != 1:
+            return None
+        return Op(target, [op.operands[0], "%two"])
+    return rewrite
+
+def build(swap):
+    return [Pattern("AddSelfToScale", "pix.add", 1 if swap else 2, add_self_to("pix.scale")),
+            Pattern("AddSelfToMul",   "pix.add", 2 if swap else 1, add_self_to("pix.mul"))]
+
+for title, swap, ops in [
+    ("默认：scale 的 benefit 高", False, [Op("pix.add", ["%x", "%x"])]),
+    ("swap：mul 的 benefit 高",  True,  [Op("pix.add", ["%x", "%x"])]),
+    ("操作数不同：两条都失败",    False, [Op("pix.add", ["%a", "%b"])]),
+    ("没有 pix.add：一条都不试",  False, [Op("pix.mul", ["%x", "%x"])]),
+]:
+    d = Driver(build(swap))
+    print(f"\n【{title}】")
+    result = d.process(list(ops))
+    print(f"  结果 IR：{result}")
+    print(f"  tried={d.tried} won={d.won} inserted={d.inserted} replaced={d.replaced}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【默认：scale 的 benefit 高】
+    pix.add ← AddSelfToScale(benefit=2) 成功 → pix.scale(%x, %two)
+       后面 benefit 更低的 1 条**不再试**
+    pix.scale：没有以它为根的 pattern，一条都不试
+  结果 IR：[pix.scale(%x, %two)]
+  tried=1 won=1 inserted=1 replaced=1
+
+【swap：mul 的 benefit 高】
+    pix.add ← AddSelfToMul(benefit=2) 成功 → pix.mul(%x, %two)
+       后面 benefit 更低的 1 条**不再试**
+    pix.mul：没有以它为根的 pattern，一条都不试
+  结果 IR：[pix.mul(%x, %two)]
+  tried=1 won=1 inserted=1 replaced=1
+
+【操作数不同：两条都失败】
+    pix.add ← AddSelfToScale(benefit=2) 匹配失败
+    pix.add ← AddSelfToMul(benefit=1) 匹配失败
+  结果 IR：[pix.add(%a, %b)]
+  tried=2 won=0 inserted=0 replaced=0
+
+【没有 pix.add：一条都不试】
+    pix.mul：没有以它为根的 pattern，一条都不试
+  结果 IR：[pix.mul(%x, %x)]
+  tried=0 won=0 inserted=0 replaced=0</code></pre>
+</div><p>四组的 <code>tried/won</code> 分别是 <code>1/1</code>、<code>1/1</code>、<code>2/0</code>、<code>0/0</code>——和本章前面用真 <code>pix-opt</code> 测出来的一模一样。模型里那两句就是全部秘密：<strong>按根 op 名分桶</strong>（<code>self.by_root</code>）、<strong>桶内按 benefit 降序</strong>（<code>sort(key=lambda p: -p.benefit)</code>），加上成功后的 <code>break</code>。</p>
+<h2>收敛：这一章要补的最后一块</h2>
+<p>第 11 章讲过 <code>--canonicalize</code> 跑到不动点，也踩过互逆 pattern 挂死的坑。<code>applyPatternsGreedily</code> 用的是同一个 driver，所以同一条规矩适用：<strong>你装的这套 pattern 也必须能收敛</strong>。</p>
+<p><code>GreedyRewriteConfig</code> 上几个和收敛直接相关的旋钮，值得记住位置（<code>mlir/include/mlir/Transforms/GreedyPatternRewriteDriver.h</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>旋钮</th>
+<th>默认</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>maxIterations</code></td>
+<td>10</td>
+<td>外层轮次上限</td>
+</tr>
+<tr>
+<td><code>maxNumRewrites</code></td>
+<td>无上限</td>
+<td><strong>内层</strong>改写次数上限。第 11 章挂死就因为它没上限</td>
+</tr>
+<tr>
+<td><code>useTopDownTraversal</code></td>
+<td>false</td>
+<td>自底向上还是自顶向下遍历</td>
+</tr>
+<tr>
+<td><code>setListener</code></td>
+<td>无</td>
+<td>本章用的那个口子</td>
+</tr>
+</tbody></table>
+<p>调试自己的 pattern 集时，<strong>先把 <code>maxNumRewrites</code> 设成一个有限值</strong>（比如 100），挂死就变成了&quot;到上限退出&quot;，比让进程卡住好查得多。第 13 章讲过 <code>--dump-pass-pipeline</code> 会把 <code>canonicalize</code> 的这些选项原样展开给你看，那里就能看到 <code>max-num-rewrites=-1</code>。</p>
+<h2>动手：给两条 pattern 声明&quot;产出什么&quot;</h2>
+<p><code>OpRewritePattern</code> 的构造函数还能声明这条 pattern 会<strong>产出</strong>哪些 op：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">AddSelfToScale(MLIRContext *ctx, PatternBenefit benefit)
+    : OpRewritePattern&lt;AddOp&gt;(ctx, benefit,
+                              /*generatedNames=*/{ScaleOp::getOperationName(),
+                                                  arith::ConstantOp::getOperationName()}) {}</code></pre>
+</div><p>改完重编，再跑一遍 <code>--debug-only=greedy-rewriter</code>，看那行 <code>&#39;pix.add -&gt; ()&#39;</code> 变成了什么。</p>
+<p><strong>再改一处</strong>：把 <code>AddSelfToMul</code> 的 benefit 也改成 2（和 <code>AddSelfToScale</code> 相同），然后反复跑 <code>--pix-rewrite-add</code>。结果是 <code>pix.scale</code> 还是 <code>pix.mul</code>？换个顺序 <code>patterns.add</code> 再试。<strong>结论应该让你不敢再依赖相同 benefit 时的顺序</strong>——这正是&quot;该写 benefit 就写 benefit&quot;的理由。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>OpRewritePattern&lt;MyOp&gt;</code> 是常规选择；要一次覆盖一批 op 用 <code>OpInterfaceRewritePattern</code>。裸 <code>RewritePattern</code> + <code>MatchAnyOpTypeTag</code> 少用——它进不了按根 op 名分的桶，每个 op 都得试一遍。</li>
+<li><strong><code>benefit</code> 是决定性的，不是提示。</strong> 高的先试，<strong>成功了低的根本不会被试</strong>（实测 <code>tried = 1</code> 而非 2）。相同 benefit 时顺序不确定，别依赖。</li>
+<li><strong>pattern 按根 op 名分桶索引</strong>：一个 op 上没有对应的 pattern，一条都不问（实测 <code>tried = 0</code>）。所以大方言注册几百条 pattern，不会拖慢无关的 op。</li>
+<li><code>matchAndRewrite</code> 里失败时用 <strong><code>return rewriter.notifyMatchFailure(op, &quot;理由&quot;)</code></strong>。不多写一个字，但那句理由会出现在 <code>--debug-only=greedy-rewriter</code> 里；没有它你只能看到&quot;failed to match&quot;。</li>
+<li><strong><code>RewriterBase::Listener</code>（<code>PatternMatch.h:370</code>）是把引擎变透明的那个口子。</strong> <code>notifyOperationInserted/Replaced/Erased/Modified</code> 对应改 IR 的四类动作，<code>notifyPatternBegin/End</code> 数得出试了几条、赢了几条。driver 自己也是靠这些通知维护 worklist 的。</li>
+<li>覆盖虚函数<strong>一律写 <code>override</code></strong>。<code>notifyOperationInserted</code> 的参数是 <code>OpBuilder::InsertPoint</code>（嵌套类，要写全限定名）；类型写错而没有 <code>override</code> 的话，你得到的是一个静默失效的回调。</li>
+<li><strong><code>replaceOpWithNewOp</code> 会顺着 def-use 链把所有使用者改掉</strong>——实测 <code>modified = 1</code> 就是 <code>func.return</code> 被改了，我们一行相关代码都没写。</li>
+<li><strong>别用地址判断 op 身份</strong>：被 erase 的内存会立刻被复用。<code>notifyOperationErased</code> 之后那个指针是悬垂的。</li>
+<li>自己装的 pattern 集<strong>同样要保证收敛</strong>。调试时先把 <code>maxNumRewrites</code> 设成有限值，挂死就变成&quot;到上限退出&quot;。</li>
+<li><strong>挂在 op 上的 canonicalizer 是全局生效的；<code>applyPatternsGreedily</code> 装的这套只在本 pass 生效。</strong> 要做&quot;只在某个阶段才该发生&quot;的改写，走后一条路。</li>
+</ul>
+<p><strong>pix 进度</strong>：新增 <code>pix-rewrite-add</code>（两条抢同一个 op 的 pattern + 一个计数 Listener + <code>swap</code> 选项）与 <code>rewrite_add.mlir</code>（两条 RUN 行做 benefit 对照，靠 <code>CHECK-SAME</code> 断言挂在函数头上的计数属性），<code>check-pix</code> 从 10 涨到 11 个文件。</p>
+<p>下一章讲<strong>声明式重写</strong>：<strong>DRR</strong>（<code>Pat&lt;&gt;</code>，写在 TableGen 里）和 <strong>PDLL</strong>。它们能把本章那种 C++ pattern 压缩成几行声明，但都有明确的天花板——那一章最重要的产出不是语法，而是一张判断表：<strong>什么时候老老实实写 C++。</strong></p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch13.html">← 第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
