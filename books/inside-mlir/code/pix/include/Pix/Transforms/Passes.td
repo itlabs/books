@@ -116,7 +116,13 @@ def PixToArith : Pass<"pix-to-arith", "::mlir::ModuleOp"> {
     Option<"full", "full", "bool", /*default=*/"false",
            "用 applyFullConversion 代替 applyPartialConversion">,
     Option<"lowerKernels", "lower-kernels", "bool", /*default=*/"false",
-           "顺带把 pix.kernel 降成 tensor 常量（会暴露第 17 章要讲的物化问题）">
+           "顺带把 pix.kernel 降成 tensor 常量（类型会变，于是需要物化）">,
+    Option<"noMaterialize", "no-materialize", "bool", /*default=*/"false",
+           "故意不装物化钩子，复现第 16 章末尾那次 unresolved materialization 失败">,
+    Option<"convertSignatures", "convert-signatures", "bool", /*default=*/"false",
+           "顺带转换函数签名里的 !pix.kernel（第 17 章）">,
+    Option<"oneToN", "one-to-n", "bool", /*default=*/"false",
+           "把 !pix.kernel 展成两个值（权重 + 半径），演示 1:N 类型转换">
   ];
 }
 

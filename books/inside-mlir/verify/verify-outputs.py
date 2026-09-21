@@ -21,6 +21,7 @@ import difflib
 import glob
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -46,7 +47,10 @@ def tool_and_args(code):
         args = "--canonicalize"
     args = args.split("|")[0].strip()
     exe = PIX_OPT if name == "pix-opt" else os.path.join(MLIR_BIN, name)
-    return name, exe, [a for a in args.split() if a]
+    # 用 shlex 而不是 split()：RUN 行里常有带引号的整体参数，比如
+    #   --pix-to-arith='convert-signatures=true one-to-n=true'
+    # 按空白硬切会把它拆成两个，得到 "Too many positional arguments"。
+    return name, exe, [a for a in shlex.split(args) if a]
 
 
 def main():

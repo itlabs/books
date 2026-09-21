@@ -264,4 +264,35 @@ def Pix_ConvolveOp : Pix_Op<"convolve", [Pure, AllTypesMatch<["image", "result"]
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// 第 17 章新增：两个 cast op，专门用来做**物化**
+//
+// 物化（materialization）是 dialect conversion 的补丁机制：类型转换让某处的
+// 值换了类型，而另一处还在等旧类型时，driver 需要一个 op 把两边接起来。
+// 它不会替你发明这个 op —— **你的方言必须提供一个能表达这个转换的 op**。
+// 这两个就是。它们是纯粹的表示转换，不做任何计算，所以都是 Pure。
+//===----------------------------------------------------------------------===//
+
+def Pix_ToKernelOp : Pix_Op<"to_kernel", [Pure]> {
+  let summary = "把一张权重张量看作一个卷积核（用于 source 物化）";
+  let description = [{
+    `addSourceMaterialization` 用它：某个 pattern 已经把卷积核变成了
+    `tensor<RxCxf32>`，但还有别人在等 `!pix.kernel<R x C>`，就插一个这个。
+  }];
+  let arguments = (ins F32Tensor:$weights);
+  let results = (outs Pix_KernelType:$result);
+  let assemblyFormat = "$weights attr-dict `:` type($weights) `->` type($result)";
+}
+
+def Pix_FromKernelOp : Pix_Op<"from_kernel", [Pure]> {
+  let summary = "把一个卷积核看作权重张量（用于 target 物化）";
+  let description = [{
+    `addTargetMaterialization` 用它：方向和 `pix.to_kernel` 相反。
+    两个方向都要有，因为转换是**逐步**进行的，两种"接不上"都会发生。
+  }];
+  let arguments = (ins Pix_KernelType:$kernel);
+  let results = (outs F32Tensor:$result);
+  let assemblyFormat = "$kernel attr-dict `:` type($kernel) `->` type($result)";
+}
+
 #endif // PIX_OPS

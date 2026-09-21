@@ -99,6 +99,13 @@ for lang in mlir mlir-lower mlir-translate; do
     b="$(basename "$f")"
     [ -z "$args" ] && args="$defargs"
 
+    # RUN 行里常有带引号的整体参数，例如
+    #   --pix-to-arith='convert-signatures=true one-to-n=true'
+    # 直接用未加引号的 $args 会被 shell 再切一刀，得到
+    #   "Too many positional arguments specified!"
+    # 所以先按 shell 词法解析成数组。
+    eval "argv=($args)"
+
     # 本块该用哪个可执行文件？pix-opt 只能用本地的，其余可走 CE
     use_ce="$CE"; runner="$bin"
     if [ "$blocktool" = "pix-opt" ]; then
@@ -113,10 +120,10 @@ for lang in mlir mlir-lower mlir-translate; do
     total=$((total+1))
     out="$TMP/$b.out"; err="$TMP/$b.err"
     if [ "$use_ce" = "1" ]; then
-      node "$CE_COMPILE" "$ceid" "$f" $args >"$out" 2>"$err"; rc=$?
+      node "$CE_COMPILE" "$ceid" "$f" "${argv[@]}" >"$out" 2>"$err"; rc=$?
     else
       # shellcheck disable=SC2086
-      "$runner" $args "$f" >"$out" 2>"$err"; rc=$?
+      "$runner" "${argv[@]}" "$f" >"$out" 2>"$err"; rc=$?
     fi
     if [ "$rc" -eq 0 ]; then
       echo "  ✓ $b  [$blocktool $args]"; ok=$((ok+1))
