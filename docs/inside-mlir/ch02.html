@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li class="active"><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章说 MLIR「没有固定的指令集，只有骨架」。这一章就把骨架拆开：<strong>Operation、Region、Block、Value</strong> 四个概念，加上把它们连起来的 <strong>OpOperand</strong>。你会看到 <code>Operation</code> 在内存里是怎么一次性分配出来的、为什么 MLIR 不需要 <code>phi</code> 指令、为什么「一个函数」和「一个模块」在 MLIR 里都只是普通的 op。</p>
+<p>拿走三样东西：一张能对着 LLVM IR 逐项翻译的对照表；一个浏览器里能跑的迷你 IR，你会亲手实现 <code>replaceAllUsesWith</code>——所有 pattern 重写背后的那个原子动作（第 14 章会用真家伙再做一遍）；以及一个此后天天要用的判断力：看到一段 MLIR，能立刻说出它有几层 region、哪些值跨了 region 边界、谁是 terminator。</p>
+</div><h2>先摆一张对照表</h2>
+<p>你已经有 LLVM IR 的心智模型了，最快的路是逐项翻译。先记结论，后面逐条展开：</p>
+<table>
+<thead>
+<tr>
+<th>LLVM IR</th>
+<th>MLIR</th>
+<th>差别在哪</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Module</code></td>
+<td><code>builtin.module</code> <strong>op</strong></td>
+<td>模块不是特殊容器，就是一个普通 op</td>
+</tr>
+<tr>
+<td><code>Function</code></td>
+<td><code>func.func</code> <strong>op</strong></td>
+<td>函数也是 op；它的函数体是它的 region</td>
+</tr>
+<tr>
+<td><code>BasicBlock</code></td>
+<td><code>Block</code></td>
+<td>概念一致，但 block 可以有<strong>参数</strong></td>
+</tr>
+<tr>
+<td><code>Instruction</code></td>
+<td><code>Operation</code></td>
+<td>指令集不固定；op 可以<strong>嵌套 region</strong></td>
+</tr>
+<tr>
+<td><code>Value</code></td>
+<td><code>Value</code></td>
+<td>一致：SSA 值。来源只有两种（op 结果 / 块参数）</td>
+</tr>
+<tr>
+<td><code>Use</code> / <code>User</code></td>
+<td><code>OpOperand</code></td>
+<td>一致：一条 def-use 边是个对象</td>
+</tr>
+<tr>
+<td><code>phi</code> 指令</td>
+<td><strong>块参数 + terminator 传参</strong></td>
+<td>MLIR 没有 phi</td>
+</tr>
+<tr>
+<td>固定的类型系统</td>
+<td>方言可注册类型</td>
+<td><code>tensor</code>、<code>memref</code>、<code>!pix.kernel</code> 平等</td>
+</tr>
+<tr>
+<td>metadata（可丢）</td>
+<td><strong>属性</strong>（固有属性不可丢）</td>
+<td>语义有保证，见本章最后一节</td>
+</tr>
+<tr>
+<td>intrinsic</td>
+<td>就是普通 op</td>
+<td>不需要&quot;特殊指令&quot;这个概念</td>
+</tr>
+</tbody></table>
+<p>一句话总结这张表：<strong>MLIR 把 LLVM IR 里那些&quot;特殊的东西&quot;（模块、函数、phi、intrinsic）全部化归成了同一个东西——op。</strong></p>
+<h2>Operation：唯一的主角</h2>
+<p>MLIR 里几乎所有东西都是 <code>Operation</code>。一个 op 身上挂着这些部分：</p>
+<ul>
+<li><strong>名字</strong>（<code>OperationName</code>）：<code>&quot;arith.addf&quot;</code> 这样的字符串，前缀就是方言名。注意名字是<strong>运行时数据</strong>，不是 C++ 枚举——这正是 op 可扩展的前提。</li>
+<li><strong>操作数</strong>（operands）：一串 <code>Value</code>，每个操作数对应一条 def-use 边。</li>
+<li><strong>结果</strong>（results）：一串 <code>Value</code>。可以是 0 个（<code>func.return</code>）、1 个、或多个。</li>
+<li><strong>属性 / 属性存储</strong>（attributes、properties）：编译期常量数据，比如常量的值、函数名、<code>fastmath</code> 标志。</li>
+<li><strong>region</strong>：0 到 N 个。这是 MLIR 与 LLVM IR 结构上最大的不同。</li>
+<li><strong>后继块</strong>（successors）：只有分支类 op 才有。</li>
+<li><strong>位置</strong>（<code>Location</code>）：<strong>不可选</strong>。每个 op 都带位置信息，报错才能指回源码。</li>
+<li>以及它在哪个 <code>Block</code> 里。</li>
+</ul>
+<p>这些东西在内存里不是一堆独立的 <code>std::vector</code>，而是<strong>紧跟在 <code>Operation</code> 对象后面一次性分配出来的</strong>。源码里这行类声明就是证据（<code>mlir/include/mlir/IR/Operation.h</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// mlir/include/mlir/IR/Operation.h
+class alignas(8) Operation final
+    : public llvm::ilist_node_with_parent&lt;Operation, Block&gt;,
+      private llvm::TrailingObjects&lt;Operation, detail::OperandStorage,
+                                    detail::OpProperties, BlockOperand, Region,
+                                    OpOperand&gt; {
+public:
+  static Operation *create(Location location, OperationName name,
+                           TypeRange resultTypes, ValueRange operands, ...);</code></pre>
+</div><p>读法：<code>TrailingObjects&lt;Operation, A, B, C…&gt;</code> 是 LLVM 里一个常用手法——<strong>把若干个变长数组接在对象自己后面</strong>，一次 <code>malloc</code> 搞定。所以一个 op 的操作数存储、属性存储、后继块、region 列表、以及结果对应的 <code>OpOperand</code>，全都在同一块内存里。<code>ilist_node_with_parent&lt;Operation, Block&gt;</code> 则说明 op 是<strong>侵入式链表的节点</strong>，它天生知道自己的父 block，在链表里插入删除都是 O(1)。</p>
+<div class="concept">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="14" y="20" font-size="13" font-weight="bold" fill="#24292f">一个 Operation 在内存里：一次分配，变长部分接在后面</text>
+  <rect x="20" y="36" width="140" height="80" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="34" y="56" font-size="12" font-weight="bold" fill="#2b6cb0">Operation</text>
+  <text x="34" y="74" font-size="10" fill="#24292f">name（字符串化）</text>
+  <text x="34" y="89" font-size="10" fill="#24292f">location（必有）</text>
+  <text x="34" y="104" font-size="10" fill="#24292f">parent block 指针</text>
+  <g font-size="10">
+    <rect x="172" y="36" width="104" height="36" rx="5" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="182" y="52" fill="#2f7a45" font-weight="bold">OperandStorage</text>
+    <text x="182" y="66" fill="#6b7280">操作数（变长）</text>
+    <rect x="172" y="80" width="104" height="36" rx="5" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="182" y="96" fill="#2f7a45" font-weight="bold">OpProperties</text>
+    <text x="182" y="110" fill="#6b7280">固有属性</text>
+    <rect x="288" y="36" width="104" height="36" rx="5" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="298" y="52" fill="#2f7a45" font-weight="bold">BlockOperand[]</text>
+    <text x="298" y="66" fill="#6b7280">后继块（分支才有）</text>
+    <rect x="288" y="80" width="104" height="36" rx="5" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="298" y="96" fill="#2f7a45" font-weight="bold">Region[]</text>
+    <text x="298" y="110" fill="#6b7280">嵌套区域</text>
+    <rect x="404" y="58" width="104" height="36" rx="5" fill="#f0f8f2" stroke="#3f9b5c"/>
+    <text x="414" y="74" fill="#2f7a45" font-weight="bold">OpOperand[]</text>
+    <text x="414" y="88" fill="#6b7280">结果的 use 边</text>
+  </g>
+  <line x1="160" y1="76" x2="170" y2="76" stroke="#6b7280"/>
+  <line x1="276" y1="76" x2="286" y2="76" stroke="#6b7280"/>
+  <line x1="392" y1="76" x2="402" y2="76" stroke="#6b7280"/>
+  <text x="524" y="70" font-size="11" fill="#e06a3b">一次 malloc</text>
+  <text x="524" y="86" font-size="11" fill="#e06a3b">零指针跳转</text>
+  <line x1="20" y1="140" x2="680" y2="140" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="164" font-size="12" font-weight="bold" fill="#6b7280">对比 LLVM IR 的 Instruction</text>
+  <text x="14" y="184" font-size="11" fill="#24292f">指令种类固定（一张 .def 表），操作数个数基本固定，<tspan font-weight="bold">不能嵌套</tspan>——所以不需要变长 region 列表</text>
+  <text x="14" y="204" font-size="11" fill="#24292f">MLIR 反过来：op 种类无限、操作数/结果/region 个数全不定，于是必须把"变长"做进内存布局里</text>
+  <text x="14" y="230" font-size="11" fill="#e06a3b">代价：op 名是字符串化的、查询要过一层间接——这是"可扩展"换来的开销（第 13 章谈编译时间时会再提）</text>
+</svg>
+<div class="caption">图 2-1　Operation 的内存布局。理解这张图能解释很多现象：为什么 op 没有"构造函数"只有 `create`（要先算出变长部分的大小）、为什么改变操作数个数的 API 很少、以及为什么 MLIR 能在一个 IR 里容纳成千上万种 op</div>
+</div><div class="keypoint">
+<strong>三个要尽早接受的"都是 op"</strong>
+<p><strong>模块是 op</strong>（<code>builtin.module</code>）：所以 pass 可以跑在模块上，也可以跑在任何 op 上，没有"顶层特殊处理"。<strong>函数是 op</strong>（<code>func.func</code>）：所以一个方言可以定义自己的"函数"（比如 <code>gpu.func</code>），不需要改框架。<strong>常量是 op</strong>（<code>arith.constant</code>）：MLIR 里没有"立即数操作数"这种东西，常量必须先由一个 op 产生出一个值——这点第 11 章讲折叠时会变得很关键。</p>
+</div><h2>Value 与 def-use：边也是对象</h2>
+<p><code>Value</code> 就是 SSA 值。它的来源<strong>只有两种</strong>（<code>mlir/include/mlir/IR/Value.h</code>）：</p>
+<ul>
+<li><strong><code>OpResult</code></strong>：某个 op 的第 n 个结果。</li>
+<li><strong><code>BlockArgument</code></strong>：某个 block 的第 n 个参数。</li>
+</ul>
+<p>没有第三种。函数参数不是特例——它们就是函数体 region 首块的块参数。</p>
+<p>把值和 op 连起来的是 <strong><code>OpOperand</code></strong>：一条 def-use 边。关键点在于<strong>边是一个对象，不是一根裸指针</strong>。每个 <code>OpOperand</code> 知道自己属于哪个 op、是第几个操作数、指向哪个值；而每个值维护一条<strong>侵入式链表</strong>，串起所有指向它的 <code>OpOperand</code>（<code>mlir/include/mlir/IR/UseDefLists.h</code> 里的 <code>IRObjectWithUseList</code>，成员就叫 <code>firstUse</code>）。</p>
+<p>这个设计带来一个极其常用的能力：<code>Value::replaceAllUsesWith(newValue)</code>——把「所有用我的地方」一次性改成用别人，代价与使用次数成正比，不需要扫整个函数。<strong>MLIR 里几乎所有变换最后都落到这一句上。</strong></p>
+<p>下面这段代码把 <code>Value</code> / <code>OpOperand</code> / <code>Operation</code> 三者照搬成 60 行 Python，然后做一次 <code>replaceAllUsesWith</code>，把第 1 章那个「乘 1.0」折掉。点运行，看 use list 怎么变：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%E8%BF%B7%E4%BD%A0%20IR%EF%BC%9A%E6%8A%8A%20MLIR%20%E7%9A%84%20Value%20%2F%20OpOperand%20%2F%20Operation%20%E4%B8%89%E8%80%85%E7%9A%84%E5%85%B3%E7%B3%BB%E7%85%A7%E6%90%AC%E5%87%BA%E6%9D%A5%EF%BC%8C%0A%23%20%E7%84%B6%E5%90%8E%E5%81%9A%E4%B8%80%E6%AC%A1%20replaceAllUsesWith%E2%80%94%E2%80%94%E8%BF%99%E6%98%AF%E6%89%80%E6%9C%89%20pattern%20%E9%87%8D%E5%86%99%E8%83%8C%E5%90%8E%E7%9A%84%E9%82%A3%E4%B8%AA%E5%8E%9F%E5%AD%90%E5%8A%A8%E4%BD%9C%E3%80%82%0A%0Aclass%20Value%3A%0A%20%20%20%20%22%22%22SSA%20%E5%80%BC%E3%80%82%E5%AE%83%E8%AE%B0%E7%9D%80'%E8%B0%81%E5%9C%A8%E7%94%A8%E6%88%91'%EF%BC%88use%20list%EF%BC%89%EF%BC%8C%E8%80%8C%E4%B8%8D%E5%8F%AA%E6%98%AF'%E6%88%91%E8%A2%AB%E8%B0%81%E5%AE%9A%E4%B9%89'%E3%80%82%22%22%22%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20defining_op%3DNone)%3A%0A%20%20%20%20%20%20%20%20self.name%20%3D%20name%0A%20%20%20%20%20%20%20%20self.defining_op%20%3D%20defining_op%20%20%20%23%20None%20%E8%A1%A8%E7%A4%BA%E5%AE%83%E6%98%AF%E5%9D%97%E5%8F%82%E6%95%B0%EF%BC%88%E6%AF%94%E5%A6%82%E5%87%BD%E6%95%B0%E5%85%A5%E5%8F%A3%E5%8F%82%E6%95%B0%EF%BC%89%0A%20%20%20%20%20%20%20%20self.uses%20%3D%20%5B%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%85%83%E7%B4%A0%E6%98%AF%20OpOperand%EF%BC%9BMLIR%20%E9%87%8C%E8%BF%99%E6%98%AF%E4%B8%80%E6%9D%A1%E4%BE%B5%E5%85%A5%E5%BC%8F%E9%93%BE%E8%A1%A8%0A%0A%20%20%20%20def%20replace_all_uses_with(self%2C%20new_value)%3A%0A%20%20%20%20%20%20%20%20%23%20MLIR%20%E9%87%8C%E8%BF%99%E4%B8%80%E5%8F%A5%E5%B0%B1%E6%98%AF%20Value%3A%3AreplaceAllUsesWith(newValue)%0A%20%20%20%20%20%20%20%20moved%20%3D%20list(self.uses)%0A%20%20%20%20%20%20%20%20for%20use%20in%20moved%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20use.set(new_value)%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E6%9D%A1%E8%BE%B9%E6%94%B9%E6%8C%87%E5%90%91%EF%BC%8C%E9%A1%BA%E6%89%8B%E7%BB%B4%E6%8A%A4%E4%B8%A4%E7%AB%AF%E7%9A%84%20use%20list%0A%20%20%20%20%20%20%20%20return%20len(moved)%0A%0A%20%20%20%20def%20__repr__(self)%3A%0A%20%20%20%20%20%20%20%20return%20self.name%0A%0A%0Aclass%20OpOperand%3A%0A%20%20%20%20%22%22%22%E4%B8%80%E6%9D%A1%20def-use%20%E8%BE%B9%E3%80%82%E5%AE%83%E6%98%AF%E4%B8%AA%E5%AF%B9%E8%B1%A1%EF%BC%8C%E4%B8%8D%E6%98%AF%E8%A3%B8%E6%8C%87%E9%92%88%E2%80%94%E2%80%94%E5%AE%83%E7%9F%A5%E9%81%93%E8%87%AA%E5%B7%B1%E5%B1%9E%E4%BA%8E%E5%93%AA%E4%B8%AA%20op%20%E7%9A%84%E7%AC%AC%E5%87%A0%E4%B8%AA%E6%93%8D%E4%BD%9C%E6%95%B0%E3%80%82%22%22%22%0A%20%20%20%20def%20__init__(self%2C%20owner%2C%20index%2C%20value)%3A%0A%20%20%20%20%20%20%20%20self.owner%2C%20self.index%2C%20self.value%20%3D%20owner%2C%20index%2C%20None%0A%20%20%20%20%20%20%20%20self.set(value)%0A%0A%20%20%20%20def%20set(self%2C%20value)%3A%0A%20%20%20%20%20%20%20%20if%20self.value%20is%20not%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20self.value.uses.remove(self)%0A%20%20%20%20%20%20%20%20self.value%20%3D%20value%0A%20%20%20%20%20%20%20%20value.uses.append(self)%0A%0A%0Aclass%20Operation%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20operands%2C%20num_results%3D1)%3A%0A%20%20%20%20%20%20%20%20self.name%20%3D%20name%0A%20%20%20%20%20%20%20%20self.operands%20%3D%20%5BOpOperand(self%2C%20i%2C%20v)%20for%20i%2C%20v%20in%20enumerate(operands)%5D%0A%20%20%20%20%20%20%20%20short%20%3D%20name.split(%22.%22)%5B-1%5D%0A%20%20%20%20%20%20%20%20self.results%20%3D%20%5BValue(f%22%25%7Bshort%7D%7Bi%7D%22%2C%20self)%20for%20i%20in%20range(num_results)%5D%0A%0A%20%20%20%20def%20ins(self)%3A%0A%20%20%20%20%20%20%20%20return%20%5Bo.value%20for%20o%20in%20self.operands%5D%0A%0A%20%20%20%20def%20__repr__(self)%3A%0A%20%20%20%20%20%20%20%20outs%20%3D%20%22%2C%20%22.join(r.name%20for%20r%20in%20self.results)%0A%20%20%20%20%20%20%20%20lhs%20%3D%20outs%20%2B%20%22%20%3D%20%22%20if%20outs%20else%20%22%22%0A%20%20%20%20%20%20%20%20return%20f%22%7Blhs%7D%7Bself.name%7D%20%7B'%2C%20'.join(v.name%20for%20v%20in%20self.ins())%7D%22%0A%0A%0Adef%20dump(title%2C%20values%2C%20ops)%3A%0A%20%20%20%20print(f%22---%20%7Btitle%7D%20---%22)%0A%20%20%20%20for%20op%20in%20ops%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%22%20%2B%20repr(op))%0A%20%20%20%20print(%22%20%20use%20list%EF%BC%88%E8%B0%81%E5%9C%A8%E7%94%A8%E8%BF%99%E4%B8%AA%E5%80%BC%EF%BC%89%EF%BC%9A%22)%0A%20%20%20%20for%20v%20in%20values%3A%0A%20%20%20%20%20%20%20%20users%20%3D%20%5Bf%22%7Bu.owner.name%7D%23%7Bu.index%7D%22%20for%20u%20in%20v.uses%5D%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bv.name%3A%3E8%7D%20-%3E%20%7Busers%20if%20users%20else%20'%EF%BC%88%E6%B2%A1%E4%BA%BA%E7%94%A8%EF%BC%89'%7D%22)%0A%20%20%20%20print()%0A%0A%0A%23%20%E6%9E%84%E9%80%A0%EF%BC%9A%25sum%20%3D%20addf%20%25a%2C%20%25b%20%3B%20%25out%20%3D%20mulf%20%25sum%2C%20%25one%20%3B%20return%20%25out%0Aa%2C%20b%2C%20one%20%3D%20Value(%22%25a%22)%2C%20Value(%22%25b%22)%2C%20Value(%22%25one%22)%0Aaddf%20%3D%20Operation(%22arith.addf%22%2C%20%5Ba%2C%20b%5D)%0Asum_v%20%3D%20addf.results%5B0%5D%0Amulf%20%3D%20Operation(%22arith.mulf%22%2C%20%5Bsum_v%2C%20one%5D)%0Aout_v%20%3D%20mulf.results%5B0%5D%0Aret%20%3D%20Operation(%22func.return%22%2C%20%5Bout_v%5D%2C%20num_results%3D0)%0Aops%20%3D%20%5Baddf%2C%20mulf%2C%20ret%5D%0Awatch%20%3D%20%5Ba%2C%20b%2C%20one%2C%20sum_v%2C%20out_v%5D%0Adump(%22%E6%9E%84%E9%80%A0%E5%AE%8C%E6%88%90%22%2C%20watch%2C%20ops)%0A%0A%23%20%E5%81%9A%22%E4%B9%98%201.0%20%E7%AD%89%E4%BA%8E%E6%B2%A1%E4%B9%98%22%E8%BF%99%E4%B8%AA%E6%8A%98%E5%8F%A0%EF%BC%9A%E6%8A%8A%20mulf%20%E7%9A%84%E7%BB%93%E6%9E%9C%EF%BC%8C%E5%85%A8%E9%83%A8%E6%8D%A2%E6%88%90%E5%AE%83%E7%9A%84%E7%AC%AC%E4%B8%80%E4%B8%AA%E6%93%8D%E4%BD%9C%E6%95%B0%0An%20%3D%20out_v.replace_all_uses_with(sum_v)%0Aprint(f%22replaceAllUsesWith%EF%BC%9A%E6%94%B9%E5%86%99%E4%BA%86%20%7Bn%7D%20%E6%9D%A1%20def-use%20%E8%BE%B9%22)%0Aprint()%0Adump(%22%E6%8A%98%E5%8F%A0%E4%B9%8B%E5%90%8E%EF%BC%88mulf%20%E8%BF%98%E5%9C%A8%EF%BC%8C%E4%BD%86%E5%B7%B2%E7%BB%8F%E6%B2%A1%E4%BA%BA%E7%94%A8%E5%AE%83%E7%9A%84%E7%BB%93%E6%9E%9C%EF%BC%89%22%2C%20watch%2C%20ops)%0A%0A%0Adef%20erase(op%2C%20ops)%3A%0A%20%20%20%20if%20any(r.uses%20for%20r%20in%20op.results)%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bop.name%7D%20%E7%9A%84%E7%BB%93%E6%9E%9C%E8%BF%98%E6%9C%89%E4%BA%BA%E7%94%A8%EF%BC%8C%E4%B8%8D%E8%83%BD%E5%88%A0%22)%0A%20%20%20%20%20%20%20%20return%0A%20%20%20%20for%20use%20in%20list(op.operands)%3A%0A%20%20%20%20%20%20%20%20use.value.uses.remove(use)%0A%20%20%20%20ops.remove(op)%0A%20%20%20%20print(f%22%20%20%E5%88%A0%E6%8E%89%20%7Bop.name%7D%22)%0A%0A%0Aprint(%22%E6%B8%85%E7%90%86%E6%AD%BB%E4%BB%A3%E7%A0%81%EF%BC%9A%22)%0Aerase(mulf%2C%20ops)%0Aprint()%0Adump(%22%E6%9C%80%E7%BB%88%20IR%22%2C%20watch%2C%20ops)%0Aprint(%22%E6%B3%A8%E6%84%8F%20%25one%20%E7%9A%84%20use%20list%20%E4%B9%9F%E7%A9%BA%E4%BA%86%E2%80%94%E2%80%94%E5%AE%9A%E4%B9%89%E5%AE%83%E7%9A%84%E9%82%A3%E4%B8%AA%E5%B8%B8%E9%87%8F%20op%20%E4%BA%8E%E6%98%AF%E4%B9%9F%E6%88%90%E4%BA%86%E6%AD%BB%E4%BB%A3%E7%A0%81%EF%BC%8C%22)%0Aprint(%22%E4%BC%9A%E8%A2%AB%E5%90%8C%E4%B8%80%E8%B6%9F%E6%B8%85%E7%90%86%E9%A1%BA%E6%89%8B%E5%B8%A6%E8%B5%B0%E3%80%82%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%BA%E4%BB%80%E4%B9%88%20MLIR%20%E9%87%8C'%E6%8A%98%E5%8F%A0'%E5%92%8C'%E5%88%A0%E6%AD%BB%E4%BB%A3%E7%A0%81'%E6%80%BB%E6%98%AF%E6%88%90%E5%AF%B9%E5%87%BA%E7%8E%B0%E3%80%82%22)"># 一个迷你 IR：把 MLIR 的 Value / OpOperand / Operation 三者的关系照搬出来，
+# 然后做一次 replaceAllUsesWith——这是所有 pattern 重写背后的那个原子动作。
+
+class Value:
+    """SSA 值。它记着'谁在用我'（use list），而不只是'我被谁定义'。"""
+    def __init__(self, name, defining_op=None):
+        self.name = name
+        self.defining_op = defining_op   # None 表示它是块参数（比如函数入口参数）
+        self.uses = []                   # 元素是 OpOperand；MLIR 里这是一条侵入式链表
+
+    def replace_all_uses_with(self, new_value):
+        # MLIR 里这一句就是 Value::replaceAllUsesWith(newValue)
+        moved = list(self.uses)
+        for use in moved:
+            use.set(new_value)           # 每条边改指向，顺手维护两端的 use list
+        return len(moved)
+
+    def __repr__(self):
+        return self.name
+
+
+class OpOperand:
+    """一条 def-use 边。它是个对象，不是裸指针——它知道自己属于哪个 op 的第几个操作数。"""
+    def __init__(self, owner, index, value):
+        self.owner, self.index, self.value = owner, index, None
+        self.set(value)
+
+    def set(self, value):
+        if self.value is not None:
+            self.value.uses.remove(self)
+        self.value = value
+        value.uses.append(self)
+
+
+class Operation:
+    def __init__(self, name, operands, num_results=1):
+        self.name = name
+        self.operands = [OpOperand(self, i, v) for i, v in enumerate(operands)]
+        short = name.split(".")[-1]
+        self.results = [Value(f"%{short}{i}", self) for i in range(num_results)]
+
+    def ins(self):
+        return [o.value for o in self.operands]
+
+    def __repr__(self):
+        outs = ", ".join(r.name for r in self.results)
+        lhs = outs + " = " if outs else ""
+        return f"{lhs}{self.name} {', '.join(v.name for v in self.ins())}"
+
+
+def dump(title, values, ops):
+    print(f"--- {title} ---")
+    for op in ops:
+        print("  " + repr(op))
+    print("  use list（谁在用这个值）：")
+    for v in values:
+        users = [f"{u.owner.name}#{u.index}" for u in v.uses]
+        print(f"    {v.name:&gt;8} -&gt; {users if users else '（没人用）'}")
+    print()
+
+
+# 构造：%sum = addf %a, %b ; %out = mulf %sum, %one ; return %out
+a, b, one = Value("%a"), Value("%b"), Value("%one")
+addf = Operation("arith.addf", [a, b])
+sum_v = addf.results[0]
+mulf = Operation("arith.mulf", [sum_v, one])
+out_v = mulf.results[0]
+ret = Operation("func.return", [out_v], num_results=0)
+ops = [addf, mulf, ret]
+watch = [a, b, one, sum_v, out_v]
+dump("构造完成", watch, ops)
+
+# 做"乘 1.0 等于没乘"这个折叠：把 mulf 的结果，全部换成它的第一个操作数
+n = out_v.replace_all_uses_with(sum_v)
+print(f"replaceAllUsesWith：改写了 {n} 条 def-use 边")
+print()
+dump("折叠之后（mulf 还在，但已经没人用它的结果）", watch, ops)
+
+
+def erase(op, ops):
+    if any(r.uses for r in op.results):
+        print(f"  {op.name} 的结果还有人用，不能删")
+        return
+    for use in list(op.operands):
+        use.value.uses.remove(use)
+    ops.remove(op)
+    print(f"  删掉 {op.name}")
+
+
+print("清理死代码：")
+erase(mulf, ops)
+print()
+dump("最终 IR", watch, ops)
+print("注意 %one 的 use list 也空了——定义它的那个常量 op 于是也成了死代码，")
+print("会被同一趟清理顺手带走。这就是为什么 MLIR 里'折叠'和'删死代码'总是成对出现。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">--- 构造完成 ---
+  %addf0 = arith.addf %a, %b
+  %mulf0 = arith.mulf %addf0, %one
+  func.return %mulf0
+  use list（谁在用这个值）：
+          %a -&gt; ['arith.addf#0']
+          %b -&gt; ['arith.addf#1']
+        %one -&gt; ['arith.mulf#1']
+      %addf0 -&gt; ['arith.mulf#0']
+      %mulf0 -&gt; ['func.return#0']
+
+replaceAllUsesWith：改写了 1 条 def-use 边
+
+--- 折叠之后（mulf 还在，但已经没人用它的结果） ---
+  %addf0 = arith.addf %a, %b
+  %mulf0 = arith.mulf %addf0, %one
+  func.return %addf0
+  use list（谁在用这个值）：
+          %a -&gt; ['arith.addf#0']
+          %b -&gt; ['arith.addf#1']
+        %one -&gt; ['arith.mulf#1']
+      %addf0 -&gt; ['arith.mulf#0', 'func.return#0']
+      %mulf0 -&gt; （没人用）
+
+清理死代码：
+  删掉 arith.mulf
+
+--- 最终 IR ---
+  %addf0 = arith.addf %a, %b
+  func.return %addf0
+  use list（谁在用这个值）：
+          %a -&gt; ['arith.addf#0']
+          %b -&gt; ['arith.addf#1']
+        %one -&gt; （没人用）
+      %addf0 -&gt; ['func.return#0']
+      %mulf0 -&gt; （没人用）
+
+注意 %one 的 use list 也空了——定义它的那个常量 op 于是也成了死代码，
+会被同一趟清理顺手带走。这就是为什么 MLIR 里'折叠'和'删死代码'总是成对出现。</code></pre>
+</div><p><strong>这段输出就是第 1 章那条 <code>--canonicalize</code> 命令内部发生的事。</strong> 真正的 <code>mlir-opt</code> 只是把「折叠 + RAUW + 删死 op」放进了一个带 worklist 的驱动器里反复跑（第 14 章）。</p>
+<div class="note">
+<strong>两个细节值得注意</strong>
+<p>一，折叠之后 <code>arith.mulf</code> <strong>还在 IR 里</strong>，只是没人用它的结果了——"改写"与"删除"是两个独立动作。二，判断一个 op 能不能删，不只看"有没有用户"，还要看它<strong>有没有副作用</strong>：一个没人用结果的 <code>memref.store</code> 绝不能删。这个信息由第 5 章的 <code>MemoryEffects</code> 接口提供，而 <code>Pure</code> 这个 trait 就是"无副作用 + 可推测执行"的简写。</p>
+</div><h2>Region 与 Block：嵌套是一等公民</h2>
+<p>现在到了 MLIR 与 LLVM IR 结构上真正分岔的地方。</p>
+<ul>
+<li><strong><code>Block</code></strong> = 一串 op + <strong>一组块参数</strong> + 最后一个 op 是 <strong>terminator</strong>。</li>
+<li><strong><code>Region</code></strong> = 一串 <code>Block</code>。</li>
+<li>一个 op 可以有 <strong>0 到 N 个 region</strong>。</li>
+</ul>
+<p>于是 IR 是一棵<strong>树</strong>：op 里有 region，region 里有 block，block 里又有 op……一路嵌套下去。LLVM IR 只有「函数 → 基本块 → 指令」这固定三层，且指令内部不能再套东西。</p>
+<p>看一个真实的三层嵌套。这段代码求和，用 <code>scf.for</code> 带 <code>iter_args</code>（相当于循环携带的累加器）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6ImZ1bmMuZnVuYyBAc3VtKCVidWY6IG1lbXJlZjw4eGYzMj4pIC0%2BIGYzMiB7XG4gICVjMCA9IGFyaXRoLmNvbnN0YW50IDAgOiBpbmRleFxuICAlYzEgPSBhcml0aC5jb25zdGFudCAxIDogaW5kZXhcbiAgJWM4ID0gYXJpdGguY29uc3RhbnQgOCA6IGluZGV4XG4gICVpbml0ID0gYXJpdGguY29uc3RhbnQgMC4wIDogZjMyXG4gICV0b3RhbCA9IHNjZi5mb3IgJWkgPSAlYzAgdG8gJWM4IHN0ZXAgJWMxIGl0ZXJfYXJncyglYWNjID0gJWluaXQpIC0%2BIChmMzIpIHtcbiAgICAldiA9IG1lbXJlZi5sb2FkICVidWZbJWldIDogbWVtcmVmPDh4ZjMyPlxuICAgICVuZXh0ID0gYXJpdGguYWRkZiAlYWNjLCAldiA6IGYzMlxuICAgIHNjZi55aWVsZCAlbmV4dCA6IGYzMlxuICB9XG4gIHJldHVybiAldG90YWwgOiBmMzJcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6IiJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">func.func @sum(%buf: memref&lt;8xf32&gt;) -&gt; f32 {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %init = arith.constant 0.0 : f32
+  %total = scf.for %i = %c0 to %c8 step %c1 iter_args(%acc = %init) -&gt; (f32) {
+    %v = memref.load %buf[%i] : memref&lt;8xf32&gt;
+    %next = arith.addf %acc, %v : f32
+    scf.yield %next : f32
+  }
+  return %total : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt input.mlir</code></div>
+</div><p>把它用通用格式打印出来，嵌套结构就全露出来了：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-opt sum.mlir --mlir-print-op-generic</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">"builtin.module"() ({
+  "func.func"() &lt;{function_type = (memref&lt;8xf32&gt;) -&gt; f32, sym_name = "sum"}&gt; ({
+  ^bb0(%arg0: memref&lt;8xf32&gt;):
+    %0 = "arith.constant"() &lt;{value = 0 : index}&gt; : () -&gt; index
+    %1 = "arith.constant"() &lt;{value = 1 : index}&gt; : () -&gt; index
+    %2 = "arith.constant"() &lt;{value = 8 : index}&gt; : () -&gt; index
+    %3 = "arith.constant"() &lt;{value = 0.000000e+00 : f32}&gt; : () -&gt; f32
+    %4 = "scf.for"(%0, %2, %1, %3) ({
+    ^bb0(%arg1: index, %arg2: f32):
+      %5 = "memref.load"(%arg0, %arg1) : (memref&lt;8xf32&gt;, index) -&gt; f32
+      %6 = "arith.addf"(%arg2, %5) &lt;{fastmath = #arith.fastmath&lt;none&gt;}&gt; : (f32, f32) -&gt; f32
+      "scf.yield"(%6) : (f32) -&gt; ()
+    }) : (index, index, index, f32) -&gt; f32
+    "func.return"(%4) : (f32) -&gt; ()
+  }) : () -&gt; ()
+}) : () -&gt; ()</code></pre>
+</div><p>逐条对着看，有五个信息量很大的点：</p>
+<ol>
+<li><strong>三层 region 清晰可见</strong>：<code>builtin.module</code> 的 region 里装着 <code>func.func</code>，<code>func.func</code> 的 region 里装着循环，<code>scf.for</code> 的 region 里装着循环体。</li>
+<li><strong>归纳变量 <code>%i</code> 和累加器 <code>%acc</code> 都是块参数</strong>：<code>^bb0(%arg1: index, %arg2: f32)</code>。循环体不是&quot;知道自己是循环体&quot;的特殊结构，它只是一个带参数的 block。</li>
+<li><strong><code>scf.yield</code> 是 terminator</strong>，它把这一轮的累加值交回给 <code>scf.for</code>；<code>scf.for</code> 的结果 <code>%4</code> 就是最后一轮 yield 的值。</li>
+<li><strong><code>%arg0</code>（那个 memref）被循环体直接引用了</strong>——它定义在外层 region，但在内层可见。这是 MLIR 允许的：<strong>内层 region 能引用外层已定义的值</strong>，不必像函数调用那样把所有东西当参数传进去。</li>
+<li><code>scf.for</code> 的操作数是 <code>(%0, %2, %1, %3)</code>，即 lower/upper/step/init——自定义格式里那套漂亮的 <code>%i = %c0 to %c8 step %c1</code> 语法只是<strong>打印出来的糖</strong>（第 3 章、第 8 章讲它从哪来）。</li>
+</ol>
+<div class="concept">
+<svg viewBox="0 0 700 290" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="14" y="20" font-size="13" font-weight="bold" fill="#24292f">IR 是一棵树：op → region → block → op</text>
+  <rect x="20" y="32" width="660" height="240" rx="8" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="32" y="50" font-size="11" font-weight="bold" fill="#2b6cb0">op: builtin.module</text>
+  <rect x="36" y="58" width="628" height="204" rx="6" fill="#fff" stroke="#2b6cb0" stroke-dasharray="4 3"/>
+  <text x="46" y="74" font-size="10" fill="#6b7280">region #0</text>
+  <rect x="52" y="82" width="596" height="172" rx="6" fill="#eef4fb" stroke="#2b6cb0"/>
+  <text x="62" y="98" font-size="11" font-weight="bold" fill="#2b6cb0">op: func.func @sum</text>
+  <rect x="66" y="106" width="566" height="140" rx="6" fill="#fff" stroke="#2b6cb0" stroke-dasharray="4 3"/>
+  <text x="76" y="122" font-size="10" fill="#6b7280">region #0 · block ^bb0(%arg0: memref&lt;8xf32&gt;)　←　函数参数 = 首块的块参数</text>
+  <rect x="82" y="130" width="250" height="24" rx="4" fill="#f0f8f2" stroke="#3f9b5c"/>
+  <text x="92" y="146" font-size="10" fill="#2f7a45">op: arith.constant ×4</text>
+  <rect x="82" y="158" width="534" height="58" rx="6" fill="#fdf1ec" stroke="#e06a3b"/>
+  <text x="92" y="174" font-size="11" font-weight="bold" fill="#e06a3b">op: scf.for</text>
+  <rect x="96" y="180" width="506" height="30" rx="4" fill="#fff" stroke="#e06a3b" stroke-dasharray="3 3"/>
+  <text x="106" y="193" font-size="10" fill="#6b7280">region #0 · block ^bb0(%i: index, %acc: f32)　←　归纳变量与累加器都是块参数</text>
+  <text x="106" y="205" font-size="10" fill="#24292f">op: memref.load → arith.addf → scf.yield（terminator）</text>
+  <rect x="82" y="220" width="250" height="24" rx="4" fill="#f0f8f2" stroke="#3f9b5c"/>
+  <text x="92" y="236" font-size="10" fill="#2f7a45">op: func.return（terminator）</text>
+  <text x="352" y="236" font-size="10" fill="#6b7280">每个 block 的最后一个 op 必须是 terminator</text>
+</svg>
+<div class="caption">图 2-2　上一段 IR 的树形结构。`scf.for` 不是"控制流指令"，它是一个**带 region 的普通 op**——这就是为什么 MLIR 能在保留循环结构的前提下做变换，而不必先拆成分支再靠分析认回来</div>
+</div><h3>为什么不需要 phi：块参数</h3>
+<p>LLVM IR 里合并控制流要用 <code>phi</code>：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">LLVM IR：phi 指令</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">define i32 @select_max(i32 %a, i32 %b) {
+entry:
+  %c = icmp sgt i32 %a, %b
+  br i1 %c, label %bb1, label %bb2
+bb1:
+  br label %merge
+bb2:
+  br label %merge
+merge:
+  %r = phi i32 [ %a, %bb1 ], [ %b, %bb2 ]
+  ret i32 %r
+}</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">MLIR：块参数 + 分支传参</div><div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6ImZ1bmMuZnVuYyBAc2VsZWN0X21heCglYTogaTMyLCAlYjogaTMyKSAtPiBpMzIge1xuICAlYyA9IGFyaXRoLmNtcGkgc2d0LCAlYSwgJWIgOiBpMzJcbiAgY2YuY29uZF9iciAlYywgXmJiMSwgXmJiMlxuXmJiMTpcbiAgY2YuYnIgXm1lcmdlKCVhIDogaTMyKVxuXmJiMjpcbiAgY2YuYnIgXm1lcmdlKCViIDogaTMyKVxuXm1lcmdlKCVyOiBpMzIpOlxuICByZXR1cm4gJXIgOiBpMzJcbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6IiJ9XSwiZXhlY3V0b3JzIjpbXX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">func.func @select_max(%a: i32, %b: i32) -&gt; i32 {
+  %c = arith.cmpi sgt, %a, %b : i32
+  cf.cond_br %c, ^bb1, ^bb2
+^bb1:
+  cf.br ^merge(%a : i32)
+^bb2:
+  cf.br ^merge(%b : i32)
+^merge(%r: i32):
+  return %r : i32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt input.mlir</code></div>
+</div></div>
+</div><p>两边语义完全一样，但 MLIR 这边<strong>没有 phi 这种&quot;必须在块开头、与前驱一一对应&quot;的特殊指令</strong>。值是由分支像函数调用一样&quot;传&quot;进目标块的，块参数就是形参。</p>
+<p>这不只是审美问题。<code>phi</code> 在真实编译器里制造了一大堆特例：删一个前驱块要同步改所有 phi；phi 的&quot;并行赋值&quot;语义容易写错；函数参数又是另一套机制。改成块参数后，这些特例全没了——函数参数就是首块的块参数，删前驱就是删一条分支的实参。官方 <code>mlir/docs/Rationale/Rationale.md</code> 里 &quot;block arguments vs phi nodes&quot; 一节专门讲这个权衡，值得一读。</p>
+<p>跑一下上面那段 MLIR，注意 <code>mlir-opt</code> 打印回来时把 <code>^merge</code> 规范化成了 <code>^bb3</code>，并自动标注了前驱：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  ^bb3(%1: i32):  // 2 preds: ^bb1, ^bb2
+    return %1 : i32</code></pre>
+</div><h3>两种 region：SSACFG 与 Graph</h3>
+<p><code>Region</code> 分两类（<code>mlir/include/mlir/IR/RegionKindInterface.h</code> 的 <code>enum class RegionKind</code>）：</p>
+<ul>
+<li><strong><code>SSACFG</code></strong>：普通的控制流语义，要求<strong>支配关系成立</strong>（定义必须支配使用）。函数体、循环体都是这种。</li>
+<li><strong><code>Graph</code></strong>：没有控制流概念，op 之间只有数据依赖，<strong>不要求支配</strong>——所以可以互相引用、可以有环。硬件描述、数据流图这类方言会用它。</li>
+</ul>
+<p>绝大多数时候你打交道的都是 SSACFG。但知道 <code>Graph</code> 存在很重要：它解释了为什么 MLIR 的很多工具（比如支配关系分析）要先问一句&quot;这个 region 是什么类型&quot;。</p>
+<h3>一个跨 region 的关键规则：IsolatedFromAbove</h3>
+<p>上面第 4 点说&quot;内层 region 可以引用外层的值&quot;。但有个例外，而且极其重要：带 <strong><code>IsolatedFromAbove</code></strong> 这个 trait 的 op，它的 region <strong>不允许</strong>引用外部的值——所有输入必须显式传进来。</p>
+<p><code>func.func</code> 就带这个 trait（函数体不能随便引用别的函数里的值，这符合直觉），<code>builtin.module</code> 也带。这条规则有两个大后果：</p>
+<ul>
+<li><strong>pass 可以并发跑</strong>。第 13 章会讲：正因为每个 <code>func.func</code> 与外界隔离，pass 管理器才能安全地把多个函数丢给多个线程同时处理。</li>
+<li><strong>outlining 才可能</strong>。第 25 章把循环体抽成 GPU kernel（一个 <code>gpu.func</code>），前提就是先把它引用的外部值都变成显式参数。</li>
+</ul>
+<p>源码里它叫 <code>OpTrait::IsIsolatedFromAbove</code>（<code>mlir/include/mlir/IR/OpDefinition.h</code>），ODS 里写作 <code>IsolatedFromAbove</code>（第 8 章你会亲手给 op 加 trait）。</p>
+<h2>属性：<code>&lt;{...}&gt;</code> 与 <code>{...}</code> 不是一回事</h2>
+<p>回头看通用格式的输出，你会注意到两种括号：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">// 尖括号：固有属性（存在 properties 里）
+%6 = "arith.addf"(%arg2, %5) &lt;{fastmath = #arith.fastmath&lt;none&gt;}&gt; : (f32, f32) -&gt; f32
+
+// 花括号：可丢弃属性（存在通用字典里）
+%7 = "arith.addf"(%arg2, %5) {my_pass.visited = true} : (f32, f32) -&gt; f32</code></pre>
+</div><p>区别是<strong>语义责任归谁</strong>：</p>
+<ul>
+<li><strong>固有属性（inherent attribute）</strong>：是 op 定义的一部分，op 的语义依赖它。<code>arith.constant</code> 的 <code>value</code>、<code>func.func</code> 的 <code>sym_name</code> 和 <code>function_type</code> 都是。它们<strong>必须</strong>存在且合法，verifier 会查（第 10 章）。采用了 properties 存储的方言，这些属性存在 op 自己的内联存储里，打印成 <code>&lt;{...}&gt;</code>。</li>
+<li><strong>可丢弃属性（discardable attribute）</strong>：语义定义在 op 之外，谁都能挂，<strong>丢了不影响 IR 合法性</strong>。典型用途是 pass 之间传信息、打标记。</li>
+</ul>
+<div class="warn">
+<strong>别把重要语义放在可丢弃属性里</strong>
+<p>这正是第 1 章批评 LLVM metadata 的那个问题——可丢弃的东西不能承载"必须成立"的语义，因为任何一次变换都可以合法地把它抹掉。如果某个信息丢了会让程序算错，它就该是固有属性、或者干脆体现在类型里（第 4 章）、或者用一个专门的 op 表达。</p>
+</div><h2>动手：把一段 IR 的骨架读出来</h2>
+<p>下面这段 IR 有点绕：一个 <code>scf.if</code> 嵌在 <code>scf.for</code> 里，还引用了外层的值。先<strong>不要</strong>运行，自己回答四个问题，再跑一遍核对：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXMgLS1tbGlyLXByaW50LW9wLWdlbmVyaWNcbmZ1bmMuZnVuYyBAY2xhbXBfc3VtKCVidWY6IG1lbXJlZjw4eGYzMj4sICVsaW1pdDogZjMyKSAtPiBmMzIge1xuICAlYzAgPSBhcml0aC5jb25zdGFudCAwIDogaW5kZXhcbiAgJWMxID0gYXJpdGguY29uc3RhbnQgMSA6IGluZGV4XG4gICVjOCA9IGFyaXRoLmNvbnN0YW50IDggOiBpbmRleFxuICAlemVybyA9IGFyaXRoLmNvbnN0YW50IDAuMCA6IGYzMlxuICAldG90YWwgPSBzY2YuZm9yICVpID0gJWMwIHRvICVjOCBzdGVwICVjMSBpdGVyX2FyZ3MoJWFjYyA9ICV6ZXJvKSAtPiAoZjMyKSB7XG4gICAgJXYgPSBtZW1yZWYubG9hZCAlYnVmWyVpXSA6IG1lbXJlZjw4eGYzMj5cbiAgICAldG9vX2JpZyA9IGFyaXRoLmNtcGYgb2d0LCAldiwgJWxpbWl0IDogZjMyXG4gICAgJWNsYW1wZWQgPSBzY2YuaWYgJXRvb19iaWcgLT4gKGYzMikge1xuICAgICAgc2NmLnlpZWxkICVsaW1pdCA6IGYzMlxuICAgIH0gZWxzZSB7XG4gICAgICBzY2YueWllbGQgJXYgOiBmMzJcbiAgICB9XG4gICAgJW5leHQgPSBhcml0aC5hZGRmICVhY2MsICVjbGFtcGVkIDogZjMyXG4gICAgc2NmLnlpZWxkICVuZXh0IDogZjMyXG4gIH1cbiAgcmV0dXJuICV0b3RhbCA6IGYzMlxufSIsImNvbXBpbGVycyI6W3siaWQiOiJtbGlyb3B0dHJ1bmsiLCJvcHRpb25zIjoiLS1tbGlyLXByaW50LW9wLWdlbmVyaWMifV0sImV4ZWN1dG9ycyI6W119XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s --mlir-print-op-generic
+func.func @clamp_sum(%buf: memref&lt;8xf32&gt;, %limit: f32) -&gt; f32 {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %zero = arith.constant 0.0 : f32
+  %total = scf.for %i = %c0 to %c8 step %c1 iter_args(%acc = %zero) -&gt; (f32) {
+    %v = memref.load %buf[%i] : memref&lt;8xf32&gt;
+    %too_big = arith.cmpf ogt, %v, %limit : f32
+    %clamped = scf.if %too_big -&gt; (f32) {
+      scf.yield %limit : f32
+    } else {
+      scf.yield %v : f32
+    }
+    %next = arith.addf %acc, %clamped : f32
+    scf.yield %next : f32
+  }
+  return %total : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt --mlir-print-op-generic input.mlir</code></div>
+</div><ol>
+<li>一共有几个 region？分别属于哪个 op？（提示：数 op，不是数缩进）</li>
+<li><code>%limit</code> 被用在了第几层 region 里？它跨了几层 region 边界？为什么这是合法的？</li>
+<li>这段 IR 里哪些 op 是 terminator？一共几个？</li>
+<li><code>scf.if</code> 有两个 region（then 和 else），它们各有几个 block？块参数有几个？</li>
+</ol>
+<p>跑 <code>mlir-opt clamp_sum.mlir --mlir-print-op-generic</code> 对答案。数清楚了，你对 MLIR 的结构就有手感了。</p>
+<p><strong>再改一改。</strong> 这三处改动的报错都有点出人意料，正好把&quot;谁在检查什么&quot;这件事分清楚：</p>
+<ol>
+<li>把 <code>scf.yield %limit : f32</code> 改成 <code>scf.yield %too_big : f32</code>。报错是 <code>use of value &#39;%too_big&#39; expects different type than prior uses: &#39;f32&#39; vs &#39;i1&#39;</code>——注意措辞：这是**解析器（parser）**抓到的，不是 verifier。因为 <code>%too_big</code> 在前面已经有类型了，文本格式里同一个名字不能有两种类型。<strong>verifier 还没来得及上场</strong>。</li>
+<li>删掉 else 里的 <code>scf.yield</code>，只留一个空的 else。你可能以为会看到&quot;block 缺 terminator&quot;，但实际报错是 <code>&#39;scf.if&#39; op along control flow edge from Operation scf.yield to Operation scf.if: region branch point has 0 operands, but region successor needs 1 inputs</code>。为什么会冒出一个 <code>scf.yield</code>？因为 <code>scf.if</code> 声明了<strong>隐式 terminator</strong>——你不写，它替你插一个空的 <code>scf.yield</code>，于是错误变成了&quot;yield 了 0 个值，但 <code>scf.if</code> 要 1 个结果&quot;。这条检查来自 <code>RegionBranchOpInterface</code>（第 5 章讲接口，第 10 章讲验证顺序）。</li>
+<li>想看<strong>真正的支配关系报错</strong>，<code>scf.if</code> 这个例子办不到——你甚至没法在外面写出那个名字（报错只会是 <code>use of undeclared SSA value name</code>，因为文本格式里 SSA 名字是按 region 作用域的）。换成显式控制流才能触发：</li>
+</ol>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">func.func @dom2(%c: i1) -&gt; i32 {
+  cf.cond_br %c, ^bb1, ^bb2
+^bb1:
+  %x = arith.constant 1 : i32
+  cf.br ^bb3
+^bb2:
+  cf.br ^bb3
+^bb3:
+  return %x : i32        // %x 只在 ^bb1 里定义，不支配 ^bb3
+}</code></pre>
+</div><p>跑它会得到：<code>error: operand #0 does not dominate this use</code>，还附带一条 <code>note: operand defined here (op in the same region)</code> 指向定义处。<strong>这才是 SSACFG region 那条&quot;定义必须支配使用&quot;规则的执行者。</strong> 顺便体会一下 MLIR 诊断的质量：错误 + note 指向两处，都带位置——这是第 10 章要教你为自己的 op 做到的。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>MLIR 把 LLVM IR 里所有&quot;特殊的东西&quot;化归成了 op：<strong>模块是 op、函数是 op、常量是 op</strong>。名字是运行时字符串，这才有了可扩展性。</li>
+<li><code>Operation</code> 用 <code>TrailingObjects</code> 一次分配：操作数存储、属性存储、后继块、region、结果的 use 边全在同一块内存里；op 同时是侵入式链表节点，插删 O(1)。</li>
+<li><code>Value</code> 只有两种来源：<strong>OpResult 与 BlockArgument</strong>。函数参数不是特例，它是首块的块参数。</li>
+<li>def-use 的边 <code>OpOperand</code> <strong>是对象</strong>，值维护一条 use 链表——于是有了 <code>replaceAllUsesWith</code>，你已经亲手实现过一遍：<strong>所有 pattern 重写最后都落到它身上</strong>。</li>
+<li><strong>Region 让 IR 成为一棵树</strong>：op → region → block → op。循环、条件都是&quot;带 region 的普通 op&quot;，结构不用先拆掉再认回来。</li>
+<li>没有 phi：<strong>块参数 + 分支传参</strong>，消掉了一堆特例。</li>
+<li><code>IsolatedFromAbove</code> 是&quot;region 不能引用外部值&quot;的声明，它是 <strong>pass 并发</strong>与 <strong>kernel outlining</strong> 的前提。</li>
+<li>属性分<strong>固有</strong>（<code>&lt;{...}&gt;</code>，语义必需、verifier 查）与<strong>可丢弃</strong>（<code>{...}</code>，随时可丢）。别把关键语义放进可丢弃属性——那就是 LLVM metadata 的老问题。</li>
+</ul>
+<p>下一章我们把&quot;怎么读写和摆弄这些 IR&quot;练成肌肉记忆：通用格式与自定义格式的关系（谁是真相）、<code>Location</code> 为什么不可选、以及 <code>mlir-opt</code> 那几个你以后每天都会敲的选项——<code>--pass-pipeline</code>、<code>--mlir-print-ir-after-change</code>、<code>--allow-unregistered-dialect</code>。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch01.html">← 第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a>
+  <a class="nav-next" href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

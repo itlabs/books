@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li class="active"><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第三部分收尾。第 13 章我们写过一个分析，但那是自己 <code>walk</code> 一遍数出来的。这一章用 MLIR 自带的三样东西，每样都在 pix 上真跑：<strong>支配关系</strong>（<code>DominanceInfo</code>）、<strong>副作用查询</strong>（<code>isPure</code> 那一族）、以及<strong>稀疏数据流框架</strong>（<code>DataFlowSolver</code> + 一个我们自己写的格）。</p>
+<p>中间那一块最重要，而且最容易被当成"文档里的说法"。这一章给 pix 加一个<strong>有副作用</strong>的 op（<code>pix.trace</code>），然后拿通用的 <code>--cse --canonicalize</code> 跑同一份输入：<code>pix.add</code> 被合并、被删除，<code>pix.trace</code> 一动不动。<strong>区别只在 ODS 里那一行声明。</strong>没有副作用建模，编译器不敢动任何可能碰内存的东西——这就是它的分量。</p>
+<p>三个查询函数 <code>isPure</code> / <code>isMemoryEffectFree</code> / <code>wouldOpBeTriviallyDead</code> 问的是<strong>三件不同的事</strong>，混用会写出微妙的错误，这一章把它们的差别讲清。</p>
+<p>最后写一个真的稀疏前向数据流分析（"这个值是不是已知全零的图"）。它能推出<strong>单看一个 op 看不出来</strong>的结论——<code>pix.mul %未知, %零</code> 的结果是零。写这个分析时撞到一个只在运行时才炸的坑，报错措辞和 TypeID 有关。</p>
+</div><h2>副作用：区别只在那一行声明</h2>
+<p>先看分量。给 pix 加一个有副作用的 op：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_TraceOp : Pix_Op&lt;"trace", [MemoryEffects&lt;[MemWrite]&gt;]&gt; {
+  let summary = "把一张图输出出去（调试用），有可观察的副作用";
+  let arguments = (ins F32Tensor:$image);
+  let assemblyFormat = "$image attr-dict `:` type($image)";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>和前面所有 pix op（都是 <code>Pure</code>）的唯一区别就是那个 trait 列表。拿通用 pass 跑：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --canonicalize --cse
+func.func @pure_ops(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %x = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+  %y = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+  %dead = pix.mul %a, %b : tensor&lt;4x4xf32&gt;
+  return %x : tensor&lt;4x4xf32&gt;
+}
+func.func @effecting(%a: tensor&lt;4x4xf32&gt;) {
+  pix.trace %a : tensor&lt;4x4xf32&gt;
+  pix.trace %a : tensor&lt;4x4xf32&gt;
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --canonicalize --cse input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @pure_ops(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = pix.add %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }
+  func.func @effecting(%arg0: tensor&lt;4x4xf32&gt;) {
+    pix.trace %arg0 : tensor&lt;4x4xf32&gt;
+    pix.trace %arg0 : tensor&lt;4x4xf32&gt;
+    return
+  }
+}</code></pre>
+</div><p>上面那个函数：两个相同的 <code>pix.add</code> 合并成一个，没人用的 <code>pix.mul</code> 被删掉。下面那个函数：<strong>两个完全相同的 <code>pix.trace</code> 一个都没动</strong>——因为对有副作用的 op，<strong>次数和顺序都是语义的一部分</strong>。</p>
+<div class="keypoint">
+<strong>副作用建模是变换的前提，不是文档里的修辞</strong>
+<p>编译器的每一个"敢"都建立在"我知道这个 op 不碰外部世界"之上：敢合并（CSE）、敢删除（DCE）、敢挪位置（LICM、调度）、敢并发（第 13 章）。<strong>你不声明，它就不敢。</strong></p>
+<p>反过来也成立，而且更危险：<strong>你声明错了，它就敢做错事。</strong>给一个真的会写内存的 op 标上 <code>Pure</code>，CSE 会把两次写合并成一次，而且没有任何报错——第 16 章讲过"trait 多数是契约"，这是其中后果最严重的一个。</p>
+</div><h2>三个查询函数，三件不同的事</h2>
+<p><code>mlir/include/mlir/Interfaces/SideEffectInterfaces.h</code> 里有一族查询函数，名字很像，问的不是一回事：</p>
+<table>
+<thead>
+<tr>
+<th>函数</th>
+<th>问的是什么</th>
+<th>官方定义的要点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>isMemoryEffectFree(op)</code></td>
+<td><strong>不碰内存</strong></td>
+<td>实现了 <code>MemoryEffectOpInterface</code> 且报告无内存效应；或有 <code>HasRecursiveMemoryEffects</code> 且所有嵌套 op 都无效应</td>
+</tr>
+<tr>
+<td><code>isSpeculatable(op)</code></td>
+<td><strong>可以提前执行</strong>（没有 UB）</td>
+<td>由 <code>ConditionallySpeculatable</code> 接口的 <code>getSpeculatability</code> 回答</td>
+</tr>
+<tr>
+<td><code>isPure(op)</code></td>
+<td>上面两条<strong>都满足</strong></td>
+<td>文档原话：&quot;is speculatable that does not touch memory&quot;，是 <code>Pure</code> trait 的 C++ 等价物</td>
+</tr>
+<tr>
+<td><code>wouldOpBeTriviallyDead(op)</code></td>
+<td><strong>没人用的话可以删吗</strong></td>
+<td>注意：<strong>终结符和 symbol 永远不算 trivially dead</strong></td>
+</tr>
+</tbody></table>
+<p>两个容易踩的差别：</p>
+<p><strong><code>isMemoryEffectFree</code> 不等于 <code>isPure</code>。</strong> 一个 op 可以不碰内存但<strong>不可推测</strong>——典型例子是整数除法：它不读不写内存，但除零是 UB，所以不能被提到条件分支外面。这种 op <code>isMemoryEffectFree</code> 为真而 <code>isPure</code> 为假。想做代码移动（把 op 挪到循环外、挪进分支）时，要问的是 <code>isSpeculatable</code>，不是 <code>isMemoryEffectFree</code>。</p>
+<p><strong><code>wouldOpBeTriviallyDead</code> 有额外的例外。</strong> 终结符和 symbol 无论如何都不算&quot;可删&quot;——即使它们无副作用。想手写 DCE 时直接用这个函数，别自己拿 <code>isPure</code> 拼，否则会删掉 <code>func.return</code>。</p>
+<p>把三个都数一遍，差别就看见了：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-analyze
+func.func @effects(%a: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %x = pix.add %a, %a : tensor&lt;4x4xf32&gt;
+  pix.trace %x : tensor&lt;4x4xf32&gt;
+  return %x : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-analyze input.mlir</code></div>
+</div><p>运行结果（函数头那一行）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @effects(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; attributes {pix.dominators = 1 : i64, pix.effect_free = 1 : i64, pix.known_zero = 0 : i64, pix.pure = 1 : i64, pix.trivially_dead = 1 : i64} {</code></pre>
+</div><p>函数里有 <strong>2 个</strong> pix op（<code>add</code> 和 <code>trace</code>），但三个计数都是 <strong>1</strong>——那个 1 就是 <code>pix.add</code>。<code>pix.trace</code> 三项全不满足。</p>
+<h2>支配关系：<code>DominanceInfo</code></h2>
+<p>概念读者已经熟（这本书假设你懂支配关系），所以只讲 MLIR 里的两个实际要点。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">DominanceInfo dom(fn);
+// a 是否严格支配 c
+dom.properlyDominates(a, c);</code></pre>
+</div><p><strong>要点一：它是按&quot;最近的 <code>IsolatedFromAbove</code> 祖先&quot;建的。</strong> 第 13 章那个 trait 第三次出现了——它划分的不只是 pass 的调度单位，也是支配关系的计算范围。这也解释了为什么 <code>DominanceInfo</code> 构造起来不贵：它只在一个隔离区域内工作。</p>
+<p><strong>要点二：region 让&quot;支配&quot;比 CFG 时代复杂。</strong> 一个 op 可能在嵌套 region 里，<code>properlyDominates</code> 会正确处理跨 region 的情况（外层的 op 支配内层的所有 op），但代价是你要想清楚问的到底是什么。<code>DominanceInfo</code> 还有 <code>PostDominanceInfo</code> 这个对偶版本。</p>
+<p>我们的 <code>pix-analyze</code> 用它数一件具体的事：<strong>有多少个 pix op 支配着函数里所有其他 pix op</strong>——也就是&quot;放在它后面一定安全&quot;的那些。<code>@zeros</code> 里有 <code>transpose</code> 和 <code>mul</code> 两个 pix op，<code>transpose</code> 支配 <code>mul</code> 而反之不然，所以答案是 1。</p>
+<h2>写一个真的数据流分析</h2>
+<p>前面两样是&quot;用现成的&quot;。这一节是&quot;自己造一个&quot;，也是这一章最实在的部分。</p>
+<p>问题：<strong>这个值是不是已知的全零图？</strong> 为什么值得分析——因为一旦知道，一大批化简就成立了（乘零直接返回零图、加零直接消去）。而这个结论<strong>跨 op 才能得到</strong>：<code>pix.mul %未知, %零</code> 的结果是零，单看这个 op 看不出来。</p>
+<h3>格（lattice）</h3>
+<p>格是数据流分析的骨架。我们的格只有四层：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">     unknown          ← 最保守：什么都不知道
+    /       \
+  zero    nonzero     ← 有结论
+    \       /
+     uninit           ← 还没算</code></pre>
+</div><p>值类型要满足的契约就是几个成员函数（照 <code>mlir/include/mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h</code> 里的 <code>ConstantValue</code> 抄）：<code>operator==</code>、<code>print</code>、<code>getUninitialized</code>、<code>isUninitialized</code>、<code>join</code>。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">/// join 是格的核心：两条路径汇合时取"更保守"的那个。
+/// 偏序是 uninit &lt; zero/nonzero &lt; unknown。
+static ZeroState join(const ZeroState &amp;a, const ZeroState &amp;b) {
+  if (a.isUninitialized()) return b;
+  if (b.isUninitialized()) return a;
+  if (a == b)              return a;
+  return getUnknown();     // 结论不一致 → 只能说不知道
+}</code></pre>
+</div><p><strong><code>join</code> 必须是保守的</strong>——这是数据流分析正确性的全部来源。两条路径给出不同结论时，只能承认不知道；如果这里&quot;择一而从&quot;，分析就会给出错误结论，而基于它的变换会生成错代码。</p>
+<h3>传递函数</h3>
+<p>这是分析的实质内容：由操作数的格值算出结果的格值。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">LogicalResult visitOperation(Operation *op,
+                            ArrayRef&lt;const ZeroLattice *&gt; operands,
+                            ArrayRef&lt;ZeroLattice *&gt; results) override {
+  // pix.add：两边都是零才是零
+  if (isa&lt;AddOp&gt;(op)) {
+    bool allZero = llvm::all_of(operands, [](const ZeroLattice *l) {
+      return !l-&gt;getValue().isUninitialized() &amp;&amp; l-&gt;getValue().isZero();
+    });
+    setAll(allZero ? ZeroState::getZero() : ZeroState::getUnknown());
+    return success();
+  }
+
+  // pix.mul / pix.scale：**任意一边**是零，结果就是零（0 × 任何 = 0）
+  // 这条是这个分析最有价值的地方。
+  if (isa&lt;MulOp, ScaleOp&gt;(op)) {
+    bool anyZero = llvm::any_of(operands, [](const ZeroLattice *l) {
+      return !l-&gt;getValue().isUninitialized() &amp;&amp; l-&gt;getValue().isZero();
+    });
+    setAll(anyZero ? ZeroState::getZero() : ZeroState::getUnknown());
+    return success();
+  }
+  // …transpose、常量、以及兜底的 unknown
+}</code></pre>
+</div><p>另一个必须写对的是<strong>入口状态</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">/// 函数参数之类我们一无所知的值，一律"未知"。
+/// 保守的起点保证分析结果可信。
+void setToEntryState(ZeroLattice *lattice) override {
+  propagateIfChanged(lattice, lattice-&gt;join(ZeroState::getUnknown()));
+}</code></pre>
+</div><h3>跑它</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">DataFlowSolver solver;
+solver.load&lt;dataflow::DeadCodeAnalysis&gt;();   // ← 这一句不能省
+solver.load&lt;ZeroAnalysis&gt;();
+if (failed(solver.initializeAndRun(fn)))
+  return signalPassFailure();
+
+// 查询某个值的结论
+if (auto *l = solver.lookupState&lt;ZeroLattice&gt;(res))
+  if (!l-&gt;getValue().isUninitialized() &amp;&amp; l-&gt;getValue().isZero())
+    ++knownZero;</code></pre>
+</div><div class="note">
+<strong><code>DeadCodeAnalysis</code> 几乎总要一起加载</strong>
+<p>它负责算"哪些块可达、哪些分支会走"。少了它，不可达代码里的格值会参与 <code>join</code>，把结论污染成 <code>unknown</code>——分析仍然"正确"（保守），但会白白失去精度。绝大多数稀疏分析都把它当前置依赖。</p>
+</div><p>实测：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-analyze
+func.func @zeros(%img: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %z = arith.constant dense&lt;0.0&gt; : tensor&lt;4x4xf32&gt;
+  %t = pix.transpose %z : tensor&lt;4x4xf32&gt; to tensor&lt;4x4xf32&gt;
+  %m = pix.mul %img, %t : tensor&lt;4x4xf32&gt;
+  return %m : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-analyze input.mlir</code></div>
+</div><p>运行结果（函数头那一行）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @zeros(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; attributes {pix.dominators = 1 : i64, pix.effect_free = 2 : i64, pix.known_zero = 3 : i64, pix.pure = 2 : i64, pix.trivially_dead = 2 : i64} {</code></pre>
+</div><p><strong><code>known_zero = 3</code></strong>：常量、<code>transpose</code> 的结果、以及 <code>mul</code> 的结果。最后那个是关键——<code>%img</code> 完全未知，但 <code>0 × 任何 = 0</code>，所以 <code>%m</code> 是零。<strong>这个结论单看 <code>pix.mul</code> 这一个 op 是得不到的。</strong></p>
+<div class="warn">
+<strong>匿名命名空间里的类要显式定义 TypeID</strong>
+<p>第一次跑这个 pass，编译通过、运行直接 abort：</p>
+<p><code>LLVM ERROR: TypeID::get&lt;...::ZeroAnalysis&gt;(): Using TypeID on a class with an anonymous namespace requires an explicit TypeID definition.</code></p>
+<p>原因：<code>DataFlowSolver</code> 拿类型的 <code>TypeID</code> 当键，而匿名命名空间里的类名在不同翻译单元里不保证唯一，隐式的按名字回退不安全。<strong>报错本身把该用的宏名都告诉你了</strong>——在类里加一行 <code>MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ZeroAnalysis)</code> 就好。lattice 类也要加。</p>
+<p>上游同类代码就是这么写的（<code>mlir/lib/Dialect/XeGPU/Transforms/XeGPUPropagateLayout.cpp:158</code>）。这个坑只在运行时暴露，而且只在你把分析类放进匿名命名空间时——照惯例这么放是对的，所以基本人人会撞一次。</p>
+</div><h2>把不动点迭代自己跑一遍</h2>
+<p>格、传递函数、<code>join</code>、不动点——这几个概念串起来才成立。下面这个模型把它们全放进 40 行，并打出每一轮变了什么：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%E7%A8%80%E7%96%8F%E5%89%8D%E5%90%91%E6%95%B0%E6%8D%AE%E6%B5%81%E5%88%86%E6%9E%90%E7%9A%84%E5%AE%8C%E6%95%B4%E6%A8%A1%E5%9E%8B%EF%BC%9A%E6%A0%BC%E3%80%81%E4%BC%A0%E9%80%92%E5%87%BD%E6%95%B0%E3%80%81join%E3%80%81%E4%B8%8D%E5%8A%A8%E7%82%B9%E8%BF%AD%E4%BB%A3%E3%80%82%0A%23%20%E5%88%86%E6%9E%90%E7%9A%84%E9%97%AE%E9%A2%98%EF%BC%9A%22%E8%BF%99%E4%B8%AA%E5%80%BC%E6%98%AF%E4%B8%8D%E6%98%AF%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%85%A8%E9%9B%B6%E5%9B%BE%EF%BC%9F%22%0A%23%20%E7%9C%8B%E7%82%B9%E6%98%AF%E5%AE%83%E8%83%BD%E6%8E%A8%E5%87%BA**%E5%8D%95%E7%9C%8B%E4%B8%80%E4%B8%AA%20op%20%E7%9C%8B%E4%B8%8D%E5%87%BA%E6%9D%A5**%E7%9A%84%E7%BB%93%E8%AE%BA%E3%80%82%0A%0AUNINIT%2C%20ZERO%2C%20NONZERO%2C%20UNKNOWN%20%3D%20%22uninit%22%2C%20%22zero%22%2C%20%22nonzero%22%2C%20%22unknown%22%0A%0Adef%20join(a%2C%20b)%3A%0A%20%20%20%20%22%22%22%E6%A0%BC%E7%9A%84%E6%A0%B8%E5%BF%83%E3%80%82%E5%81%8F%E5%BA%8F%EF%BC%9Auninit%20%3C%20zero%2Fnonzero%20%3C%20unknown%E3%80%82%0A%20%20%20%20%20%20%20%E4%B8%A4%E6%9D%A1%E8%B7%AF%E5%BE%84%E6%B1%87%E5%90%88%E6%97%B6%E5%8F%96%E6%9B%B4%E4%BF%9D%E5%AE%88%E7%9A%84%E2%80%94%E2%80%94%E8%BF%99%E4%BF%9D%E8%AF%81%E4%BA%86%E5%88%86%E6%9E%90%E6%B0%B8%E4%B8%8D%E7%BB%99%E5%87%BA%E9%94%99%E8%AF%AF%E7%BB%93%E8%AE%BA%E3%80%82%22%22%22%0A%20%20%20%20if%20a%20%3D%3D%20UNINIT%3A%20return%20b%0A%20%20%20%20if%20b%20%3D%3D%20UNINIT%3A%20return%20a%0A%20%20%20%20return%20a%20if%20a%20%3D%3D%20b%20else%20UNKNOWN%0A%0Adef%20transfer(op%2C%20ins)%3A%0A%20%20%20%20%22%22%22%E4%BC%A0%E9%80%92%E5%87%BD%E6%95%B0%EF%BC%9A%E7%94%B1%E6%93%8D%E4%BD%9C%E6%95%B0%E7%9A%84%E6%A0%BC%E5%80%BC%E7%AE%97%E5%87%BA%E7%BB%93%E6%9E%9C%E7%9A%84%E6%A0%BC%E5%80%BC%E3%80%82%E5%88%86%E6%9E%90%E7%9A%84%E5%85%A8%E9%83%A8%E5%86%85%E5%AE%B9%E5%B0%B1%E5%9C%A8%E8%BF%99%E3%80%82%22%22%22%0A%20%20%20%20if%20op%20%3D%3D%20%22const.zero%22%3A%20%20%20%20%20return%20ZERO%0A%20%20%20%20if%20op%20%3D%3D%20%22const.other%22%3A%20%20%20%20return%20NONZERO%0A%20%20%20%20if%20op%20%3D%3D%20%22pix.add%22%3A%20%20%20%20%20%20%20%20return%20ZERO%20if%20all(i%20%3D%3D%20ZERO%20for%20i%20in%20ins)%20else%20UNKNOWN%0A%20%20%20%20%23%20%E5%85%B3%E9%94%AE%E4%B8%80%E6%9D%A1%EF%BC%9A%E4%BB%BB%E6%84%8F%E4%B8%80%E8%BE%B9%E6%98%AF%E9%9B%B6%EF%BC%8C%E4%B9%98%E7%A7%AF%E5%B0%B1%E6%98%AF%E9%9B%B6%20%E2%80%94%E2%80%94%20%E5%93%AA%E6%80%95%E5%8F%A6%E4%B8%80%E8%BE%B9%E5%AE%8C%E5%85%A8%E6%9C%AA%E7%9F%A5%0A%20%20%20%20if%20op%20%3D%3D%20%22pix.mul%22%3A%20%20%20%20%20%20%20%20return%20ZERO%20if%20any(i%20%3D%3D%20ZERO%20for%20i%20in%20ins)%20else%20UNKNOWN%0A%20%20%20%20if%20op%20%3D%3D%20%22pix.transpose%22%3A%20%20return%20ins%5B0%5D%20if%20ins%20and%20ins%5B0%5D%20in%20(ZERO%2C%20NONZERO)%20else%20UNKNOWN%0A%20%20%20%20return%20UNKNOWN%0A%0Adef%20solve(ir%2C%20entry)%3A%0A%20%20%20%20%22%22%22%E4%B8%8D%E5%8A%A8%E7%82%B9%E8%BF%AD%E4%BB%A3%EF%BC%9A%E5%8F%8D%E5%A4%8D%E8%B7%91%E4%BC%A0%E9%80%92%E5%87%BD%E6%95%B0%EF%BC%8C%E7%9B%B4%E5%88%B0%E6%B2%A1%E6%9C%89%E6%A0%BC%E5%80%BC%E5%86%8D%E5%8F%98%E3%80%82%22%22%22%0A%20%20%20%20state%20%3D%20dict(entry)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%85%A5%E5%8F%A3%E7%8A%B6%E6%80%81%0A%20%20%20%20for%20name%2C%20_%2C%20_%20in%20ir%3A%0A%20%20%20%20%20%20%20%20state.setdefault(name%2C%20UNINIT)%0A%20%20%20%20for%20rnd%20in%20range(1%2C%2020)%3A%0A%20%20%20%20%20%20%20%20changed%20%3D%20%5B%5D%0A%20%20%20%20%20%20%20%20for%20name%2C%20op%2C%20args%20in%20ir%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20ins%20%3D%20%5Bstate%5Ba%5D%20for%20a%20in%20args%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20any(i%20%3D%3D%20UNINIT%20for%20i%20in%20ins)%20and%20op.startswith(%22pix.%22)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20continue%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%93%8D%E4%BD%9C%E6%95%B0%E8%BF%98%E6%B2%A1%E7%AE%97%E5%87%BA%E6%9D%A5%EF%BC%8C%E8%BF%99%E8%BD%AE%E8%B7%B3%E8%BF%87%0A%20%20%20%20%20%20%20%20%20%20%20%20new%20%3D%20join(state%5Bname%5D%2C%20transfer(op%2C%20ins))%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20new%20!%3D%20state%5Bname%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20state%5Bname%5D%20%3D%20new%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20changed.append(f%22%7Bname%7D%3D%7Bnew%7D%22)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%E7%AC%AC%20%7Brnd%7D%20%E8%BD%AE%EF%BC%9A%22%20%2B%20(%22%2C%20%22.join(changed)%20if%20changed%20else%20%22%E6%97%A0%E5%8F%98%E5%8C%96%20%E2%86%92%20%E5%88%B0%E8%BE%BE%E4%B8%8D%E5%8A%A8%E7%82%B9%22))%0A%20%20%20%20%20%20%20%20if%20not%20changed%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20state%0A%20%20%20%20return%20state%0A%0AIR%20%3D%20%5B%0A%20%20%20%20(%22%25z%22%2C%20%22const.zero%22%2C%20%20%20%20%5B%5D)%2C%0A%20%20%20%20(%22%25t%22%2C%20%22pix.transpose%22%2C%20%5B%22%25z%22%5D)%2C%0A%20%20%20%20(%22%25m%22%2C%20%22pix.mul%22%2C%20%20%20%20%20%20%20%5B%22%25img%22%2C%20%22%25t%22%5D)%2C%20%20%20%23%20%25img%20%E5%AE%8C%E5%85%A8%E6%9C%AA%E7%9F%A5%EF%BC%81%0A%20%20%20%20(%22%25s%22%2C%20%22pix.add%22%2C%20%20%20%20%20%20%20%5B%22%25m%22%2C%20%22%25m%22%5D)%2C%0A%5D%0Aprint(%22%E3%80%90IR%E3%80%91%22)%0Afor%20n%2C%20op%2C%20a%20in%20IR%3A%0A%20%20%20%20print(f%22%20%20%20%20%7Bn%7D%20%3D%20%7Bop%7D(%7B'%2C%20'.join(a)%20or%20''%7D)%22)%0Aprint(%22%E3%80%90%E5%85%A5%E5%8F%A3%E7%8A%B6%E6%80%81%E3%80%91%25img%20%E6%98%AF%E5%87%BD%E6%95%B0%E5%8F%82%E6%95%B0%EF%BC%8C%E4%B8%80%E6%97%A0%E6%89%80%E7%9F%A5%20%E2%86%92%20unknown%EF%BC%88%E4%BF%9D%E5%AE%88%E8%B5%B7%E7%82%B9%EF%BC%89%22)%0Afinal%20%3D%20solve(IR%2C%20%7B%22%25img%22%3A%20UNKNOWN%7D)%0Aprint(%22%5Cn%E3%80%90%E7%BB%93%E8%AE%BA%E3%80%91%22)%0Afor%20n%2C%20_%2C%20_%20in%20IR%3A%0A%20%20%20%20mark%20%3D%20%22%20%20%E2%86%90%20%E5%8D%95%E7%9C%8B%E8%BF%99%E4%B8%80%E4%B8%AA%20op%20%E7%9C%8B%E4%B8%8D%E5%87%BA%E6%9D%A5%22%20if%20n%20in%20(%22%25m%22%2C%20%22%25s%22)%20else%20%22%22%0A%20%20%20%20print(f%22%20%20%20%20%7Bn%7D%3A%20%7Bfinal%5Bn%5D%7D%7Bmark%7D%22)%0Aprint(f%22%5Cn%20%20%E5%B7%B2%E7%9F%A5%E5%85%A8%E9%9B%B6%E7%9A%84%E5%80%BC%E5%85%B1%20%7Bsum(1%20for%20n%2C_%2C_%20in%20IR%20if%20final%5Bn%5D%3D%3DZERO)%7D%20%E4%B8%AA%22)%0Aprint(%22%20%20%25m%20%E6%98%AF%E9%9B%B6%EF%BC%8C%E5%9B%A0%E4%B8%BA%200%20%C3%97%20%E4%BB%BB%E4%BD%95%20%3D%200%EF%BC%9B%25s%20%E6%98%AF%E9%9B%B6%EF%BC%8C%E5%9B%A0%E4%B8%BA%E9%9B%B6%E5%8A%A0%E9%9B%B6%E3%80%82%22)%0Aprint(%22%20%20%E8%BF%99%E4%B8%A4%E6%9D%A1%E9%83%BD%E9%9C%80%E8%A6%81**%E8%B7%A8%20op%20%E4%BC%A0%E6%92%AD**%E6%89%8D%E8%83%BD%E5%BE%97%E5%88%B0%20%E2%80%94%E2%80%94%20%E8%BF%99%E5%B0%B1%E6%98%AF%E6%95%B0%E6%8D%AE%E6%B5%81%E5%88%86%E6%9E%90%E7%9A%84%E4%BB%B7%E5%80%BC%E3%80%82%22)"># 一个稀疏前向数据流分析的完整模型：格、传递函数、join、不动点迭代。
+# 分析的问题："这个值是不是已知的全零图？"
+# 看点是它能推出**单看一个 op 看不出来**的结论。
+
+UNINIT, ZERO, NONZERO, UNKNOWN = "uninit", "zero", "nonzero", "unknown"
+
+def join(a, b):
+    """格的核心。偏序：uninit &lt; zero/nonzero &lt; unknown。
+       两条路径汇合时取更保守的——这保证了分析永不给出错误结论。"""
+    if a == UNINIT: return b
+    if b == UNINIT: return a
+    return a if a == b else UNKNOWN
+
+def transfer(op, ins):
+    """传递函数：由操作数的格值算出结果的格值。分析的全部内容就在这。"""
+    if op == "const.zero":     return ZERO
+    if op == "const.other":    return NONZERO
+    if op == "pix.add":        return ZERO if all(i == ZERO for i in ins) else UNKNOWN
+    # 关键一条：任意一边是零，乘积就是零 —— 哪怕另一边完全未知
+    if op == "pix.mul":        return ZERO if any(i == ZERO for i in ins) else UNKNOWN
+    if op == "pix.transpose":  return ins[0] if ins and ins[0] in (ZERO, NONZERO) else UNKNOWN
+    return UNKNOWN
+
+def solve(ir, entry):
+    """不动点迭代：反复跑传递函数，直到没有格值再变。"""
+    state = dict(entry)                       # 已知的入口状态
+    for name, _, _ in ir:
+        state.setdefault(name, UNINIT)
+    for rnd in range(1, 20):
+        changed = []
+        for name, op, args in ir:
+            ins = [state[a] for a in args]
+            if any(i == UNINIT for i in ins) and op.startswith("pix."):
+                continue                      # 操作数还没算出来，这轮跳过
+            new = join(state[name], transfer(op, ins))
+            if new != state[name]:
+                state[name] = new
+                changed.append(f"{name}={new}")
+        print(f"    第 {rnd} 轮：" + (", ".join(changed) if changed else "无变化 → 到达不动点"))
+        if not changed:
+            return state
+    return state
+
+IR = [
+    ("%z", "const.zero",    []),
+    ("%t", "pix.transpose", ["%z"]),
+    ("%m", "pix.mul",       ["%img", "%t"]),   # %img 完全未知！
+    ("%s", "pix.add",       ["%m", "%m"]),
+]
+print("【IR】")
+for n, op, a in IR:
+    print(f"    {n} = {op}({', '.join(a) or ''})")
+print("【入口状态】%img 是函数参数，一无所知 → unknown（保守起点）")
+final = solve(IR, {"%img": UNKNOWN})
+print("\n【结论】")
+for n, _, _ in IR:
+    mark = "  ← 单看这一个 op 看不出来" if n in ("%m", "%s") else ""
+    print(f"    {n}: {final[n]}{mark}")
+print(f"\n  已知全零的值共 {sum(1 for n,_,_ in IR if final[n]==ZERO)} 个")
+print("  %m 是零，因为 0 × 任何 = 0；%s 是零，因为零加零。")
+print("  这两条都需要**跨 op 传播**才能得到 —— 这就是数据流分析的价值。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">【IR】
+    %z = const.zero()
+    %t = pix.transpose(%z)
+    %m = pix.mul(%img, %t)
+    %s = pix.add(%m, %m)
+【入口状态】%img 是函数参数，一无所知 → unknown（保守起点）
+    第 1 轮：%z=zero, %t=zero, %m=zero, %s=zero
+    第 2 轮：无变化 → 到达不动点
+
+【结论】
+    %z: zero
+    %t: zero
+    %m: zero  ← 单看这一个 op 看不出来
+    %s: zero  ← 单看这一个 op 看不出来
+
+  已知全零的值共 4 个
+  %m 是零，因为 0 × 任何 = 0；%s 是零，因为零加零。
+  这两条都需要**跨 op 传播**才能得到 —— 这就是数据流分析的价值。</code></pre>
+</div><p>注意两点。<strong>第一轮就全部收敛</strong>，因为这段 IR 是直线代码；有循环时会迭代多轮，每轮靠 <code>join</code> 把回边上的信息并进来。<strong><code>%m</code> 和 <code>%s</code> 的结论都需要跨 op 传播</strong>——这就是为什么需要一个框架，而不是在每个 op 的 <code>fold</code> 里各自判断。</p>
+<h2>分析和变换怎么接上</h2>
+<p>分析本身不改 IR。上面那个 <code>known_zero</code> 算出来之后能干什么？</p>
+<p><strong>最直接的用法</strong>：写一个 pattern，在 <code>matchAndRewrite</code> 里查分析结论，把 <code>pix.mul %未知, %零</code> 直接替换成那个零图。这比第 11 章的 <code>fold</code> 强——<code>fold</code> 只能看操作数是不是<strong>字面常量</strong>，而分析能看到&quot;沿着 def-use 链传播过来的结论&quot;。</p>
+<p><strong>代价也要说清楚</strong>：跑一次数据流分析比跑一个 <code>fold</code> 贵得多，而且第 13 章讲过，pass 改了 IR 之后分析默认全部作废。所以实践上的取舍是：<strong>能用 <code>fold</code> 解决的别上分析</strong>；需要跨 op 推理时才上，而且尽量让一个 pass 里的多个 pattern 共享同一次分析结果。</p>
+<div class="concept">
+<svg viewBox="0 0 700 396" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c19b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c19o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c19g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">三样分析各回答一类问题，而副作用是所有变换的前提</text>
+  <rect x="14" y="32" width="216" height="92" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="26" y="51" font-size="10" font-weight="bold" fill="#2b6cb0">① DominanceInfo</text>
+  <text x="26" y="69" font-size="9" fill="#24292f">"a 一定在 b 之前执行吗"</text>
+  <text x="26" y="86" font-size="9" fill="#6b7280">按最近的 IsolatedFromAbove</text>
+  <text x="26" y="99" font-size="9" fill="#6b7280">祖先建 —— 第 13 章那个 trait</text>
+  <text x="26" y="116" font-size="9" fill="#6b7280">第三次出现</text>
+  <rect x="242" y="32" width="216" height="92" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="254" y="51" font-size="10" font-weight="bold" fill="#e06a3b">② 副作用查询</text>
+  <text x="254" y="69" font-size="9" fill="#24292f">"我敢动这个 op 吗"</text>
+  <text x="254" y="86" font-size="9" font-family="monospace" fill="#6b7280">isMemoryEffectFree ≠ isPure</text>
+  <text x="254" y="100" font-size="9" fill="#6b7280">（整数除法：不碰内存，</text>
+  <text x="254" y="113" font-size="9" fill="#6b7280">但除零 UB → 不可推测）</text>
+  <rect x="470" y="32" width="216" height="92" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="482" y="51" font-size="10" font-weight="bold" fill="#2f7a45">③ DataFlowSolver</text>
+  <text x="482" y="69" font-size="9" fill="#24292f">"沿 def-use 链能推出什么"</text>
+  <text x="482" y="86" font-size="9" fill="#6b7280">格 + 传递函数 + join</text>
+  <text x="482" y="100" font-size="9" fill="#6b7280">+ 不动点迭代</text>
+  <text x="482" y="113" font-size="9" fill="#6b7280">要一起加载 DeadCodeAnalysis</text>
+  <line x1="14" y1="138" x2="686" y2="138" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="158" font-size="11" font-weight="bold" fill="#e06a3b">副作用的分量：同一份输入，同一个 --cse --canonicalize</text>
+  <rect x="14" y="168" width="330" height="96" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="26" y="187" font-size="10" font-weight="bold" fill="#2f7a45">pix.add（声明了 Pure）</text>
+  <text x="26" y="206" font-size="9" font-family="monospace" fill="#24292f">%x = pix.add %a, %b</text>
+  <text x="26" y="219" font-size="9" font-family="monospace" fill="#24292f">%y = pix.add %a, %b　← 重复</text>
+  <text x="26" y="232" font-size="9" font-family="monospace" fill="#24292f">%d = pix.mul %a, %b　← 没人用</text>
+  <text x="26" y="252" font-size="9" fill="#3f9b5c">→ 合并成一个，dead 的删掉</text>
+  <rect x="356" y="168" width="330" height="96" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="368" y="187" font-size="10" font-weight="bold" fill="#e06a3b">pix.trace（声明了 MemWrite）</text>
+  <text x="368" y="206" font-size="9" font-family="monospace" fill="#24292f">pix.trace %a</text>
+  <text x="368" y="219" font-size="9" font-family="monospace" fill="#24292f">pix.trace %a　← 完全一样</text>
+  <text x="368" y="238" font-size="9" fill="#e06a3b">→ <tspan font-weight="bold">一个都不动</tspan></text>
+  <text x="368" y="255" font-size="9" fill="#6b7280">次数和顺序都是语义的一部分</text>
+  <rect x="14" y="276" width="672" height="52" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="295" font-size="10" fill="#24292f"><tspan font-weight="bold">区别只在 ODS 里那一行 trait。</tspan>编译器的每一个"敢"都建立在"我知道它不碰外部世界"之上：</text>
+  <text x="26" y="312" font-size="10" fill="#24292f">敢合并（CSE）、敢删除（DCE）、敢挪位置（LICM）、敢并发（第 13 章）。你不声明，它就不敢。</text>
+  <text x="26" y="324" font-size="9" fill="#e06a3b">更危险的反面：给真会写内存的 op 标 Pure，CSE 会把两次写合并成一次，而且没有任何报错。</text>
+  <rect x="14" y="338" width="672" height="52" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-dasharray="5 3"/>
+  <text x="26" y="357" font-size="10" fill="#24292f">分析与变换怎么接：pattern 里查分析结论，能做到 fold 做不到的事——fold 只看操作数是不是<tspan font-weight="bold">字面常量</tspan>，</text>
+  <text x="26" y="374" font-size="10" fill="#24292f">分析能看到<tspan font-weight="bold">沿 def-use 链传播过来的结论</tspan>（pix.mul %未知, %零 = 零）。代价：比 fold 贵，且改 IR 后默认作废。</text>
+  <text x="26" y="386" font-size="9" fill="#6b7280">取舍：能用 fold 解决的别上分析；上了就让一个 pass 里的多个 pattern 共享同一次结果。</text>
+</svg>
+<div class="caption">图 19-1　三样分析各自的问题域；下半部分是副作用声明的实际后果——同一个 pass、同一份输入，只因一行 trait 而结果不同</div>
+</div><h2>动手：把分析结论用起来</h2>
+<p><code>pix-analyze</code> 现在只是把结论写成属性。改成真的做优化：</p>
+<ol>
+<li>在 <code>AnalyzePass.cpp</code> 里，跑完 solver 之后遍历所有 op，找出&quot;结果已知为零、但本身不是常量&quot;的 <code>pix.mul</code>；</li>
+<li>用 <code>OpBuilder</code> 造一个 <code>arith.constant dense&lt;0.0&gt;</code>，<code>replaceAllUsesWith</code> 掉它；</li>
+<li>跑 <code>--pix-analyze --canonicalize</code>，看那条 <code>pix.mul</code> 是不是连带整条链都消失了。</li>
+</ol>
+<p><strong>注意别忘了</strong>：改了 IR 就不能再 <code>markAllAnalysesPreserved()</code>（第 13 章那笔账）。</p>
+<p><strong>再改一处</strong>：给 <code>pix.trace</code> 换个 effect 试试。把 <code>MemWrite</code> 改成 <code>MemRead</code>，重新构建，跑 <code>--cse</code>。两个相同的 <code>pix.trace</code> 会被合并吗？想清楚为什么——<strong>读操作之间没有顺序依赖，所以 CSE 敢合并两次相同的读</strong>。这个实验能让你对&quot;effect 的种类不只是有无&quot;有实感。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>副作用建模是所有变换的前提</strong>，而且是可观测的：同一份输入、同一个 <code>--cse --canonicalize</code>，<code>Pure</code> 的 <code>pix.add</code> 被合并被删除，声明了 <code>MemWrite</code> 的 <code>pix.trace</code> 一动不动。<strong>区别只在 ODS 里那一行。</strong></li>
+<li>更危险的是反面：<strong>声明错了，编译器就敢做错事</strong>。给会写内存的 op 标 <code>Pure</code>，CSE 会把两次写合并成一次，没有任何报错。</li>
+<li>三个查询函数问三件事：<code>isMemoryEffectFree</code>（不碰内存）、<code>isSpeculatable</code>（可提前执行、无 UB）、<code>isPure</code>（两者都满足）。<strong>整数除法就是&quot;不碰内存但不可推测&quot;的例子</strong>——做代码移动要问 <code>isSpeculatable</code>。</li>
+<li><code>wouldOpBeTriviallyDead</code> 有额外例外：<strong>终结符和 symbol 永远不算可删</strong>。手写 DCE 直接用它，别拿 <code>isPure</code> 自己拼。</li>
+<li><code>DominanceInfo</code> 按<strong>最近的 <code>IsolatedFromAbove</code> 祖先</strong>建——第 13 章那个 trait 的第三次现身。它划的不只是 pass 调度单位，也是支配关系的计算范围。</li>
+<li>写数据流分析要四样：<strong>格</strong>（值类型的契约是 <code>==</code> / <code>print</code> / <code>getUninitialized</code> / <code>isUninitialized</code> / <code>join</code>）、<strong>传递函数</strong>（<code>visitOperation</code>）、<strong>入口状态</strong>（<code>setToEntryState</code>，必须保守）、<strong>solver</strong>。</li>
+<li><strong><code>join</code> 必须保守</strong>——两条路径结论不一致时只能承认&quot;不知道&quot;。这是分析正确性的全部来源；这里&quot;择一而从&quot;会让基于它的变换生成错代码。</li>
+<li><strong><code>DataFlowSolver</code> 几乎总要一起 <code>load&lt;DeadCodeAnalysis&gt;()</code></strong>。少了它不影响正确性，但不可达代码的格值会污染 <code>join</code>，白白失去精度。</li>
+<li><strong>匿名命名空间里的分析/格类要加 <code>MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID</code></strong>。<code>DataFlowSolver</code> 拿 <code>TypeID</code> 当键，隐式的按名字回退在匿名上下文里不安全。这个坑只在运行时 abort，而按惯例把这些类放进匿名命名空间是对的，所以基本人人会撞一次。</li>
+<li>分析的价值在于<strong>跨 op 推理</strong>：<code>pix.mul %未知, %零</code> 的结果是零，这个结论 <code>fold</code> 得不到（它只看字面常量）。代价是贵、且改 IR 后默认作废——<strong>能用 <code>fold</code> 解决的别上分析</strong>。</li>
+</ul>
+<p><strong>pix 进度</strong>：新增 <code>pix.trace</code>（第一个有副作用的 op，专门用来做对照）与 <code>pix-analyze</code> pass（三样分析各用一遍，结果写成属性）。<code>analyze.mlir</code> 两条 RUN 行：一条断言分析结论，一条用通用 pass 证明副作用真的在管事。<code>check-pix</code> 从 15 涨到 16 个文件。</p>
+<p>第三部分到此结束。<strong>第四部分开始把 pix 一路降到机器上</strong>：第 20 章讲 <code>linalg</code>——为什么它的核心是&quot;用 indexing map 描述迭代空间&quot;，以及正因为如此，tiling 和融合才能<strong>通用地</strong>实现，而不必为每个 op 单独写一遍。那一章会把 pix 降到 <code>linalg</code>，第 18 章学的 transform 调度从此就能作用在我们自己的方言上了。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch18.html">← 第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a>
+  <a class="nav-next" href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

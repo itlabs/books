@@ -39,6 +39,12 @@
   <p class="shelf-sub">写给编译器工程师的源码之旅：LLVM、DPC++/SYCL 实现与扩展</p>
   <p class="shelf-desc">从 LLVM 的三段式架构与 IR 讲起，沿着 Pass 框架、SPIR-V、异构 offload 工具链与 liboffload 运行时一路走到 NVIDIA 后端；再深入 intel/llvm 里 SYCL(DPC++) 的真实实现——头文件、两趟编译、属性、运行时与 Unified Runtime；最后手把手教你实现一个 SYCL 扩展（free function kernels、bindless images、运行时编译）。以可视化图示 + 真实源码路径讲清编译器内部机制。</p>
 </a>
+<a class="shelf-card" href="inside-mlir/index.html">
+  <h2>深入 MLIR</h2>
+  <p class="shelf-en">Inside MLIR</p>
+  <p class="shelf-sub">写给编译器工程师的多层 IR 之旅：方言、变换与下降</p>
+  <p class="shelf-desc">从「为什么 LLVM IR 不够用」讲起，把 MLIR 的核心抽象（Operation/Region/Type/Attribute/Trait/Interface）拆开；然后用 TableGen/ODS 从零造一个自己的 pix 方言，给它写 verifier、folder、Pass、Pattern 与 Dialect Conversion；再沿 linalg → vector → memref → LLVM / GPU 把它一路下降到真机跑起来；最后看 Triton、IREE、flang、ClangIR 这些真实项目各自怎么用 MLIR。每个机制都锚到 llvm-project/mlir 里的真实路径与类名，代码块可在 Compiler Explorer 里跑 mlir-opt，全书代码随书带校验脚本。</p>
+</a>
 <a class="shelf-card" href="modern-cpp/index.html">
   <h2>现代 C++ 之路</h2>
   

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li class="active"><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 24 章 落到 LLVM：scf→cf、memref descriptor 与 JIT 跑起来</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p><strong>这一章把一张图真的算出来，打印在屏幕上。</strong></p>
+<p>前面二十三章验证的全是"IR 长什么样"。这一章第一次验证"算出来的数对不对"——`(1+10)×2 = 22`。整条链是：<code>pix</code> → <code>linalg</code> → <code>memref</code> → <code>scf</code> → <code>cf</code> → <code>llvm</code> 方言 → 真正的 LLVM IR → JIT → 数字。</p>
+<p>途中有一个必须讲透的东西：<strong>memref descriptor</strong>。<code>memref&lt;2x2xf32&gt;</code> 在 LLVM 层变成一个五字段的结构体 <code>{ ptr, ptr, i64, [2 x i64], [2 x i64] }</code>。这五个字段是 <strong>MLIR 与外部世界的 ABI 边界</strong>——想从 C 调用 MLIR 编译出来的函数，就得按它的布局传参。它也顺带解释了两件前面留下的事：第 22 章 <code>memref.subview</code> 为什么零拷贝，以及第 17 章那个 1:N 类型转换最大的用户是谁。</p>
+<p>最后会给出那条完整的 pass 管线，以及**顺序为什么不能乱**——其中有一个 pass 的名字（<code>--expand-strided-metadata</code>）看起来完全无关，漏了它整条链就断。</p>
+</div><h2>完整的管线</h2>
+<p>先把结论摆出来。从 pix 到可执行，十个 pass：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt run24.mlir \
+  --pix-to-linalg \
+  --one-shot-bufferize=bufferize-function-boundaries=true \
+  --convert-linalg-to-loops \
+  --convert-scf-to-cf \
+  --expand-strided-metadata \
+  --finalize-memref-to-llvm \
+  --convert-cf-to-llvm \
+  --convert-func-to-llvm \
+  --convert-arith-to-llvm \
+  --reconcile-unrealized-casts</code></pre>
+</div><p>分成四段来看：</p>
+<table>
+<thead>
+<tr>
+<th>段</th>
+<th>pass</th>
+<th>做什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>抽象层</strong></td>
+<td><code>pix-to-linalg</code></td>
+<td>第 20 章：保留迭代空间</td>
+</tr>
+<tr>
+<td><strong>内存化</strong></td>
+<td><code>one-shot-bufferize</code></td>
+<td>第 22 章：tensor → memref</td>
+</tr>
+<tr>
+<td><strong>循环化</strong></td>
+<td><code>convert-linalg-to-loops</code>、<code>convert-scf-to-cf</code></td>
+<td><code>linalg.generic</code> → <code>scf.for</code> → 基本块 + 条件跳转</td>
+</tr>
+<tr>
+<td><strong>LLVM 化</strong></td>
+<td>剩下五个</td>
+<td>memref/cf/func/arith → <code>llvm</code> 方言，最后清理残留的 cast</td>
+</tr>
+</tbody></table>
+<div class="warn">
+<strong>三个几乎人人踩的顺序坑</strong>
+<p><strong>① 漏了 <code>--expand-strided-metadata</code>。</strong>这个名字看起来和 LLVM 毫无关系，但它负责把 <code>memref.subview</code>、<code>memref.dim</code> 这类"操作 descriptor 元数据"的 op 展开成具体的算术。不跑它，<code>--finalize-memref-to-llvm</code> 会留下无法转换的 op，而报错信息不会告诉你缺的是这一步。</p>
+<p><strong>② 漏了 <code>--convert-cf-to-llvm</code>。</strong>我第一次就漏了，得到的报错是 <code>Dialect 'cf' not found for custom op 'cf.br'</code>——出现在 <strong>mlir-runner 解析输入</strong>的时候，而不是 lowering 的时候。因为 <code>mlir-runner</code> 只注册 LLVM 相关方言，遇到没降完的 <code>cf.br</code> 连解析都过不去。<strong>看到"某方言 not found"，先想"是不是那一层没降完"，而不是"工具缺注册"。</strong></p>
+<p><strong>③ 漏了 <code>--reconcile-unrealized-casts</code>。</strong>各个 <code>convert-*-to-llvm</code> 是独立的 partial conversion（第 16 章），彼此之间会留下 <code>builtin.unrealized_conversion_cast</code>（第 17 章那个占位 op）。这个 pass 负责把能对消的成对 cast 消掉。它<strong>必须放最后</strong>——放中间的话后面的 pass 又会产生新的 cast。</p>
+</div><h2>memref descriptor：ABI 边界</h2>
+<p><code>memref&lt;2x2xf32&gt;</code> 降到 LLVM 方言之后，变成一个结构体。从生成的 LLVM IR 里能直接看到它：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">{ ptr, ptr, i64, [2 x i64], [2 x i64] }</code></pre>
+</div><p>五个字段，各有明确职责：</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>字段</th>
+<th>类型</th>
+<th>干什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td><code>allocated</code></td>
+<td><code>ptr</code></td>
+<td><strong>分配</strong>返回的原始指针。<code>free()</code> 要用它</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>aligned</code></td>
+<td><code>ptr</code></td>
+<td><strong>对齐后</strong>的指针。所有访存用它</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>offset</code></td>
+<td><code>i64</code></td>
+<td>起始偏移（<strong>元素数</strong>，不是字节数）</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>sizes</code></td>
+<td><code>[N x i64]</code></td>
+<td>各维长度</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>strides</code></td>
+<td><code>[N x i64]</code></td>
+<td>各维步长（元素数）</td>
+</tr>
+</tbody></table>
+<div class="keypoint">
+<strong>为什么 <code>allocated</code> 和 <code>aligned</code> 要分成两个字段</strong>
+<p>因为 <code>malloc</code> 不保证对齐到你要的边界。MLIR 的做法是多分配一点，然后手工把指针往上取整——于是就有了两个指针：一个用来还给 <code>free()</code>，一个用来访存。</p>
+<p>这件事在生成的 LLVM IR 里看得一清二楚（下面那段输出的最后四行）：<code>malloc(80)</code> 明显多于 2×2×4=16 字节，接着 <code>ptrtoint</code> / <code>add 63</code> / <code>urem 64</code> / <code>sub</code> 一串算术，就是"对齐到 64 字节"。</p>
+<p><strong>只传一个指针是不够的</strong>——这也是为什么不能简单地把 memref 当成 C 的数组指针。</p>
+</div><p>看真正的 LLVM IR：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-translate lowered24.mlir --mlir-to-llvmir</code></pre>
+</div><p>运行结果（开头部分）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
+
+@__constant_2x2xf32_0 = private constant [2 x [2 x float]] [[2 x float] [float 1.000000e+01, float 2.000000e+01], [2 x float] [float 3.000000e+01, float 4.000000e+01]], align 64
+@__constant_2x2xf32 = private constant [2 x [2 x float]] [[2 x float] [float 1.000000e+00, float 2.000000e+00], [2 x float] [float 3.000000e+00, float 4.000000e+00]], align 64
+
+declare ptr @malloc(i64)
+
+define void @main() {
+  %1 = call ptr @malloc(i64 80)
+  %2 = ptrtoint ptr %1 to i64
+  %3 = add i64 %2, 63
+  %4 = urem i64 %3, 64
+  %5 = sub i64 %3, %4</code></pre>
+</div><p>两个常量数组直接进了 <code>.rodata</code>（<code>private constant [2 x [2 x float]]</code>），然后是那段对齐算术。<strong>到这里已经是纯 LLVM IR 了</strong>——后面交给 LLVM 后端，和 MLIR 再无关系。</p>
+<h3>descriptor 解释了两件前面留下的事</h3>
+<p><strong>第一件：<code>memref.subview</code> 为什么零拷贝（第 22 章）。</strong></p>
+<p>取一个子视图只需要改 <code>offset</code> 和 <code>sizes</code>，<strong><code>aligned</code> 指针和内存内容一个字节都不动</strong>。本章的模拟器会把这个过程按 descriptor 的语义真的走一遍。</p>
+<p>顺带一个推论：<strong>转置视图也不用动数据</strong>——只要把 <code>strides</code> 换个顺序。这就是为什么 <code>memref</code> 类型里那个 <code>strided&lt;[?, ?], offset: ?&gt;</code>（第 22 章函数签名里见过）这么重要：它让&quot;任意布局的视图&quot;能作为参数传递。</p>
+<p><strong>第二件：第 17 章那个 1:N 类型转换，最大的用户就是它。</strong></p>
+<p>一个 <code>memref&lt;2x2xf32&gt;</code> 在函数边界上要展开成 <strong>3 + 2×2 = 7</strong> 个标量参数（两个指针、一个 offset、两个 size、两个 stride）。这正是 1:N 类型转换存在的理由。第 17 章我们为 pix 手工造了一个 1:N 的例子，而 memref 的 descriptor 展开是它在真实世界里最重要的应用。</p>
+<h2>跑起来</h2>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">mlir-runner lowered24.mlir -e main -entry-point-result=void \
+  --shared-libs=$LLVM/build/lib/libmlir_runner_utils.so \
+  --shared-libs=$LLVM/build/lib/libmlir_c_runner_utils.so</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Unranked Memref base@ = 0x64d994c2c280 rank = 2 offset = 0 sizes = [2, 2] strides = [2, 1] data = 
+[[22,   44], 
+ [66,   88]]</code></pre>
+</div><p>输入是 <code>[[1,2],[3,4]]</code> 和 <code>[[10,20],[30,40]]</code>，做 <code>pix.add</code> 再 <code>pix.scale</code> 乘 2。<code>(1+10)×2 = 22</code>，<code>(2+20)×2 = 44</code>，<code>(3+30)×2 = 66</code>，<code>(4+40)×2 = 88</code>。<strong>全对。</strong></p>
+<p>而那行 <code>Unranked Memref base@ = 0x... rank = 2 offset = 0 sizes = [2, 2] strides = [2, 1]</code> 就是 descriptor 本身——<code>printMemrefF32</code> 干的事就是把它的字段打出来再按 sizes/strides 遍历数据。</p>
+<div class="note">
+<strong><code>mlir-runner</code> 和那两个 <code>--shared-libs</code></strong>
+<p><code>mlir-runner</code>（老版本叫 <code>mlir-cpu-runner</code>）是一个 JIT：它把 <code>llvm</code> 方言的 IR 交给 ORC JIT 编译执行。</p>
+<p>那两个运行时库提供的是"编译器生成的代码要调的外部函数"：<code>libmlir_c_runner_utils</code> 里有 <code>printMemrefF32</code> 这类打印函数，<code>libmlir_runner_utils</code> 里有计时、随机数等。<strong>它们不是 MLIR 的一部分，而是测试用的运行时支持</strong>——真实产品里这些接口由你自己的运行时提供（第 27 章看 IREE 时会看到一个完整的运行时长什么样）。</p>
+<p>注意 <code>-e main -entry-point-result=void</code>：入口函数名和返回类型要显式告诉它。</p>
+</div><div class="keypoint">
+<strong>这是全书第一个断言「运行结果」的测试</strong>
+<p><code>jit_run.mlir</code> 那条 RUN 行把十个 pass 串起来、JIT 运行、再用 FileCheck 断言 <code>[22, 44]</code> 和 <code>[66, 88]</code>。前二十三章的测试全在验"IR 长什么样"，这一条在验"算得对不对"。</p>
+<p><strong>两种测试都需要，而且互补。</strong>IR 测试告诉你"变换做了预期的事"，能精确定位问题在哪一层；运行测试告诉你"整条链的语义是对的"，能发现所有 IR 测试都通过但结果错了的情况——比如某个 indexing map 写反了、累加器初值忘了置零（第 20 章那个 <code>linalg.fill</code>）。<strong>只有 IR 测试的项目，很容易全绿着算错数。</strong></p>
+</div><h2>把 descriptor 的语义跑一遍</h2>
+<p>descriptor 的全部语义就是一个取址公式。下面这个模型按那个公式真的去取元素，于是零拷贝视图为什么成立就一目了然：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20memref%20descriptor%20%E7%9A%84%E4%BA%94%E4%B8%AA%E5%AD%97%E6%AE%B5%E5%90%84%E7%AE%A1%E4%BB%80%E4%B9%88%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AE%83%E6%98%AF%20MLIR%20%E4%B8%8E%E5%A4%96%E9%83%A8%E4%B8%96%E7%95%8C%E7%9A%84%20ABI%20%E8%BE%B9%E7%95%8C%EF%BC%9F%0A%23%20%E8%BF%99%E4%B8%AA%E6%A8%A1%E5%9E%8B%E6%8C%89%20descriptor%20%E7%9A%84%E8%AF%AD%E4%B9%89%E7%9C%9F%E7%9A%84%E5%8E%BB%E5%8F%96%E5%85%83%E7%B4%A0%EF%BC%8C%E4%BA%8E%E6%98%AF%20subview%20%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9B%B6%E6%8B%B7%E8%B4%9D%E5%B0%B1%E4%B8%80%E7%9B%AE%E4%BA%86%E7%84%B6%E3%80%82%0A%0Aclass%20Descriptor%3A%0A%20%20%20%20%22%22%22%E5%AF%B9%E5%BA%94%20LLVM%20%E5%B1%82%E7%9A%84%20%7B%20ptr%2C%20ptr%2C%20i64%2C%20%5BN%20x%20i64%5D%2C%20%5BN%20x%20i64%5D%20%7D%22%22%22%0A%20%20%20%20def%20__init__(self%2C%20data%2C%20allocated%2C%20aligned%2C%20offset%2C%20sizes%2C%20strides)%3A%0A%20%20%20%20%20%20%20%20self.data%20%3D%20data%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%A8%A1%E6%8B%9F%E9%82%A3%E5%9D%97%E5%86%85%E5%AD%98%EF%BC%88%E4%B8%80%E7%BB%B4%EF%BC%89%0A%20%20%20%20%20%20%20%20self.allocated%20%3D%20allocated%20%20%20%20%23%20%E2%91%A0%20%E5%88%86%E9%85%8D%E5%9F%BA%E5%9D%80%EF%BC%9Adealloc%20%E7%94%A8%E5%AE%83%0A%20%20%20%20%20%20%20%20self.aligned%20%3D%20aligned%20%20%20%20%20%20%20%20%23%20%E2%91%A1%20%E5%AF%B9%E9%BD%90%E5%9F%BA%E5%9D%80%EF%BC%9A%E8%AE%BF%E5%AD%98%E7%94%A8%E5%AE%83%0A%20%20%20%20%20%20%20%20self.offset%20%3D%20offset%20%20%20%20%20%20%20%20%20%20%23%20%E2%91%A2%20%E8%B5%B7%E5%A7%8B%E5%81%8F%E7%A7%BB%EF%BC%88%E5%85%83%E7%B4%A0%E6%95%B0%EF%BC%89%0A%20%20%20%20%20%20%20%20self.sizes%20%3D%20sizes%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E2%91%A3%20%E5%90%84%E7%BB%B4%E9%95%BF%E5%BA%A6%0A%20%20%20%20%20%20%20%20self.strides%20%3D%20strides%20%20%20%20%20%20%20%20%23%20%E2%91%A4%20%E5%90%84%E7%BB%B4%E6%AD%A5%E9%95%BF%0A%0A%20%20%20%20def%20at(self%2C%20*idx)%3A%0A%20%20%20%20%20%20%20%20%22%22%22%E5%8F%96%E5%85%83%E7%B4%A0%E7%9A%84%E5%85%AC%E5%BC%8F%E2%80%94%E2%80%94descriptor%20%E7%9A%84%E5%85%A8%E9%83%A8%E8%AF%AD%E4%B9%89%E5%B0%B1%E8%BF%99%E4%B8%80%E8%A1%8C%22%22%22%0A%20%20%20%20%20%20%20%20flat%20%3D%20self.offset%20%2B%20sum(i%20*%20s%20for%20i%2C%20s%20in%20zip(idx%2C%20self.strides))%0A%20%20%20%20%20%20%20%20return%20self.data%5Bflat%5D%0A%0A%20%20%20%20def%20subview(self%2C%20off%2C%20sizes)%3A%0A%20%20%20%20%20%20%20%20%22%22%22%E5%81%9A%E4%B8%80%E4%B8%AA%E8%A7%86%E5%9B%BE%EF%BC%9A%E5%8F%AA%E6%94%B9%20offset%2Fsizes%EF%BC%8C**%E6%8C%87%E9%92%88%E5%92%8C%E6%95%B0%E6%8D%AE%E4%B8%80%E4%B8%AA%E5%AD%97%E8%8A%82%E9%83%BD%E4%B8%8D%E5%8A%A8**%22%22%22%0A%20%20%20%20%20%20%20%20new_off%20%3D%20self.offset%20%2B%20sum(o%20*%20s%20for%20o%2C%20s%20in%20zip(off%2C%20self.strides))%0A%20%20%20%20%20%20%20%20return%20Descriptor(self.data%2C%20self.allocated%2C%20self.aligned%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20new_off%2C%20sizes%2C%20self.strides)%0A%0A%20%20%20%20def%20show(self%2C%20name)%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bname%7D%3A%20aligned%3D0x%7Bself.aligned%3Ax%7D%20offset%3D%7Bself.offset%7D%20%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22sizes%3D%7Bself.sizes%7D%20strides%3D%7Bself.strides%7D%22)%0A%0A%23%20%E4%B8%80%E5%9D%97%204x4%20%E7%9A%84%E5%86%85%E5%AD%98%EF%BC%8C%E8%A1%8C%E4%B8%BB%E5%BA%8F%0Amem%20%3D%20list(range(16))%0Abig%20%3D%20Descriptor(mem%2C%200x1000%2C%200x1000%2C%200%2C%20%5B4%2C%204%5D%2C%20%5B4%2C%201%5D)%0Abig.show(%22%E5%AE%8C%E6%95%B4%204x4%22)%0Aprint(%22%20%20%20%20%E6%8C%89%E8%A1%8C%E6%89%93%E5%8D%B0%EF%BC%9A%22%2C%20%5B%5Bbig.at(i%2C%20j)%20for%20j%20in%20range(4)%5D%20for%20i%20in%20range(4)%5D)%0A%0Aprint(%22%5Cn%E5%8F%96%E5%8F%B3%E4%B8%8B%E8%A7%92%202x2%20%E7%9A%84%E5%AD%90%E8%A7%86%E5%9B%BE%EF%BC%9A%22)%0Asub%20%3D%20big.subview(%5B2%2C%202%5D%2C%20%5B2%2C%202%5D)%0Asub.show(%22subview%22)%0Aprint(%22%20%20%20%20%E5%86%85%E5%AE%B9%EF%BC%9A%22%2C%20%5B%5Bsub.at(i%2C%20j)%20for%20j%20in%20range(2)%5D%20for%20i%20in%20range(2)%5D)%0Aprint(f%22%20%20%20%20data%20%E6%98%AF%E5%90%8C%E4%B8%80%E4%B8%AA%E5%AF%B9%E8%B1%A1%E5%90%97%EF%BC%9F%7Bsub.data%20is%20big.data%7D%20%E2%80%94%E2%80%94%20**%E9%9B%B6%E6%8B%B7%E8%B4%9D**%22)%0Aprint(%22%20%20%20%20%E5%8F%98%E7%9A%84%E5%8F%AA%E6%9C%89%20offset%EF%BC%880%20%E2%86%92%20%25d%EF%BC%89%EF%BC%8Cstrides%20%E4%B8%80%E6%A8%A1%E4%B8%80%E6%A0%B7%20%E2%80%94%E2%80%94%22%20%25%20sub.offset)%0Aprint(%22%20%20%20%20%E8%BF%99%E5%B0%B1%E6%98%AF%E7%AC%AC%2022%20%E7%AB%A0%20extract_slice%20%E2%86%92%20memref.subview%20%E4%B8%8D%E6%8B%B7%E6%95%B0%E6%8D%AE%E7%9A%84%E5%85%A8%E9%83%A8%E5%8E%9F%E5%9B%A0%E3%80%82%22)%0A%0Aprint(%22%5Cn%E8%BD%AC%E7%BD%AE%E4%B9%9F%E4%B8%8D%E7%94%A8%E5%8A%A8%E6%95%B0%E6%8D%AE%EF%BC%8C%E5%8F%AA%E8%A6%81%E6%8A%8A%20strides%20%E6%8D%A2%E4%B8%AA%E9%A1%BA%E5%BA%8F%EF%BC%9A%22)%0Atr%20%3D%20Descriptor(mem%2C%200x1000%2C%200x1000%2C%200%2C%20%5B4%2C%204%5D%2C%20%5B1%2C%204%5D)%20%20%20%23%20strides%20%E5%8F%8D%E8%BF%87%E6%9D%A5%0Atr.show(%22transposed%20view%22)%0Aprint(%22%20%20%20%20%E5%86%85%E5%AE%B9%EF%BC%9A%22%2C%20%5B%5Btr.at(i%2C%20j)%20for%20j%20in%20range(4)%5D%20for%20i%20in%20range(4)%5D)%0A%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2062)%0Aprint(%22%E4%B8%BA%E4%BB%80%E4%B9%88%20descriptor%20%E6%98%AF%20ABI%20%E8%BE%B9%E7%95%8C%EF%BC%9A%22)%0Aprint(%22%20%20%C2%B7%20allocated%20%E5%92%8C%20aligned%20**%E5%88%86%E5%BC%80**%EF%BC%8C%E5%9B%A0%E4%B8%BA%20free()%20%E8%A6%81%E5%8E%9F%E5%A7%8B%E6%8C%87%E9%92%88%EF%BC%8C%22)%0Aprint(%22%20%20%20%20%E8%80%8C%E8%AE%BF%E5%AD%98%E8%A6%81%E5%AF%B9%E9%BD%90%E5%90%8E%E7%9A%84%E6%8C%87%E9%92%88%20%E2%80%94%E2%80%94%20%E8%BF%99%E5%B0%B1%E6%98%AF%20LLVM%20IR%20%E9%87%8C%E9%82%A3%E6%AE%B5%20malloc%20%2B%20%E6%89%8B%E5%B7%A5%E5%AF%B9%E9%BD%90%E7%AE%97%E6%9C%AF%22)%0Aprint(%22%20%20%C2%B7%20sizes%2Fstrides%20%E5%9C%A8%E7%BB%93%E6%9E%84%E4%BD%93%E9%87%8C%EF%BC%8C%E6%89%80%E4%BB%A5%E8%A2%AB%E8%B0%83%E6%96%B9%E4%B8%8D%E5%BF%85%E7%9F%A5%E9%81%93%E7%BC%96%E8%AF%91%E6%9C%9F%E5%BD%A2%E7%8A%B6%EF%BC%8C%22)%0Aprint(%22%20%20%20%20%E5%90%8C%E4%B8%80%E4%B8%AA%E5%87%BD%E6%95%B0%E8%83%BD%E6%8E%A5%E5%8F%97%E4%BB%BB%E4%BD%95%E6%AD%A5%E9%95%BF%E7%9A%84%E8%A7%86%E5%9B%BE%EF%BC%88%E7%AC%AC%2022%20%E7%AB%A0%E9%82%A3%E4%B8%AA%20strided%3C%5B%3F%2C%3F%5D%2C%20offset%3A%3F%3E%EF%BC%89%22)%0Aprint(%22%20%20%C2%B7%20%E4%BB%A3%E4%BB%B7%EF%BC%9A%E4%BC%A0%E4%B8%80%E4%B8%AA%20memref%20%E8%A6%81%E4%BC%A0%203%20%2B%202N%20%E4%B8%AA%E6%A0%87%E9%87%8F%E3%80%82%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%BA%E4%BB%80%E4%B9%88%22)%0Aprint(%22%20%20%20%20MLIR%20%E6%9C%89%201%3AN%20%E7%B1%BB%E5%9E%8B%E8%BD%AC%E6%8D%A2%EF%BC%88%E7%AC%AC%2017%20%E7%AB%A0%EF%BC%89%E2%80%94%E2%80%94%20descriptor%20%E5%B1%95%E5%BC%80%E6%AD%A3%E6%98%AF%E5%AE%83%E6%9C%80%E5%A4%A7%E7%9A%84%E7%94%A8%E6%88%B7%22)"># memref descriptor 的五个字段各管什么？为什么它是 MLIR 与外部世界的 ABI 边界？
+# 这个模型按 descriptor 的语义真的去取元素，于是 subview 为什么零拷贝就一目了然。
+
+class Descriptor:
+    """对应 LLVM 层的 { ptr, ptr, i64, [N x i64], [N x i64] }"""
+    def __init__(self, data, allocated, aligned, offset, sizes, strides):
+        self.data = data              # 模拟那块内存（一维）
+        self.allocated = allocated    # ① 分配基址：dealloc 用它
+        self.aligned = aligned        # ② 对齐基址：访存用它
+        self.offset = offset          # ③ 起始偏移（元素数）
+        self.sizes = sizes            # ④ 各维长度
+        self.strides = strides        # ⑤ 各维步长
+
+    def at(self, *idx):
+        """取元素的公式——descriptor 的全部语义就这一行"""
+        flat = self.offset + sum(i * s for i, s in zip(idx, self.strides))
+        return self.data[flat]
+
+    def subview(self, off, sizes):
+        """做一个视图：只改 offset/sizes，**指针和数据一个字节都不动**"""
+        new_off = self.offset + sum(o * s for o, s in zip(off, self.strides))
+        return Descriptor(self.data, self.allocated, self.aligned,
+                          new_off, sizes, self.strides)
+
+    def show(self, name):
+        print(f"  {name}: aligned=0x{self.aligned:x} offset={self.offset} "
+              f"sizes={self.sizes} strides={self.strides}")
+
+# 一块 4x4 的内存，行主序
+mem = list(range(16))
+big = Descriptor(mem, 0x1000, 0x1000, 0, [4, 4], [4, 1])
+big.show("完整 4x4")
+print("    按行打印：", [[big.at(i, j) for j in range(4)] for i in range(4)])
+
+print("\n取右下角 2x2 的子视图：")
+sub = big.subview([2, 2], [2, 2])
+sub.show("subview")
+print("    内容：", [[sub.at(i, j) for j in range(2)] for i in range(2)])
+print(f"    data 是同一个对象吗？{sub.data is big.data} —— **零拷贝**")
+print("    变的只有 offset（0 → %d），strides 一模一样 ——" % sub.offset)
+print("    这就是第 22 章 extract_slice → memref.subview 不拷数据的全部原因。")
+
+print("\n转置也不用动数据，只要把 strides 换个顺序：")
+tr = Descriptor(mem, 0x1000, 0x1000, 0, [4, 4], [1, 4])   # strides 反过来
+tr.show("transposed view")
+print("    内容：", [[tr.at(i, j) for j in range(4)] for i in range(4)])
+
+print("\n" + "=" * 62)
+print("为什么 descriptor 是 ABI 边界：")
+print("  · allocated 和 aligned **分开**，因为 free() 要原始指针，")
+print("    而访存要对齐后的指针 —— 这就是 LLVM IR 里那段 malloc + 手工对齐算术")
+print("  · sizes/strides 在结构体里，所以被调方不必知道编译期形状，")
+print("    同一个函数能接受任何步长的视图（第 22 章那个 strided&lt;[?,?], offset:?&gt;）")
+print("  · 代价：传一个 memref 要传 3 + 2N 个标量。这就是为什么")
+print("    MLIR 有 1:N 类型转换（第 17 章）—— descriptor 展开正是它最大的用户")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  完整 4x4: aligned=0x1000 offset=0 sizes=[4, 4] strides=[4, 1]
+    按行打印： [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]]
+
+取右下角 2x2 的子视图：
+  subview: aligned=0x1000 offset=10 sizes=[2, 2] strides=[4, 1]
+    内容： [[10, 11], [14, 15]]
+    data 是同一个对象吗？True —— **零拷贝**
+    变的只有 offset（0 → 10），strides 一模一样 ——
+    这就是第 22 章 extract_slice → memref.subview 不拷数据的全部原因。
+
+转置也不用动数据，只要把 strides 换个顺序：
+  transposed view: aligned=0x1000 offset=0 sizes=[4, 4] strides=[1, 4]
+    内容： [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]]
+
+==============================================================
+为什么 descriptor 是 ABI 边界：
+  · allocated 和 aligned **分开**，因为 free() 要原始指针，
+    而访存要对齐后的指针 —— 这就是 LLVM IR 里那段 malloc + 手工对齐算术
+  · sizes/strides 在结构体里，所以被调方不必知道编译期形状，
+    同一个函数能接受任何步长的视图（第 22 章那个 strided&lt;[?,?], offset:?&gt;）
+  · 代价：传一个 memref 要传 3 + 2N 个标量。这就是为什么
+    MLIR 有 1:N 类型转换（第 17 章）—— descriptor 展开正是它最大的用户</code></pre>
+</div><p>三处值得停一下：</p>
+<p><strong>子视图的 <code>data is big.data</code> 为 <code>True</code></strong> ——同一块内存，变的只有 <code>offset</code>（0 → 10）。这就是 <code>memref.subview</code> 零拷贝的全部内容。</p>
+<p><strong>转置视图只改了 <code>strides</code></strong>（<code>[4,1]</code> → <code>[1,4]</code>），数据一个字节没动，取出来就是转置的。</p>
+<p><strong>最后那段说明了代价</strong>：传一个二维 memref 要传 7 个标量。descriptor 把布局信息做成运行时数据，换来的是&quot;同一个函数能接受任何布局的视图&quot;；代价是参数变多、以及每次访存要多几条算术。</p>
+<h2>这条链的分层，回头看</h2>
+<p>走到这里，第四部分那条下降路已经全部走完。回头看每一层都在&quot;放弃什么、换来什么&quot;：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>放弃了</th>
+<th>换来了</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>pix</code></td>
+<td>——</td>
+<td>领域语义（一眼看懂在算什么）</td>
+</tr>
+<tr>
+<td><code>linalg</code> on tensor</td>
+<td>领域语义</td>
+<td><strong>迭代空间显式</strong>（可 tile、可融合）</td>
+</tr>
+<tr>
+<td><code>linalg</code> on memref</td>
+<td>值语义、别名安全</td>
+<td><strong>内存可控</strong>（第 22 章那次分析）</td>
+</tr>
+<tr>
+<td><code>vector</code></td>
+<td>&quot;逐元素&quot;的简单性</td>
+<td><strong>SIMD 宽度</strong>（第 23 章）</td>
+</tr>
+<tr>
+<td><code>scf</code> → <code>cf</code></td>
+<td>结构化控制流</td>
+<td>任意控制流（LLVM 要的形式）</td>
+</tr>
+<tr>
+<td><code>llvm</code></td>
+<td>类型系统里的形状信息</td>
+<td><strong>descriptor</strong>：可与外界互操作的 ABI</td>
+</tr>
+</tbody></table>
+<p><strong>每一层都是一次&quot;把隐含信息显式化&quot;的交易。</strong> 这就是&quot;渐进下降&quot;的实质——不是&quot;分很多步比较优雅&quot;，而是<strong>每一步只在信息最充分的时候做一个决定</strong>：tile 大小在还有迭代空间时决定，就地写在还有值语义时决定，向量宽度在还有 tile 结构时决定。顺序反了，信息就没了。</p>
+<div class="concept">
+<svg viewBox="0 0 700 404" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c24b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c24g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">pix 到数字：每一层放弃什么、换来什么</text>
+  <rect x="14" y="30" width="160" height="34" rx="5" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="24" y="52" font-size="10" font-family="monospace" fill="#24292f">pix.add / pix.scale</text>
+  <text x="182" y="45" font-size="9" fill="#6b7280">领域语义：一眼看懂在算什么</text>
+  <line x1="94" y1="66" x2="94" y2="80" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c24b)"/>
+  <text x="102" y="77" font-size="8" fill="#2b6cb0">pix-to-linalg</text>
+  <rect x="14" y="82" width="160" height="34" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="104" font-size="10" font-family="monospace" fill="#24292f">linalg on tensor</text>
+  <text x="182" y="97" font-size="9" fill="#3f9b5c">换来迭代空间显式 → 可 tile、可融合（ch20/21）</text>
+  <line x1="94" y1="118" x2="94" y2="132" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c24b)"/>
+  <text x="102" y="129" font-size="8" fill="#2b6cb0">one-shot-bufferize</text>
+  <rect x="14" y="134" width="160" height="34" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="156" font-size="10" font-family="monospace" fill="#24292f">linalg on memref</text>
+  <text x="182" y="149" font-size="9" fill="#3f9b5c">换来内存可控；放弃值语义 → 别名要自己管（ch22）</text>
+  <line x1="94" y1="170" x2="94" y2="184" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c24b)"/>
+  <text x="102" y="181" font-size="8" fill="#2b6cb0">vectorize / linalg-to-loops</text>
+  <rect x="14" y="186" width="160" height="34" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="208" font-size="10" font-family="monospace" fill="#24292f">vector + scf.for</text>
+  <text x="182" y="201" font-size="9" fill="#3f9b5c">换来 SIMD 宽度；mask 处理边界（ch23）</text>
+  <line x1="94" y1="222" x2="94" y2="236" stroke="#2b6cb0" stroke-width="1.4" marker-end="url(#c24b)"/>
+  <text x="102" y="233" font-size="8" fill="#2b6cb0">convert-scf-to-cf</text>
+  <rect x="14" y="238" width="160" height="34" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="24" y="260" font-size="10" font-family="monospace" fill="#24292f">cf（基本块 + 跳转）</text>
+  <text x="182" y="253" font-size="9" fill="#6b7280">放弃结构化控制流，换成 LLVM 要的形式</text>
+  <line x1="94" y1="274" x2="94" y2="288" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c24g)"/>
+  <text x="102" y="285" font-size="8" fill="#3f9b5c">五个 convert-*-to-llvm + reconcile</text>
+  <rect x="14" y="290" width="160" height="34" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2.2"/>
+  <text x="24" y="312" font-size="10" font-family="monospace" fill="#24292f">llvm 方言 → LLVM IR</text>
+  <text x="182" y="305" font-size="9" fill="#3f9b5c">换来 descriptor —— 可与外界互操作的 ABI</text>
+  <line x1="94" y1="326" x2="94" y2="340" stroke="#3f9b5c" stroke-width="1.4" marker-end="url(#c24g)"/>
+  <rect x="14" y="342" width="160" height="30" rx="5" fill="#fff" stroke="#3f9b5c" stroke-width="2.2"/>
+  <text x="24" y="362" font-size="10" font-weight="bold" fill="#2f7a45">[[22, 44], [66, 88]]</text>
+  <text x="182" y="360" font-size="9" fill="#2f7a45">mlir-runner JIT —— 全书第一次断言"算得对不对"</text>
+  <rect x="374" y="222" width="312" height="150" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="386" y="241" font-size="10" font-weight="bold" fill="#24292f">memref descriptor：五个字段</text>
+  <text x="386" y="259" font-size="9" font-family="monospace" fill="#24292f">{ ptr, ptr, i64, [N x i64], [N x i64] }</text>
+  <text x="386" y="275" font-size="9" fill="#24292f">① allocated —— free() 要它</text>
+  <text x="386" y="288" font-size="9" fill="#24292f">② aligned —— 访存用它（malloc 不保证对齐）</text>
+  <text x="386" y="301" font-size="9" fill="#24292f">③ offset　④ sizes　⑤ strides</text>
+  <text x="386" y="320" font-size="9" fill="#3f9b5c">解释了 subview 零拷贝：只改 offset/sizes，</text>
+  <text x="386" y="332" font-size="9" fill="#3f9b5c">指针和数据不动；转置只需换 strides 顺序</text>
+  <text x="386" y="350" font-size="9" fill="#e06a3b">代价：传一个二维 memref = 7 个标量 ——</text>
+  <text x="386" y="362" font-size="9" fill="#e06a3b">第 17 章 1:N 类型转换最大的真实用户</text>
+  <text x="374" y="40" font-size="10" font-weight="bold" fill="#e06a3b">三个顺序坑（漏一个整条链就断）</text>
+  <text x="374" y="58" font-size="9" fill="#24292f">· <tspan font-family="monospace">--expand-strided-metadata</tspan>：名字看着无关，</text>
+  <text x="384" y="70" font-size="9" fill="#24292f">但它展开 subview/dim 的元数据算术</text>
+  <text x="374" y="86" font-size="9" fill="#24292f">· <tspan font-family="monospace">--convert-cf-to-llvm</tspan>：漏了报</text>
+  <text x="384" y="98" font-size="9" font-family="monospace" fill="#e06a3b">Dialect 'cf' not found for custom op 'cf.br'</text>
+  <text x="384" y="110" font-size="9" fill="#6b7280">—— 出现在 runner <tspan font-weight="bold">解析</tspan>时，不是 lowering 时</text>
+  <text x="374" y="126" font-size="9" fill="#24292f">· <tspan font-family="monospace">--reconcile-unrealized-casts</tspan> 必须<tspan font-weight="bold">放最后</tspan>：</text>
+  <text x="384" y="138" font-size="9" fill="#24292f">各 convert 是独立的 partial conversion，之间</text>
+  <text x="384" y="150" font-size="9" fill="#24292f">会留 cast；放中间后面又会产生新的</text>
+  <text x="374" y="168" font-size="9" fill="#6b7280">看到"某方言 not found"，先想"那一层没降完"，</text>
+  <text x="374" y="180" font-size="9" fill="#6b7280">而不是"工具缺注册"。</text>
+  <text x="374" y="200" font-size="9" fill="#2b6cb0">这条管线正是 jit_run.mlir 那条 RUN 行的内容。</text>
+</svg>
+<div class="caption">图 24-1　整条下降链每层的取舍、memref descriptor 的五个字段，以及三个最常踩的管线顺序坑</div>
+</div><h2>动手：从 C 调用它</h2>
+<p>descriptor 是 ABI，所以可以从 C 调用 MLIR 编译出来的函数。试一次：</p>
+<ol>
+<li>把那段 IR 降完后用 <code>mlir-translate --mlir-to-llvmir</code> 出 <code>.ll</code>，再用 <code>llc</code>/<code>clang</code> 编成 <code>.o</code>；</li>
+<li>在 C 里按 descriptor 的布局声明结构体：</li>
+</ol>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">struct MemRef2DF32 {
+  float *allocated;
+  float *aligned;
+  int64_t offset;
+  int64_t sizes[2];
+  int64_t strides[2];
+};</code></pre>
+</div><ol start="3">
+<li>注意 MLIR 默认把 memref 参数<strong>展平</strong>成 7 个标量（1:N），所以函数签名要么按展平的写，要么给 MLIR 的函数加 <code>llvm.emit_c_interface</code> 属性让它额外生成一个接受结构体指针的包装（那个包装名字前缀是 <code>_mlir_ciface_</code>）。</li>
+</ol>
+<p><strong>先跑 <code>pix-opt ... --llvm-request-c-wrappers</code> 看它生成的包装长什么样</strong>，对照着写 C 声明比猜快得多。</p>
+<p><strong>再改一处</strong>：把 <code>jit_run.mlir</code> 里的 <code>pix.scale</code> 系数从 2.0 改成 0.5，预期输出变成 <code>[5.5, 11]</code> / <code>[16.5, 22]</code>。跑一遍确认——<strong>然后故意把 <code>pix-to-linalg</code> 里 <code>ReduceToLinalg</code> 那个 <code>linalg.fill</code> 删掉</strong>（第 20 章说过累加器必须初始化），加一个 <code>pix.reduce</code> 到测试里，看结果变成什么。<strong>你会得到一个不确定的垃圾值，而所有 IR 测试都仍然通过</strong>——这就是前面那个 keypoint 说的&quot;只有 IR 测试的项目很容易全绿着算错数&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>完整管线十个 pass，分四段：<strong>抽象层</strong>（<code>pix-to-linalg</code>）、<strong>内存化</strong>（<code>one-shot-bufferize</code>）、<strong>循环化</strong>（<code>linalg-to-loops</code>、<code>scf-to-cf</code>）、<strong>LLVM 化</strong>（五个 <code>convert-*</code> + <code>reconcile</code>）。</li>
+<li><strong>三个顺序坑</strong>：<code>--expand-strided-metadata</code>（名字看着无关，但它展开 subview/dim 的元数据算术）；<code>--convert-cf-to-llvm</code>（漏了会在 <strong>runner 解析</strong>时报 <code>Dialect &#39;cf&#39; not found</code>，不是 lowering 时）；<code>--reconcile-unrealized-casts</code> <strong>必须放最后</strong>（各 convert 是独立的 partial conversion，之间会留 cast）。</li>
+<li>看到&quot;某方言 not found&quot;，<strong>先想&quot;那一层没降完&quot;</strong>，而不是&quot;工具缺注册&quot;。</li>
+<li><strong>memref descriptor 是 MLIR 与外部世界的 ABI 边界</strong>：<code>{ ptr, ptr, i64, [N x i64], [N x i64] }</code> = allocated / aligned / offset / sizes / strides。</li>
+<li><strong><code>allocated</code> 和 <code>aligned</code> 分开，因为 <code>malloc</code> 不保证对齐</strong>——MLIR 多分配一点再手工取整，生成的 LLVM IR 里那段 <code>ptrtoint</code>/<code>add 63</code>/<code>urem 64</code>/<code>sub</code> 就是它。所以<strong>不能把 memref 当成一个裸指针传</strong>。</li>
+<li>descriptor 解释了两件前面的事：<strong><code>memref.subview</code> 零拷贝</strong>（只改 offset/sizes，指针和数据不动；转置只需换 strides 顺序），以及<strong>第 17 章 1:N 类型转换最大的真实用户</strong>（一个二维 memref 展平成 7 个标量）。</li>
+<li><code>mlir-runner</code> 是 JIT；那两个 <code>--shared-libs</code> 提供的是<strong>测试用的运行时支持</strong>（<code>printMemrefF32</code> 等），不是 MLIR 的一部分。真实产品由自己的运行时提供。</li>
+<li><strong>这是全书第一个断言&quot;运行结果&quot;的测试。</strong> IR 测试验&quot;变换做了预期的事&quot;、能定位层次；运行测试验&quot;整条链语义对&quot;、能发现&quot;IR 全对但数算错&quot;。<strong>只有 IR 测试的项目很容易全绿着算错数。</strong></li>
+<li>回头看整条链：<strong>每一层都是一次&quot;把隐含信息显式化&quot;的交易</strong>。渐进下降的实质不是&quot;分步优雅&quot;，而是<strong>每一步只在信息最充分的时候做一个决定</strong>——tile 大小在还有迭代空间时定，就地写在还有值语义时定，向量宽度在还有 tile 结构时定。顺序反了信息就没了。</li>
+</ul>
+<p><strong>pix 进度</strong>：管线打通到底。新增 <code>jit_run.mlir</code>——十个 pass 串起来、JIT 运行、断言 <code>[22, 44]</code> / <code>[66, 88]</code>。为此给 lit 配置加了 <code>%mlir_lib_dir</code> 与 <code>%shlibext</code> 两个替换，并把 <code>mlir-runner</code> 加进工具替换。<code>check-pix</code> 从 21 涨到 22 个文件。</p>
+<p>第四部分只剩一章。第 25 章讲 <strong>GPU</strong>：<code>gpu</code> 方言、<code>gpu.launch</code> 与 kernel outlining（第 13 章那笔 <code>IsolatedFromAbove</code> 的账会最后一次出现，而且这次是它的正面价值），以及三个出口——NVVM→PTX、ROCDL、SPIR-V。会和《深入 LLVM 与 SYCL》《GPU 编程》两本书交叉引用，不重复它们已经讲过的硬件细节。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch23.html">← 第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a>
+  <a class="nav-next" href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -116,7 +116,7 @@
 <p>看一眼 <code>cir.for</code> 的实际形状（取自 <code>clang/test/CIR/CodeGen/loop.cpp</code>，一个空的 <code>for (;;) {}</code>）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.for : cond {
+  <pre class="line-numbers"><code class="language-mlir">cir.for : cond {
     %true = cir.const #true
     cir.condition(%true)
 } body {
@@ -173,7 +173,7 @@
 <p>因为 <code>.cir</code> 能手写，这个 pass 的测试可以完全不碰 C++。下面是 <code>clang/test/CIR/Transforms/if.cir</code> 的全文（这是一个非常值得精读的文件，它把「一个 pass 做什么」讲得比任何文档都清楚）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">// RUN: cir-opt %s -cir-flatten-cfg -o - | FileCheck %s
+  <pre class="line-numbers"><code class="language-mlir">// RUN: cir-opt %s -cir-flatten-cfg -o - | FileCheck %s
 
 !s32i = !cir.int&lt;s, 32&gt;
 module {
@@ -192,7 +192,7 @@ module {
 </div><p>跑完 pass 之后，<code>cir.if</code> 那个带两个 region 的操作消失了，换成了 <code>cir.brcond</code> 和三个基本块：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">//      CHECK: cir.func{{.*}} @foo(%arg0: !s32i) -&gt; !s32i {
+  <pre class="line-numbers"><code class="language-mlir">//      CHECK: cir.func{{.*}} @foo(%arg0: !s32i) -&gt; !s32i {
 // CHECK-NEXT:   %0 = cir.cast int_to_bool %arg0 : !s32i -&gt; !cir.bool
 // CHECK-NEXT:   cir.brcond %0 ^bb1, ^bb2
 // CHECK-NEXT: ^bb1:  // pred: ^bb0
@@ -213,7 +213,7 @@ module {
 <p>它有三种形态（<code>CIRTypes.td</code> 里明确列出）：<strong>具名且完整</strong>、<strong>具名但不完整</strong>、<strong>匿名</strong>。而且每个成员都带一个「种类」标记：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">!rec_complete   = !cir.struct&lt;"complete" {data !u8i}&gt;
+  <pre class="line-numbers"><code class="language-mlir">!rec_complete   = !cir.struct&lt;"complete" {data !u8i}&gt;
 !rec_class      = !cir.struct&lt;class "MyClass" {data !s32i}&gt;
 !rec_incomplete = !cir.struct&lt;"incomplete" incomplete&gt;
 !anonymous      = !cir.struct&lt;{data !u8i}&gt;
@@ -233,7 +233,7 @@ module {
 <div class="known">
 <div class="compare-head">CIR：名字、类别、嵌套结构都在</div><div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">!rec_Base =
+  <pre class="line-numbers"><code class="language-mlir">!rec_Base =
   !cir.struct&lt;class "Base" {data !s32i}&gt;
 
 !rec_Derived =
@@ -290,7 +290,7 @@ module {
 <p>TableGen 文档里给的完整调用序列是这样（<code>!rec_C</code> 是某个带虚函数的类）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">%2 = cir.load %0 : !cir.ptr&lt;!cir.ptr&lt;!rec_C&gt;&gt;, !cir.ptr&lt;!rec_C&gt;
+  <pre class="line-numbers"><code class="language-mlir">%2 = cir.load %0 : !cir.ptr&lt;!cir.ptr&lt;!rec_C&gt;&gt;, !cir.ptr&lt;!rec_C&gt;
 %3 = cir.vtable.get_vptr %2 : !cir.ptr&lt;!rec_C&gt; -&gt; !cir.ptr&lt;!cir.vptr&gt;
 %4 = cir.load %3 : !cir.ptr&lt;!cir.vptr&gt;, !cir.vptr
 %5 = cir.vtable.get_virtual_fn_addr %4[2] : !cir.vptr
@@ -344,7 +344,7 @@ module {
 <p>CIR 的模型是：<code>cir.try</code> 是一个带 region 的操作，try 体和每个 handler 各占一个 region；handler region 接收一个<strong>类型化的</strong> <code>!cir.eh_token</code> 参数代表在飞的异常。直接看 <code>CIROps.td</code> 里给的例子：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.try {
+  <pre class="line-numbers"><code class="language-mlir">cir.try {
   cir.call exception @function() : () -&gt; ()
   cir.yield
 } catch [type #cir.global_view&lt;@_ZTIPf&gt; : !cir.ptr&lt;!u8i&gt;] (%eh_token : !cir.eh_token) {
@@ -371,7 +371,7 @@ module {
 <p>更能说明这个模型表达力的是<strong>动态异常规范</strong>（<code>void f() throw(int)</code>）。CIR 不为它新造语法，而是复用 <code>cir.try</code>，换一对 handler：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.try {
+  <pre class="line-numbers"><code class="language-mlir">cir.try {
   cir.call exception @function() : () -&gt; ()
   cir.yield
 } filter [#cir.global_view&lt;@_ZTIi&gt; : !cir.ptr&lt;!u8i&gt;]
@@ -417,7 +417,7 @@ module {
 <p>函数上还带 personality 信息，在文本里直接可见（来自 <code>clang/test/CIR/CodeGenCXX/try-catch.cpp</code>）：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
-  <pre class="line-numbers"><code class="language-llvm">cir.func @_Z30try_catch_with_empty_catch_allv() personality(@__gxx_personality_v0)</code></pre>
+  <pre class="line-numbers"><code class="language-mlir">cir.func @_Z30try_catch_with_empty_catch_allv() personality(@__gxx_personality_v0)</code></pre>
 </div><p>这一整套最后由 <strong><code>cir-eh-abi-lowering</code></strong> 这个 pass 降到目标 ABI 的形态（Itanium 的 <code>invoke</code>/<code>landingpad</code>，或者别的）。它在 <code>populateCIRPreLoweringPasses()</code> 里紧跟着 <code>cir-flatten-cfg</code>——<strong>先把普通控制流拍平，再降异常 ABI</strong>，因为异常的降级需要知道扁平之后的块结构。</p>
 <div class="keypoint">
 <strong>一条贯穿三节的规律</strong>
@@ -646,6 +646,9 @@ print("`cleanup eh` region 的原因：正常路径和 unwind 路径必须分别
 <script src="vendor/prism-c.min.js"></script>
 <script src="vendor/prism-cpp.min.js"></script>
 <script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
 <script src="vendor/prism-line-numbers.min.js"></script>
 <!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>

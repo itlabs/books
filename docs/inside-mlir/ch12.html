@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li class="active"><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第二部分的收尾。前五章我们一件件往 pix 上加东西：op、类型、属性、verifier、化简。这一章不再加新机制，而是<strong>把它变成一个能交付的项目</strong>——补齐最后一个语义缺口、给方言一个公开的入口、以及把测试这件事彻底讲透。</p>
+<p>三块内容。<strong>一</strong>：兑现第 8 章留下的那句"归约方式以后用枚举扩展"，顺带讲清一个很实用的问题——<strong>给已经在用的 op 加属性，怎么不破坏别人写好的 IR</strong>。<strong>二</strong>：注册一条命名管线 <code>--pix-simplify</code>，并说清"管线"和"pass"根本不是一回事。<strong>三</strong>：lit 那三个配置文件到底怎么串起来的、<code>%s</code> 和 <code>pix-opt</code> 这些替换是谁做的、<code>ninja check-pix</code> 这个目标从哪来。</p>
+<p>另外这一章会拆开 <strong>FileCheck</strong>。本书从第 7 章起一直在用 <code>CHECK-LABEL</code>、<code>CHECK-NEXT</code>、<code>%[[C:.*]]</code>，却从没解释过它们的语义。我们会写一个 45 行的 mini-FileCheck 跑一遍，然后用它暴露一个<strong>真 FileCheck 也有的陷阱</strong>：<code>%[[C]]</code> 是子串匹配，<code>%cst</code> 会悄悄匹配上 <code>%cst_9</code>——我自己写的测试就中了这一枪，这一章顺手把它们全修了。</p>
+</div><h2>补上最后一个语义缺口：<code>pix.reduce</code> 的归约方式</h2>
+<p>第 8 章定义 <code>pix.reduce</code> 时把语义写死成&quot;求和&quot;，<code>.td</code> 里留了一句注释：&quot;归约方式先固定为求和；以后用枚举属性把它扩展成 sum/max/min。&quot;现在兑现。</p>
+<p>枚举属性的写法第 9 章已经走过一遍（<code>#pix.border&lt;clamp|zero|wrap&gt;</code>），照抄就是——<strong>这正是要点：这套东西是有套路的，第二个枚举应该毫无悬念。</strong></p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_ReduceKind : I32EnumAttr&lt;"ReduceKind", "全图归约的方式", [
+      I32EnumAttrCase&lt;"Sum", 0, "sum"&gt;,
+      I32EnumAttrCase&lt;"Max", 1, "max"&gt;,
+      I32EnumAttrCase&lt;"Min", 2, "min"&gt;
+    ]&gt; {
+  let cppNamespace = "::mlir::pix";
+  let genSpecializedAttr = 0;
+}
+
+def Pix_ReduceKindAttr : EnumAttr&lt;Pix_Dialect, Pix_ReduceKind, "reduce_kind"&gt; {
+  let assemblyFormat = "`&lt;` $value `&gt;`";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><h3>关键一招：<code>DefaultValuedAttr</code> 保住老 IR</h3>
+<p>真正值得学的在 op 这边。直接往 <code>arguments</code> 里塞一个必填属性，<strong>所有已经写好的 <code>pix.reduce</code> 立刻全部解析失败</strong>——包括本书前面几章的示例、<code>roundtrip.mlir</code> 里的用例、以及读者自己攒的文件。</p>
+<p>用 <code>DefaultValuedAttr</code> 就没这个问题：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_ReduceOp : Pix_Op&lt;"reduce", [Pure]&gt; {
+  let arguments = (ins F32Tensor:$image,
+                       DefaultValuedAttr&lt;Pix_ReduceKindAttr,
+                                         "ReduceKind::Sum"&gt;:$kind);
+  let results = (outs F32:$result);
+
+  // kind 走 attr-dict 打印：默认值（sum）时整个字典是空的，IR 一个字都不多。
+  let assemblyFormat = "$image attr-dict `:` type($image) `-&gt;` type($result)";
+  let hasFolder = 1;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>两件事合起来才管用：<strong><code>DefaultValuedAttr</code> 让属性可以不写</strong>，而<strong>把它交给 <code>attr-dict</code> 打印</strong>让默认值不会被打印出来。实测：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+func.func @old_syntax() -&gt; f32 {
+  %img = arith.constant dense&lt;[[1.0, 5.0], [3.0, 2.0]]&gt; : tensor&lt;2x2xf32&gt;
+  %s = pix.reduce %img : tensor&lt;2x2xf32&gt; -&gt; f32
+  return %s : f32
+}
+
+func.func @as_max() -&gt; f32 {
+  %img = arith.constant dense&lt;[[1.0, 5.0], [3.0, 2.0]]&gt; : tensor&lt;2x2xf32&gt;
+  %s = pix.reduce %img {kind = #pix.reduce_kind&lt;max&gt;} : tensor&lt;2x2xf32&gt; -&gt; f32
+  return %s : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><p>运行结果（只看那两行 op）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    %0 = pix.reduce %cst : tensor&lt;2x2xf32&gt; -&gt; f32
+    %0 = pix.reduce %cst {kind = #pix.reduce_kind&lt;max&gt;} : tensor&lt;2x2xf32&gt; -&gt; f32</code></pre>
+</div><p>老写法进去、老写法出来，<strong>一个字符都没多</strong>。想要 max/min 才写属性。</p>
+<div class="keypoint">
+<strong>给已有 op 加属性的三条规矩</strong>
+<p>一、<strong>能给默认值就给</strong>（<code>DefaultValuedAttr</code>），别让老 IR 解析失败。二、<strong>默认值交给 <code>attr-dict</code> 打印</strong>，不要在 <code>assemblyFormat</code> 里显式写 <code>$kind</code>——那样默认值也会被打印出来，round-trip 虽然仍成立，但所有现存文件的<strong>输出</strong>都变了，别人的 FileCheck 测试会一片红。三、<strong>默认值要选"和原来行为一致的那个"</strong>。我们选 <code>Sum</code> 不是因为它排第一，而是因为第 8 章的语义就是求和。</p>
+</div><h3>folder 按 kind 分三种算法</h3>
+<p>第 11 章的 <code>ReduceOp::fold</code> 只会求和，现在要分情况。有意思的是 splat 那条捷径对三种 kind 都成立，但<strong>理由不同</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">OpFoldResult ReduceOp::fold(FoldAdaptor adaptor) {
+  auto dense = dyn_cast_or_null&lt;DenseFPElementsAttr&gt;(adaptor.getImage());
+  if (!dense)
+    return {};
+  // 空图的 max/min 没有定义（min 该返回什么？），直接不折。
+  if (dense.getNumElements() == 0)
+    return {};
+
+  const ReduceKind kind = getKind();
+
+  if (dense.isSplat()) {
+    APFloat v = dense.getSplatValue&lt;APFloat&gt;();
+    APFloat r = kind == ReduceKind::Sum
+                    ? v * APFloat(static_cast&lt;float&gt;(dense.getNumElements()))
+                    : v;                       // max/min 全都一样，就是它自己
+    return FloatAttr::get(getResult().getType(), r);
+  }
+
+  auto values = dense.getValues&lt;APFloat&gt;();
+  APFloat acc = *values.begin();
+  bool first = true;
+  for (APFloat v : values) {
+    if (first) {
+      first = false;
+      if (kind == ReduceKind::Sum)
+        acc = v;
+      continue;
+    }
+    switch (kind) {
+    case ReduceKind::Sum: acc = acc + v;        break;
+    case ReduceKind::Max: acc = maxnum(acc, v); break;
+    case ReduceKind::Min: acc = minnum(acc, v); break;
+    }
+  }
+  return FloatAttr::get(getResult().getType(), acc);
+}</code></pre>
+</div><p>那个 <code>getNumElements() == 0</code> 的早退值得一说：<strong>空图的 max/min 没有正确答案</strong>。返回 0？返回正无穷？都是编出来的。第 11 章说过&quot;别把化简写得太贪&quot;，这是同一条原则的另一面——<strong>答不出来就别答</strong>，把 op 原样留着，让运行时或后面的 pass 去处理。</p>
+<p><code>switch</code> 上不写 <code>default</code> 也是故意的：以后往枚举里加一种归约方式（比如 <code>Prod</code>），编译器会因为 <code>switch</code> 没覆盖全而<strong>警告</strong>，直接把你领到该改的地方。写了 <code>default:</code> 就把这个提醒关掉了。</p>
+<p>用一张 <code>[[1, 5], [3, 2]]</code> 验三种 kind——三个答案互不相同，所以这组测试真的能区分三种算法：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --canonicalize
+func.func @sum() -&gt; f32 {
+  %img = arith.constant dense&lt;[[1.0, 5.0], [3.0, 2.0]]&gt; : tensor&lt;2x2xf32&gt;
+  %s = pix.reduce %img : tensor&lt;2x2xf32&gt; -&gt; f32
+  return %s : f32
+}
+func.func @max() -&gt; f32 {
+  %img = arith.constant dense&lt;[[1.0, 5.0], [3.0, 2.0]]&gt; : tensor&lt;2x2xf32&gt;
+  %s = pix.reduce %img {kind = #pix.reduce_kind&lt;max&gt;} : tensor&lt;2x2xf32&gt; -&gt; f32
+  return %s : f32
+}
+func.func @min() -&gt; f32 {
+  %img = arith.constant dense&lt;[[1.0, 5.0], [3.0, 2.0]]&gt; : tensor&lt;2x2xf32&gt;
+  %s = pix.reduce %img {kind = #pix.reduce_kind&lt;min&gt;} : tensor&lt;2x2xf32&gt; -&gt; f32
+  return %s : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --canonicalize input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @sum() -&gt; f32 {
+    %cst = arith.constant 1.100000e+01 : f32
+    return %cst : f32
+  }
+  func.func @max() -&gt; f32 {
+    %cst = arith.constant 5.000000e+00 : f32
+    return %cst : f32
+  }
+  func.func @min() -&gt; f32 {
+    %cst = arith.constant 1.000000e+00 : f32
+    return %cst : f32
+  }
+}</code></pre>
+</div><p>11、5、1。三张图全部在编译期算完了。</p>
+<h2><code>--pix-simplify</code>：给方言一个公开入口</h2>
+<p>第 11 章之后，&quot;把 pix 化简干净&quot;要敲三个开关：<code>--canonicalize --cse --symbol-dce</code>。把它包成一个名字：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">static void buildPixSimplifyPipeline(mlir::OpPassManager &amp;pm) {
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createSymbolDCEPass());
+}
+
+int main(int argc, char **argv) {
+  mlir::registerAllPasses();
+
+  static mlir::PassPipelineRegistration&lt;&gt; pixSimplify(
+      "pix-simplify", "把 pix IR 化简干净：canonicalize + cse + symbol-dce",
+      buildPixSimplifyPipeline);
+  // …注册方言，然后交给 MlirOptMain
+}</code></pre>
+</div><p>注册完它就和内建 pass 平起平坐，<code>--help</code> 里也有：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">--pix-simplify    -   把 pix IR 化简干净：canonicalize + cse + symbol-dce</code></pre>
+</div><div class="note">
+<strong>"管线"不是"pass"</strong>
+<p>这里<strong>一个 Pass 类都没写</strong>，只是把现成的三个串起来起了个名。<code>PassPipelineRegistration</code> 注册的是一个"往 <code>OpPassManager</code> 里加 pass 的函数"，它和 <code>PassRegistration&lt;MyPass&gt;</code>（注册一个真正的 pass，第 13 章讲）是两套东西。上游 <code>--sparsifier</code>、<code>--gpu-lower-to-nvvm-pipeline</code> 都是这一类。</p>
+<p>为什么值得起名？因为这个名字是<strong>给使用者的接口</strong>。以后管线里加了 pix 自己的 pass、或者调整了顺序，用 <code>--pix-simplify</code> 的人不用改命令，测试也不用改。把"我方言该怎么化简"这个知识<strong>收在方言一侧</strong>，而不是散在每个调用者的命令行里。</p>
+</div><p>跑一下，三件事一次做完：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-simplify
+func.func @everything_collapses(%img: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+  %one = arith.constant 1.0 : f32
+  %a = pix.scale %img, %one : tensor&lt;4x4xf32&gt;   // 系数 1 → fold
+  %b = pix.add %img, %img : tensor&lt;4x4xf32&gt;     // 和下面重复 → cse
+  %c = pix.add %img, %img : tensor&lt;4x4xf32&gt;
+  %d = pix.add %b, %c : tensor&lt;4x4xf32&gt;         // 没人用 → DCE
+  return %a : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-simplify input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @everything_collapses(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    return %arg0 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><h2>lit：那三个文件到底怎么串起来的</h2>
+<p>从第 7 章起你一直在跑 <code>check-pix</code>，但大概没弄清它是怎么工作的。测试目录里有三个文件，各司其职：</p>
+<div class="concept">
+<svg viewBox="0 0 700 396" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c12b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c12o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c12g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">一条 RUN 行是怎么真的跑起来的</text>
+  <text x="14" y="42" font-size="10" font-weight="bold" fill="#2b6cb0">源码树（你写的，进 git）</text>
+  <rect x="14" y="50" width="200" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="24" y="70" font-size="10" font-family="monospace" fill="#24292f">test/lit.cfg.py</text>
+  <rect x="14" y="86" width="200" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="24" y="106" font-size="10" font-family="monospace" fill="#24292f">test/lit.site.cfg.py.in</text>
+  <rect x="14" y="122" width="200" height="30" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="24" y="142" font-size="10" font-family="monospace" fill="#24292f">test/CMakeLists.txt</text>
+  <line x1="216" y1="137" x2="258" y2="137" stroke="#e06a3b" stroke-width="1.6" marker-end="url(#c12o)"/>
+  <text x="220" y="130" font-size="9" fill="#e06a3b">cmake 时</text>
+  <text x="262" y="42" font-size="10" font-weight="bold" fill="#e06a3b">构建目录（生成的，不进 git）</text>
+  <rect x="262" y="50" width="424" height="102" rx="5" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.6"/>
+  <text x="272" y="70" font-size="10" font-family="monospace" fill="#24292f">test/lit.site.cfg.py　← configure_lit_site_cfg 替换掉 @占位符@</text>
+  <text x="272" y="88" font-size="9" font-family="monospace" fill="#6b7280">config.llvm_tools_dir = ".../llvm-project/build/./bin"</text>
+  <text x="272" y="103" font-size="9" font-family="monospace" fill="#6b7280">config.pix_obj_root  = "/tmp/pix-build"</text>
+  <text x="272" y="121" font-size="9" font-family="monospace" fill="#24292f">最后一句：load_config(…/test/lit.cfg.py)</text>
+  <text x="272" y="139" font-size="9" fill="#e06a3b">所以真正的入口是这个生成的文件，它再回头加载你写的 lit.cfg.py</text>
+  <line x1="474" y1="154" x2="474" y2="178" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c12b)"/>
+  <rect x="262" y="180" width="424" height="76" rx="5" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.6"/>
+  <text x="272" y="200" font-size="10" font-weight="bold" fill="#2b6cb0">lit.cfg.py 装好替换规则</text>
+  <text x="272" y="218" font-size="9" font-family="monospace" fill="#24292f">use_default_substitutions()　→ %s %t %S …</text>
+  <text x="272" y="234" font-size="9" font-family="monospace" fill="#24292f">add_tool_substitutions(["pix-opt","mlir-opt"], tool_dirs)</text>
+  <text x="272" y="250" font-size="9" fill="#6b7280">于是 RUN 行里写裸名字 pix-opt 就能找到构建目录里那个</text>
+  <line x1="474" y1="258" x2="474" y2="282" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c12b)"/>
+  <rect x="262" y="284" width="424" height="58" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="272" y="303" font-size="10" font-weight="bold" fill="#2f7a45">替换后真正执行的命令</text>
+  <text x="272" y="322" font-size="9" font-family="monospace" fill="#24292f">/tmp/pix-build/bin/pix-opt reduce_kind.mlir --canonicalize</text>
+  <text x="272" y="336" font-size="9" font-family="monospace" fill="#24292f">  | .../build/bin/FileCheck reduce_kind.mlir</text>
+  <rect x="14" y="180" width="200" height="76" rx="5" fill="#fff" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="24" y="200" font-size="10" font-weight="bold" fill="#2f7a45">CMakeLists 建的两个目标</text>
+  <text x="24" y="219" font-size="9" font-family="monospace" fill="#24292f">check-pix</text>
+  <text x="24" y="232" font-size="8" fill="#6b7280">跑全套（add_lit_testsuite）</text>
+  <text x="24" y="248" font-size="9" font-family="monospace" fill="#24292f">check-pix-pix</text>
+  <rect x="14" y="264" width="200" height="78" rx="5" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="4 3"/>
+  <text x="24" y="283" font-size="10" font-weight="bold" fill="#24292f">DEPENDS 不是摆设</text>
+  <text x="24" y="300" font-size="9" fill="#24292f">FileCheck count not pix-opt</text>
+  <text x="24" y="316" font-size="9" fill="#6b7280">少写 FileCheck，报错是</text>
+  <text x="24" y="330" font-size="9" fill="#6b7280">"Did not find FileCheck in …"</text>
+  <text x="14" y="366" font-size="10" fill="#24292f">测试文件里那行 <tspan font-family="monospace">// RUN: pix-opt %s --canonicalize | FileCheck %s</tspan> 本身是 MLIR 注释，</text>
+  <text x="14" y="384" font-size="10" fill="#24292f">留在 IR 里不影响解析——所以读者可以把整个文件<tspan font-weight="bold">原样复制</tspan>去跑。</text>
+</svg>
+<div class="caption">图 12-1　lit 的三个文件、两级配置加载、以及 RUN 行从文本变成真实命令的替换链</div>
+</div><p>几个容易踩的点：</p>
+<p><strong>真正的入口是生成的那个文件。</strong> <code>lit.site.cfg.py.in</code> 里全是 <code>@LLVM_TOOLS_DIR@</code> 这种占位符，<code>configure_lit_site_cfg</code> 在 cmake 阶段把它们换成真路径，生成 <code>build/test/lit.site.cfg.py</code>；这个生成的文件最后一句才是 <code>load_config(…, &quot;…/test/lit.cfg.py&quot;)</code>。<strong>所以配置是两级的</strong>：生成的那个负责&quot;路径是什么&quot;，你手写的那个负责&quot;规则是什么&quot;。想知道路径对不对，直接看生成的文件：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cat $BUILD/test/lit.site.cfg.py</code></pre>
+</div><p><strong><code>%s</code> 不是 shell 的东西</strong>，是 lit 的替换。<code>use_default_substitutions()</code> 装的一批里最常用的三个：<code>%s</code>＝当前测试文件的路径，<code>%t</code>＝一个专属的临时文件名（要写中间文件时用它，避免并行测试互相踩），<code>%S</code>＝测试文件所在目录。</p>
+<p><strong>RUN 行里为什么能写裸 <code>pix-opt</code></strong>：<code>add_tool_substitutions([&quot;pix-opt&quot;, &quot;mlir-opt&quot;], tool_dirs)</code> 把这些名字换成构建目录里的绝对路径。这一句的价值是<strong>保证测的是刚编出来的那个</strong>，而不是你 <code>PATH</code> 里碰巧存在的另一个版本——这个坑一旦踩上极难发现。</p>
+<p><strong><code>DEPENDS</code> 少一个就全崩。</strong> 我这次就撞了：<code>FileCheck</code> 没编，报错是</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">llvm-lit: …/subst.py:137: fatal: Did not find FileCheck in /…/build/./bin</code></pre>
+</div><p>它不说&quot;你忘了编 FileCheck&quot;，只说找不到。<code>test/CMakeLists.txt</code> 里那个 <code>PIX_TEST_DEPENDS</code>（<code>FileCheck count not pix-opt</code>）就是为此存在的。</p>
+<p><strong>两个目标，粒度不同。</strong> <code>add_lit_testsuite</code> 建了 <code>check-pix</code>（跑全套），<code>add_lit_testsuites(PIX …)</code> 额外按目录建了细粒度目标——我们只有一个子目录，所以是 <code>check-pix-pix</code>。改一个 op 时只跑相关目录，比全套快得多。</p>
+<p>跑起来是这样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">ninja check-pix</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[0/1] Running the pix regression tests
+-- Testing: 8 tests, 8 workers --
+Testing:  0.. 10.. 20.. 30.. 40.. 50.. 60.. 70.. 80.. 90..
+
+Testing Time: 0.07s
+
+Total Discovered Tests: 8
+  Passed: 8 (100.00%)</code></pre>
+</div><p>调一个具体的测试时不必走 ninja，直接用 <code>llvm-lit</code>（<code>-v</code> 会把失败的命令和输出全打出来）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">$LLVM/build/bin/llvm-lit -v $BUILD/test/Pix/reduce_kind.mlir</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">PASS: PIX :: Pix/reduce_kind.mlir (1 of 1)
+
+Testing Time: 0.05s
+
+Total Discovered Tests: 1
+  Passed: 1 (100.00%)</code></pre>
+</div><h3>测试文件怎么分</h3>
+<p>pix 现在 8 个测试文件，命名对着上游 <code>mlir/test/Dialect/&lt;方言&gt;/</code> 的惯例：</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>管什么</th>
+<th>RUN 行</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>roundtrip.mlir</code></td>
+<td>自定义格式打印出来还能解析回去</td>
+<td><code>pix-opt %s</code></td>
+</tr>
+<tr>
+<td><code>types_attrs.mlir</code></td>
+<td>自定义类型与属性的语法</td>
+<td><code>pix-opt %s</code></td>
+</tr>
+<tr>
+<td><code>invalid.mlir</code></td>
+<td><strong>解析</strong>就该失败的写法</td>
+<td><code>--verify-diagnostics</code></td>
+</tr>
+<tr>
+<td><code>invalid_verifiers.mlir</code></td>
+<td>解析得过、但 <strong>verifier</strong> 该拦的</td>
+<td><code>--split-input-file --verify-diagnostics</code></td>
+</tr>
+<tr>
+<td><code>canonicalize.mlir</code></td>
+<td>fold 与 canonicalize pattern</td>
+<td><code>--canonicalize | FileCheck</code></td>
+</tr>
+<tr>
+<td><code>reduce_kind.mlir</code></td>
+<td>枚举属性三种 kind + 老写法兼容</td>
+<td><code>--canonicalize | FileCheck</code></td>
+</tr>
+<tr>
+<td><code>cse.mlir</code></td>
+<td><code>Pure</code> 换来的通用 CSE</td>
+<td><code>--cse | FileCheck</code></td>
+</tr>
+<tr>
+<td><code>pix_simplify.mlir</code></td>
+<td>那条命名管线</td>
+<td><code>--pix-simplify | FileCheck</code></td>
+</tr>
+</tbody></table>
+<p><code>invalid.mlir</code> 和 <code>invalid_verifiers.mlir</code> 分成两个文件不是啰嗦：<strong>parser 报错和 verifier 报错发生在不同阶段</strong>，而 parser 一旦失败就不会走到 verifier（第 10 章那个&quot;parser 先于 verifier 报错&quot;的实测就是这么来的）。混在一个文件里，一处语法错会把后面所有用例的验证都跳过。</p>
+<div class="note">
+<strong>一条朴素但有效的规矩：每个化简都配一对测试</strong>
+<p>「该折的折了」和「不该动的没动」。<code>canonicalize.mlir</code> 里 <code>scale_by_one</code> 配 <code>scale_by_two_stays</code>、<code>add_zero</code> 配 <code>add_nonzero_stays</code>、<code>double_transpose</code> 配 <code>single_transpose_stays</code>。只写前一半的测试有个典型失效方式：某天有人把 <code>fold</code> 写成无条件返回操作数，测试<strong>全绿</strong>，而你的方言已经算错了。</p>
+</div><h2>FileCheck：把 CHECK 那套语义弄准</h2>
+<p>本书一直在用它，现在拆开。指令一共这几种（名字来自 <code>llvm/lib/FileCheck/FileCheck.cpp</code> 里的 <code>Check::Check*</code> 枚举）：</p>
+<table>
+<thead>
+<tr>
+<th>指令</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CHECK</code></td>
+<td>从上次匹配之后，往下<strong>任意位置</strong>找</td>
+</tr>
+<tr>
+<td><code>CHECK-NEXT</code></td>
+<td>必须在上次匹配的<strong>紧接下一行</strong></td>
+</tr>
+<tr>
+<td><code>CHECK-SAME</code></td>
+<td>必须在<strong>同一行</strong>的后面（用来把一行拆成几条断言写）</td>
+</tr>
+<tr>
+<td><code>CHECK-NOT</code></td>
+<td>这一段区间里<strong>不许出现</strong></td>
+</tr>
+<tr>
+<td><code>CHECK-DAG</code></td>
+<td>一组断言，<strong>顺序随意</strong>（多个结果的顺序不稳定时用）</td>
+</tr>
+<tr>
+<td><code>CHECK-LABEL</code></td>
+<td>分段锚点：把输入切成互不干扰的块</td>
+</tr>
+<tr>
+<td><code>CHECK-EMPTY</code></td>
+<td>下一行必须是空行</td>
+</tr>
+<tr>
+<td><code>CHECK-COUNT-n</code></td>
+<td>连续匹配 n 次</td>
+</tr>
+</tbody></table>
+<p><code>CHECK-LABEL</code> 值得单独说。它不只是&quot;匹配一行&quot;，而是<strong>把整个输入按它切段，每段里的 CHECK 只在本段内匹配</strong>。所以 <code>// CHECK-LABEL: func.func @foo</code> 这个写法有个实际好处：函数 A 的断言绝不会意外匹配到函数 B 的输出里去——文件里有十几个函数时，这条差别很要紧。</p>
+<p>变量捕获是 <code>[[名字:正则]]</code> 定义、<code>[[名字]]</code> 引用：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">// CHECK: %[[C:.*]] = arith.constant 6.000000e+00 : f32
+// CHECK: pix.scale %arg0, %[[C]] :</code></pre>
+</div><p>它的价值是<strong>对 SSA 名字改动免疫</strong>。MLIR 的 <code>%0</code>、<code>%cst</code>、<code>%cst_0</code> 是打印时按顺序生成的，你在函数里多插一个 op，后面所有编号都变。如果测试里硬写 <code>%cst</code>，这种无关改动会让一片测试变红。捕获之后，只要&quot;定义处和引用处是同一个值&quot;这个<strong>关系</strong>成立就行。</p>
+<h3>写一个 mini-FileCheck，顺手抓出一个真陷阱</h3>
+<p>上面这些讲一遍不如跑一遍。下面 45 行实现了 <code>CHECK</code> / <code>CHECK-NEXT</code> / <code>CHECK-NOT</code> 和变量捕获——够覆盖本书用到的全部：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E4%B8%80%E4%B8%AA%2045%20%E8%A1%8C%E7%9A%84%20mini-FileCheck%EF%BC%8C%E5%A4%9F%E8%A6%86%E7%9B%96%E6%9C%AC%E4%B9%A6%E7%94%A8%E5%88%B0%E7%9A%84%E5%9B%9B%E7%A7%8D%E6%8C%87%E4%BB%A4%20%2B%20%E5%8F%98%E9%87%8F%E6%8D%95%E8%8E%B7%E3%80%82%0A%23%20%E7%9B%AE%E7%9A%84%E6%98%AF%E6%8A%8A%20CHECK-NEXT%20%E5%92%8C%20%5B%5BVAR%5D%5D%20%E7%9A%84%E8%AF%AD%E4%B9%89%E5%BC%84%E6%B8%85%E6%A5%9A%E2%80%94%E2%80%94%E8%BF%99%E4%B8%A4%E4%B8%AA%E6%9C%80%E5%AE%B9%E6%98%93%E6%83%B3%E5%BD%93%E7%84%B6%E3%80%82%0Aimport%20re%0A%0Adef%20compile_pattern(pat%2C%20bound)%3A%0A%20%20%20%20%22%22%22%E6%8A%8A%20CHECK%20%E8%A1%8C%E9%87%8C%E7%9A%84%20%5B%5BNAME%3Aregex%5D%5D%20%E4%B8%8E%20%5B%5BNAME%5D%5D%20%E7%BF%BB%E8%AF%91%E6%88%90%20Python%20%E6%AD%A3%E5%88%99%E3%80%82%22%22%22%0A%20%20%20%20out%2C%20i%20%3D%20%22%22%2C%200%0A%20%20%20%20for%20m%20in%20re.finditer(r%22%5C%5B%5C%5B(%5Cw%2B)(%3F%3A%3A(%5B%5E%5C%5D%5D%2B))%3F%5C%5D%5C%5D%22%2C%20pat)%3A%0A%20%20%20%20%20%20%20%20out%20%2B%3D%20re.escape(pat%5Bi%3Am.start()%5D)%0A%20%20%20%20%20%20%20%20name%2C%20regex%20%3D%20m.group(1)%2C%20m.group(2)%0A%20%20%20%20%20%20%20%20if%20regex%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%AE%9A%E4%B9%89%EF%BC%9A%5B%5BC%3A.*%5D%5D%20%E2%80%94%E2%80%94%20%E6%8D%95%E8%8E%B7%E5%AE%83%0A%20%20%20%20%20%20%20%20%20%20%20%20out%20%2B%3D%20f%22(%3FP%3C%7Bname%7D%3E%7Bregex%7D)%22%0A%20%20%20%20%20%20%20%20else%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%BC%95%E7%94%A8%EF%BC%9A%5B%5BC%5D%5D%20%E2%80%94%E2%80%94%20%E5%BF%85%E9%A1%BB%E5%92%8C%E5%85%88%E5%89%8D%E6%8D%95%E8%8E%B7%E7%9A%84%E4%B8%80%E8%87%B4%0A%20%20%20%20%20%20%20%20%20%20%20%20out%20%2B%3D%20re.escape(bound.get(name%2C%20%22%5C0%3C%E6%9C%AA%E5%AE%9A%E4%B9%89%3E%22))%0A%20%20%20%20%20%20%20%20i%20%3D%20m.end()%0A%20%20%20%20return%20out%20%2B%20re.escape(pat%5Bi%3A%5D)%0A%0Adef%20filecheck(directives%2C%20text)%3A%0A%20%20%20%20lines%2C%20bound%2C%20cursor%20%3D%20text.splitlines()%2C%20%7B%7D%2C%200%0A%20%20%20%20for%20kind%2C%20pat%20in%20directives%3A%0A%20%20%20%20%20%20%20%20rx%20%3D%20re.compile(compile_pattern(pat%2C%20bound))%0A%20%20%20%20%20%20%20%20if%20kind%20%3D%3D%20%22NOT%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20for%20l%20in%20lines%5Bcursor%3A%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20if%20rx.search(l)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20return%20f%22%E2%9C%97%20CHECK-NOT%20%E5%A4%B1%E8%B4%A5%EF%BC%9A%E4%B8%8D%E8%AF%A5%E5%87%BA%E7%8E%B0%E7%9A%84%20%7Bpat!r%7D%20%E5%87%BA%E7%8E%B0%E5%9C%A8%20%7Bl.strip()!r%7D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%23%20CHECK%20%E4%BB%8E%20cursor%20%E5%BE%80%E5%90%8E%E4%BB%BB%E6%84%8F%E4%BD%8D%E7%BD%AE%E6%89%BE%EF%BC%9BCHECK-NEXT%20%E5%8F%AA%E8%AE%B8%E7%B4%A7%E6%8C%A8%E7%9D%80%E4%B8%8A%E4%B8%80%E5%A4%84%0A%20%20%20%20%20%20%20%20search_range%20%3D%20range(cursor%2C%20len(lines))%20if%20kind%20%3D%3D%20%22CHECK%22%20else%20range(cursor%2C%20min(cursor%20%2B%201%2C%20len(lines)))%0A%20%20%20%20%20%20%20%20for%20j%20in%20search_range%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20(m%20%3A%3D%20rx.search(lines%5Bj%5D))%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20bound.update(%7Bk%3A%20v%20for%20k%2C%20v%20in%20m.groupdict().items()%20if%20v%20is%20not%20None%7D)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20cursor%20%3D%20j%20%2B%201%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20break%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20where%20%3D%20%22%E7%B4%A7%E6%8E%A5%E7%9A%84%E4%B8%8B%E4%B8%80%E8%A1%8C%22%20if%20kind%20%3D%3D%20%22NEXT%22%20else%20f%22%E7%AC%AC%20%7Bcursor%2B1%7D%20%E8%A1%8C%E4%B9%8B%E5%90%8E%22%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20f%22%E2%9C%97%20CHECK-%7Bkind%7D%20%E5%A4%B1%E8%B4%A5%EF%BC%9A%7Bwhere%7D%E6%89%BE%E4%B8%8D%E5%88%B0%20%7Bpat!r%7D%22%0A%20%20%20%20return%20%22%E2%9C%93%20%E5%85%A8%E9%83%A8%E5%8C%B9%E9%85%8D%EF%BC%9B%E6%8D%95%E8%8E%B7%E5%88%B0%E7%9A%84%E5%8F%98%E9%87%8F%EF%BC%9A%22%20%2B%20(str(bound)%20if%20bound%20else%20%22%EF%BC%88%E6%97%A0%EF%BC%89%22)%0A%0AGOOD%20%3D%20%22%22%22%5C%0A%20%20func.func%20%40f(%25arg0%3A%20tensor%3C4x4xf32%3E)%20-%3E%20tensor%3C4x4xf32%3E%20%7B%0A%20%20%20%20%25cst%20%3D%20arith.constant%206.000000e%2B00%20%3A%20f32%0A%20%20%20%20%250%20%3D%20pix.scale%20%25arg0%2C%20%25cst%20%3A%20tensor%3C4x4xf32%3E%0A%20%20%20%20return%20%250%20%3A%20tensor%3C4x4xf32%3E%0A%20%20%7D%22%22%22%0A%23%20%E5%A4%9A%E6%8F%92%E4%BA%86%E4%B8%80%E8%A1%8C%20pix.add%EF%BC%8C%E4%B8%94%E5%B8%B8%E9%87%8F%E5%90%8D%E6%8D%A2%E6%88%90%20%25cst_0%0ABAD%20%3D%20GOOD.replace(%22%20%20%20%20%250%20%3D%20pix.scale%22%2C%20%22%20%20%20%20%25junk%20%3D%20pix.add%20%25arg0%2C%20%25arg0%20%3A%20tensor%3C4x4xf32%3E%5Cn%20%20%20%20%250%20%3D%20pix.scale%22)%20%5C%0A%20%20%20%20%20%20%20%20%20%20.replace(%22%25cst%22%2C%20%22%25cst_0%22)%0A%0ADIRECTIVES%20%3D%20%5B(%22CHECK%22%2C%20%22func.func%20%40f%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22CHECK%22%2C%20%22%25%5B%5BC%3A.*%5D%5D%20%3D%20arith.constant%206.000000e%2B00%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22NEXT%22%2C%20%20%22pix.scale%20%25arg0%2C%20%25%5B%5BC%5D%5D%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22NOT%22%2C%20%20%20%22pix.add%22)%5D%0A%0Aprint(%22CHECK%20%E5%BA%8F%E5%88%97%EF%BC%9A%22)%0Afor%20k%2C%20p%20in%20DIRECTIVES%3A%0A%20%20%20%20print(f%22%20%20%2F%2F%20CHECK%7B''%20if%20k%3D%3D'CHECK'%20else%20'-'%2Bk%7D%3A%20%7Bp%7D%22)%0A%23%20%E6%95%B4%E4%BD%93%E6%94%B9%E5%90%8D%EF%BC%9A%E6%8D%95%E8%8E%B7%E5%AF%B9%E5%AE%83%E5%85%8D%E7%96%AB%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%9A%E4%B9%89%E5%A4%84%E5%92%8C%E5%BC%95%E7%94%A8%E5%A4%84%E4%B8%80%E8%B5%B7%E5%8F%98%E4%BA%86%0ARENAMED%20%3D%20GOOD.replace(%22%25cst%22%2C%20%22%25cst_42%22)%0A%23%20%E5%8F%AA%E6%94%B9%E5%BC%95%E7%94%A8%E5%A4%84%EF%BC%9A%E5%AE%9A%E4%B9%89%E6%98%AF%20%25cst%EF%BC%8C%E4%BD%BF%E7%94%A8%E7%9A%84%E5%8D%B4%E6%98%AF%20%25cst_9%20%E2%80%94%E2%80%94%20%E8%BF%99%E6%89%8D%E6%98%AF%E6%8D%95%E8%8E%B7%E8%A6%81%E6%8A%93%E7%9A%84%0AINCONSISTENT%20%3D%20GOOD.replace(%22pix.scale%20%25arg0%2C%20%25cst%22%2C%20%22pix.scale%20%25arg0%2C%20%25cst_9%22)%0A%0Afor%20label%2C%20text%20in%20%5B(%22%E6%AD%A3%E5%B8%B8%E8%BE%93%E5%87%BA%22%2C%20GOOD)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22%E5%B8%B8%E9%87%8F%E6%95%B4%E4%BD%93%E6%94%B9%E5%90%8D%20%25cst%20%E2%86%92%20%25cst_42%22%2C%20RENAMED)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22%E5%AE%9A%E4%B9%89%E6%98%AF%20%25cst%EF%BC%8C%E5%BC%95%E7%94%A8%E5%8D%B4%E5%86%99%E6%88%90%20%25cst_9%22%2C%20INCONSISTENT)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22%E5%A4%9A%E6%8F%92%E4%BA%86%E4%B8%80%E8%A1%8C%20pix.add%22%2C%20BAD)%5D%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Blabel%7D%E3%80%91%22)%0A%20%20%20%20print(filecheck(DIRECTIVES%2C%20text))"># 一个 45 行的 mini-FileCheck，够覆盖本书用到的四种指令 + 变量捕获。
+# 目的是把 CHECK-NEXT 和 [[VAR]] 的语义弄清楚——这两个最容易想当然。
+import re
+
+def compile_pattern(pat, bound):
+    """把 CHECK 行里的 [[NAME:regex]] 与 [[NAME]] 翻译成 Python 正则。"""
+    out, i = "", 0
+    for m in re.finditer(r"\[\[(\w+)(?::([^\]]+))?\]\]", pat):
+        out += re.escape(pat[i:m.start()])
+        name, regex = m.group(1), m.group(2)
+        if regex:                              # 定义：[[C:.*]] —— 捕获它
+            out += f"(?P&lt;{name}&gt;{regex})"
+        else:                                  # 引用：[[C]] —— 必须和先前捕获的一致
+            out += re.escape(bound.get(name, "\0&lt;未定义&gt;"))
+        i = m.end()
+    return out + re.escape(pat[i:])
+
+def filecheck(directives, text):
+    lines, bound, cursor = text.splitlines(), {}, 0
+    for kind, pat in directives:
+        rx = re.compile(compile_pattern(pat, bound))
+        if kind == "NOT":
+            for l in lines[cursor:]:
+                if rx.search(l):
+                    return f"✗ CHECK-NOT 失败：不该出现的 {pat!r} 出现在 {l.strip()!r}"
+            continue
+        # CHECK 从 cursor 往后任意位置找；CHECK-NEXT 只许紧挨着上一处
+        search_range = range(cursor, len(lines)) if kind == "CHECK" else range(cursor, min(cursor + 1, len(lines)))
+        for j in search_range:
+            if (m := rx.search(lines[j])):
+                bound.update({k: v for k, v in m.groupdict().items() if v is not None})
+                cursor = j + 1
+                break
+        else:
+            where = "紧接的下一行" if kind == "NEXT" else f"第 {cursor+1} 行之后"
+            return f"✗ CHECK-{kind} 失败：{where}找不到 {pat!r}"
+    return "✓ 全部匹配；捕获到的变量：" + (str(bound) if bound else "（无）")
+
+GOOD = """\
+  func.func @f(%arg0: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %cst = arith.constant 6.000000e+00 : f32
+    %0 = pix.scale %arg0, %cst : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }"""
+# 多插了一行 pix.add，且常量名换成 %cst_0
+BAD = GOOD.replace("    %0 = pix.scale", "    %junk = pix.add %arg0, %arg0 : tensor&lt;4x4xf32&gt;\n    %0 = pix.scale") \
+          .replace("%cst", "%cst_0")
+
+DIRECTIVES = [("CHECK", "func.func @f"),
+              ("CHECK", "%[[C:.*]] = arith.constant 6.000000e+00"),
+              ("NEXT",  "pix.scale %arg0, %[[C]]"),
+              ("NOT",   "pix.add")]
+
+print("CHECK 序列：")
+for k, p in DIRECTIVES:
+    print(f"  // CHECK{'' if k=='CHECK' else '-'+k}: {p}")
+# 整体改名：捕获对它免疫，因为定义处和引用处一起变了
+RENAMED = GOOD.replace("%cst", "%cst_42")
+# 只改引用处：定义是 %cst，使用的却是 %cst_9 —— 这才是捕获要抓的
+INCONSISTENT = GOOD.replace("pix.scale %arg0, %cst", "pix.scale %arg0, %cst_9")
+
+for label, text in [("正常输出", GOOD),
+                    ("常量整体改名 %cst → %cst_42", RENAMED),
+                    ("定义是 %cst，引用却写成 %cst_9", INCONSISTENT),
+                    ("多插了一行 pix.add", BAD)]:
+    print(f"\n【{label}】")
+    print(filecheck(DIRECTIVES, text))</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">CHECK 序列：
+  // CHECK: func.func @f
+  // CHECK: %[[C:.*]] = arith.constant 6.000000e+00
+  // CHECK-NEXT: pix.scale %arg0, %[[C]]
+  // CHECK-NOT: pix.add
+
+【正常输出】
+✓ 全部匹配；捕获到的变量：{'C': 'cst'}
+
+【常量整体改名 %cst → %cst_42】
+✓ 全部匹配；捕获到的变量：{'C': 'cst_42'}
+
+【定义是 %cst，引用却写成 %cst_9】
+✓ 全部匹配；捕获到的变量：{'C': 'cst'}
+
+【多插了一行 pix.add】
+✗ CHECK-NEXT 失败：紧接的下一行找不到 'pix.scale %arg0, %[[C]]'</code></pre>
+</div><p>四个结果里有三个符合直觉：整体改名照样过（捕获的价值），多插一行被 <code>CHECK-NEXT</code> 抓住（相邻性的价值）。</p>
+<p><strong>第三个不对：定义是 <code>%cst</code>、引用写成 <code>%cst_9</code>，它居然通过了。</strong></p>
+<p>第一反应是我的模拟器写错了。拿真 FileCheck 对一遍：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">$ cat chk.txt
+// CHECK: %[[C:.*]] = arith.constant 6.000000e+00
+// CHECK-NEXT: pix.scale %arg0, %[[C]]
+$ printf '    %%cst = arith.constant 6.000000e+00 : f32\n    %%0 = pix.scale %%arg0, %%cst_9 : tensor&lt;4x4xf32&gt;\n' | FileCheck chk.txt
+$ echo $?
+0</code></pre>
+</div><p><strong>真 FileCheck 也通过。</strong> 原因是 FileCheck 做的是<strong>子串匹配</strong>：<code>%cst</code> 是 <code>%cst_9</code> 的前缀，所以 <code>pix.scale %arg0, %cst</code> 作为子串确实出现在那一行里。捕获变量没有边界的概念。</p>
+<p>补救办法是给引用加个<strong>定界符</strong>——把紧跟在后面的那个字符也写进 CHECK：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">$ cat chk2.txt
+// CHECK: %[[C:.*]] = arith.constant 6.000000e+00
+// CHECK-NEXT: pix.scale %arg0, %[[C]] :
+$ printf '…%%cst_9 : tensor&lt;4x4xf32&gt;\n' | FileCheck chk2.txt
+chk2.txt:2:16: error: CHECK-NEXT: expected string not found in input
+// CHECK-NEXT: pix.scale %arg0, %[[C]] :
+               ^</code></pre>
+</div><p>加一个 <code> :</code> 就抓住了。（想更严格可以用 <code>--match-full-lines</code>，但那样对空白和整行内容都变敏感，通常过头。）</p>
+<div class="warn">
+<strong>我自己的测试全中了这一枪</strong>
+<p>写完这段我回头查了 pix 的测试，<strong>每一处 <code>%[[X]]</code> 引用都没有定界符</strong>——<code>canonicalize.mlir</code> 6 处、<code>cse.mlir</code> 1 处、<code>pix_simplify.mlir</code> 3 处、<code>reduce_kind.mlir</code> 1 处，共 11 处。它们当时全绿，但那是运气：只要哪天打印出来的名字变成带前缀的另一个（<code>%cst</code> → <code>%cst_0</code>），测试会<strong>继续绿着</strong>，而它其实已经不再验证"是同一个值"了。</p>
+<p>本章把它们全部补上了 <code>:</code> 定界符，补完 8 个测试仍然全绿——说明收紧之后依然匹配真实输出，不是把断言改松了。<strong>一条测试悄悄失去效力，比它直接报错危险得多。</strong></p>
+</div><h2>动手：给 <code>pix.reduce</code> 加第四种归约</h2>
+<p>往枚举里加 <code>Prod</code>（全图乘积），走一遍完整流程，你会体会到这套东西&quot;改一处、其他地方自动跟上&quot;的程度：</p>
+<ol>
+<li><code>PixAttrs.td</code> 的 <code>Pix_ReduceKind</code> 里加一个 <code>I32EnumAttrCase&lt;&quot;Prod&quot;, 3, &quot;prod&quot;&gt;</code>。</li>
+<li>重新构建。<strong>先别改 <code>fold</code></strong> —— 看编译器报什么。<code>ReduceOp::fold</code> 里那个 <code>switch</code> 没写 <code>default</code>，所以你会收到一条&quot;枚举值未覆盖&quot;的警告，正好指到该改的行。这就是不写 <code>default</code> 的回报。</li>
+<li>补上 <code>case ReduceKind::Prod: acc = acc * v; break;</code>，并想清楚 splat 那条捷径该怎么算（提示：不是&quot;就是那个值&quot;，也不是&quot;乘以元素个数&quot;）。</li>
+<li>在 <code>reduce_kind.mlir</code> 里加一对用例：一个该折的、一个不该动的。用 <code>[[1, 5], [3, 2]]</code> 的话答案是 30——注意它和 sum 的 11、max 的 5、min 的 1 都不同，这样测试才区分得开。</li>
+<li><code>ninja check-pix</code>。</li>
+</ol>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">MLIR_DIR=$LLVM/build/lib/cmake/mlir books/inside-mlir/verify/verify-pix.sh</code></pre>
+</div><p><strong>再改一处</strong>：把 <code>reduce_kind.mlir</code> 里任意一个 <code>%[[C]] :</code> 的定界符删掉，然后把测试期望的常量值改成一个<strong>前缀相同的更长数字</strong>（比如 <code>1.100000e+01</code> 改成 <code>1.1</code> 再配合手改输出），看 FileCheck 怎么被骗过去。亲手骗它一次，以后写 CHECK 会更小心。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>给已经在用的 op 加属性</strong>：用 <code>DefaultValuedAttr</code> 让它可以不写、交给 <code>attr-dict</code> 打印让默认值不出现、默认值选&quot;和原来行为一致的那个&quot;。三条都做到，老 IR 的输入和<strong>输出</strong>都不变，别人的测试不会红。</li>
+<li><strong>别把答不出来的情形折出一个答案</strong>。空图的 max/min 没有正确值，<code>fold</code> 就该原样返回。和第 11 章&quot;别把化简写得太贪&quot;是同一条原则。</li>
+<li><code>switch</code> 覆盖枚举时<strong>不写 <code>default:</code></strong>。以后枚举加成员，编译器的&quot;未覆盖&quot;警告会直接把你领到该改的地方；写了 <code>default</code> 就把这个提醒关掉了。</li>
+<li><strong>命名管线不是 pass</strong>：<code>PassPipelineRegistration</code> 注册的是&quot;往 <code>OpPassManager</code> 里加 pass 的函数&quot;。给它起名字的意义是<strong>把&quot;我的方言该怎么化简&quot;这个知识收在方言一侧</strong>，管线内容以后能换，用的人不改命令。</li>
+<li><strong>lit 是两级配置</strong>：<code>lit.site.cfg.py.in</code>（占位符）→ cmake 的 <code>configure_lit_site_cfg</code> → 生成的 <code>lit.site.cfg.py</code>（真路径）→ 它再 <code>load_config</code> 你手写的 <code>lit.cfg.py</code>（规则）。排查路径问题，直接 <code>cat</code> 生成的那个。</li>
+<li><code>%s</code> / <code>%t</code> / <code>%S</code> 是 <strong>lit 的替换</strong>，不是 shell 的。RUN 行里能写裸 <code>pix-opt</code> 靠的是 <code>add_tool_substitutions</code>，它保证测的是<strong>刚编出来的那个</strong>，而不是 <code>PATH</code> 里碰巧存在的另一个版本。</li>
+<li><code>DEPENDS</code> 少一个就全崩，而报错只说&quot;找不到&quot;不说&quot;你没编&quot;。<code>FileCheck count not</code> 这三个测试工具容易漏。</li>
+<li><strong><code>CHECK-LABEL</code> 是分段锚点</strong>，不只是匹配一行。它保证函数 A 的断言不会意外匹配到函数 B 的输出。</li>
+<li><strong>变量捕获 <code>[[C:.*]]</code> / <code>[[C]]</code> 是子串匹配，没有边界</strong>：<code>%cst</code> 会匹配上 <code>%cst_9</code>，实测真 FileCheck 也如此。引用处要<strong>加定界符</strong>（多写紧跟的那个字符），否则测试可能悄悄失去效力——<strong>这比测试报错危险得多</strong>。</li>
+<li>每个化简配一对测试：<strong>「该折的折了」和「不该动的没动」</strong>。只写前一半，有人把 <code>fold</code> 写成无条件返回操作数时，测试会全绿。</li>
+</ul>
+<p><strong>pix 进度</strong>：第二部分收尾。pix 现在是一个完整的方言——9 个 op、1 个参数化类型、2 个枚举属性、3 处手写 verifier、1 处接口实现、4 组化简、1 条命名管线，<code>ninja check-pix</code> 一条命令跑 8 个测试文件。它从第 7 章一行 ODS 长到这里，每一步都是被一个具体问题逼出来的。</p>
+<p>第三部分开始<strong>在它身上做变换</strong>。第 13 章讲 <strong>Pass 框架</strong>：<code>OperationPass&lt;T&gt;</code> 与嵌套 PassManager 怎么和 op 树对应、<code>AnalysisManager</code> 的缓存什么时候失效、以及 MLIR 凭什么敢<strong>并发</strong>跑 pass——第 2 章和第 10 章都提过 <code>IsolatedFromAbove</code> 是并发的前提，到那一章它会第三次出现，这次是在 pass 管理器里。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch11.html">← 第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a>
+  <a class="nav-next" href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

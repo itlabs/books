@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li class="active"><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 8、9 章结尾我们攒下了三个洞：<code>pix.transpose</code> 可以把 4×8「转置」成 4×8；<code>pix.kernel</code> 的权重形状可以和 <code>!pix.kernel&lt;R x C&gt;</code> 说的不一致；<code>pix.pipeline</code> 可以声明有结果却什么都不 yield。三段荒唐的 IR 都干干净净地通过了验证——因为没人声明过这些规则。这一章把它们全堵上。</p>
+<p>但比"怎么写 verifier"更重要的是<strong>两条路的选择</strong>：手写 <code>verify()</code>，还是去实现一个接口让通用机制替你查？两条我们都走一遍——pipeline 那个洞，我们只写了 <strong>两个接口方法、二十来行</strong>，检查就白拿到了，报错和第 2 章 <code>scf.if</code> 那条除了 op 名一个字都不差。</p>
+<p>另外三件实用的事：<strong>验证的执行顺序</strong>（以及由此而来的一条硬规矩：<code>verify()</code> 里不能碰嵌套 op）、<strong>类型参数怎么验</strong>（它发生在还没有 op 的时候，所以报错方式不同）、以及<strong>怎么给"报错行为"写测试</strong>。</p>
+</div><h2>先看清验证是怎么跑的</h2>
+<p>打开 <code>mlir/lib/IR/Verifier.cpp</code>，整个验证器是一次树的遍历，每个 op 有两个钩子——<strong>进门时</strong>和<strong>出门时</strong>：</p>
+<div class="concept">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c10a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">验证的顺序：进门查自己，出门查 region</text>
+  <rect x="14" y="30" width="316" height="128" rx="8" fill="#eef4fb" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="26" y="50" font-size="12" font-weight="bold" fill="#2b6cb0">① 进门（verifyOnEntrance）</text>
+  <text x="26" y="70" font-size="10.5" fill="#24292f">1. 操作数、结果、属性的 context 一致性</text>
+  <text x="26" y="86" font-size="10.5" fill="#24292f">2. 属性本身是否合法；方言级属性检查</text>
+  <text x="26" y="102" font-size="10.5" fill="#24292f">3. <tspan font-weight="bold">verifyInvariants()</tspan>：ODS 的类型约束、</text>
+  <text x="40" y="117" font-size="10.5" fill="#24292f">操作数/结果个数、trait 的结构检查</text>
+  <text x="26" y="134" font-size="10.5" fill="#e06a3b">4. 你手写的 <tspan font-family="monospace">verify()</tspan>（hasVerifier = 1）</text>
+  <text x="26" y="150" font-size="10" fill="#6b7280">此时嵌套 op <tspan font-weight="bold">还没验过</tspan>，可能是坏的</text>
+  <line x1="172" y1="160" x2="172" y2="186" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c10a)"/>
+  <text x="182" y="178" font-size="10.5" fill="#2b6cb0">递归进入每个 region / block / 子 op</text>
+  <rect x="14" y="190" width="316" height="52" rx="8" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="2"/>
+  <text x="26" y="210" font-size="12" font-weight="bold" fill="#2f7a45">② 子 op 全部验完</text>
+  <text x="26" y="230" font-size="10.5" fill="#24292f">block 的 terminator、支配关系等也在这一层查</text>
+  <line x1="172" y1="244" x2="172" y2="264" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c10a)"/>
+  <rect x="14" y="268" width="316" height="44" rx="8" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="26" y="288" font-size="12" font-weight="bold" fill="#e06a3b">③ 出门：verifyRegions()（hasRegionVerifier = 1）</text>
+  <text x="26" y="305" font-size="10.5" fill="#24292f">这时候才可以安全地看 region 里的东西</text>
+  <rect x="352" y="30" width="334" height="120" rx="8" fill="#fff" stroke="#6b7280" stroke-dasharray="4 3"/>
+  <text x="364" y="50" font-size="12" font-weight="bold" fill="#24292f">由此而来的硬规矩</text>
+  <text x="364" y="72" font-size="10.5" fill="#e06a3b">在 verify() 里<tspan font-weight="bold">不要访问嵌套 op</tspan></text>
+  <text x="364" y="88" font-size="10.5" fill="#24292f">——它们还没被验证，可能类型都不对，</text>
+  <text x="364" y="104" font-size="10.5" fill="#24292f">你的代码可能直接崩。要看 region 内容，</text>
+  <text x="364" y="120" font-size="10.5" fill="#24292f">用 verifyRegions()。</text>
+  <text x="364" y="140" font-size="10" fill="#6b7280">ODS 里这两个开关的注释写得很清楚，值得一读</text>
+  <rect x="352" y="160" width="334" height="152" rx="8" fill="#f7f8fa" stroke="#6b7280"/>
+  <text x="364" y="180" font-size="12" font-weight="bold" fill="#24292f">顺带一个收获</text>
+  <text x="364" y="202" font-size="10.5" fill="#24292f">出门那一步里，带 <tspan font-family="monospace">IsolatedFromAbove</tspan> 且有</text>
+  <text x="364" y="218" font-size="10.5" fill="#24292f">region 的子 op 会被收集起来，用</text>
+  <text x="364" y="234" font-size="10.5" fill="#24292f"><tspan font-family="monospace">parallelForEach</tspan> <tspan font-weight="bold">并发验证</tspan>。</text>
+  <text x="364" y="256" font-size="10.5" fill="#6b7280">第 2 章说 IsolatedFromAbove 是并发的前提，</text>
+  <text x="364" y="272" font-size="10.5" fill="#6b7280">这就是它在验证器里的兑现——同一个道理</text>
+  <text x="364" y="288" font-size="10.5" fill="#6b7280">第 13 章还会在 pass 管理器里再见一次。</text>
+</svg>
+<div class="caption">图 10-1　验证的两个钩子。选错钩子的后果很实际：在 `verify()` 里遍历 region 内容，遇到畸形 IR 时可能直接崩溃，而且崩在一个和真实错误毫无关系的地方</div>
+</div><p><strong>两个 ODS 开关对应这两个钩子</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>开关</th>
+<th>生成的方法</th>
+<th>什么时候跑</th>
+<th>用它查什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>let hasVerifier = 1;</code></td>
+<td><code>LogicalResult verify()</code></td>
+<td>进门（子 op 还没验）</td>
+<td>只涉及<strong>本 op 自己</strong>：操作数/结果类型的关系、属性的取值范围</td>
+</tr>
+<tr>
+<td><code>let hasRegionVerifier = 1;</code></td>
+<td><code>LogicalResult verifyRegions()</code></td>
+<td>出门（子 op 都验完了）</td>
+<td>需要看 region 内部：terminator 交出什么、region 里有没有必须存在的 op</td>
+</tr>
+</tbody></table>
+<p>「进门时子 op 还没验」这句话的分量，跑一遍就清楚了。下面这段照 <code>Verifier.cpp</code> 的结构走同一棵树，让 <code>pix.pipeline</code> 在<strong>两个钩子里各偷看同一个子 op 一次</strong>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%85%A7%20mlir%2Flib%2FIR%2FVerifier.cpp%20%E7%9A%84%E7%BB%93%E6%9E%84%E8%B5%B0%E4%B8%80%E9%81%8D%EF%BC%9A%E8%BF%9B%E9%97%A8%20%E2%86%92%20%E9%80%92%E5%BD%92%20%E2%86%92%20%E5%87%BA%E9%97%A8%E3%80%82%0A%23%20%E9%87%8D%E7%82%B9%E7%9C%8B%22%E5%9C%A8%20verify()%20%E9%87%8C%E7%A2%B0%E5%B5%8C%E5%A5%97%20op%22%E4%B8%BA%E4%BB%80%E4%B9%88%E5%8D%B1%E9%99%A9%E3%80%82%0A%0Aclass%20Op%3A%0A%20%20%20%20def%20__init__(self%2C%20name%2C%20kids%3D()%2C%20payload%3DNone)%3A%0A%20%20%20%20%20%20%20%20self.name%2C%20self.kids%2C%20self.payload%20%3D%20name%2C%20list(kids)%2C%20payload%0A%20%20%20%20%20%20%20%20self.verified%20%3D%20False%20%20%20%20%20%20%20%20%20%20%23%20%E8%BF%99%E4%B8%AA%20op%20%E8%87%AA%E5%B7%B1%E9%AA%8C%E8%BF%87%E4%BA%86%E5%90%97%0A%0A%20%20%20%20%23%20%E2%91%A0%20%E8%BF%9B%E9%97%A8%EF%BC%9A%E5%8F%AA%E8%AE%B8%E7%9C%8B%E8%87%AA%E5%B7%B1%E3%80%82%E6%AD%A4%E6%97%B6%20self.kids%20%E9%87%8C%E7%9A%84%20op%20%E9%83%BD%E8%BF%98%E6%B2%A1%E9%AA%8C%E3%80%82%0A%20%20%20%20def%20verify(self)%3A%0A%20%20%20%20%20%20%20%20if%20self.name%20%3D%3D%20%22pix.pipeline%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20kid%20%3D%20self.kids%5B-1%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5Bverify%5D%20pix.pipeline%20%E5%81%B7%E7%9C%8B%E4%BA%86%E5%AD%90%20op%20%7Bkid.name%7D%EF%BC%9A%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22verified%3D%7Bkid.verified%7D%EF%BC%8Cpayload%3D%7Bkid.payload!r%7D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20kid.payload%20is%20None%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%95%B8%E5%BD%A2%E6%95%B0%E6%8D%AE%EF%BC%8C%E7%9C%9F%E5%AE%9E%20C%2B%2B%20%E9%87%8C%E8%BF%99%E5%B0%B1%E6%98%AF%E5%B4%A9%E7%82%B9%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20print(%22%20%20%20%20%5Bverify%5D%20%E2%86%90%20%E5%AE%83%E7%9A%84%20payload%20%E8%BF%98%E6%98%AF%20None%E3%80%82%E7%9C%9F%E5%AE%9E%E4%BB%A3%E7%A0%81%E5%9C%A8%E8%BF%99%E9%87%8C%E8%A7%A3%E5%BC%95%E7%94%A8%E5%B0%B1%E5%B4%A9%E4%BA%86%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%22%E8%80%8C%E4%B8%94%E5%B4%A9%E5%9C%A8%E5%92%8C%E7%9C%9F%E6%AD%A3%E9%94%99%E8%AF%AF%E6%97%A0%E5%85%B3%E7%9A%84%E5%9C%B0%E6%96%B9%22)%0A%20%20%20%20%20%20%20%20return%20None%0A%0A%20%20%20%20%23%20%E2%91%A2%20%E5%87%BA%E9%97%A8%EF%BC%9A%E5%AD%90%20op%20%E5%85%A8%E9%AA%8C%E5%AE%8C%E4%BA%86%EF%BC%8C%E8%BF%99%E6%97%B6%E5%80%99%E7%9C%8B%20region%20%E6%98%AF%E5%AE%89%E5%85%A8%E7%9A%84%0A%20%20%20%20def%20verifyRegions(self)%3A%0A%20%20%20%20%20%20%20%20if%20self.name%20%3D%3D%20%22pix.pipeline%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20kid%20%3D%20self.kids%5B-1%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%5BverifyRegions%5D%20%E5%90%8C%E4%B8%80%E4%B8%AA%E5%AD%90%20op%EF%BC%9Averified%3D%7Bkid.verified%7D%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22payload%3D%7Bkid.payload!r%7D%20%E2%80%94%E2%80%94%20%E5%B7%B2%E7%BB%8F%E5%8F%AF%E4%BF%A1%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20kid.payload%20!%3D%201%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20return%20%22pix.pipeline%20%E4%BA%A4%E5%87%BA%E7%9A%84%E5%80%BC%E4%B8%AA%E6%95%B0%E4%B8%8D%E5%AF%B9%22%0A%20%20%20%20%20%20%20%20return%20None%0A%0Adef%20run_verifier(op%2C%20depth%3D0)%3A%0A%20%20%20%20pad%20%3D%20%22%20%20%22%20*%20depth%0A%20%20%20%20print(f%22%7Bpad%7D%E2%91%A0%20%E8%BF%9B%E9%97%A8%20%7Bop.name%7D%22)%0A%20%20%20%20if%20(err%20%3A%3D%20op.verify())%3A%0A%20%20%20%20%20%20%20%20return%20err%0A%20%20%20%20for%20kid%20in%20op.kids%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E2%91%A1%20%E9%80%92%E5%BD%92%0A%20%20%20%20%20%20%20%20if%20(err%20%3A%3D%20run_verifier(kid%2C%20depth%20%2B%201))%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20err%0A%20%20%20%20op.payload%20%3D%20op.payload%20if%20op.payload%20is%20not%20None%20else%201%20%20%20%23%20%E5%81%87%E8%A3%85%22%E9%AA%8C%E8%AF%81%E9%A1%BA%E5%B8%A6%E8%A1%A5%E5%85%A8%E4%BA%86%E4%BF%A1%E6%81%AF%22%0A%20%20%20%20op.verified%20%3D%20True%0A%20%20%20%20print(f%22%7Bpad%7D%E2%91%A2%20%E5%87%BA%E9%97%A8%20%7Bop.name%7D%22)%0A%20%20%20%20return%20op.verifyRegions()%0A%0Atree%20%3D%20Op(%22builtin.module%22%2C%20%5B%0A%20%20%20%20Op(%22func.func%22%2C%20%5B%0A%20%20%20%20%20%20%20%20Op(%22pix.pipeline%22%2C%20%5BOp(%22pix.add%22%2C%20payload%3D1)%2C%20Op(%22pix.yield%22)%5D)%20%20%20%23%20yield%20%E7%9A%84%20payload%20%E7%BC%BA%0A%20%20%20%20%5D)%0A%5D)%0A%0Aerr%20%3D%20run_verifier(tree)%0Aprint(%22%5Cn%E9%AA%8C%E8%AF%81%E7%BB%93%E6%9E%9C%EF%BC%9A%22%2C%20err%20or%20%22%E9%80%9A%E8%BF%87%22)%0Aprint(%22%E6%B3%A8%E6%84%8F%E4%B8%A4%E5%A4%84%20%5Bverify%5D%20%2F%20%5BverifyRegions%5D%20%E7%9C%8B%E5%88%B0%E7%9A%84%E6%98%AF%E5%90%8C%E4%B8%80%E4%B8%AA%20pix.yield%EF%BC%8C%22%0A%20%20%20%20%20%20%22%E4%BD%86%E5%8F%AF%E4%BF%A1%E7%A8%8B%E5%BA%A6%E5%AE%8C%E5%85%A8%E4%B8%8D%E5%90%8C%20%E2%80%94%E2%80%94%20%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%A4%E4%B8%AA%E9%92%A9%E5%AD%90%E5%AD%98%E5%9C%A8%E7%9A%84%E5%85%A8%E9%83%A8%E7%90%86%E7%94%B1%E3%80%82%22)"># 照 mlir/lib/IR/Verifier.cpp 的结构走一遍：进门 → 递归 → 出门。
+# 重点看"在 verify() 里碰嵌套 op"为什么危险。
+
+class Op:
+    def __init__(self, name, kids=(), payload=None):
+        self.name, self.kids, self.payload = name, list(kids), payload
+        self.verified = False          # 这个 op 自己验过了吗
+
+    # ① 进门：只许看自己。此时 self.kids 里的 op 都还没验。
+    def verify(self):
+        if self.name == "pix.pipeline":
+            kid = self.kids[-1]
+            print(f"    [verify] pix.pipeline 偷看了子 op {kid.name}："
+                  f"verified={kid.verified}，payload={kid.payload!r}")
+            if kid.payload is None:                  # 畸形数据，真实 C++ 里这就是崩点
+                print("    [verify] ← 它的 payload 还是 None。真实代码在这里解引用就崩了，"
+                      "而且崩在和真正错误无关的地方")
+        return None
+
+    # ③ 出门：子 op 全验完了，这时候看 region 是安全的
+    def verifyRegions(self):
+        if self.name == "pix.pipeline":
+            kid = self.kids[-1]
+            print(f"    [verifyRegions] 同一个子 op：verified={kid.verified}，"
+                  f"payload={kid.payload!r} —— 已经可信")
+            if kid.payload != 1:
+                return "pix.pipeline 交出的值个数不对"
+        return None
+
+def run_verifier(op, depth=0):
+    pad = "  " * depth
+    print(f"{pad}① 进门 {op.name}")
+    if (err := op.verify()):
+        return err
+    for kid in op.kids:                              # ② 递归
+        if (err := run_verifier(kid, depth + 1)):
+            return err
+    op.payload = op.payload if op.payload is not None else 1   # 假装"验证顺带补全了信息"
+    op.verified = True
+    print(f"{pad}③ 出门 {op.name}")
+    return op.verifyRegions()
+
+tree = Op("builtin.module", [
+    Op("func.func", [
+        Op("pix.pipeline", [Op("pix.add", payload=1), Op("pix.yield")])   # yield 的 payload 缺
+    ])
+])
+
+err = run_verifier(tree)
+print("\n验证结果：", err or "通过")
+print("注意两处 [verify] / [verifyRegions] 看到的是同一个 pix.yield，"
+      "但可信程度完全不同 —— 这就是两个钩子存在的全部理由。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">① 进门 builtin.module
+  ① 进门 func.func
+    ① 进门 pix.pipeline
+    [verify] pix.pipeline 偷看了子 op pix.yield：verified=False，payload=None
+    [verify] ← 它的 payload 还是 None。真实代码在这里解引用就崩了，而且崩在和真正错误无关的地方
+      ① 进门 pix.add
+      ③ 出门 pix.add
+      ① 进门 pix.yield
+      ③ 出门 pix.yield
+    ③ 出门 pix.pipeline
+    [verifyRegions] 同一个子 op：verified=True，payload=1 —— 已经可信
+  ③ 出门 func.func
+③ 出门 builtin.module
+
+验证结果： 通过
+注意两处 [verify] / [verifyRegions] 看到的是同一个 pix.yield，但可信程度完全不同 —— 这就是两个钩子存在的全部理由。</code></pre>
+</div><p>同一个 <code>pix.yield</code>：进门时 <code>verified=False</code>、数据还是 <code>None</code>；出门时 <code>verified=True</code>、数据齐了。真实的 C++ 在进门那一刻解引用这种半成品，就是一次崩溃——<strong>而且崩的位置和真正的错误毫无关系</strong>，这是这类 bug 最难查的地方。把模拟器里 <code>verify()</code> 那段挪到 <code>verifyRegions()</code> 里，两个钩子的差别立刻消失，这也正是选对钩子的全部意义。</p>
+<h2>补洞一：手写 <code>verify()</code>（<code>pix.transpose</code>）</h2>
+<p>ODS 里开个开关：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_TransposeOp : Pix_Op&lt;"transpose", [Pure]&gt; {
+  // …
+  let hasVerifier = 1;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>然后在 <code>lib/Pix/PixOps.cpp</code> 里实现。注意三件事：<strong>走到这里时 ODS 的检查已经过了</strong>（不用再判断&quot;是不是 F32Tensor&quot;）、<strong>动态维要放过</strong>、<strong>报错信息要给出足够的上下文</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">LogicalResult TransposeOp::verify() {
+  auto inTy = cast&lt;RankedTensorType&gt;(getImage().getType());
+  auto outTy = cast&lt;RankedTensorType&gt;(getResult().getType());
+
+  if (inTy.getRank() != 2 || outTy.getRank() != 2)
+    return emitOpError("只支持二维图像，收到 ") &lt;&lt; inTy &lt;&lt; " 和 " &lt;&lt; outTy;
+
+  ArrayRef&lt;int64_t&gt; in = inTy.getShape(), out = outTy.getShape();
+  // 动态维（?）无从比较，放过；静态维必须逐对交换
+  for (auto [i, o] : {std::pair{in[0], out[1]}, std::pair{in[1], out[0]}}) {
+    if (!ShapedType::isDynamic(i) &amp;&amp; !ShapedType::isDynamic(o) &amp;&amp; i != o)
+      return emitOpError("结果形状必须是输入形状的逆序：输入 ")
+             &lt;&lt; inTy &lt;&lt; "，结果应为 " &lt;&lt; out[1] &lt;&lt; "x" &lt;&lt; out[0]
+             &lt;&lt; "，实际是 " &lt;&lt; outTy;
+  }
+  return success();
+}</code></pre>
+</div><p>现在那段荒唐的 IR 被拦住了（真实报错）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: 'pix.transpose' op 结果形状必须是输入形状的逆序：输入 'tensor&lt;4x8xf32&gt;'，结果应为 8x4，实际是 'tensor&lt;4x8xf32&gt;'
+  %t = pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;4x8xf32&gt;
+       ^
+note: see current operation: %0 = "pix.transpose"(%arg0) : (tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt;</code></pre>
+</div><div class="note">
+<strong>诊断的三个习惯</strong>
+<p><strong>一，用 <code>emitOpError()</code> 而不是 <code>emitError()</code></strong>：前者自动带上 op 名（<code>'pix.transpose' op …</code>）和位置。</p>
+<p><strong>二，别在消息里重复 op 名</strong>：<code>emitOpError("pix.transpose 的形状不对")</code> 会打印成 <code>'pix.transpose' op pix.transpose 的形状不对</code>。</p>
+<p><strong>三，把"实际值"和"期望值"都写进去</strong>。<code>&lt;&lt;</code> 可以直接接 <code>Type</code>、<code>Value</code>、<code>Attribute</code>、整数——这是第 4 章那些类型能被打印的好处。需要指向另一处代码时，用 <code>emitOpError(…).attachNote(otherOp-&gt;getLoc()) &lt;&lt; "…"</code>，诊断里会多一条 note——第 2 章那个支配关系报错就是这么做的。</p>
+</div><h2>补洞二：属性与类型的一致性（<code>pix.kernel</code>）</h2>
+<p>权重存在属性里、尺寸存在类型里，两者必须一致：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">LogicalResult KernelOp::verify() {
+  auto kernelTy = getResult().getType();          // !pix.kernel&lt;R x C&gt;
+  auto weightsTy = dyn_cast&lt;ShapedType&gt;(getWeights().getType());
+  if (!weightsTy || weightsTy.getRank() != 2)
+    return emitOpError("权重必须是二维的 elements 属性");
+
+  if (weightsTy.getDimSize(0) != kernelTy.getRows() ||
+      weightsTy.getDimSize(1) != kernelTy.getCols())
+    return emitOpError("权重形状与卷积核类型不一致：权重是 ")
+           &lt;&lt; weightsTy.getDimSize(0) &lt;&lt; "x" &lt;&lt; weightsTy.getDimSize(1)
+           &lt;&lt; "，而类型说的是 " &lt;&lt; kernelTy.getRows() &lt;&lt; "x" &lt;&lt; kernelTy.getCols();
+  return success();
+}</code></pre>
+</div><p>真实报错：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: 'pix.kernel' op 权重形状与卷积核类型不一致：权重是 3x3，而类型说的是 5x5</code></pre>
+</div><p><strong>这类&quot;两处信息必须一致&quot;的检查在真实方言里非常多</strong>（属性 vs 类型、静态形状 vs 动态尺寸操作数、编译期常量 vs 运行时值）。它们没法靠声明表达，因为涉及两个不同来源的数据。</p>
+<h2>补洞三：类型参数的验证（<code>!pix.kernel&lt;R x C&gt;</code>）</h2>
+<p>卷积核的边长应该是正奇数。这条规则属于<strong>类型自己</strong>，与任何 op 无关——所以它不能写在 op 的 verifier 里（否则一个只出现在函数签名里的坏类型就漏掉了）。</p>
+<p>ODS 侧开 <code>genVerifyDecl</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_KernelType : Pix_Type&lt;"Kernel", "kernel"&gt; {
+  let parameters = (ins "int64_t":$rows, "int64_t":$cols);
+  let genVerifyDecl = 1;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>实现的签名和 op 的 verifier<strong>不一样</strong>，值得看清：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 第一个参数是"怎么报错"的回调。类型验证发生在还没有 op 的时候
+// （类型可以独立存在），所以不能用 emitOpError，只能用框架给的这个发射器。
+LogicalResult KernelType::verify(function_ref&lt;InFlightDiagnostic()&gt; emitError,
+                                 int64_t rows, int64_t cols) {
+  if (rows &lt;= 0 || cols &lt;= 0)
+    return emitError() &lt;&lt; "卷积核的行列必须是正数，收到 " &lt;&lt; rows &lt;&lt; "x" &lt;&lt; cols;
+  if (rows % 2 == 0 || cols % 2 == 0)
+    return emitError() &lt;&lt; "卷积核的行列必须是奇数（才有明确的中心点），收到 "
+                       &lt;&lt; rows &lt;&lt; "x" &lt;&lt; cols;
+  return success();
+}</code></pre>
+</div><p>效果是<strong>连函数签名里的坏类型都拦得住</strong>（真实报错，注意插入符直接指向类型本身）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: 卷积核的行列必须是奇数（才有明确的中心点），收到 2x4
+func.func @f(%k: !pix.kernel&lt;2 x 4&gt;) {
+                            ^</code></pre>
+</div><div class="keypoint">
+<strong>类型验证发生在"构造类型"的那一刻</strong>
+<p>不是在某个 op 上，而是在 <code>KernelType::get(ctx, 2, 4)</code>（或解析到这个类型文本）时。这与第 4 章"类型是唯一化的不可变值"是一致的：既然类型可以脱离 op 独立存在，它的不变式就必须在构造时守住——**坏类型根本不该被造出来**。</p>
+</div><h2>补洞四：不写 verifier，改为实现接口（<code>pix.pipeline</code>）</h2>
+<p>最后一个洞：pipeline 声明返回一张图，body 却什么都不 yield。</p>
+<p>按第 8 章的分析，<code>SingleBlockImplicitTerminator</code> 只管&quot;有没有终结符&quot;，不管&quot;终结符交出的值与 op 的结果对不对齐&quot;。现在有两条路：</p>
+<p><strong>路一：手写 <code>verifyRegions()</code>。</strong> 大约十几行：取出 body 的 terminator、比较操作数个数与类型、逐个报错。直观，但这套逻辑每个带 region 的 op 都要重写一遍。</p>
+<p><strong>路二：声明自己实现 <code>RegionBranchOpInterface</code>，让通用机制来查。</strong> 第 5 章讲过，&quot;通用变换能为你做什么&quot;取决于你声明了什么——验证也一样。</p>
+<p>我们走路二。ODS 里加一行：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
+    SingleBlockImplicitTerminator&lt;"YieldOp"&gt;,
+    RecursiveMemoryEffects,
+    DeclareOpInterfaceMethods&lt;RegionBranchOpInterface,
+                              ["getSuccessorInputs"]&gt;]&gt; {</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>C++ 里实现两个方法。第一个描述控制流怎么在&quot;本 op&quot;与&quot;它的 region&quot;之间流动：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">void PipelineOp::getSuccessorRegions(RegionBranchPoint point,
+                                     SmallVectorImpl&lt;RegionSuccessor&gt; &amp;regions) {
+  // 从 pipeline 自己出发 → 进入 body
+  if (point.isParent()) {
+    regions.push_back(RegionSuccessor(&amp;getBody()));
+    return;
+  }
+  // 从 body 出来 → 回到 pipeline
+  regions.push_back(RegionSuccessor(getOperation()));
+}</code></pre>
+</div><p>第二个说清每条边的<strong>落点接收哪些值</strong>。这一步不能省：<code>RegionSuccessor</code> 只记&quot;落在哪&quot;（一个 region，还是本 op），它不带值，所以框架得另外问你一次：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">ValueRange PipelineOp::getSuccessorInputs(RegionSuccessor successor) {
+  // 落在本 op 上 → 接收方是本 op 的结果，这正是 yield 要对齐的目标
+  if (successor.isOperation())
+    return getOperation()-&gt;getResults();
+  // 落在 body 上 → body 没有块参数
+  return {};
+}</code></pre>
+</div><p><code>getSuccessorInputs</code> 在接口里带默认实现（返回空），所以 ODS 那行必须把它<strong>显式列进覆盖名单</strong>，否则你写的版本不会被调用——框架会以为这条边上一个值都不接收，于是合法的 <code>pix.yield %c</code> 反而被判成错。</p>
+<p><strong>二十行代码，换来的报错是这样的</strong>（真实输出）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: 'pix.pipeline' op along control flow edge from Operation pix.yield to Operation pix.pipeline: region branch point has 0 operands, but region successor needs 1 inputs
+  %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
+         ^
+note: region branch point</code></pre>
+</div><p>对比第 2 章我们在 <code>scf.if</code> 上看到的那条：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">error: 'scf.if' op along control flow edge from Operation scf.yield to Operation scf.if: region branch point has 0 operands, but region successor needs 1 inputs</code></pre>
+</div><p>把两条放在一起看：除了 op 名，<strong>一个字都不差</strong>。你的 op 现在和内建 op 走的是同一条代码路径，报错由同一个函数打印（<code>mlir/lib/Interfaces/ControlFlowInterfaces.cpp</code> 里那段边检查）。而且这个接口的回报远不止验证：第 19 章的数据流分析、第 13 章某些 pass 的正确性，都建立在它之上。</p>
+<div class="warn">
+<strong>接口方法的签名会随版本变</strong>
+<p>这个接口本身就是活例子。早先的 <code>RegionSuccessor</code> 是<strong>连值一起带</strong>的，构造时就把"落点接收哪些值"塞进去（<code>RegionSuccessor(Operation::result_range)</code> 之类）；基线 23.1 把这件事拆开了——<code>RegionSuccessor</code> 只记落点，值改由单独的 <code>getSuccessorInputs</code> 回答。照老写法只实现 <code>getSuccessorRegions</code> 的代码在 23.1 上不会编译失败，而是<strong>静悄悄地行为不对</strong>：默认实现说"这条边不接收任何值"，于是空 <code>pipeline</code> 不报错了，合法的 <code>yield</code> 倒被判错——这种失败最难查。<strong>实现任何接口前，先打开你手上那份头文件，把方法列表和默认实现一起看过</strong>；带默认实现的方法尤其要留意，漏了它编译器不会提醒你。附录 A 第 0 节那条"以你手上的版本为准"就是为它准备的。</p>
+</div><h2>该写 verifier 还是该实现接口？</h2>
+<p>一张判断表，是这一章最该带走的东西：</p>
+<table>
+<thead>
+<tr>
+<th>情况</th>
+<th>怎么做</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>类型/形状之间的<strong>固定关系</strong></td>
+<td>ODS 约束（<code>AllTypesMatch</code>、<code>TypesMatchWith</code>）或 trait</td>
+<td><code>pix.scale</code> 的 image = result</td>
+</tr>
+<tr>
+<td>只涉及本 op 的<strong>自定义关系</strong></td>
+<td>手写 <code>verify()</code></td>
+<td><code>pix.transpose</code> 的形状逆序</td>
+</tr>
+<tr>
+<td>属性与类型<strong>两处信息一致</strong></td>
+<td>手写 <code>verify()</code></td>
+<td><code>pix.kernel</code> 的权重形状</td>
+</tr>
+<tr>
+<td>类型参数本身的<strong>不变式</strong></td>
+<td>类型的 <code>genVerifyDecl</code> + <code>verify()</code></td>
+<td>卷积核边长为正奇数</td>
+</tr>
+<tr>
+<td>需要看 <strong>region 内部</strong></td>
+<td><code>hasRegionVerifier</code> + <code>verifyRegions()</code></td>
+<td>region 里必须含某个 op</td>
+</tr>
+<tr>
+<td>region 之间的<strong>控制流与传值</strong></td>
+<td><strong>实现 <code>RegionBranchOpInterface</code></strong></td>
+<td>pipeline 的 yield 对齐</td>
+</tr>
+<tr>
+<td>想要通用变换也能用同一信息</td>
+<td><strong>实现接口</strong>，别写 verifier</td>
+<td>循环类 op 实现 <code>LoopLikeOpInterface</code></td>
+</tr>
+</tbody></table>
+<p>判断原则很简单：<strong>如果这条信息除了&quot;验证&quot;之外还能被别的地方用到，就把它做成接口；如果它纯粹是本 op 的私事，就写 verifier。</strong> 接口的成本高一点（要读文档、实现方法），但它是<strong>可复用的声明</strong>，而 verifier 只是一次性的检查。</p>
+<h2>给报错行为写测试</h2>
+<p>verifier 写完不测，等于没写——它最容易在后续重构里悄悄失效。测试写法就是第 3 章那套 <code>--split-input-file --verify-diagnostics</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --split-input-file --verify-diagnostics
+
+func.func @transpose_not_reversed(%a: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32&gt; {
+  // expected-error @+1 {{结果形状必须是输入形状的逆序}}
+  %t = pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;4x8xf32&gt;
+  return %t : tensor&lt;4x8xf32&gt;
+}
+
+// -----
+
+func.func @pipeline_yields_nothing() -&gt; tensor&lt;4x4xf32&gt; {
+  // 这条检查不是手写的：实现了 RegionBranchOpInterface 之后由通用机制给出。
+  // 通用机制除了报错还附一条 note 指出"边的起点在哪"，--verify-diagnostics
+  // 要求 note 也得预期，漏了它测试同样算失败。
+  // expected-error @+2 {{region branch point has 0 operands, but region successor needs 1 inputs}}
+  // expected-note @+1 {{region branch point}}
+  %out = pix.pipeline : tensor&lt;4x4xf32&gt; {
+  }
+  return %out : tensor&lt;4x4xf32&gt;
+}
+
+// -----
+
+// expected-error @+1 {{卷积核的行列必须是奇数}}
+func.func @even_kernel(%k: !pix.kernel&lt;2 x 4&gt;) {
+  return
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --split-input-file --verify-diagnostics input.mlir</code></div>
+</div><p>三个写法要点：</p>
+<ul>
+<li><strong><code>@+1</code></strong> 表示&quot;错误发生在下一行&quot;。也可以写 <code>@-1</code>（上一行）、<code>@+2</code>，或者不带偏移（本行）。</li>
+<li><strong><code>{{…}}</code> 里是正则</strong>，不必写全文。<strong>只匹配最稳定的那一段</strong>——把整句话抄进去，以后改个措辞测试就红了。</li>
+<li><strong><code>// -----</code> 分隔的每一段独立解析</strong>（配 <code>--split-input-file</code>）。类型验证那种&quot;错误发生在函数签名上&quot;的情况，必须这样隔开，否则整段都过不了解析。</li>
+</ul>
+<div class="keypoint">
+<strong>别忘了测"合法的也得过"</strong>
+<p>verifier 写紧了比写松了更难发现——一段本该合法的 IR 被拒绝，往往要等到很久以后有人写出那种 IR 才暴露。我们的测试文件最后一段专门放一堆<strong>合法</strong>的 op（正确的转置、匹配的卷积核、正常 yield 的 pipeline），确保新加的检查没有误伤。</p>
+</div><p>测试文件的最后一段就是这个&quot;合法也得过&quot;的对照组，它同时也是本章成果的一次总检阅——
+四条新不变式全部生效，而这些写法一个都不能被误伤：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s
+func.func @all_legal(%a: tensor&lt;4x8xf32&gt;, %img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x4xf32&gt; {
+  %t = pix.transpose %a : tensor&lt;4x8xf32&gt; to tensor&lt;8x4xf32&gt;       // 形状确实逆序
+  %k = pix.kernel dense&lt;1.0&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;  // 权重与类型一致，边长为奇数
+  %c = pix.convolve %img, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  %p = pix.pipeline : tensor&lt;8x8xf32&gt; {
+    pix.yield %c : tensor&lt;8x8xf32&gt;                                  // yield 与结果对齐
+  }
+  return %t : tensor&lt;8x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt input.mlir</code></div>
+</div><p>现在跑全套：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-mlir/verify/verify-pix.sh</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">✓ pix-opt 编译通过
+-- Testing: 5 tests, 5 workers --
+Testing:  0.. 10.. 20.. 30.. 40.. 50.. 60.. 70.. 80.. 90..
+
+Testing Time: 0.18s
+
+Total Discovered Tests: 5
+  Passed: 5 (100.00%)</code></pre>
+</div><h2>动手</h2>
+<p><strong>改一改：</strong></p>
+<ol>
+<li><strong>把 <code>TransposeOp::verify()</code> 里&quot;动态维放过&quot;的逻辑删掉</strong>（直接比较 <code>in[0] != out[1]</code>），然后跑 <code>pix.transpose %a : tensor&lt;?x8xf32&gt; to tensor&lt;8x?xf32&gt;</code>。会误报吗？<code>ShapedType::isDynamic</code> 这个判断在真实方言里到处都要写，忘了它就是&quot;verifier 写太紧&quot;的典型。</li>
+<li><strong>把 <code>pix.kernel</code> 的 verifier 挪到 <code>verifyRegions()</code> 里</strong>（把 ODS 开关换成 <code>hasRegionVerifier</code>）。还能正常工作吗？想一想：这个 op 根本没有 region，那个钩子会被调用吗？</li>
+<li><strong>在 <code>PipelineOp</code> 上手写一个 <code>verifyRegions()</code></strong>，做与接口相同的检查（取 terminator、比较个数与类型）。写完对比一下：你的报错信息和通用机制给的哪个更有用？多少行？</li>
+<li><strong>给 <code>!pix.kernel</code> 加一条&quot;边长不超过 15&quot;的限制</strong>，然后写一个 <code>expected-error</code> 测试。注意报错位置——它指向类型，还是指向用这个类型的 op？</li>
+<li><strong>故意让 <code>expected-error</code> 的正则写得过死</strong>（把整句话抄进去），然后改一个字的报错措辞，看测试怎么失败。这是&quot;测试该测什么&quot;的一堂实践课。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>验证是一次树遍历，每个 op 有两个钩子：<strong>进门</strong>跑 ODS 的 <code>verifyInvariants()</code> 和你的 <code>verify()</code>（此时<strong>嵌套 op 还没验过，不能碰</strong>），<strong>出门</strong>跑 <code>verifyRegions()</code>（这时才能安全地看 region 内部）。</li>
+<li>对应两个 ODS 开关：<code>hasVerifier</code> → <code>verify()</code>；<code>hasRegionVerifier</code> → <code>verifyRegions()</code>。</li>
+<li>诊断三习惯：用 <code>emitOpError()</code>（自动带 op 名与位置）、消息里别重复 op 名、把期望值与实际值都写进去；要指向别处用 <code>attachNote</code>。</li>
+<li><strong>类型参数的不变式用类型自己的 <code>genVerifyDecl</code> + <code>verify()</code></strong>，签名里第一个参数是 <code>emitError</code> 回调——因为类型验证发生在&quot;构造类型&quot;那一刻，还没有 op 可言。它连函数签名里的坏类型都拦得住。</li>
+<li><strong>能做成接口的，就别写 verifier</strong>：pipeline 的 yield 对齐，我们只实现了 <code>getSuccessorRegions</code> 与 <code>getSuccessorInputs</code> 两个方法、二十来行，就白拿到和 <code>scf.if</code> 同级的控制流验证，而且同一个接口还会被第 13、19 章的分析复用。判断原则：<strong>这条信息只用于验证，还是也能被别人用？</strong></li>
+<li>给报错行为写测试：<code>--split-input-file --verify-diagnostics</code> + <code>expected-error @+1 {{正则}}</code>。正则只匹配最稳定的片段；<strong>别忘了同时测&quot;合法的仍然通过&quot;</strong>，否则 verifier 写紧了没人知道。</li>
+<li>顺带的一个印证：验证器在&quot;出门&quot;那一步用 <code>parallelForEach</code> <strong>并发</strong>验证带 <code>IsolatedFromAbove</code> 的子 op——第 2 章那句&quot;这个 trait 是并发的前提&quot;，在这里第一次兑现。</li>
+</ul>
+<p><strong>pix 进度</strong>：三个洞全补上（transpose 形状、kernel 权重与类型一致、pipeline yield 对齐），外加一条类型级不变式（边长为正奇数）。5 个 lit 测试全绿，其中一个专门守报错行为。</p>
+<p>下一章讲 <strong>fold 与 canonicalize</strong>：让 <code>pix.add %x, 零图</code> 直接消失、让两次 <code>pix.transpose</code> 互相抵消、让 <code>pix.reduce</code> 对一张常量图在编译期就把和算出来。你会看到&quot;折叠&quot;和&quot;规范化&quot;是两件不同的事——分界线只有一条，<strong>结果里需要新造 op 吗</strong>——也会亲手撞上一个经典陷阱：两条互逆的规则打成死循环，而且它不报错，是直接挂死。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch09.html">← 第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a>
+  <a class="nav-next" href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

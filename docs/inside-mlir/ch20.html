@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li class="active"><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第四部分开始把 pix 一路降到机器上。第一站是 <code>linalg</code>——而这一章要回答的问题不是"怎么用它"，是<strong>为什么绕这一道</strong>。</p>
+<p>因为第 16 章我们已经把 pix 降到 <code>arith</code> 了，那条路更短：<code>arith.addf</code> 在 tensor 上本来就是逐点的。但那条路有个致命缺陷——<strong>它把迭代空间丢了</strong>。<code>arith.addf %a, %b : tensor&lt;8x8xf32&gt;</code> 是一个不透明的"整张图加整张图"，没人知道它由哪些循环组成，于是 tile 不了、融合不了、向量化也无从下手。</p>
+<p>这一章会用一条实测的报错把这件事钉死：同一个 <code>pix.add</code>，走 linalg 那条路降下来能被 transform 调度 tile 成嵌套循环；走 arith 那条路降下来，transform 直接拒绝——<code>only ops implementing TilingInterface are supported</code>。</p>
+<p>核心概念只有一个：<strong>indexing map 把"迭代空间"和"每个点上算什么"分开写。</strong>正因为迭代空间是显式的、可分析的，tiling 和融合才能<strong>通用地</strong>实现，而不必为每个 op 写一遍。这一章会把 pix 的逐点、缩放、归约三类运算全降到 <code>linalg.generic</code>——你会看到<strong>同一个 op</strong>，只换 map 和 iterator 类型，就从逐点变成了归约。</p>
+</div><h2>先看结论：两条路的差别</h2>
+<p>第 16 章那条路和这一章这条路，输入完全相同。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">// pix.add %a, %b : tensor&lt;8x8xf32&gt;
+
+// 路 A（第 16 章，--pix-to-arith）：
+%s = arith.addf %a, %b : tensor&lt;8x8xf32&gt;
+
+// 路 B（这一章，--pix-to-linalg）：
+%0 = tensor.empty() : tensor&lt;8x8xf32&gt;
+%s = linalg.generic {indexing_maps = [#id, #id, #id],
+                     iterator_types = ["parallel", "parallel"]}
+     ins(%a, %b : tensor&lt;8x8xf32&gt;, tensor&lt;8x8xf32&gt;) outs(%0 : tensor&lt;8x8xf32&gt;) {
+  ^bb0(%x: f32, %y: f32, %out: f32):
+    %v = arith.addf %x, %y : f32
+    linalg.yield %v : f32
+} -&gt; tensor&lt;8x8xf32&gt;</code></pre>
+</div><p>路 B 明显啰嗦得多。它多出来的到底是什么？<strong>是那两个属性。</strong> <code>indexing_maps</code> 说&quot;迭代点 (i,j) 该读写哪些元素&quot;，<code>iterator_types</code> 说&quot;这些维度是可并行的还是归约的&quot;。region 里那三行是&quot;每个点上算什么&quot;。</p>
+<p><strong>两件事被分开了，而分开的那一半正好是 tiling 需要的。</strong></p>
+<p>拿第 18 章学的 transform 调度试一下。路 B：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%g = transform.structured.match ops{["linalg.generic"]} in %root : …
+%tiled, %loops:2 = transform.structured.tile_using_for %g tile_sizes [4, 4] : …</code></pre>
+</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt pay20.mlir --pix-to-linalg --transform-interpreter</code></pre>
+</div><p>运行结果（截取）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    %1 = scf.for %arg2 = %c0 to %c8 step %c4 iter_args(%arg3 = %0) -&gt; (tensor&lt;8x8xf32&gt;) {
+      %2 = scf.for %arg4 = %c0_0 to %c8_1 step %c4_2 iter_args(%arg5 = %arg3) -&gt; (tensor&lt;8x8xf32&gt;) {
+        %extracted_slice = tensor.extract_slice %arg0[%arg2, %arg4] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %extracted_slice_3 = tensor.extract_slice %arg1[%arg2, %arg4] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %extracted_slice_4 = tensor.extract_slice %arg5[%arg2, %arg4] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %3 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%extracted_slice, %extracted_slice_3 : tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) outs(%extracted_slice_4 : tensor&lt;4x4xf32&gt;) {</code></pre>
+</div><p>两层 <code>scf.for</code>、三个 <code>tensor.extract_slice</code>，最内层是一个 4×4 的 <code>linalg.generic</code>。<strong>我们一行 tiling 代码都没写</strong>——这全是 <code>transform.structured.tile_using_for</code> 根据 indexing map 算出来的。</p>
+<p>换路 A，同样的调度（改成匹配 <code>arith.addf</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt pay20b.mlir --pix-to-arith --transform-interpreter</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pay20b.mlir:10:24: error: only ops implementing TilingInterface are supported
+    %tiled, %loops:2 = transform.structured.tile_using_for %g tile_sizes [4, 4]
+                       ^</code></pre>
+</div><div class="keypoint">
+<strong>「结构化」的含义就是"迭代空间是显式的"</strong>
+<p><code>arith.addf</code> 在 tensor 上是<strong>不透明</strong>的：语义上它等价于一个双重循环，但那个循环只存在于文档里，IR 里找不到。想 tile 它，你得先"知道"它是双重循环——也就是为每一个这样的 op 单独写一遍 tiling 逻辑。</p>
+<p><code>linalg.generic</code> 把循环结构写进了 IR（<code>indexing_maps</code> + <code>iterator_types</code>），于是 tiling 变成了对<strong>一个属性</strong>的操作，对所有 linalg op 通用。<code>TilingInterface</code> 就是这份契约的名字。</p>
+<p>代价是 IR 变长、可读性下降。<strong>这是一笔明确的交易：用表达上的冗长换取变换上的通用性。</strong>第四部分后面几章（tiling、融合、bufferization、向量化）全都在收这笔交易的利息。</p>
+</div><h2>indexing map：从迭代点到访存下标的函数</h2>
+<p>把 <code>linalg.generic</code> 拆开只有四样东西：</p>
+<table>
+<thead>
+<tr>
+<th>部件</th>
+<th>说什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ins</code> / <code>outs</code></td>
+<td>哪些张量参与。<code>outs</code> 同时是<strong>结果的去处</strong>（destination-passing style，下面细说）</td>
+</tr>
+<tr>
+<td><code>indexing_maps</code></td>
+<td>每个操作数一个 <code>AffineMap</code>：<strong>迭代点 → 这个操作数的下标</strong></td>
+</tr>
+<tr>
+<td><code>iterator_types</code></td>
+<td>每个迭代维度是 <code>parallel</code> 还是 <code>reduction</code></td>
+</tr>
+<tr>
+<td>region</td>
+<td>每个迭代点上做什么（纯标量代码 + <code>linalg.yield</code>）</td>
+</tr>
+</tbody></table>
+<p>迭代空间的形状不用写——它由 <code>indexing_maps</code> 和操作数的形状<strong>反推</strong>出来。</p>
+<p>三个例子摆在一起，差别就清楚了。逐点加法：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">indexing_maps = [(d0,d1)-&gt;(d0,d1),   // lhs
+                 (d0,d1)-&gt;(d0,d1),   // rhs
+                 (d0,d1)-&gt;(d0,d1)]   // out
+iterator_types = ["parallel", "parallel"]</code></pre>
+</div><p>全图归约：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">indexing_maps = [(d0,d1)-&gt;(d0,d1),   // in：逐点读
+                 (d0,d1)-&gt;()]        // out：**没有下标** —— 两维都被归约掉
+iterator_types = ["reduction", "reduction"]</code></pre>
+</div><p>转置：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">indexing_maps = [(d0,d1)-&gt;(d1,d0),   // in：**下标交换**
+                 (d0,d1)-&gt;(d0,d1)]   // out
+iterator_types = ["parallel", "parallel"]</code></pre>
+</div><p><strong>三个都是同一个 <code>linalg.generic</code>。</strong> 逐点、归约、转置的区别完全在那两个属性里——region 里的标量代码甚至可以一样（转置的 region 就是直接 yield 输入）。</p>
+<div class="note">
+<strong>`(d0,d1)->()` 这个写法值得多看一眼</strong>
+<p>输出的 map 里不出现任何迭代变量，意思是"所有迭代点都写到同一个地方"——这正是归约的定义。配上 <code>iterator_types = ["reduction", ...]</code>，框架就知道这个维度上的迭代<strong>不能并行</strong>、且需要一个累加器。</p>
+<p>反过来，如果 map 里少了某个维度但 iterator 写成 <code>parallel</code>，那是个 bug：多个迭代点并行写同一个位置。verifier 会拦住一部分这类错误。</p>
+</div><h2>把 pix 降下来</h2>
+<p>三条 pattern，各演示一个要点。逐点的那条可以用模板覆盖两个 op：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">/// 逐点二元运算的通用下降。pix.add 和 pix.mul 的区别只在 region 里那一个
+/// 标量 op，所以用模板参数传进来。
+template &lt;typename PixOp, typename ScalarOp&gt;
+struct PointwiseLowering : OpConversionPattern&lt;PixOp&gt; {
+  LogicalResult matchAndRewrite(PixOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &amp;rewriter) const override {
+    auto ty = dyn_cast&lt;RankedTensorType&gt;(op.getType());
+    if (!ty || !ty.hasStaticShape())
+      return rewriter.notifyMatchFailure(op, "需要静态形状的有阶张量");
+
+    Location loc = op.getLoc();
+    // outs 要一个"目标张量"——linalg 是 destination-passing style。
+    Value init = tensor::EmptyOp::create(rewriter, loc, ty.getShape(),
+                                         ty.getElementType());
+
+    AffineMap id = AffineMap::getMultiDimIdentityMap(ty.getRank(),
+                                                     rewriter.getContext());
+    SmallVector&lt;AffineMap&gt; maps{id, id, id};           // lhs, rhs, out
+    SmallVector&lt;utils::IteratorType&gt; iters(
+        ty.getRank(), utils::IteratorType::parallel);
+
+    auto generic = linalg::GenericOp::create(
+        rewriter, loc, TypeRange{ty},
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()}, ValueRange{init}, maps,
+        iters,
+        [&amp;](OpBuilder &amp;b, Location nested, ValueRange args) {
+          // args = (lhs 的一个元素, rhs 的一个元素, out 的一个元素)
+          Value s = ScalarOp::create(b, nested, args[0], args[1]);
+          linalg::YieldOp::create(b, nested, s);
+        });
+
+    rewriter.replaceOp(op, generic.getResults());
+    return success();
+  }
+};</code></pre>
+</div><p><code>pix.scale</code> 那条有个小技巧：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">Value factor = adaptor.getFactor();
+auto generic = linalg::GenericOp::create(
+    rewriter, loc, TypeRange{ty}, ValueRange{adaptor.getImage()},
+    ValueRange{init}, maps, iters,
+    [&amp;](OpBuilder &amp;b, Location nested, ValueRange args) {
+      // 标量 factor 不在 args 里 —— 直接引用外面那个值
+      Value s = arith::MulFOp::create(b, nested, args[0], factor);
+      linalg::YieldOp::create(b, nested, s);
+    });</code></pre>
+</div><p><strong>标量不进 <code>ins</code>，而是在 region 里直接引用外面的值。</strong> 这么写合法，是因为 <code>linalg.generic</code> 的 region <strong>不是</strong> <code>IsolatedFromAbove</code>（第 13 章那个 trait 第四次出现）。好处很实在：省掉了&quot;把标量 splat 成一整张图&quot;这次实体化——对比第 16 章那条 arith 路径，它就得先造一个 <code>tensor.splat</code>。</p>
+<p>归约那条最能说明问题：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 输出是 0 阶张量（一个标量），初值必须是 0——归约的单位元。
+Value zero = arith::ConstantOp::create(rewriter, loc,
+                                       rewriter.getF32FloatAttr(0.0));
+Value empty = tensor::EmptyOp::create(rewriter, loc, ArrayRef&lt;int64_t&gt;{},
+                                      ty.getElementType());
+Value init = linalg::FillOp::create(rewriter, loc, ValueRange{zero},
+                                    ValueRange{empty}).getResult(0);
+
+SmallVector&lt;AffineMap&gt; maps{
+    AffineMap::getMultiDimIdentityMap(rank, ctx),      // 输入：逐点读
+    AffineMap::get(rank, /*symbolCount=*/0, {}, ctx)};  // 输出：() ← 全归约
+SmallVector&lt;utils::IteratorType&gt; iters(rank, utils::IteratorType::reduction);</code></pre>
+</div><p>注意那个 <code>linalg.fill</code>：<strong>累加器必须显式初始化成单位元</strong>。<code>tensor.empty</code> 给的是未定义内容，直接拿它当累加器会得到垃圾。这是 destination-passing style 的一个直接后果——</p>
+<div class="keypoint">
+<strong>destination-passing style：<code>outs</code> 既是"往哪写"也是"初值"</strong>
+<p>region 里那个 <code>%out</code> 参数不是占位符，它是<strong>目标张量当前的值</strong>。逐点运算用不到它（每个点只写一次），但归约必须用：<code>arith.addf %in, %out</code> 里的 <code>%out</code> 就是累加器。</p>
+<p>为什么这么设计？因为它让"写到哪"变成 IR 里的显式信息，于是<strong>bufferization（第 22 章）能直接读出"这块结果该放进哪块内存"</strong>，不必做复杂的别名分析。代价是所有 linalg op 都得先有一个目标张量，于是 IR 里多出很多 <code>tensor.empty</code> 和 <code>linalg.fill</code>。</p>
+<p>这也是初学 linalg 最容易困惑的地方：<strong><code>outs</code> 不是"输出参数"，而是"目标 + 初值"。</strong></p>
+</div><p>跑一下三条：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-linalg
+func.func @pointwise(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;, %f: f32) -&gt; tensor&lt;4x4xf32&gt; {
+  %s = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+  %m = pix.scale %s, %f : tensor&lt;4x4xf32&gt;
+  return %m : tensor&lt;4x4xf32&gt;
+}
+func.func @reduction(%a: tensor&lt;4x4xf32&gt;) -&gt; f32 {
+  %r = pix.reduce %a : tensor&lt;4x4xf32&gt; -&gt; f32
+  return %r : f32
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-linalg input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">#map = affine_map&lt;(d0, d1) -&gt; (d0, d1)&gt;
+#map1 = affine_map&lt;(d0, d1) -&gt; ()&gt;
+module {
+  func.func @pointwise(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;, %arg2: f32) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = tensor.empty() : tensor&lt;4x4xf32&gt;
+    %1 = linalg.generic {indexing_maps = [#map, #map, #map], iterator_types = ["parallel", "parallel"]} ins(%arg0, %arg1 : tensor&lt;4x4xf32&gt;, tensor&lt;4x4xf32&gt;) outs(%0 : tensor&lt;4x4xf32&gt;) {
+    ^bb0(%in: f32, %in_0: f32, %out: f32):
+      %4 = arith.addf %in, %in_0 : f32
+      linalg.yield %4 : f32
+    } -&gt; tensor&lt;4x4xf32&gt;
+    %2 = tensor.empty() : tensor&lt;4x4xf32&gt;
+    %3 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]} ins(%1 : tensor&lt;4x4xf32&gt;) outs(%2 : tensor&lt;4x4xf32&gt;) {
+    ^bb0(%in: f32, %out: f32):
+      %4 = arith.mulf %in, %arg2 : f32
+      linalg.yield %4 : f32
+    } -&gt; tensor&lt;4x4xf32&gt;
+    return %3 : tensor&lt;4x4xf32&gt;
+  }
+  func.func @reduction(%arg0: tensor&lt;4x4xf32&gt;) -&gt; f32 {
+    %cst = arith.constant 0.000000e+00 : f32
+    %0 = tensor.empty() : tensor&lt;f32&gt;
+    %1 = linalg.fill ins(%cst : f32) outs(%0 : tensor&lt;f32&gt;) -&gt; tensor&lt;f32&gt;
+    %2 = linalg.generic {indexing_maps = [#map, #map1], iterator_types = ["reduction", "reduction"]} ins(%arg0 : tensor&lt;4x4xf32&gt;) outs(%1 : tensor&lt;f32&gt;) {
+    ^bb0(%in: f32, %out: f32):
+      %3 = arith.addf %in, %out : f32
+      linalg.yield %3 : f32
+    } -&gt; tensor&lt;f32&gt;
+    %extracted = tensor.extract %2[] : tensor&lt;f32&gt;
+    return %extracted : f32
+  }
+}</code></pre>
+</div><p>对比两个函数里的 <code>linalg.generic</code>：<strong><code>ins</code>/<code>outs</code>/region 的形状几乎一样，差别全在 <code>#map</code> vs <code>#map1</code> 和 <code>parallel</code> vs <code>reduction</code></strong>。这就是 linalg 的全部设计。</p>
+<p>注意 <code>%arg2</code>（那个标量）出现在第二个 generic 的 region 里，而 <code>ins</code> 只有一个操作数——前面说的&quot;标量不进 ins&quot;在输出里看得很清楚。</p>
+<h2>named op 与 <code>linalg.generic</code></h2>
+<p>上游还有一批 <strong>named op</strong>：<code>linalg.matmul</code>、<code>linalg.conv_2d</code>、<code>linalg.fill</code>、<code>linalg.add</code>……它们是什么？</p>
+<p><strong>就是预设好 <code>indexing_maps</code> 和 <code>iterator_types</code> 的 <code>linalg.generic</code>。</strong> <code>linalg.matmul</code> 等价于一个三维迭代空间、maps 为 <code>(m,n,k)-&gt;(m,k)</code>、<code>(m,n,k)-&gt;(k,n)</code>、<code>(m,n,k)-&gt;(m,n)</code>、iterator 为 <code>[parallel, parallel, reduction]</code> 的 generic。</p>
+<p>用哪个？</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>用 named op</th>
+<th>用 <code>linalg.generic</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>什么时候</td>
+<td>你的计算正好是那个语义</td>
+<td>语义特殊，或需要自定义 region</td>
+</tr>
+<tr>
+<td>好处</td>
+<td>IR 短、可读；有专门的 pattern 认它（比如 matmul 的向量化策略）</td>
+<td>完全自由</td>
+</tr>
+<tr>
+<td>坏处</td>
+<td>只有上游定义好的那些</td>
+<td>通用 pattern 认它，但<strong>针对性优化不认</strong></td>
+</tr>
+</tbody></table>
+<p>实践上的取舍：<strong>如果你的 op 能映射到 named op，就映射过去</strong>——那意味着你能白拿那批针对性优化。pix 的逐点运算其实可以降到 <code>linalg.add</code> / <code>linalg.mul</code>，但我们这里用 <code>generic</code> 是为了把 indexing map 摊开给你看。第 23 章讲向量化时会再碰到这个取舍。</p>
+<h2>把 indexing map 自己跑一遍</h2>
+<p>上面那些&quot;map 决定一切&quot;的说法，跑一遍最直观。下面这个模型做两件事：把三种 op 的 map 展开成&quot;每个迭代点访问哪些元素&quot;，然后演示 <strong>tiling 为什么只需要切迭代空间</strong>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20indexing%20map%20%E5%88%B0%E5%BA%95%E8%A1%A8%E8%BE%BE%E4%BA%86%E4%BB%80%E4%B9%88%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%89%E4%BA%86%E5%AE%83%EF%BC%8Ctiling%20%E5%B0%B1%E8%83%BD**%E9%80%9A%E7%94%A8%E5%9C%B0**%E5%AE%9E%E7%8E%B0%EF%BC%9F%0A%23%20%E7%94%A8%E4%B8%80%E4%B8%AA%2040%20%E8%A1%8C%E7%9A%84%E6%A8%A1%E5%9E%8B%E5%9B%9E%E7%AD%94%EF%BC%9Amap%20%E6%98%AF%22%E4%BB%8E%E8%BF%AD%E4%BB%A3%E7%82%B9%E5%88%B0%E8%AE%BF%E5%AD%98%E4%B8%8B%E6%A0%87%22%E7%9A%84%E5%87%BD%E6%95%B0%EF%BC%8C%0A%23%20%E4%BA%8E%E6%98%AF%20tiling%20%E5%8F%AA%E9%9C%80%E8%A6%81%E5%88%87%E8%BF%AD%E4%BB%A3%E7%A9%BA%E9%97%B4%EF%BC%8C%E8%AE%BF%E5%AD%98%E4%B8%8B%E6%A0%87%E7%94%B1%20map%20%E8%87%AA%E5%8A%A8%E7%AE%97%E5%87%BA%E6%9D%A5%E3%80%82%0A%0Adef%20apply_map(m%2C%20point)%3A%0A%20%20%20%20%22%22%22m%20%E6%98%AF%E4%B8%80%E4%B8%B2%E4%B8%8B%E6%A0%87%E8%A1%A8%E8%BE%BE%E5%BC%8F%EF%BC%8C%E6%AF%8F%E9%A1%B9%E8%AF%B4%22%E8%BF%99%E4%B8%80%E7%BB%B4%E7%9A%84%E4%B8%8B%E6%A0%87%E6%80%8E%E4%B9%88%E7%94%B1%E8%BF%AD%E4%BB%A3%E7%82%B9%E7%AE%97%E5%87%BA%E6%9D%A5%22%E3%80%82%0A%20%20%20%20%20%20%20(d0%2Cd1)-%3E(d0%2Cd1)%20%E5%86%99%E6%88%90%20%5B0%2C1%5D%EF%BC%9B(d0%2Cd1)-%3E()%20%E5%86%99%E6%88%90%20%5B%5D%EF%BC%9B%0A%20%20%20%20%20%20%20(d0%2Cd1)-%3E(d1%2Cd0)%20%E5%86%99%E6%88%90%20%5B1%2C0%5D%E3%80%82%22%22%22%0A%20%20%20%20return%20tuple(point%5Bi%5D%20for%20i%20in%20m)%0A%0Adef%20describe(name%2C%20iter_space%2C%20maps%2C%20iters)%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Bname%7D%E3%80%91%22)%0A%20%20%20%20print(f%22%20%20%E8%BF%AD%E4%BB%A3%E7%A9%BA%E9%97%B4%20%7Biter_space%7D%EF%BC%8Citerator_types%20%3D%20%7Biters%7D%22)%0A%20%20%20%20for%20who%2C%20m%20in%20maps.items()%3A%0A%20%20%20%20%20%20%20%20shape%20%3D%20%22%E6%A0%87%E9%87%8F%EF%BC%88%E5%85%A8%E8%A2%AB%E5%BD%92%E7%BA%A6%E6%8E%89%EF%BC%89%22%20if%20not%20m%20else%20f%22%E6%8C%89%20%7Bm%7D%20%E5%8F%96%E4%B8%8B%E6%A0%87%22%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bwho%3A6%7D%20map%3D%7Bm%20or%20'()'%7D%20%20%E2%86%92%20%7Bshape%7D%22)%0A%20%20%20%20%23%20%E5%88%97%E4%B8%BE%E5%89%8D%E5%87%A0%E4%B8%AA%E8%BF%AD%E4%BB%A3%E7%82%B9%EF%BC%8C%E7%9C%8B%E6%AF%8F%E4%B8%AA%E6%93%8D%E4%BD%9C%E6%95%B0%E8%A2%AB%E8%AE%BF%E9%97%AE%E7%9A%84%E4%BD%8D%E7%BD%AE%0A%20%20%20%20pts%20%3D%20%5B(i%2C%20j)%20for%20i%20in%20range(iter_space%5B0%5D)%20for%20j%20in%20range(iter_space%5B1%5D)%5D%5B%3A4%5D%0A%20%20%20%20for%20p%20in%20pts%3A%0A%20%20%20%20%20%20%20%20cells%20%3D%20%7Bw%3A%20apply_map(m%2C%20p)%20or%20%22()%22%20for%20w%2C%20m%20in%20maps.items()%7D%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%E8%BF%AD%E4%BB%A3%E7%82%B9%20%7Bp%7D%3A%20%22%20%2B%20%22%20%20%22.join(f%22%7Bw%7D%7Bc%7D%22%20for%20w%2C%20c%20in%20cells.items()))%0A%0A%23%20%E4%B8%89%E7%A7%8D%20op%EF%BC%8C**%E5%90%8C%E4%B8%80%E4%B8%AA%20linalg.generic**%EF%BC%8C%E5%8F%AA%E6%98%AF%20map%20%E5%92%8C%20iterator%20%E4%B8%8D%E5%90%8C%0Adescribe(%22%E9%80%90%E7%82%B9%E5%8A%A0%E6%B3%95%20pix.add%22%2C%20(4%2C%204)%2C%0A%20%20%20%20%20%20%20%20%20%7B%22lhs%22%3A%20%5B0%2C%201%5D%2C%20%22rhs%22%3A%20%5B0%2C%201%5D%2C%20%22out%22%3A%20%5B0%2C%201%5D%7D%2C%0A%20%20%20%20%20%20%20%20%20%5B%22parallel%22%2C%20%22parallel%22%5D)%0Adescribe(%22%E5%85%A8%E5%9B%BE%E5%BD%92%E7%BA%A6%20pix.reduce%22%2C%20(4%2C%204)%2C%0A%20%20%20%20%20%20%20%20%20%7B%22in%22%3A%20%5B0%2C%201%5D%2C%20%22out%22%3A%20%5B%5D%7D%2C%0A%20%20%20%20%20%20%20%20%20%5B%22reduction%22%2C%20%22reduction%22%5D)%0Adescribe(%22%E8%BD%AC%E7%BD%AE%20pix.transpose%22%2C%20(4%2C%204)%2C%0A%20%20%20%20%20%20%20%20%20%7B%22in%22%3A%20%5B1%2C%200%5D%2C%20%22out%22%3A%20%5B0%2C%201%5D%7D%2C%0A%20%20%20%20%20%20%20%20%20%5B%22parallel%22%2C%20%22parallel%22%5D)%0A%0A%23%20tiling%EF%BC%9A%E5%8F%AA%E5%88%87%E8%BF%AD%E4%BB%A3%E7%A9%BA%E9%97%B4%EF%BC%8C%E8%AE%BF%E5%AD%98%E4%B8%8B%E6%A0%87%E7%94%B1%20map%20%E8%87%AA%E5%8A%A8%E8%B7%9F%E4%B8%8A%20%E2%80%94%E2%80%94%20%E8%BF%99%E5%B0%B1%E6%98%AF%22%E9%80%9A%E7%94%A8%22%E7%9A%84%E5%90%AB%E4%B9%89%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2062)%0Aprint(%22tiling%20%3D%20%E6%8A%8A%E8%BF%AD%E4%BB%A3%E7%A9%BA%E9%97%B4%E5%88%87%E5%9D%97%E3%80%82%E8%AE%BF%E5%AD%98%E4%B8%8B%E6%A0%87%E4%B8%8D%E7%94%A8%E5%8D%95%E7%8B%AC%E5%A4%84%E7%90%86%EF%BC%8Cmap%20%E8%87%AA%E5%8A%A8%E8%B7%9F%E4%B8%8A%EF%BC%9A%22)%0AMAPS%20%3D%20%7B%22lhs%22%3A%20%5B0%2C%201%5D%2C%20%22rhs%22%3A%20%5B0%2C%201%5D%2C%20%22out%22%3A%20%5B0%2C%201%5D%7D%0ATILE%20%3D%20(2%2C%202)%0Afor%20bi%20in%20range(0%2C%204%2C%20TILE%5B0%5D)%3A%0A%20%20%20%20for%20bj%20in%20range(0%2C%204%2C%20TILE%5B1%5D)%3A%0A%20%20%20%20%20%20%20%20%23%20%E4%B8%80%E4%B8%AA%20tile%20%E8%A6%86%E7%9B%96%E7%9A%84%E8%BF%AD%E4%BB%A3%E7%82%B9%0A%20%20%20%20%20%20%20%20pts%20%3D%20%5B(bi%20%2B%20i%2C%20bj%20%2B%20j)%20for%20i%20in%20range(TILE%5B0%5D)%20for%20j%20in%20range(TILE%5B1%5D)%5D%0A%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%B8%AA%E6%93%8D%E4%BD%9C%E6%95%B0%E8%A6%81%E5%8F%96%E7%9A%84%E5%88%87%E7%89%87%20%3D%20%E9%82%A3%E4%BA%9B%E8%BF%AD%E4%BB%A3%E7%82%B9%E7%BB%8F%E8%BF%87%20map%20%E4%B9%8B%E5%90%8E%E7%9A%84%E8%8C%83%E5%9B%B4%0A%20%20%20%20%20%20%20%20slices%20%3D%20%7B%7D%0A%20%20%20%20%20%20%20%20for%20w%2C%20m%20in%20MAPS.items()%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20idx%20%3D%20%5Bapply_map(m%2C%20p)%20for%20p%20in%20pts%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20lo%20%3D%20tuple(min(x%5Bk%5D%20for%20x%20in%20idx)%20for%20k%20in%20range(len(idx%5B0%5D)))%0A%20%20%20%20%20%20%20%20%20%20%20%20hi%20%3D%20tuple(max(x%5Bk%5D%20for%20x%20in%20idx)%20%2B%201%20for%20k%20in%20range(len(idx%5B0%5D)))%0A%20%20%20%20%20%20%20%20%20%20%20%20slices%5Bw%5D%20%3D%20f%22%5B%7Blo%5B0%5D%7D%3A%7Bhi%5B0%5D%7D%2C%20%7Blo%5B1%5D%7D%3A%7Bhi%5B1%5D%7D%5D%22%0A%20%20%20%20%20%20%20%20print(f%22%20%20tile%20(%7Bbi%7D%2C%7Bbj%7D)%3A%20%22%20%2B%20%22%20%20%22.join(f%22%7Bw%7D%7Bs%7D%22%20for%20w%2C%20s%20in%20slices.items()))%0Aprint(%22%5Cn%20%20%E5%88%87%E7%89%87%E8%8C%83%E5%9B%B4%E6%98%AF**%E7%AE%97%E5%87%BA%E6%9D%A5%E7%9A%84**%EF%BC%8C%E4%B8%8D%E6%98%AF%E4%B8%BA%20add%20%E6%89%8B%E5%86%99%E7%9A%84%20%E2%80%94%E2%80%94%20%E6%8D%A2%E6%88%90%20transpose%20%E7%9A%84%20map%22)%0Aprint(%22%20%20%5B1%2C0%5D%EF%BC%8C%E5%90%8C%E4%B8%80%E5%A5%97%E9%80%BB%E8%BE%91%E4%BC%9A%E8%87%AA%E5%8A%A8%E7%BB%99%E5%87%BA%E8%BD%AC%E7%BD%AE%E8%BF%87%E7%9A%84%E5%88%87%E7%89%87%E3%80%82%E8%BF%99%E5%B0%B1%E6%98%AF%E4%B8%BA%E4%BB%80%E4%B9%88%20tiling%20%E8%83%BD%E5%AF%B9%22)%0Aprint(%22%20%20%E6%89%80%E6%9C%89%20linalg%20op%20%E9%80%9A%E7%94%A8%EF%BC%8C%E8%80%8C%E4%B8%8D%E5%BF%85%E4%B8%BA%E6%AF%8F%E4%B8%AA%20op%20%E5%86%99%E4%B8%80%E9%81%8D%E3%80%82%22)"># indexing map 到底表达了什么？为什么有了它，tiling 就能**通用地**实现？
+# 用一个 40 行的模型回答：map 是"从迭代点到访存下标"的函数，
+# 于是 tiling 只需要切迭代空间，访存下标由 map 自动算出来。
+
+def apply_map(m, point):
+    """m 是一串下标表达式，每项说"这一维的下标怎么由迭代点算出来"。
+       (d0,d1)-&gt;(d0,d1) 写成 [0,1]；(d0,d1)-&gt;() 写成 []；
+       (d0,d1)-&gt;(d1,d0) 写成 [1,0]。"""
+    return tuple(point[i] for i in m)
+
+def describe(name, iter_space, maps, iters):
+    print(f"\n【{name}】")
+    print(f"  迭代空间 {iter_space}，iterator_types = {iters}")
+    for who, m in maps.items():
+        shape = "标量（全被归约掉）" if not m else f"按 {m} 取下标"
+        print(f"    {who:6} map={m or '()'}  → {shape}")
+    # 列举前几个迭代点，看每个操作数被访问的位置
+    pts = [(i, j) for i in range(iter_space[0]) for j in range(iter_space[1])][:4]
+    for p in pts:
+        cells = {w: apply_map(m, p) or "()" for w, m in maps.items()}
+        print(f"    迭代点 {p}: " + "  ".join(f"{w}{c}" for w, c in cells.items()))
+
+# 三种 op，**同一个 linalg.generic**，只是 map 和 iterator 不同
+describe("逐点加法 pix.add", (4, 4),
+         {"lhs": [0, 1], "rhs": [0, 1], "out": [0, 1]},
+         ["parallel", "parallel"])
+describe("全图归约 pix.reduce", (4, 4),
+         {"in": [0, 1], "out": []},
+         ["reduction", "reduction"])
+describe("转置 pix.transpose", (4, 4),
+         {"in": [1, 0], "out": [0, 1]},
+         ["parallel", "parallel"])
+
+# tiling：只切迭代空间，访存下标由 map 自动跟上 —— 这就是"通用"的含义
+print("\n" + "=" * 62)
+print("tiling = 把迭代空间切块。访存下标不用单独处理，map 自动跟上：")
+MAPS = {"lhs": [0, 1], "rhs": [0, 1], "out": [0, 1]}
+TILE = (2, 2)
+for bi in range(0, 4, TILE[0]):
+    for bj in range(0, 4, TILE[1]):
+        # 一个 tile 覆盖的迭代点
+        pts = [(bi + i, bj + j) for i in range(TILE[0]) for j in range(TILE[1])]
+        # 每个操作数要取的切片 = 那些迭代点经过 map 之后的范围
+        slices = {}
+        for w, m in MAPS.items():
+            idx = [apply_map(m, p) for p in pts]
+            lo = tuple(min(x[k] for x in idx) for k in range(len(idx[0])))
+            hi = tuple(max(x[k] for x in idx) + 1 for k in range(len(idx[0])))
+            slices[w] = f"[{lo[0]}:{hi[0]}, {lo[1]}:{hi[1]}]"
+        print(f"  tile ({bi},{bj}): " + "  ".join(f"{w}{s}" for w, s in slices.items()))
+print("\n  切片范围是**算出来的**，不是为 add 手写的 —— 换成 transpose 的 map")
+print("  [1,0]，同一套逻辑会自动给出转置过的切片。这就是为什么 tiling 能对")
+print("  所有 linalg op 通用，而不必为每个 op 写一遍。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【逐点加法 pix.add】
+  迭代空间 (4, 4)，iterator_types = ['parallel', 'parallel']
+    lhs    map=[0, 1]  → 按 [0, 1] 取下标
+    rhs    map=[0, 1]  → 按 [0, 1] 取下标
+    out    map=[0, 1]  → 按 [0, 1] 取下标
+    迭代点 (0, 0): lhs(0, 0)  rhs(0, 0)  out(0, 0)
+    迭代点 (0, 1): lhs(0, 1)  rhs(0, 1)  out(0, 1)
+    迭代点 (0, 2): lhs(0, 2)  rhs(0, 2)  out(0, 2)
+    迭代点 (0, 3): lhs(0, 3)  rhs(0, 3)  out(0, 3)
+
+【全图归约 pix.reduce】
+  迭代空间 (4, 4)，iterator_types = ['reduction', 'reduction']
+    in     map=[0, 1]  → 按 [0, 1] 取下标
+    out    map=()  → 标量（全被归约掉）
+    迭代点 (0, 0): in(0, 0)  out()
+    迭代点 (0, 1): in(0, 1)  out()
+    迭代点 (0, 2): in(0, 2)  out()
+    迭代点 (0, 3): in(0, 3)  out()
+
+【转置 pix.transpose】
+  迭代空间 (4, 4)，iterator_types = ['parallel', 'parallel']
+    in     map=[1, 0]  → 按 [1, 0] 取下标
+    out    map=[0, 1]  → 按 [0, 1] 取下标
+    迭代点 (0, 0): in(0, 0)  out(0, 0)
+    迭代点 (0, 1): in(1, 0)  out(0, 1)
+    迭代点 (0, 2): in(2, 0)  out(0, 2)
+    迭代点 (0, 3): in(3, 0)  out(0, 3)
+
+==============================================================
+tiling = 把迭代空间切块。访存下标不用单独处理，map 自动跟上：
+  tile (0,0): lhs[0:2, 0:2]  rhs[0:2, 0:2]  out[0:2, 0:2]
+  tile (0,2): lhs[0:2, 2:4]  rhs[0:2, 2:4]  out[0:2, 2:4]
+  tile (2,0): lhs[2:4, 0:2]  rhs[2:4, 0:2]  out[2:4, 0:2]
+  tile (2,2): lhs[2:4, 2:4]  rhs[2:4, 2:4]  out[2:4, 2:4]
+
+  切片范围是**算出来的**，不是为 add 手写的 —— 换成 transpose 的 map
+  [1,0]，同一套逻辑会自动给出转置过的切片。这就是为什么 tiling 能对
+  所有 linalg op 通用，而不必为每个 op 写一遍。</code></pre>
+</div><p>看最后那段 tiling 的输出：<strong>切片范围是由 map 算出来的，不是为 <code>add</code> 手写的</strong>。把 map 换成转置的 <code>[1, 0]</code>，同一套逻辑会自动给出转置过的切片。</p>
+<p><strong>这就是&quot;通用&quot;的全部含义</strong>，也是 <code>TilingInterface</code> 这个接口能存在的原因。对比一下：如果每个 op 的循环结构只存在于文档里，tiling 就得为每个 op 写一遍——那正是路 A 的处境。</p>
+<div class="concept">
+<svg viewBox="0 0 700 392" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c20b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c20o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c20g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">同一个 pix.add，两条下降路；差别不在长短，在「迭代空间还在不在」</text>
+  <rect x="14" y="32" width="200" height="40" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="24" y="50" font-size="10" font-family="monospace" fill="#24292f">pix.add %a, %b</text>
+  <text x="24" y="65" font-size="9" fill="#6b7280">: tensor&lt;8x8xf32&gt;</text>
+  <path d="M 216 44 L 258 44" fill="none" stroke="#6b7280" stroke-width="1.5" marker-end="url(#c20b)"/>
+  <text x="220" y="38" font-size="8" fill="#6b7280">路 A（ch16）</text>
+  <path d="M 216 62 L 258 62" fill="none" stroke="#3f9b5c" stroke-width="1.5" marker-end="url(#c20g)"/>
+  <text x="220" y="76" font-size="8" fill="#3f9b5c">路 B（本章）</text>
+  <rect x="262" y="26" width="424" height="40" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="272" y="44" font-size="10" font-family="monospace" fill="#24292f">arith.addf %a, %b : tensor&lt;8x8xf32&gt;</text>
+  <text x="272" y="58" font-size="9" fill="#e06a3b">最短，但循环结构<tspan font-weight="bold">只存在于文档里</tspan> —— IR 里找不到</text>
+  <rect x="262" y="72" width="424" height="78" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="272" y="90" font-size="10" font-family="monospace" fill="#24292f">linalg.generic {</text>
+  <text x="272" y="105" font-size="9" font-family="monospace" fill="#2b6cb0">  indexing_maps = [#id, #id, #id]   ← 迭代点 → 访存下标</text>
+  <text x="272" y="119" font-size="9" font-family="monospace" fill="#2b6cb0">  iterator_types = ["parallel","parallel"]  ← 能否并行</text>
+  <text x="272" y="133" font-size="9" font-family="monospace" fill="#24292f">} ins(…) outs(…) { ^bb0: arith.addf; linalg.yield }</text>
+  <text x="272" y="146" font-size="9" fill="#3f9b5c">啰嗦，但<tspan font-weight="bold">迭代空间写进了 IR</tspan></text>
+  <line x1="14" y1="166" x2="686" y2="166" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="186" font-size="11" font-weight="bold" fill="#24292f">拿第 18 章的 transform 调度 tile 一下，差别立刻兑现</text>
+  <rect x="14" y="196" width="330" height="74" rx="6" fill="#fff" stroke="#e06a3b" stroke-width="1.6"/>
+  <text x="26" y="215" font-size="10" font-weight="bold" fill="#e06a3b">路 A：直接拒绝</text>
+  <text x="26" y="234" font-size="9" font-family="monospace" fill="#e06a3b">error: only ops implementing</text>
+  <text x="26" y="247" font-size="9" font-family="monospace" fill="#e06a3b">TilingInterface are supported</text>
+  <text x="26" y="263" font-size="9" fill="#6b7280">要 tile 它，只能为它单独写一遍逻辑</text>
+  <rect x="356" y="196" width="330" height="74" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="368" y="215" font-size="10" font-weight="bold" fill="#2f7a45">路 B：一行调度换来嵌套循环</text>
+  <text x="368" y="234" font-size="9" font-family="monospace" fill="#24292f">scf.for × 2 + tensor.extract_slice × 3</text>
+  <text x="368" y="247" font-size="9" font-family="monospace" fill="#24292f">+ 最内层一个 4x4 的 linalg.generic</text>
+  <text x="368" y="263" font-size="9" fill="#3f9b5c">切片范围由 map <tspan font-weight="bold">算出来</tspan>，不是手写的</text>
+  <rect x="14" y="282" width="672" height="56" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-dasharray="5 3"/>
+  <text x="26" y="301" font-size="10" font-weight="bold" fill="#2b6cb0">同一个 linalg.generic，只换 map 与 iterator，就是完全不同的计算：</text>
+  <text x="26" y="319" font-size="9" font-family="monospace" fill="#24292f">逐点 [(d0,d1)→(d0,d1)] × 3, parallel　　归约 [(d0,d1)→(d0,d1), (d0,d1)→()], reduction</text>
+  <text x="26" y="333" font-size="9" font-family="monospace" fill="#24292f">转置 [(d0,d1)→(d1,d0), (d0,d1)→(d0,d1)], parallel　　← region 里的标量代码可以一样</text>
+  <rect x="14" y="348" width="672" height="42" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="366" font-size="10" fill="#24292f">这是一笔明确的交易：<tspan font-weight="bold">用表达上的冗长，换取变换上的通用性</tspan>。第 21–24 章全在收这笔交易的利息。</text>
+  <text x="26" y="383" font-size="10" fill="#24292f">destination-passing style（outs 既是"往哪写"也是"初值"）是同一个思路：把信息写进 IR，让后续 pass 不必猜。</text>
+</svg>
+<div class="caption">图 20-1　两条下降路的真正差别，以及 indexing map 如何让 tiling 成为一个通用操作</div>
+</div><h2>动手：把 pix.transpose 也降下来</h2>
+<p><code>pix-to-linalg</code> 现在没处理 <code>pix.transpose</code>。它是最能体现 indexing map 表达力的一个——<strong>region 里什么都不算，只把输入 yield 出去，全部工作由 map 完成</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// in 的 map 是 (d0,d1)-&gt;(d1,d0)，out 的是 (d0,d1)-&gt;(d0,d1)
+SmallVector&lt;AffineMap&gt; maps{
+    AffineMap::getPermutationMap(ArrayRef&lt;unsigned&gt;{1, 0}, ctx),
+    AffineMap::getMultiDimIdentityMap(2, ctx)};
+// region：直接 yield 输入元素
+[&amp;](OpBuilder &amp;b, Location nested, ValueRange args) {
+  linalg::YieldOp::create(b, nested, args[0]);
+}</code></pre>
+</div><p>加完记得把 <code>TransposeOp</code> 加进 <code>addIllegalOp</code>，然后跑：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt /tmp/l20.mlir --pix-to-linalg</code></pre>
+</div><p><strong>再改一处</strong>（这个更有意思）：把逐点那条 pattern 从 <code>linalg.generic</code> 改成 named op <code>linalg.add</code>，然后对比两者被 <code>--linalg-generalize-named-ops</code> 处理之后的结果。你会发现 named op 只是 generic 的语法糖——但<strong>在被 generalize 之前</strong>，针对 named op 的优化 pattern 认得它，而对 generic 一无所知。这就是前面那张取舍表的实感。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>绕 <code>linalg</code> 这一道的理由不是&quot;更规范&quot;，而是<strong>保留迭代空间</strong>。<code>arith.addf</code> 在 tensor 上是不透明的：&quot;它等价于双重循环&quot;这件事只存在于文档里，IR 里找不到。</li>
+<li><strong>实测的分界线</strong>：走 linalg 降下来的 IR 能被 <code>transform.structured.tile_using_for</code> tile 成嵌套 <code>scf.for</code>；走 arith 降下来的直接报 <code>only ops implementing TilingInterface are supported</code>。</li>
+<li><code>linalg.generic</code> 只有四样东西：<code>ins</code>/<code>outs</code>、<code>indexing_maps</code>（<strong>迭代点 → 访存下标</strong>）、<code>iterator_types</code>（<code>parallel</code> / <code>reduction</code>）、region（每个点上算什么）。<strong>迭代空间的形状是反推出来的</strong>，不用写。</li>
+<li><strong>同一个 <code>linalg.generic</code>，只换 map 和 iterator，就是完全不同的计算</strong>：逐点、归约（输出 map 是 <code>(d0,d1)-&gt;()</code>）、转置（输入 map 交换下标）。region 里的标量代码甚至可以一样。</li>
+<li><strong>tiling 只需要切迭代空间</strong>，访存切片由 map 自动算出来——所以它能对所有 linalg op 通用。这就是 <code>TilingInterface</code> 存在的根据。</li>
+<li><strong>destination-passing style</strong>：<code>outs</code> 既是&quot;往哪写&quot;也是&quot;初值&quot;。region 里的 <code>%out</code> 是目标张量当前的值——逐点运算用不到，<strong>归约必须用它当累加器</strong>，而且累加器要用 <code>linalg.fill</code> 显式初始化成单位元（<code>tensor.empty</code> 给的是未定义内容）。这个设计让第 22 章的 bufferization 能直接读出&quot;结果该放哪块内存&quot;。</li>
+<li><strong>标量操作数不进 <code>ins</code></strong>，直接在 region 里引用外面的值——因为 <code>linalg.generic</code> 的 region 不是 <code>IsolatedFromAbove</code>。这省掉了一次&quot;splat 成整张图&quot;的实体化。</li>
+<li><strong>named op 就是预设好 map 和 iterator 的 generic</strong>。能映射过去就映射——那意味着白拿针对它们的优化 pattern；反过来，generalize 成 generic 之后那些优化就不认了。</li>
+<li>这一章的交易要看清：<strong>用表达上的冗长换取变换上的通用性</strong>。第 21–24 章都在收这笔利息。</li>
+</ul>
+<p><strong>pix 进度</strong>：新增 <code>pix-to-linalg</code>（逐点用模板覆盖 <code>add</code>/<code>mul</code>，<code>scale</code> 演示&quot;标量在 region 里直接引用&quot;，<code>reduce</code> 演示归约 map 与累加器初始化）与 <code>to_linalg.mlir</code>。现在 pix 降下来的 IR 可以被第 18 章的 transform 调度直接 tile —— 第四部分的地基铺好了。<code>check-pix</code> 从 16 涨到 17 个文件。</p>
+<p>下一章正式做 <strong>tiling 与融合</strong>：tile 的数学（迭代空间切分 + 访存切片，这一章的模拟器已经演示了一半）、<code>scf.forall</code> 与并行、producer-consumer 融合为什么能把两个 <code>linalg.generic</code> 合成一个，以及 stencil 运算特有的 <strong>halo</strong>——<code>pix.convolve</code> 分块时边界要多取几行，那是 tiling 里最容易出错的地方。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch19.html">← 第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a>
+  <a class="nav-next" href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

@@ -38,8 +38,14 @@ function loadBooks() {
 //   ```cpp           -> 高亮 + "🔗 在 Compiler Explorer 打开" + 附本地编译命令
 //   ```cpp-asm       -> 同上，但 godbolt 默认 -O2 并展开汇编面板（讲"编译器处理"用）
 //   ```cpp-norun     -> 只高亮（片段、故意报错示范、伪代码）
+// 约定（MLIR 书）：
+//   ```mlir / ```mlir-lower / ```mlir-translate
+//                    -> 高亮 + "在 Compiler Explorer 打开"（跑 mlir-opt / mlir-translate）
+//                       参数取自块首 `// RUN:` 行，没有则用默认
+//   ```tablegen      -> ODS 定义，只高亮 + mlir-tblgen 生成命令
 //   ```bash / 其它    -> 只高亮
 let blockId = 0;
+let bookUsesIr = false; // 当前正在构建的这本书有没有 IR 代码块（见 page()）
 const renderer = new marked.Renderer();
 
 // 把整段源码打包进一个 Compiler Explorer 分享链接。
@@ -60,6 +66,25 @@ function godboltUrl(code, { language = "c++", compiler = "g142", options = "-std
   };
   const b64 = Buffer.from(JSON.stringify(state), "utf8").toString("base64");
   return "https://godbolt.org/clientstate/" + encodeURIComponent(b64);
+}
+
+// MLIR 代码块的 lit 风格首行 `// RUN: mlir-opt %s --foo --bar`（可带 `| FileCheck %s`）
+// 里抽出要传给工具的参数。没有 RUN 行时返回 null，由调用方用默认参数。
+// 注意：RUN 行本身是 MLIR 的 `//` 注释，留在源码里不影响解析，读者也能直接照抄。
+function mlirRunArgs(code, tool) {
+  const m = code.match(/^[ \t]*\/\/[ \t]*RUN:[ \t]*(.+)$/m);
+  if (!m) return null;
+  const line = m[1].split("|")[0]; // 丢掉 `| FileCheck %s` 之类的下游管道
+  // RUN 行里真正用的工具。本书的 pix 代码块用的是自己编出来的 pix-opt，
+  // 它认识 pix 方言而 Compiler Explorer 上的 mlir-opt 不认识——这个区别决定了
+  // 要不要给按钮（见下面的 mlirSpec 分支）。
+  const named = /\b(pix-opt|mlir-translate|mlir-opt)\b/.exec(line);
+  const actualTool = named ? named[1] : tool;
+  const args = line
+    .replace(/%\w+\b/g, "") // 丢掉 %s / %t 这些 lit 占位符
+    .replace(new RegExp("^.*\\b" + actualTool + "\\b"), "") // 丢掉工具名及其路径前缀
+    .trim();
+  return { tool: actualTool, args };
 }
 
 renderer.code = function (token) {
@@ -123,6 +148,56 @@ renderer.code = function (token) {
 </div>`;
   }
 
+  // ===== MLIR 书（inside-mlir）专用代码块 =====
+  // 约定：
+  //   ```mlir            -> 完整、能 round-trip 的 MLIR 模块。CE 用 mlir-opt（trunk）
+  //   ```mlir-lower      -> 同上，但按钮强调"跑一条下降管线看结果"
+  //   ```mlir-translate  -> 用 mlir-translate 出 LLVM IR（讲 ch24 落地那一步）
+  //   ```tablegen        -> ODS（.td）片段，只高亮 + mlir-tblgen 本地命令（CE 没有 tblgen）
+  //   ```mlir-norun      -> IR 片段 / 伪 IR，只高亮（见下面 norun 表）
+  // 块首若写了 lit 风格的 `// RUN: mlir-opt %s <args>` 行，就把 <args> 同时用作
+  // CE 的编译参数和底部本地命令——读者点开看到的正是本节在讲的那条管线，
+  // 而 verify/verify-mlir.sh 也读同一行，网页与校验脚本不会各说一套。
+  const mlirSpec = {
+    mlir:              { tag: "MLIR", tool: "mlir-opt", compiler: "mliropttrunk", defOpts: "", label: "🔗 在 Compiler Explorer 打开（mlir-opt）" },
+    "mlir-lower":      { tag: "MLIR", tool: "mlir-opt", compiler: "mliropttrunk", defOpts: "--canonicalize", label: "🔬 看下降结果（mlir-opt）" },
+    "mlir-translate":  { tag: "MLIR → LLVM IR", tool: "mlir-translate", compiler: "mlirtranslatetrunk", defOpts: "--mlir-to-llvmir", label: "🔬 看 LLVM IR（mlir-translate）" },
+  };
+  if (mlirSpec[lang]) {
+    const s = mlirSpec[lang];
+    const run = mlirRunArgs(code, s.tool);
+    const tool = run ? run.tool : s.tool;
+    const opts = run ? run.args : s.defOpts;
+    const cmd = `${tool} ${opts ? opts + " " : ""}input.mlir`;
+    // 用 pix-opt 的块（本书自造的方言）没法在 CE 上跑——那边的 mlir-opt 不认识 pix，
+    // 点开必然报 unregistered dialect。这种块只给本地命令，不给按钮。
+    const btn =
+      tool === "pix-opt"
+        ? ""
+        : `<a class="ce-btn" href="${godboltUrl(code, {
+            language: "mlir",
+            compiler: s.compiler,
+            options: opts,
+          })}" target="_blank" rel="noopener">${s.label}</a>`;
+    const tag = tool === "pix-opt" ? "MLIR（pix 方言）" : s.tag;
+    return `<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">${tag}</span>
+    ${btn}</div>
+  <pre class="line-numbers"><code class="language-mlir">${escape(code)}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>${escape(cmd)}</code></div>
+</div>`;
+  }
+  if (lang === "tablegen") {
+    // ODS 定义。CE 没有 mlir-tblgen，只高亮 + 给出生成命令（看生成了什么是第 8 章的重点）。
+    const cmd =
+      "mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td";
+    return `<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">${escape(code)}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>${escape(cmd)}</code></div>
+</div>`;
+  }
+
   // norun 变体：只高亮、不给按钮（片段、伪代码、需 GPU 的示范）
   const norun = {
     "python-norun": { prism: "language-python", tag: "Python" },
@@ -135,8 +210,8 @@ renderer.code = function (token) {
     "llvm":         { prism: "language-llvm", tag: "LLVM IR" },
     "llvm-norun":   { prism: "language-llvm", tag: "LLVM IR" },
     "spirv-norun":  { prism: "language-llvm", tag: "SPIR-V" },
-    "cir-norun":    { prism: "language-llvm", tag: "ClangIR（cir 方言）" },
-    "mlir-norun":   { prism: "language-llvm", tag: "MLIR" },
+    "cir-norun":    { prism: "language-mlir", tag: "ClangIR（cir 方言）" },
+    "mlir-norun":   { prism: "language-mlir", tag: "MLIR" },
   };
   const langClass = norun[lang]
     ? norun[lang].prism
@@ -167,6 +242,15 @@ marked.setOptions({ renderer, breaks: false, gfm: true });
 
 // ---- HTML 页面模板（书内页面：assets/vendor 都在本书目录下）----
 function page(title, bodyHtml, prevLink, nextLink, tocHtml) {
+  // IR 高亮只在真的用到 LLVM IR / MLIR 代码块的页面上加载，别给 Python 书塞没用的脚本。
+  const needsIr = /class="language-(?:llvm|mlir)"/.test(bodyHtml);
+  if (needsIr) bookUsesIr = true;   // 供 buildBook 决定要不要留下 IR 高亮文件
+  const irScripts = needsIr
+    ? `<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+`
+    : "";
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -197,7 +281,7 @@ ${bodyHtml}
 <script src="vendor/prism-c.min.js"></script>
 <script src="vendor/prism-cpp.min.js"></script>
 <script src="vendor/prism-bash.min.js"></script>
-<script src="vendor/prism-line-numbers.min.js"></script>
+${irScripts}<script src="vendor/prism-line-numbers.min.js"></script>
 <!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
 <script src="assets/runner.js"></script>
@@ -206,9 +290,13 @@ ${bodyHtml}
 }
 
 // 目录侧边栏（每本书内共用）
-function buildToc(book, currentSlug) {
+// written 是"已经写了 .md 的章节"集合。没写的章照样列出来（读者能看到全书规划），
+// 但**不给链接**——否则点开就是 404。书还没写完时这个区别很要紧。
+function buildToc(book, currentSlug, written) {
   const items = book.chapters
     .map(([slug, title]) => {
+      if (written && !written.has(slug))
+        return `<li class="toc-todo"><span>${title}</span></li>`;
       const cls = slug === currentSlug ? ' class="active"' : "";
       return `<li${cls}><a href="${slug}.html">${title}</a></li>`;
     })
@@ -248,6 +336,14 @@ function buildBook(book) {
   }
 
   const chDir = path.join(book.dir, "chapters");
+  // 先过一遍：哪些章真的有 .md。目录、上下章导航、首页链接都以它为准，
+  // 免得生成指向不存在的 .html 的死链。
+  const written = new Set(
+    book.chapters
+      .map(([slug]) => slug)
+      .filter((slug) => fs.existsSync(path.join(chDir, slug + ".md"))),
+  );
+  bookUsesIr = false;
   let built = 0;
   book.chapters.forEach(([slug, title], i) => {
     const mdPath = path.join(chDir, slug + ".md");
@@ -258,8 +354,15 @@ function buildBook(book) {
     blockId = 0;
     const md = stripBlankLinesInSvg(fs.readFileSync(mdPath, "utf8"));
     const body = marked.parse(md);
-    const prev = book.chapters[i - 1];
-    const next = book.chapters[i + 1];
+    // 上/下一章只连**紧邻**那一章，且它得真的写了。
+    // 不跨过没写的章去找更远的——那样「下一章 →」会指到十几章之后的附录，
+    // 比没有链接更误导。书写完之后这个判断自然就不起作用了。
+    const neighbor = (j) => {
+      const ch = book.chapters[j];
+      return ch && written.has(ch[0]) ? ch : undefined;
+    };
+    const prev = neighbor(i - 1);
+    const next = neighbor(i + 1);
     const prevLink = prev
       ? `<a class="nav-prev" href="${prev[0]}.html">← ${prev[1]}</a>`
       : "";
@@ -268,22 +371,38 @@ function buildBook(book) {
       : "";
     fs.writeFileSync(
       path.join(outDir, slug + ".html"),
-      page(title, body, prevLink, nextLink, buildToc(book, slug)),
+      page(title, body, prevLink, nextLink, buildToc(book, slug, written)),
     );
     built++;
   });
 
   // 本书首页（目录）：来自 books/<slug>/README.md
   const readmePath = path.join(book.dir, "README.md");
+  // 这本书压根没有 IR 代码块 → 不留 IR 高亮文件，保持输出目录干净
+  if (!bookUsesIr) {
+    for (const f of [
+      path.join(vendorDir, "prism-llvm.min.js"),
+      path.join(assetDir, "mlir-syntax.js"),
+    ]) {
+      if (fs.existsSync(f)) fs.rmSync(f);
+    }
+  }
+
   if (fs.existsSync(readmePath)) {
     const indexMd = stripBlankLinesInSvg(fs.readFileSync(readmePath, "utf8"));
-    // 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html
+    // 把 README 里指向 chapters/xxx.md 的链接改成 xxx.html。
+    // 但**只改已经写了的**——还没写的那些，整个 markdown 链接降级成纯文本，
+    // 否则首页上就是一排 404。
     const indexBody = marked.parse(
-      indexMd.replace(/chapters\/([\w-]+)\.md/g, "$1.html"),
+      indexMd
+        .replace(/\[([^\]]+)\]\(chapters\/([\w-]+)\.md\)/g, (m, text, slug) =>
+          written.has(slug) ? `[${text}](${slug}.html)` : `${text}（待写）`,
+        )
+        .replace(/chapters\/([\w-]+)\.md/g, "$1.html"),
     );
     fs.writeFileSync(
       path.join(outDir, "index.html"),
-      page(book.title, indexBody, "", "", buildToc(book, "index")),
+      page(book.title, indexBody, "", "", buildToc(book, "index", written)),
     );
   }
 

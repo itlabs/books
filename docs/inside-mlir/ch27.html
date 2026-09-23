@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li class="active"><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章看的是 Triton 在 MLIR 上<strong>造了什么新东西</strong>。这一章换一个问题，一个你真要做项目时第一天就会撞上的问题：</p>
+<p><strong>我该造几层方言？</strong></p>
+<p>这一章把两个都很成功、但答案完全相反的项目摆在一起：<strong>IREE</strong> 自造了九个方言，一路管到自带的运行时；<strong>flang</strong> 只造了两个（<code>fir</code> 和 <code>hlfir</code>），而且连上游的 <code>linalg</code>、<code>tensor</code> 都一个没用。</p>
+<p>如果"层数越多越好"或者"越少越好"里有一个是对的，那这两个项目里应该有一个是失败的。但它们都不是——flang 已经是 LLVM 的正式 Fortran 前端，IREE 是工业界端到端部署栈里被抄得最多的设计。</p>
+<p>所以真正要提炼的是：<strong>层数不是风格问题，是"有多少个独立决策要做"的结果。</strong>这一章把这句话展开成四个可以逐条对答案的问题，并且——这是最舒服的一点——<strong>flang 自己的设计文档把加一层的理由写下来了</strong>，我们不用猜。</p>
+<p>所有方言名、op 名、pass 名、设计动机都锚在两处真实源码：<code>iree-org/iree</code> 的 <code>6ef606b</code>（2026-09-19），以及 LLVM <strong>23.1.2</strong> 的 <code>flang/</code>。引用的设计文档原文出自 <code>flang/docs/HighLevelFIR.md</code>。</p>
+</div><h2>先把差距摆出来</h2>
+<p>两个项目的自造方言清单，都是从源码里数出来的。</p>
+<p>IREE 的方言目录（<code>compiler/src/iree/compiler/Dialect/</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Encoding  Flow  HAL  LinalgExt  Stream  TensorExt  Util  VM  VMVX</code></pre>
+</div><p>九个。flang 的（<code>flang/include/flang/Optimizer/</code>）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Dialect/   -&gt; fir
+HLFIR/     -&gt; hlfir</code></pre>
+</div><p>两个。这不是我按某种标准归类出来的数字，是 <code>let name</code> 的数量：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">$ grep -rhoE 'let name = "[a-z]+"' \
+      flang/include/flang/Optimizer/Dialect/FIRDialect.td \
+      flang/include/flang/Optimizer/HLFIR/HLFIROpBase.td | sort -u
+let name = "fir"
+let name = "hlfir"</code></pre>
+</div><p>比数量更能说明问题的是<strong>复用面</strong>。前面二十几章我们一直在讲&quot;降到 <code>linalg</code> 就白拿整条链&quot;（第 20 章），那 flang 用了多少上游方言？答案在 <code>FIRDialect.td</code> 里：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">let dependentDialects = [
+  // Arith dialect provides FastMathFlagsAttr
+  // supported by some FIR operations.
+  "mlir::arith::ArithDialect",
+  // TBAA Tag types
+  "mlir::LLVM::LLVMDialect"
+];</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>两个，而且理由都极小：一个是为了借 <code>FastMathFlagsAttr</code> 这个属性，一个是为了借 TBAA 的类型。加上 CodeGen 那一步用到的（<code>grep</code> 出来只有 <code>arith</code>、<code>cf</code>、<code>func</code>、<code>LLVM</code> 四个），flang 的上游方言面<strong>就是 MLIR 最底下那四个最基础的方言</strong>。</p>
+<p><code>linalg</code>？<code>tensor</code>？一个都没有：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">$ grep -rl "linalg" flang/include/flang/Optimizer/
+（无输出）</code></pre>
+</div><p>这件事第一次看到是会愣一下的。Fortran 是<strong>为数组计算而生</strong>的语言，<code>linalg</code> 是 MLIR 里<strong>专门表示数组计算</strong>的方言，两者看起来天造地设——结果 flang 一行都没用。</p>
+<p>这就是这一章要解释的东西。</p>
+<svg viewBox="0 0 760 430" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <style>
+    .lbl { font-size: 13px; }
+    .sm { font-size: 11px; fill: #555; }
+    .own { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; }
+    .reuse { fill: #f3f4f6; stroke: #9ca3af; stroke-width: 1.5; stroke-dasharray: 4 3; }
+    .rt { fill: #fee2e2; stroke: #dc2626; stroke-width: 1.5; }
+    .ttl { font-size: 14px; font-weight: bold; }
+    .ar { stroke: #444; stroke-width: 1.5; marker-end: url(#a27); fill: none; }
+  </style>
+  <defs>
+    <marker id="a27" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#444"/>
+    </marker>
+  </defs>
+  <text x="130" y="22" class="ttl" text-anchor="middle">IREE：自造 9 层</text>
+  <text x="130" y="38" class="sm" text-anchor="middle">一路管到自己的运行时</text>
+  <rect x="45" y="50" width="170" height="30" rx="4" class="reuse"/>
+  <text x="130" y="70" class="lbl" text-anchor="middle">linalg（上游，复用）</text>
+  <rect x="45" y="100" width="170" height="38" rx="4" class="own"/>
+  <text x="130" y="116" class="lbl" text-anchor="middle">flow</text>
+  <text x="130" y="131" class="sm" text-anchor="middle">切分成可派发的区域</text>
+  <rect x="45" y="158" width="170" height="38" rx="4" class="own"/>
+  <text x="130" y="174" class="lbl" text-anchor="middle">stream</text>
+  <text x="130" y="189" class="sm" text-anchor="middle">放哪个设备、怎么并发</text>
+  <rect x="45" y="216" width="170" height="38" rx="4" class="own"/>
+  <text x="130" y="232" class="lbl" text-anchor="middle">hal</text>
+  <text x="130" y="247" class="sm" text-anchor="middle">设备 API（≈ 1:1 C API）</text>
+  <rect x="45" y="274" width="170" height="38" rx="4" class="own"/>
+  <text x="130" y="290" class="lbl" text-anchor="middle">vm</text>
+  <text x="130" y="305" class="sm" text-anchor="middle">字节码 + 宿主侧胶水</text>
+  <rect x="45" y="332" width="170" height="34" rx="4" class="rt"/>
+  <text x="130" y="354" class="lbl" text-anchor="middle">IREE 自带运行时</text>
+  <path d="M130 80 L130 100" class="ar"/>
+  <path d="M130 138 L130 158" class="ar"/>
+  <path d="M130 196 L130 216" class="ar"/>
+  <path d="M130 254 L130 274" class="ar"/>
+  <path d="M130 312 L130 332" class="ar"/>
+  <line x1="380" y1="45" x2="380" y2="400" stroke="#ddd" stroke-width="1"/>
+  <text x="600" y="22" class="ttl" text-anchor="middle">flang：自造 2 层</text>
+  <text x="600" y="38" class="sm" text-anchor="middle">到 LLVM 就交棒</text>
+  <rect x="515" y="50" width="170" height="30" rx="4" class="reuse"/>
+  <text x="600" y="70" class="lbl" text-anchor="middle">Fortran 前端（非 MLIR）</text>
+  <rect x="515" y="100" width="170" height="38" rx="4" class="own"/>
+  <text x="600" y="116" class="lbl" text-anchor="middle">hlfir</text>
+  <text x="600" y="131" class="sm" text-anchor="middle">表达式的值语义（后加的）</text>
+  <rect x="515" y="158" width="170" height="38" rx="4" class="own"/>
+  <text x="600" y="174" class="lbl" text-anchor="middle">fir</text>
+  <text x="600" y="189" class="sm" text-anchor="middle">内存语义 + descriptor</text>
+  <rect x="515" y="216" width="170" height="30" rx="4" class="reuse"/>
+  <text x="600" y="236" class="lbl" text-anchor="middle">llvm 方言（上游，复用）</text>
+  <rect x="515" y="266" width="170" height="30" rx="4" class="reuse"/>
+  <text x="600" y="286" class="lbl" text-anchor="middle">LLVM IR → 目标码</text>
+  <path d="M600 80 L600 100" class="ar"/>
+  <path d="M600 138 L600 158" class="ar"/>
+  <path d="M600 196 L600 216" class="ar"/>
+  <path d="M600 246 L600 266" class="ar"/>
+  <text x="600" y="330" class="sm" text-anchor="middle">上游方言面只有 arith / cf / func / llvm</text>
+  <text x="600" y="348" class="sm" text-anchor="middle">linalg、tensor 一个没用</text>
+  <rect x="45" y="390" width="640" height="32" rx="4" fill="#fefce8" stroke="#ca8a04" stroke-width="1"/>
+  <text x="365" y="410" class="lbl" text-anchor="middle">两者都成功。差别不在品味，在"有多少个独立决策要做"。</text>
+</svg><h2>IREE：每一层对应一个&quot;必须有人拍板&quot;的决策</h2>
+<p>IREE 的分层不用我总结，<code>Stream</code> 方言的 <code>description</code> 自己画了图：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">+--------+    +----------+    +-------+
+| flow.* | -&gt; | stream.* | -&gt; | hal.* |
++--------+    +----------+    +-------+</code></pre>
+</div><p>而且它把三层各管什么逐条写清了（以下是 <code>StreamBase.td</code> 里 <code>description</code> 的原文）：</p>
+<ul>
+<li><code>flow</code> — &quot;models tensor programs by separating work into dispatchable functions in order to isolate the main host program data flow and the dense tensor compute operations.&quot;</li>
+<li><code>stream</code> — &quot;models explicitly scheduled asynchronous programs by partitioning...&quot;</li>
+<li><code>hal</code> — &quot;models a low-level hardware abstraction layer used to manage buffers and issue asynchronous work across a variety of device types. <strong>The dialect is largely 1:1 with the IREE HAL C API.</strong>&quot;</li>
+</ul>
+<p>把这三句翻成&quot;每层引入了什么上一层表达不了的决策&quot;：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>新引入的决策</th>
+<th>上一层为什么表达不了</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>flow</code></td>
+<td>哪些计算打包成一个可派发的函数、包之间怎么传数据</td>
+<td><code>linalg</code> 只说&quot;算什么&quot;，没有&quot;派发边界&quot;这个概念</td>
+</tr>
+<tr>
+<td><code>stream</code></td>
+<td>放到哪个设备、哪些能并发、张量编码成什么设备资源</td>
+<td><code>flow</code> 里还没有&quot;设备&quot;这个概念</td>
+</tr>
+<tr>
+<td><code>hal</code></td>
+<td>具体的 buffer / command buffer / executable</td>
+<td><code>stream</code> 是抽象调度，不绑定任何一家的 API</td>
+</tr>
+<tr>
+<td><code>vm</code></td>
+<td>字节码、宿主侧胶水</td>
+<td>前面都在描述计算，这一层描述&quot;怎么被加载执行&quot;</td>
+</tr>
+</tbody></table>
+<p>最后一句里的 <code>hal</code> 那条特别值得停一下。<code>hal</code> 之所以存在，<strong>不是因为它是一个更好的编译器抽象</strong>——它的 <code>description</code> 直说了是跟 IREE 的 HAL C API 一比一对应的。也就是说：</p>
+<blockquote>
+<p><strong><code>hal</code> 是运行时 ABI 照进 IR 里的影子。</strong></p>
+</blockquote>
+<p>这一下就解释了 IREE 和 flang 的分歧从哪来。IREE <strong>自带一个运行时</strong>，所以它必须在 IR 里表达那个运行时的接口；flang 的&quot;运行时接口&quot;就是 LLVM IR 加几个 libc/Fortran runtime 调用，LLVM 已经帮它表达好了，所以它一层都不用造。</p>
+<p><strong>要不要造 <code>hal</code> 这样的一层，取决于你下游交给谁。</strong> 这不是品味问题。</p>
+<h3>一个容易漏掉的观察：分层不一定要新方言</h3>
+<p><code>Stream</code> 的 <code>description</code> 接着写了它内部怎么走：</p>
+<blockquote>
+<p>&quot;At entry <code>stream.tensor.*</code> ops are used to capture the source tensor encoding information (data type, shapes, etc) and then lowered into <code>stream.async.*</code> ops that model the asynchronous workloads on the opaque resources. The asynchronous operations are then partitioned, allocated, and scheduled for execution using the <code>stream.cmd.*</code> ops.&quot;</p>
+</blockquote>
+<p>数一下：<code>stream.tensor.*</code> → <code>stream.async.*</code> → <code>stream.cmd.*</code>。<strong>这是三层</strong>，从&quot;带形状的张量&quot;到&quot;不透明资源上的异步任务&quot;到&quot;具体命令&quot;，转换的性质和 <code>flow</code>→<code>stream</code>→<code>hal</code> 那几步没有本质区别。</p>
+<p>但它们<strong>共用一个方言</strong>，只用 op 名前缀区分。</p>
+<p>这条很实用。你想给自己的编译器加一层，第一反应往往是&quot;再开一个 dialect&quot;，那意味着一套新的 <code>.td</code>、新的 <code>CMakeLists</code>、新的注册、新的 <code>dependentDialects</code>、新的类型转换。IREE 在自己项目里给出的对照答案是：<strong>如果两层的类型系统基本一致、只是 op 的抽象层次不同，op 名前缀就够了。</strong></p>
+<p>判断依据也很清楚：<strong>新方言的真正成本在类型和属性</strong>。<code>stream.tensor.*</code> 和 <code>stream.cmd.*</code> 用的是同一套 <code>!stream.resource</code> 类型，所以不值得分家；而 <code>flow</code> 用值语义 <code>tensor</code>、<code>hal</code> 用 <code>!hal.buffer_view</code>，类型系统整个换掉了，那就该分。</p>
+<p>回头看我们的 pix：第 20 章 <code>pix</code> → <code>linalg</code> 是类型系统不变（都是 <code>tensor</code>）、抽象层次变了。按这个标准，如果 <code>linalg</code> 不存在，我们<strong>本来可以</strong>用 <code>pix.generic</code> 这样的 op 名在同一个方言里做那一步，而不必新开一个方言。我们之所以真的换了方言，理由不是分层，而是第 20 章反复说的那个：换到 <code>linalg</code> 能白拿 tiling、融合、bufferization 一整条上游链。</p>
+<p><strong>为了分层而分方言，和为了复用而换方言，是两件不同的事。</strong> 前者常常不必要，后者几乎总是值得。</p>
+<h3>另外五个方言是干什么的</h3>
+<p>前面只讲了 <code>flow</code>/<code>stream</code>/<code>hal</code>/<code>vm</code> 这条主链，剩下五个也数一下，因为它们代表另一类&quot;为什么造方言&quot;：</p>
+<table>
+<thead>
+<tr>
+<th>方言</th>
+<th>性质</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Util</code></td>
+<td>跨层共用的基础设施（全局变量、列表、buffer 之类），不属于任何一层</td>
+</tr>
+<tr>
+<td><code>LinalgExt</code></td>
+<td><strong>上游 <code>linalg</code> 的扩展</strong>——上游表达不了的那些（比如某些 scan/sort/topk 类算子）</td>
+</tr>
+<tr>
+<td><code>Encoding</code> / <code>TensorExt</code></td>
+<td>张量编码/布局相关的补充表达</td>
+</tr>
+<tr>
+<td><code>VMVX</code></td>
+<td><code>vm</code> 的一个具体后端（VM 上的向量扩展）</td>
+</tr>
+</tbody></table>
+<p><code>LinalgExt</code> 是很有代表性的一类：<strong>你不是想另造一层，你是发现上游那一层缺了几个 op。</strong> 这种情况下正确做法不是重写 <code>linalg</code>，而是在旁边加一个扩展方言，让两者在同一层混用。我们的 pix 如果将来发现 <code>linalg.generic</code> 表达不了某种图像算子（比如非规则的邻域采样），该走的也是这条路——<strong>加一个 <code>pix_ext</code>，而不是把 <code>linalg</code> 那一层重做一遍。</strong></p>
+<h2>flang：两层，而且第二层是后来才加的</h2>
+<p>flang 这边有个特别好的地方：<strong>它加第二层的时候，把理由写成了文档。</strong></p>
+<p>FIR 最初是唯一的一层。<code>flang/docs/HighLevelFIR.md</code> 开头交代了当时的状态：</p>
+<blockquote>
+<p>&quot;The approach of FIR and lowering design so far was to start with the minimal set of IR operations that could allow implementing the core aspects of Fortran (like memory allocations, array addressing, runtime descriptors, and structured control flow operations). One notable aspect of the current FIR is that array and character operations are <strong>buffered</strong> (some storage is allocated for the result, and the storage is addressed to implement the operation).&quot;</p>
+</blockquote>
+<p>注意 &quot;buffered&quot; 这个词。FIR 是<strong>内存语义</strong>的：数组表达式一落到 FIR，结果就已经有一块存储了。用我们第 22 章的话说，FIR 相当于直接从前端跳到了 <code>memref</code> 那一侧，中间没有 <code>tensor</code> 那一段。</p>
+<p>然后是症状：</p>
+<blockquote>
+<p>&quot;While this proved functional so far, the code lowering expressions and assignments from the front-end representations (the <code>evaluate::Expr</code> and parser nodes) to FIR <strong>has significantly grown in complexity</strong> while it still lacks some F95 features around character array expressions or FORALL. This is mainly explained by the fact that <strong>the representation level gap is big, and a lot is happening in lowering</strong>.&quot;</p>
+</blockquote>
+<p>这两句是这一章最值钱的引文。它给出的加层理由不是&quot;分层更优雅&quot;，而是一个<strong>可观测的工程症状</strong>：</p>
+<blockquote>
+<p><strong>降的那一步代码复杂到失控，而且开始装不下某些语言特性——说明跨度太大了。</strong></p>
+</blockquote>
+<p>这个判断标准很好用，因为它是事后可验证的，不需要你在第一天就预见到全部结构。你先按最少的层数开工；等某个 lowering 的 <code>.cpp</code> 长到没人敢碰、里面开始出现&quot;如果当前在 FORALL 上下文里就走另一条路&quot;这种分支，那就是该加一层的信号。</p>
+<p>对照我们自己的书：第 16 章 <code>pix</code> → <code>arith</code> 那条路径，和第 20 章 <code>pix</code> → <code>linalg</code>，差别正是这个。第 16 章那条最短，但它<strong>在下降的那一步里把迭代空间丢了</strong>，于是 tile 和融合都没法做。当时我在 <code>PixToLinalg.cpp</code> 开头写的是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">// 那条路最短，但**丢掉了迭代空间**：arith.addf 在 tensor 上是一个不透明的
+// "整张图加整张图"，没人知道它由哪些循环组成，于是 tile 不了、融合不了。</code></pre>
+</div><p>和 flang 遇到的是同一类问题的两种表现：跨度太大时，要么信息丢了，要么复杂度全堆在那一步里。</p>
+<h3>HLFIR 的三条原则</h3>
+<p>文档接着列了新设计的三条原则，逐条都能对到我们前面的章节：</p>
+<blockquote>
+<ul>
+<li>Make expression lowering <strong>context independent</strong> and rather naive</li>
+<li><strong>Do not materialize temporaries</strong> while lowering to FIR</li>
+<li><strong>Preserve Fortran semantics/information</strong> for high-level optimizations</li>
+</ul>
+</blockquote>
+<p>第一条&quot;上下文无关&quot;是说：不管这个表达式是在普通赋值里、数组赋值里，还是在 <code>FORALL</code> 里，降的方式<strong>完全一样</strong>。原来的 FIR 做不到，因为它必须当场决定临时存储怎么分配，而那件事是依赖上下文的。</p>
+<p>第二条最直接：<strong>不实体化临时量</strong>。这一条我们的代码里正好有一个现成的例子。第 20 章的 <code>ScaleToLinalg</code> 处理 <code>pix.scale %img, %f</code>——<code>%f</code> 是个标量。天真的做法是先把 <code>%f</code> splat 成一整张 4×4 的图，再逐点相乘；<code>ScaleToLinalg</code> 没这么干：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-linalg
+// flang 的三条原则之一："Do not materialize temporaries while lowering to FIR"。
+// 第 20 章的 ScaleToLinalg 就是这么写的：标量 %f 不 splat 成整张图，
+// 直接在 region 里引用。看输出里有没有那个 4x4 的临时张量。
+func.func @scale(%img: tensor&lt;4x4xf32&gt;, %f: f32) -&gt; tensor&lt;4x4xf32&gt; {
+  %r = pix.scale %img, %f : tensor&lt;4x4xf32&gt;
+  return %r : tensor&lt;4x4xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-linalg input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">#map = affine_map&lt;(d0, d1) -&gt; (d0, d1)&gt;
+module {
+  func.func @scale(%arg0: tensor&lt;4x4xf32&gt;, %arg1: f32) -&gt; tensor&lt;4x4xf32&gt; {
+    %0 = tensor.empty() : tensor&lt;4x4xf32&gt;
+    %1 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]} ins(%arg0 : tensor&lt;4x4xf32&gt;) outs(%0 : tensor&lt;4x4xf32&gt;) {
+    ^bb0(%in: f32, %out: f32):
+      %2 = arith.mulf %in, %arg1 : f32
+      linalg.yield %2 : f32
+    } -&gt; tensor&lt;4x4xf32&gt;
+    return %1 : tensor&lt;4x4xf32&gt;
+  }
+}</code></pre>
+</div><p><code>%arg1</code> 直接出现在 region 里（<code>arith.mulf %in, %arg1</code>），<code>ins</code> 只有一个操作数。没有 splat，没有多出来的 4×4 常量张量——<code>tensor.empty</code> 是 destination-passing style 要的目标（第 20 章讲过），不是标量的临时副本。</p>
+<p>能这么写的前提是 <code>linalg.generic</code> 的 region <strong>不是</strong> <code>IsolatedFromAbove</code>（第 13 章那个 trait）。这不是巧合：<strong>&quot;值语义的高层表示&quot; + &quot;region 可以引用外面的值&quot;，正是让&quot;不实体化临时量&quot;这条原则能落地的两个机制。</strong> HLFIR 和 <code>linalg</code> 各自独立地要到了这两样东西。</p>
+<p>第三条&quot;保留 Fortran 语义供高层优化&quot;——这条的回报在下一节。</p>
+<h3>加一层的回报：12 个 pass 里只有 4 个在做下降</h3>
+<p>HLFIR 这一层带来了什么？把它的 pass 全列出来最直观：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">$ grep -hoE 'def [A-Za-z]+ : Pass' flang/include/flang/Optimizer/HLFIR/Passes.td
+ConvertHLFIRtoFIR
+BufferizeHLFIR
+OptimizedBufferization
+LowerHLFIRIntrinsics
+LowerHLFIROrderedAssignments
+SimplifyHLFIRIntrinsics
+ExpressionSimplification
+InlineElementals
+SeparateAllocatableAssign
+InlineHLFIRAssign
+InlineHLFIRCopy
+PropagateFortranVariableAttributes</code></pre>
+</div><p>十二个。其中只有 <code>ConvertHLFIRtoFIR</code>、<code>BufferizeHLFIR</code>、<code>LowerHLFIRIntrinsics</code>、<code>LowerHLFIROrderedAssignments</code> 是<strong>往下降</strong>；剩下八个全是<strong>在 HLFIR 这一层做的优化</strong>：简化表达式、内联 elemental、内联赋值与拷贝、传播 Fortran 变量属性……</p>
+<p><strong>这八个 pass 就是加这一层的回报。</strong> 它们在 FIR 上根本写不出来——一旦 buffer 已经分配好、下标已经算成地址，&quot;这个数组表达式能不能就地算&quot;这种问题就已经问不出来了。</p>
+<p>这里还有一个 MLIR 老读者会立刻认出的东西：<code>BufferizeHLFIR</code>。HLFIR 的 <code>description</code> 是这么说的：</p>
+<blockquote>
+<p>&quot;A bufferization pass transforms <code>hlfir.expr</code> values into FIR temporary in memory, and its translation pass to FIR translates high level operations...&quot;</p>
+</blockquote>
+<p>值语义的 <code>hlfir.expr</code> → 内存里的临时量。这就是第 22 章那件事——<strong>One-Shot Bufferize 做的 <code>tensor</code> → <code>memref</code>，和 flang 做的 <code>hlfir.expr</code> → FIR 内存，是同一个模式的两个实例。</strong> flang 没有用上游的 bufferization 基础设施（它的类型完全不同），但<strong>问题的形状一模一样</strong>：高层用值语义方便分析和优化，落地前用一个 pass 换成内存语义，那个 pass 的核心工作是决定&quot;哪些地方能就地、哪些必须拷贝&quot;。</p>
+<p><code>OptimizedBufferization</code> 这个名字也说明了同一件事：bufferization 的质量是性能问题，不是形式转换——第 22 章讲 in-place 分析和 <code>copy-before-write</code> 时是一样的结论。</p>
+<h3>HLFIR 故意不完整</h3>
+<p>这一点单独拎出来，因为它和大多数人的直觉相反。HLFIR 的 <code>description</code>：</p>
+<blockquote>
+<p>&quot;It is <strong>not a complete implementation of Fortran</strong>, for constructs and lower level operations, <strong>FIR should be used directly</strong>.&quot;</p>
+</blockquote>
+<p>HLFIR 只覆盖<strong>表达式和赋值</strong>。<code>hlfir</code> 的 op 全集是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">hlfir.apply  hlfir.assign  hlfir.associate  hlfir.char_extremum
+hlfir.copy_in  hlfir.copy_out  hlfir.declare  hlfir.designate
+hlfir.destroy  hlfir.elemental  hlfir.elemental_addr  hlfir.elsewhere
+hlfir.end_associate  hlfir.eval_in_mem  hlfir.expr  hlfir.forall
+hlfir.forall_mask  hlfir.matmul_transpose  hlfir.region_assign
+hlfir.shape_of  hlfir.where  hlfir.yield  hlfir.yield_element</code></pre>
+</div><p>二十几个，全部围绕&quot;表达式、赋值、以及和它们纠缠的那几个 Fortran 构造（<code>FORALL</code>/<code>WHERE</code>/<code>ELSEWHERE</code>）&quot;。其他一切——过程调用、I/O、模块、<code>COMMON</code>、派生类型的布局——<strong>直接用 FIR，不经过 HLFIR</strong>。</p>
+<p>于是 HLFIR 和 FIR 在同一个函数里是<strong>混着出现</strong>的。这和我们前面讲的 <code>applyPartialConversion</code>（第 17 章）那种&quot;部分转换&quot;是同一个思路，但它是<strong>设计层面</strong>的部分：不是转换转不完，是这一层本来就只打算管一部分。</p>
+<p>为什么这是对的？因为<strong>加一层的成本是按 op 数量算的，收益是按&quot;这一层能做的优化&quot;算的</strong>。表达式和赋值是 Fortran 里最需要高层优化的部分（也是原来 lowering 最复杂的部分），把这块提上来，那八个优化 pass 就能写；而给 I/O 语句造一个高层形式，收益接近零——没人要优化 <code>WRITE</code> 语句的迭代空间。</p>
+<p><strong>&quot;只在需要优化的地方加高层表示&quot;</strong>，这条对自己做方言的人非常实用。看到一个成功项目有九层，很容易以为自己也要把每个阶段都补齐；HLFIR 的反例说明：<strong>层可以是局部的。</strong></p>
+<h2>为什么 flang 不用 linalg</h2>
+<p>现在回到开头那个愣住的地方。</p>
+<p>我要先把话说准：<strong>这是一个设计选择，不是一个&quot;flang 做错了&quot;的结论。</strong> 能从源码和文档里确定的事实是这几条：</p>
+<ol>
+<li>flang 的 IR 里没有 <code>linalg</code>、没有 <code>tensor</code>（<code>grep</code> 结果为空）。</li>
+<li><code>hlfir</code> 建模的是 <strong>Fortran 自己的构造</strong>：<code>hlfir.elemental</code>（逐元素表达式）、<code>hlfir.forall</code>、<code>hlfir.where</code>、<code>hlfir.designate</code>（Fortran 的数组/子串取址规则）。</li>
+<li>HLFIR 的第三条原则明确是 &quot;<strong>Preserve Fortran semantics/information</strong> for high-level optimizations&quot;。</li>
+</ol>
+<p>把三条连起来，flang 的取舍就清楚了。<code>hlfir.elemental</code> 和 <code>linalg.generic</code> 在<strong>形状</strong>上确实很像（都是&quot;一个迭代空间 + region 里算一个元素&quot;），但 <code>linalg.generic</code> 表达一个 Fortran 数组表达式时，会丢掉一批 Fortran 特有的东西：</p>
+<ul>
+<li><strong>descriptor 语义</strong>：Fortran 的数组参数可能是 assumed-shape 的，形状、步长、下界都在运行时的 descriptor 里；<code>memref</code> 的 strided layout 能表达一部分，但 Fortran 还有可分配（<code>ALLOCATABLE</code>）、指针关联、<code>OPTIONAL</code> 这些状态。</li>
+<li><strong>下界不从 0 开始</strong>：Fortran 数组可以声明成 <code>A(-3:5)</code>。这不是小事——它渗透到每一次取址。</li>
+<li><strong>字符类型与派生类型</strong>：<code>hlfir.char_extremum</code> 这种 op 的存在说明字符数组表达式是一等公民；<code>linalg</code> 那一层不管这个。</li>
+<li><strong>语言级别名规则</strong>：Fortran 的别名保证比 C 强得多（这正是 Fortran 在数值计算上快的一大原因），<code>flang/docs/AliasingAnalysisFIR.md</code> 专门讲这个。降到通用方言就得想办法把这些保证一路带下去。</li>
+</ul>
+<p>而 flang 要的&quot;高层优化&quot;是什么？看那八个 pass 的名字：<code>ExpressionSimplification</code>、<code>InlineElementals</code>、<code>InlineHLFIRAssign</code>、<code>PropagateFortranVariableAttributes</code>——<strong>全是 Fortran 语义层面的优化</strong>，不是 tiling 和融合。</p>
+<p>这就对上了第 20 章讲过的那句话的反面。我们当时说&quot;降到 <code>linalg</code> 就白拿 tiling / 融合 / bufferization 一整条链&quot;。这句话有个前提：<strong>你要的正是那条链上的东西。</strong> flang 要的是别的，所以那条链对它的吸引力没那么大，而<strong>丢信息的代价</strong>却是实打实的。</p>
+<p>顺便说一句，flang 社区并不是不往上游投入——<code>omp</code> 和 <code>acc</code> 这两个上游 MLIR 方言里就有大量来自 Fortran 侧的贡献。它只是把上游投入放在了 OpenMP/OpenACC，而不是 tensor/linalg 栈。</p>
+<p><strong>复用上游方言不是无条件的好事。判断依据是：上游那一层能不能表达你最需要优化的那些信息。</strong> 能，就复用，白拿整条链；不能，硬降过去只是把信息扔掉换一堆用不上的 pass。</p>
+<h2>把判断标准写成可以对答案的东西</h2>
+<p>前面的观察可以收成四个问题。下面这个小程序把三个项目（IREE、flang、我们的 pix）各自的层数摆出来，然后逐条对这四个问题——省得你读完只记住&quot;看情况&quot;三个字。</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%22%E8%AF%A5%E9%80%A0%E5%87%A0%E5%B1%82%E6%96%B9%E8%A8%80%EF%BC%9F%22%E2%80%94%E2%80%94IREE%20%E9%80%A0%E4%BA%86%E4%B9%9D%E4%B8%AA%EF%BC%8Cflang%20%E5%8F%AA%E9%80%A0%E4%BA%86%E4%B8%A4%E4%B8%AA%EF%BC%8C%E4%B8%A4%E8%80%85%E9%83%BD%E6%88%90%E5%8A%9F%E3%80%82%0A%23%20%E8%BF%99%E4%B8%AA%E6%A8%A1%E5%9E%8B%E6%8A%8A%E5%88%A4%E6%96%AD%E6%A0%87%E5%87%86%E5%8F%98%E6%88%90%E5%8F%AF%E8%AE%A1%E7%AE%97%E7%9A%84%EF%BC%9A%E6%AF%8F%E4%B8%80%E5%B1%82%E8%A6%81%E4%B9%88%E5%BC%95%E5%85%A5%E6%96%B0%E7%9A%84%E5%86%B3%E7%AD%96%EF%BC%8C%E8%A6%81%E4%B9%88%E4%B8%8D%E5%80%BC%E5%BE%97%E5%AD%98%E5%9C%A8%E3%80%82%0A%0ALAYERS%20%3D%20%7B%0A%20%20%20%20%22IREE%EF%BC%88%E6%8A%8A%20MLIR%20%E7%94%A8%E5%88%B0%E6%9E%81%E8%87%B4%EF%BC%89%22%3A%20%5B%0A%20%20%20%20%20%20%20%20(%22linalg%22%2C%20False%2C%20%22%E7%AE%97%E4%BB%80%E4%B9%88%EF%BC%88%E5%A4%8D%E7%94%A8%E4%B8%8A%E6%B8%B8%EF%BC%8C%E4%B8%8D%E8%87%AA%E5%B7%B1%E9%80%A0%EF%BC%89%22)%2C%0A%20%20%20%20%20%20%20%20(%22flow%22%2C%20%20%20True%2C%20%20%22%E6%80%8E%E4%B9%88%E5%88%87%E5%88%86%E6%88%90%E5%8F%AF%E8%B0%83%E5%BA%A6%E7%9A%84%E5%8C%BA%E5%9F%9F%E3%80%81%E5%8C%BA%E5%9F%9F%E4%B9%8B%E9%97%B4%E6%80%8E%E4%B9%88%E4%BC%A0%E6%95%B0%E6%8D%AE%22)%2C%0A%20%20%20%20%20%20%20%20(%22stream%22%2C%20True%2C%20%20%22%E6%94%BE%E5%88%B0%E5%93%AA%E4%B8%AA%E8%AE%BE%E5%A4%87%E3%80%81%E6%80%8E%E4%B9%88%E5%B9%B6%E5%8F%91%E3%80%81%E5%BC%A0%E9%87%8F%E6%80%8E%E4%B9%88%E7%BC%96%E7%A0%81%E6%88%90%E8%AE%BE%E5%A4%87%E8%B5%84%E6%BA%90%22)%2C%0A%20%20%20%20%20%20%20%20(%22hal%22%2C%20%20%20%20True%2C%20%20%22%E5%85%B7%E4%BD%93%E8%AE%BE%E5%A4%87%20API%EF%BC%88buffer%20%2F%20command%20buffer%20%2F%20executable%EF%BC%89%22)%2C%0A%20%20%20%20%20%20%20%20(%22vm%22%2C%20%20%20%20%20True%2C%20%20%22%E5%AD%97%E8%8A%82%E7%A0%81%E4%B8%8E%E5%AE%BF%E4%B8%BB%E4%BE%A7%E8%83%B6%E6%B0%B4%E2%80%94%E2%80%94%E8%87%AA%E5%B8%A6%E8%BF%90%E8%A1%8C%E6%97%B6%22)%2C%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22flang%EF%BC%88%E5%8F%AA%E5%80%9F%20MLIR%20%E5%81%9A%E4%B8%AD%E7%AB%AF%EF%BC%89%22%3A%20%5B%0A%20%20%20%20%20%20%20%20(%22hlfir%22%2C%20%20True%2C%20%20%22Fortran%20%E8%A1%A8%E8%BE%BE%E5%BC%8F%E4%B8%8E%E8%B5%8B%E5%80%BC%E7%9A%84%E5%80%BC%E8%AF%AD%E4%B9%89%E5%BD%A2%E5%BC%8F%EF%BC%88%E4%B8%8D%E5%88%86%E9%85%8D%E4%B8%B4%E6%97%B6%E5%AD%98%E5%82%A8%EF%BC%89%22)%2C%0A%20%20%20%20%20%20%20%20(%22fir%22%2C%20%20%20%20True%2C%20%20%22%E5%86%85%E5%AD%98%E8%AF%AD%E4%B9%89%20%2B%20Fortran%20%E7%9A%84%20descriptor%E3%80%81%E6%95%B0%E7%BB%84%E8%AF%AD%E4%B9%89%22)%2C%0A%20%20%20%20%20%20%20%20(%22llvm%22%2C%20%20%20False%2C%20%22%EF%BC%88%E4%B8%8D%E8%87%AA%E5%B7%B1%E9%80%A0%EF%BC%8C%E7%9B%B4%E6%8E%A5%E9%99%8D%E5%88%B0%E4%B8%8A%E6%B8%B8%E7%9A%84%20llvm%20%E6%96%B9%E8%A8%80%EF%BC%89%22)%2C%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22pix%EF%BC%88%E6%9C%AC%E4%B9%A6%EF%BC%8C%E6%95%99%E5%AD%A6%E8%A7%84%E6%A8%A1%EF%BC%89%22%3A%20%5B%0A%20%20%20%20%20%20%20%20(%22pix%22%2C%20%20%20%20True%2C%20%20%22%E9%A2%86%E5%9F%9F%E8%AF%AD%E4%B9%89%EF%BC%9A%E9%80%90%E7%82%B9%20%2F%20%E9%82%BB%E5%9F%9F%20%2F%20%E5%BD%92%E7%BA%A6%E4%B8%89%E7%B1%BB%E5%9B%BE%E5%83%8F%E8%BF%90%E7%AE%97%22)%2C%0A%20%20%20%20%20%20%20%20(%22linalg%22%2C%20False%2C%20%22%EF%BC%88%E4%B8%8D%E8%87%AA%E5%B7%B1%E9%80%A0%EF%BC%9B%E7%AC%AC%2020%20%E7%AB%A0%E9%99%8D%E8%BF%87%E5%8E%BB%E5%B0%B1%E7%99%BD%E6%8B%BF%E6%95%B4%E6%9D%A1%E9%93%BE%EF%BC%89%22)%2C%0A%20%20%20%20%5D%2C%0A%7D%0A%0Afor%20proj%2C%20layers%20in%20LAYERS.items()%3A%0A%20%20%20%20own%20%3D%20sum(1%20for%20_%2C%20o%2C%20_%20in%20layers%20if%20o)%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Bproj%7D%E3%80%91%E8%87%AA%E9%80%A0%20%7Bown%7D%20%E5%B1%82%EF%BC%8C%E5%A4%8D%E7%94%A8%20%7Blen(layers)%20-%20own%7D%20%E5%B1%82%22)%0A%20%20%20%20for%20name%2C%20o%2C%20decision%20in%20layers%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%5B%7B'%E8%87%AA%E9%80%A0'%20if%20o%20else%20'%E5%A4%8D%E7%94%A8'%7D%5D%20%7Bname%3A8%7D%20%3C-%20%7Bdecision%7D%22)%0A%0Aprint(%22%5Cn%22%20%2B%20%22%3D%22%20*%2062)%0Aprint(%22%E5%88%A4%E6%96%AD%E6%A0%87%E5%87%86%EF%BC%88%E4%BB%8E%E4%B8%8A%E9%9D%A2%E4%B8%89%E4%BE%8B%E5%8F%8D%E6%8E%A8%E5%87%BA%E7%9A%84%E5%9B%9B%E9%97%AE%EF%BC%89%EF%BC%9A%5Cn%22)%0Atests%20%3D%20%5B%0A%20%20%20%20(%22%E8%BF%99%E4%B8%80%E5%B1%82%E5%BC%95%E5%85%A5%E4%BA%86%E4%B8%80%E4%B8%AA%E4%B8%8A%E4%B8%80%E5%B1%82%E8%A1%A8%E8%BE%BE%E4%B8%8D%E4%BA%86%E7%9A%84%E5%86%B3%E7%AD%96%E5%90%97%EF%BC%9F%22%2C%0A%20%20%20%20%20%22flow%20%E8%A6%81%E8%A1%A8%E8%BE%BE%E3%80%8E%E5%88%87%E5%88%86%E3%80%8F%EF%BC%8Clinalg%20%E9%87%8C%E6%B2%A1%E6%9C%89%E8%BF%99%E4%B8%AA%E6%A6%82%E5%BF%B5%20-%3E%20%E5%80%BC%E5%BE%97%E9%80%A0%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E4%B8%AA%E5%86%B3%E7%AD%96%E4%BC%9A%E8%A2%AB%E5%8F%8D%E5%A4%8D%E4%BC%98%E5%8C%96%E5%90%97%EF%BC%9F%22%2C%0A%20%20%20%20%20%22stream%20%E7%9A%84%E8%AE%BE%E5%A4%87%E6%94%BE%E7%BD%AE%E4%B8%8E%E5%B9%B6%E5%8F%91%E8%A6%81%E5%8F%8D%E5%A4%8D%E9%87%8D%E6%8E%92%20-%3E%20%E5%80%BC%E5%BE%97%E5%8D%95%E7%8B%AC%E4%B8%80%E5%B1%82%22)%2C%0A%20%20%20%20(%22%E4%B8%8A%E6%B8%B8%E5%B7%B2%E7%BB%8F%E6%9C%89%E8%83%BD%E8%A1%A8%E8%BE%BE%E5%AE%83%E7%9A%84%E6%96%B9%E8%A8%80%E4%BA%86%E5%90%97%EF%BC%9F%22%2C%0A%20%20%20%20%20%22flang%20%E4%B8%8D%E8%87%AA%E9%80%A0%20llvm%20%E9%82%A3%E5%B1%82%EF%BC%9Bpix%20%E7%9B%B4%E6%8E%A5%E9%99%8D%E5%88%B0%20linalg%20-%3E%20%E4%B8%8D%E5%80%BC%E5%BE%97%E9%80%A0%22)%2C%0A%20%20%20%20(%22%E8%BF%99%E4%B8%80%E5%B1%82%E9%9C%80%E8%A6%81%E5%AE%8C%E6%95%B4%E5%90%97%EF%BC%9F%22%2C%0A%20%20%20%20%20%22hlfir%20%E6%95%85%E6%84%8F%E4%B8%8D%E5%AE%8C%E6%95%B4%EF%BC%9A%E5%8F%AA%E8%A6%86%E7%9B%96%E8%A1%A8%E8%BE%BE%E5%BC%8F%E4%B8%8E%E8%B5%8B%E5%80%BC%EF%BC%8C%E5%85%B6%E4%BD%99%E7%9B%B4%E6%8E%A5%E7%94%A8%20fir%22)%2C%0A%5D%0Afor%20i%2C%20(q%2C%20a)%20in%20enumerate(tests%2C%201)%3A%0A%20%20%20%20print(f%22%20%20%7Bi%7D.%20%7Bq%7D%22)%0A%20%20%20%20print(f%22%20%20%20%20%20%E4%BE%8B%EF%BC%9A%7Ba%7D%22)%0A%0Aprint(%22%5Cn%E4%B8%80%E5%8F%A5%E8%AF%9D%EF%BC%9A%E5%B1%82%E6%95%B0%E4%B8%8D%E6%98%AF%E9%A3%8E%E6%A0%BC%E9%97%AE%E9%A2%98%EF%BC%8C%E6%98%AF%E3%80%8E%E6%9C%89%E5%A4%9A%E5%B0%91%E4%B8%AA%E7%8B%AC%E7%AB%8B%E5%86%B3%E7%AD%96%E8%A6%81%E5%81%9A%E3%80%8F%E7%9A%84%E7%BB%93%E6%9E%9C%E3%80%82%22)%0Aprint(%22IREE%20%E8%A6%81%E7%AE%A1%E5%88%B0%E8%AE%BE%E5%A4%87%E4%B8%8E%E8%BF%90%E8%A1%8C%E6%97%B6%EF%BC%8C%E5%86%B3%E7%AD%96%E5%A4%9A%EF%BC%9Bflang%20%E5%8F%AA%E7%AE%A1%E5%88%B0%20LLVM%20%E4%B9%8B%E5%89%8D%EF%BC%8C%E5%86%B3%E7%AD%96%E5%B0%91%E3%80%82%22)%0Aprint(%22%E7%85%A7%E6%8A%84%20IREE%20%E7%9A%84%E5%B1%82%E6%95%B0%E5%8E%BB%E5%81%9A%E4%B8%80%E4%B8%AA%E5%8F%AA%E9%99%8D%E5%88%B0%20LLVM%20%E7%9A%84%E7%BC%96%E8%AF%91%E5%99%A8%EF%BC%8C%E6%98%AF%E7%BA%AF%E7%B2%B9%E7%9A%84%E8%B4%9F%E6%8B%85%E3%80%82%22)"># "该造几层方言？"——IREE 造了九个，flang 只造了两个，两者都成功。
+# 这个模型把判断标准变成可计算的：每一层要么引入新的决策，要么不值得存在。
+
+LAYERS = {
+    "IREE（把 MLIR 用到极致）": [
+        ("linalg", False, "算什么（复用上游，不自己造）"),
+        ("flow",   True,  "怎么切分成可调度的区域、区域之间怎么传数据"),
+        ("stream", True,  "放到哪个设备、怎么并发、张量怎么编码成设备资源"),
+        ("hal",    True,  "具体设备 API（buffer / command buffer / executable）"),
+        ("vm",     True,  "字节码与宿主侧胶水——自带运行时"),
+    ],
+    "flang（只借 MLIR 做中端）": [
+        ("hlfir",  True,  "Fortran 表达式与赋值的值语义形式（不分配临时存储）"),
+        ("fir",    True,  "内存语义 + Fortran 的 descriptor、数组语义"),
+        ("llvm",   False, "（不自己造，直接降到上游的 llvm 方言）"),
+    ],
+    "pix（本书，教学规模）": [
+        ("pix",    True,  "领域语义：逐点 / 邻域 / 归约三类图像运算"),
+        ("linalg", False, "（不自己造；第 20 章降过去就白拿整条链）"),
+    ],
+}
+
+for proj, layers in LAYERS.items():
+    own = sum(1 for _, o, _ in layers if o)
+    print(f"\n【{proj}】自造 {own} 层，复用 {len(layers) - own} 层")
+    for name, o, decision in layers:
+        print(f"  [{'自造' if o else '复用'}] {name:8} &lt;- {decision}")
+
+print("\n" + "=" * 62)
+print("判断标准（从上面三例反推出的四问）：\n")
+tests = [
+    ("这一层引入了一个上一层表达不了的决策吗？",
+     "flow 要表达『切分』，linalg 里没有这个概念 -&gt; 值得造"),
+    ("这个决策会被反复优化吗？",
+     "stream 的设备放置与并发要反复重排 -&gt; 值得单独一层"),
+    ("上游已经有能表达它的方言了吗？",
+     "flang 不自造 llvm 那层；pix 直接降到 linalg -&gt; 不值得造"),
+    ("这一层需要完整吗？",
+     "hlfir 故意不完整：只覆盖表达式与赋值，其余直接用 fir"),
+]
+for i, (q, a) in enumerate(tests, 1):
+    print(f"  {i}. {q}")
+    print(f"     例：{a}")
+
+print("\n一句话：层数不是风格问题，是『有多少个独立决策要做』的结果。")
+print("IREE 要管到设备与运行时，决策多；flang 只管到 LLVM 之前，决策少。")
+print("照抄 IREE 的层数去做一个只降到 LLVM 的编译器，是纯粹的负担。")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">【IREE（把 MLIR 用到极致）】自造 4 层，复用 1 层
+  [复用] linalg   &lt;- 算什么（复用上游，不自己造）
+  [自造] flow     &lt;- 怎么切分成可调度的区域、区域之间怎么传数据
+  [自造] stream   &lt;- 放到哪个设备、怎么并发、张量怎么编码成设备资源
+  [自造] hal      &lt;- 具体设备 API（buffer / command buffer / executable）
+  [自造] vm       &lt;- 字节码与宿主侧胶水——自带运行时
+
+【flang（只借 MLIR 做中端）】自造 2 层，复用 1 层
+  [自造] hlfir    &lt;- Fortran 表达式与赋值的值语义形式（不分配临时存储）
+  [自造] fir      &lt;- 内存语义 + Fortran 的 descriptor、数组语义
+  [复用] llvm     &lt;- （不自己造，直接降到上游的 llvm 方言）
+
+【pix（本书，教学规模）】自造 1 层，复用 1 层
+  [自造] pix      &lt;- 领域语义：逐点 / 邻域 / 归约三类图像运算
+  [复用] linalg   &lt;- （不自己造；第 20 章降过去就白拿整条链）
+
+==============================================================
+判断标准（从上面三例反推出的四问）：
+
+  1. 这一层引入了一个上一层表达不了的决策吗？
+     例：flow 要表达『切分』，linalg 里没有这个概念 -&gt; 值得造
+  2. 这个决策会被反复优化吗？
+     例：stream 的设备放置与并发要反复重排 -&gt; 值得单独一层
+  3. 上游已经有能表达它的方言了吗？
+     例：flang 不自造 llvm 那层；pix 直接降到 linalg -&gt; 不值得造
+  4. 这一层需要完整吗？
+     例：hlfir 故意不完整：只覆盖表达式与赋值，其余直接用 fir
+
+一句话：层数不是风格问题，是『有多少个独立决策要做』的结果。
+IREE 要管到设备与运行时，决策多；flang 只管到 LLVM 之前，决策少。
+照抄 IREE 的层数去做一个只降到 LLVM 的编译器，是纯粹的负担。</code></pre>
+</div><p>注意 IREE 那一栏：<strong>它自造 4 层，不是 9 层。</strong> 主链上真正的&quot;层&quot;就是 <code>flow</code>/<code>stream</code>/<code>hal</code>/<code>vm</code>；<code>Util</code> 是横切的基础设施、<code>LinalgExt</code> 是上游的扩展、<code>Encoding</code>/<code>TensorExt</code> 是补充表达、<code>VMVX</code> 是 <code>vm</code> 的一个后端。</p>
+<p>&quot;九个方言&quot;听起来吓人，拆开看只有四个是分层决策。<strong>数方言目录的数量会高估一个项目的分层复杂度</strong>——这也是我一开始把这两个项目摆在一起时自己踩的坑。</p>
+<h2>代价那一面</h2>
+<p>四个问题都答&quot;是&quot;也不等于该造。层是有持续成本的，这些成本在项目第一年基本看不见，第三年全会找上来：</p>
+<ul>
+<li><strong>每一层都要一套完整的配套</strong>。<code>.td</code> 定义、verifier、自定义 assembly、canonicalization、往下的 conversion pattern、类型转换、lit 测试。我们这本书里给 pix 加一个 op 要改的地方你已经数过一遍了（第 9 到第 11 章），乘以一整个方言。</li>
+<li><strong>跨层的信息传递会成为长期负担</strong>。第 17 章讲 <code>TypeConverter</code> 的 source/target materialization 时说过，一旦两层类型系统不同，边界上就必须有人负责补转换 op。层越多，这种边界越多。</li>
+<li><strong>调试路径变长</strong>。第 12 章那些 <code>--mlir-print-ir-after-all</code> 的技巧，在一条九层的管线上，输出量是另一个量级。</li>
+<li><strong>一层加错了，删它比加它难得多</strong>。下游可能已经有人依赖那一层的 op 了。</li>
+</ul>
+<p>不过 flang 的 HLFIR 恰好给出了一个反向的好消息。设计文档里有这么一句：</p>
+<blockquote>
+<p>&quot;As a result of these additions, <strong>it is likely that the <code>fir.array_load</code>/<code>fir.array_merge_store</code> and related array operations could be removed from FIR</strong> since array assignment analysis could directly happen on the higher-level FIR representation.&quot;</p>
+</blockquote>
+<p>加一层，让<strong>下面那层能删掉一批 op</strong>。原来 FIR 必须自己扛数组赋值分析，于是长出了 <code>fir.array_load</code>/<code>fir.array_merge_store</code> 这套相当复杂的机制；有了 HLFIR，那件事在上面做更自然，下面就可以瘦身。</p>
+<p><strong>加一层的净成本，要减掉它让别处变简单的那部分。</strong> 这条经常被忘掉——只算新增的代码，不算减掉的复杂度，会让人系统性地低估该加层的情形。</p>
+<h2>小结</h2>
+<ul>
+<li><strong>同一个问题（造几层方言），两个成功项目给了相反的答案</strong>：IREE 九个方言目录、自带运行时；flang 两个方言，连上游的 <code>linalg</code>/<code>tensor</code> 都一个没用。都成功了，所以&quot;层数越多/越少越好&quot;两种说法都不成立。</li>
+<li><strong>&quot;九个方言&quot;要拆开看</strong>。IREE 主链上真正的分层决策只有 4 个（<code>flow</code>/<code>stream</code>/<code>hal</code>/<code>vm</code>）；<code>Util</code> 是横切基础设施、<code>LinalgExt</code> 是<strong>上游 <code>linalg</code> 的扩展</strong>、<code>Encoding</code>/<code>TensorExt</code> 补充表达、<code>VMVX</code> 是 <code>vm</code> 的后端。数目录会高估分层复杂度。</li>
+<li><strong>IREE 每一层对应一个&quot;必须有人拍板&quot;的决策</strong>：<code>flow</code> 管切分、<code>stream</code> 管设备放置与并发、<code>hal</code> 管具体设备 API、<code>vm</code> 管字节码与宿主胶水。上一层里根本没有下一层要拍板的那个概念，所以分层是被迫的，不是审美的。</li>
+<li><strong><code>hal</code> 的存在理由值得单独记</strong>：它的 <code>description</code> 自己说是 &quot;largely 1:1 with the IREE HAL C API&quot;——<strong>它是运行时 ABI 照进 IR 里的影子</strong>。IREE 自带运行时所以必须有这一层；flang 交给 LLVM，所以一层都不用造。<strong>要不要这一层，取决于你下游交给谁。</strong></li>
+<li><strong>分层不一定要新方言</strong>。<code>stream</code> 内部自己就是三层：<code>stream.tensor.*</code> → <code>stream.async.*</code> → <code>stream.cmd.*</code>，共用一个方言、只用 op 名前缀区分。判断依据是<strong>类型系统</strong>：类型一致就用前缀（新方言的真正成本在类型和属性上），类型整个换掉（<code>tensor</code> → <code>!hal.buffer_view</code>）才值得分家。</li>
+<li><strong>flang 把加一层的理由写成了文档，那句话是这一章最实用的判断标准</strong>：加层不是因为优雅，而是因为出现了可观测的症状——&quot;the code lowering ... <strong>has significantly grown in complexity</strong>&quot; 且 &quot;<strong>the representation level gap is big, and a lot is happening in lowering</strong>&quot;。等某个 lowering 的 <code>.cpp</code> 长到没人敢碰、里面开始出现上下文分支，就是信号。</li>
+<li><strong>HLFIR 的三条原则都能对到本书前面的章节</strong>：上下文无关的降；<strong>不实体化临时量</strong>（对应第 20 章 <code>ScaleToLinalg</code> 那段真实输出——<code>%arg1</code> 直接进 region，<code>ins</code> 只有一个操作数）；保留领域语义供高层优化。能做到第二条的前提是&quot;值语义的高层表示&quot;加上&quot;region 可以引用外面的值&quot;（<code>linalg.generic</code> 不是 <code>IsolatedFromAbove</code>），HLFIR 和 <code>linalg</code> 各自独立地要到了这两样。</li>
+<li><strong>加一层的回报要看这一层能写出多少优化</strong>。HLFIR 的 12 个 pass 里只有 4 个在往下降，另外 8 个全是在这一层做的优化（<code>ExpressionSimplification</code>、<code>InlineElementals</code>、<code>InlineHLFIRAssign</code>…）——那 8 个在 FIR 上根本写不出来，因为 buffer 已经分配、下标已经算成地址了。</li>
+<li><strong><code>BufferizeHLFIR</code> 是第 22 章那件事的另一个实例</strong>：<code>hlfir.expr</code> 的值语义 → FIR 的内存临时量。flang 没用上游的 bufferization 基础设施（类型完全不同），但问题形状一模一样，连&quot;质量是性能问题&quot;这个结论都一样（那个 pass 旁边就有个 <code>OptimizedBufferization</code>）。</li>
+<li><strong>层可以是局部的</strong>。HLFIR 的 <code>description</code> 明说 &quot;It is <strong>not a complete implementation of Fortran</strong>, for constructs and lower level operations, FIR should be used directly&quot;——它只管表达式和赋值，I/O、过程调用、模块直接走 FIR，两层在同一个函数里混着出现。因为<strong>加层成本按 op 数算，收益按&quot;这一层能做的优化&quot;算</strong>，给 <code>WRITE</code> 语句造高层形式的收益接近零。</li>
+<li><strong>复用上游方言不是无条件的好事</strong>。flang 不用 <code>linalg</code> 是取舍而非疏漏：<code>linalg</code> 表达不了 Fortran 的 descriptor 语义、非零下界、字符/派生类型、语言级别名保证，而 flang 想要的高层优化全是 Fortran 语义层面的，不是 tiling 和融合。<strong>判断依据是：上游那一层能不能表达你最需要优化的那些信息。</strong> 能就白拿整条链，不能就只是扔掉信息换一堆用不上的 pass。</li>
+<li><strong>算净成本，不要只算新增代码</strong>。层的持续成本是真的（一整套 <code>.td</code>/verifier/pattern/测试、跨层类型转换的边界、更长的调试路径、加错了删不掉）；但 HLFIR 的文档也写着，加了它之后 FIR 里的 <code>fir.array_load</code>/<code>fir.array_merge_store</code> 那套复杂机制<strong>可以被移除</strong>。<strong>加一层的净成本要减掉它让别处变简单的那部分</strong>——忘了这一项，会系统性地低估该加层的情形。</li>
+</ul>
+<p>下一章是最后一章：<strong>ClangIR</strong>——C/C++ 也变成了方言，这件事把 MLIR 的适用边界推到了一个很不一样的地方（一个语义极其复杂、且已有一个成熟且不肯轻易让位的现有实现的语言）。那一章也要把这本书欠的账还掉：<strong>MLIR 还没解决的问题</strong>，以及在什么情况下你不该用它。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch26.html">← 第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a>
+  <a class="nav-next" href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

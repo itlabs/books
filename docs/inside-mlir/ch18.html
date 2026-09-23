@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 18 章 Transform 方言：把「怎么变换」本身写成 IR</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li class="active"><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 18 章 Transform 方言：把「怎么变换」本身写成 IR</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>到这里，pix 已经有了 pass、pattern、分析、conversion。但有一个问题一直没解决：<strong>"什么时候做哪个变换、用什么参数"这些决定写在哪？</strong></p>
+<p>传统答案是硬编码进 pass 里——tile 大小写成常量或 pass option，先融合还是先向量化写成 pass 顺序。transform 方言给的答案完全不同：<strong>把调度本身写成一段 IR</strong>。第 15 章讲 PDLL 时我们见过这个思路的一半（pattern 成了 IR），transform 方言把它推到了调度层面。</p>
+<p>这一章讲清三件事。<strong>一、handle/payload 模型</strong>：transform IR 操作的不是值，而是"指向被变换 IR 里某组 op 的名字"；理解这一点，才能理解那个几乎人人都会撞一次的错误——<strong>handle 失效</strong>。<strong>二、真的跑一遍</strong>：用 <code>transform.structured.tile_using_for</code> 把一个 <code>linalg.matmul</code> tile 成嵌套 <code>scf.for</code>，输出是实测的。<strong>三、和 pix 接上</strong>：用 <code>transform.apply_registered_pass</code> 从调度里驱动我们第 13 章写的那个 pass——于是"调度"和"pass 实现"彻底解耦。</p>
+<p>顺带会撞一个很误导人的报错：<code>custom op 'transform.structured.match' is unknown</code>。它不是"版本里没这个 op"。</p>
+</div><h2>先理解模型：handle 指向 op，不是值</h2>
+<p>transform 方言里有两套 IR 同时存在，别混：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>叫什么</th>
+<th>是什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>被变换的那个</td>
+<td><strong>payload</strong></td>
+<td>你真正要编译的代码（我们的 <code>func.func</code>、<code>linalg.matmul</code>、<code>pix.add</code>）</td>
+</tr>
+<tr>
+<td>做变换的那个</td>
+<td><strong>schedule</strong></td>
+<td>一段 <code>transform</code> 方言的 IR，描述&quot;对 payload 做什么&quot;</td>
+</tr>
+</tbody></table>
+<p>schedule 里的 SSA 值<strong>不是运行时的数据</strong>，而是 <strong>handle</strong>——指向 payload 里某一组 op 的名字。类型也说明了这一点：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>指向什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>!transform.any_op</code></td>
+<td>一组任意 op</td>
+</tr>
+<tr>
+<td><code>!transform.op&lt;&quot;linalg.matmul&quot;&gt;</code></td>
+<td>一组特定名字的 op（带静态检查）</td>
+</tr>
+<tr>
+<td><code>!transform.any_value</code></td>
+<td>一组 payload 里的 Value</td>
+</tr>
+<tr>
+<td><code>!transform.param&lt;i64&gt;</code></td>
+<td>一个编译期参数（比如 tile 大小），不指向 op</td>
+</tr>
+</tbody></table>
+<p>一段最小的 schedule：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">transform.named_sequence @__transform_main(%root: !transform.any_op {transform.readonly}) {
+  // 匹配：从 %root 里找出所有 linalg.matmul，得到一个 handle
+  %mm = transform.structured.match ops{["linalg.matmul"]} in %root
+    : (!transform.any_op) -&gt; !transform.any_op
+
+  // 变换：tile 成 4x4。它**产出新的 handle**，而 %mm 从此失效
+  %tiled, %loops:2 = transform.structured.tile_using_for %mm tile_sizes [4, 4]
+    : (!transform.any_op) -&gt; (!transform.any_op, !transform.any_op, !transform.any_op)
+
+  transform.yield
+}</code></pre>
+</div><p><code>@__transform_main</code> 是 <code>--transform-interpreter</code> 默认找的入口名（可以用 <code>entry-point=</code> 改）。<code>{transform.readonly}</code> 声明这个 handle 只读——<strong>这类声明是失效分析的依据</strong>，下面就会用到。</p>
+<h2>真的跑一遍：tile 一个 matmul</h2>
+<p>payload 和 schedule 可以放在同一个 module 里（上游测试就这么写，省掉一个 <code>--transform-preload-library</code>），module 上要标 <code>transform.with_named_sequence</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoibWxpciIsInNvdXJjZSI6Ii8vIFJVTjogbWxpci1vcHQgJXMgLS10cmFuc2Zvcm0taW50ZXJwcmV0ZXJcbm1vZHVsZSBhdHRyaWJ1dGVzIHt0cmFuc2Zvcm0ud2l0aF9uYW1lZF9zZXF1ZW5jZX0ge1xuICBmdW5jLmZ1bmMgQG1tKCVhOiB0ZW5zb3I8OHg4eGYzMj4sICViOiB0ZW5zb3I8OHg4eGYzMj4sICVjOiB0ZW5zb3I8OHg4eGYzMj4pIC0%2BIHRlbnNvcjw4eDh4ZjMyPiB7XG4gICAgJXIgPSBsaW5hbGcubWF0bXVsIGlucyglYSwgJWIgOiB0ZW5zb3I8OHg4eGYzMj4sIHRlbnNvcjw4eDh4ZjMyPilcbiAgICAgICAgICAgICAgICAgICAgICAgb3V0cyglYyA6IHRlbnNvcjw4eDh4ZjMyPikgLT4gdGVuc29yPDh4OHhmMzI%2BXG4gICAgcmV0dXJuICVyIDogdGVuc29yPDh4OHhmMzI%2BXG4gIH1cblxuICB0cmFuc2Zvcm0ubmFtZWRfc2VxdWVuY2UgQF9fdHJhbnNmb3JtX21haW4oJXJvb3Q6ICF0cmFuc2Zvcm0uYW55X29wIHt0cmFuc2Zvcm0ucmVhZG9ubHl9KSB7XG4gICAgJW1tID0gdHJhbnNmb3JtLnN0cnVjdHVyZWQubWF0Y2ggb3Bze1tcImxpbmFsZy5tYXRtdWxcIl19IGluICVyb290XG4gICAgICA6ICghdHJhbnNmb3JtLmFueV9vcCkgLT4gIXRyYW5zZm9ybS5hbnlfb3BcbiAgICAldGlsZWQsICVsb29wczoyID0gdHJhbnNmb3JtLnN0cnVjdHVyZWQudGlsZV91c2luZ19mb3IgJW1tIHRpbGVfc2l6ZXMgWzQsIDRdXG4gICAgICA6ICghdHJhbnNmb3JtLmFueV9vcCkgLT4gKCF0cmFuc2Zvcm0uYW55X29wLCAhdHJhbnNmb3JtLmFueV9vcCwgIXRyYW5zZm9ybS5hbnlfb3ApXG4gICAgdHJhbnNmb3JtLnlpZWxkXG4gIH1cbn0iLCJjb21waWxlcnMiOlt7ImlkIjoibWxpcm9wdHRydW5rIiwib3B0aW9ucyI6Ii0tdHJhbnNmb3JtLWludGVycHJldGVyIn1dLCJleGVjdXRvcnMiOltdfV19" target="_blank" rel="noopener">🔬 看下降结果（mlir-opt）</a></div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: mlir-opt %s --transform-interpreter
+module attributes {transform.with_named_sequence} {
+  func.func @mm(%a: tensor&lt;8x8xf32&gt;, %b: tensor&lt;8x8xf32&gt;, %c: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %r = linalg.matmul ins(%a, %b : tensor&lt;8x8xf32&gt;, tensor&lt;8x8xf32&gt;)
+                       outs(%c : tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt;
+    return %r : tensor&lt;8x8xf32&gt;
+  }
+
+  transform.named_sequence @__transform_main(%root: !transform.any_op {transform.readonly}) {
+    %mm = transform.structured.match ops{["linalg.matmul"]} in %root
+      : (!transform.any_op) -&gt; !transform.any_op
+    %tiled, %loops:2 = transform.structured.tile_using_for %mm tile_sizes [4, 4]
+      : (!transform.any_op) -&gt; (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>mlir-opt --transform-interpreter input.mlir</code></div>
+</div><p>运行结果（payload 部分）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @mm(%arg0: tensor&lt;8x8xf32&gt;, %arg1: tensor&lt;8x8xf32&gt;, %arg2: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %c0 = arith.constant 0 : index
+    %c0_0 = arith.constant 0 : index
+    %c8 = arith.constant 8 : index
+    %c8_1 = arith.constant 8 : index
+    %c4 = arith.constant 4 : index
+    %c4_2 = arith.constant 4 : index
+    %0 = scf.for %arg3 = %c0 to %c8 step %c4 iter_args(%arg4 = %arg2) -&gt; (tensor&lt;8x8xf32&gt;) {
+      %1 = scf.for %arg5 = %c0_0 to %c8_1 step %c4_2 iter_args(%arg6 = %arg4) -&gt; (tensor&lt;8x8xf32&gt;) {
+        %extracted_slice = tensor.extract_slice %arg0[%arg3, 0] [4, 8] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x8xf32&gt;
+        %extracted_slice_3 = tensor.extract_slice %arg1[0, %arg5] [8, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;8x4xf32&gt;
+        %extracted_slice_4 = tensor.extract_slice %arg6[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;8x8xf32&gt; to tensor&lt;4x4xf32&gt;
+        %2 = linalg.matmul ins(%extracted_slice, %extracted_slice_3 : tensor&lt;4x8xf32&gt;, tensor&lt;8x4xf32&gt;) outs(%extracted_slice_4 : tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt;
+        %inserted_slice = tensor.insert_slice %2 into %arg6[%arg3, %arg5] [4, 4] [1, 1] : tensor&lt;4x4xf32&gt; into tensor&lt;8x8xf32&gt;
+        scf.yield %inserted_slice : tensor&lt;8x8xf32&gt;
+      }
+      scf.yield %1 : tensor&lt;8x8xf32&gt;
+    }
+    return %0 : tensor&lt;8x8xf32&gt;
+  }</code></pre>
+</div><p>一行 <code>tile_sizes [4, 4]</code> 换来两层 <code>scf.for</code> 加 <code>tensor.extract_slice</code>/<code>insert_slice</code>，里面那个 <code>linalg.matmul</code> 缩成了 4×4。<strong>注意最内层仍然是 <code>linalg.matmul</code></strong>——tiling 不改变语义，只是把它切小了，所以还能继续 tile、继续融合。这正是第 20 章要讲的&quot;linalg 为什么好变换&quot;。</p>
+<p>要改 tile 大小，<strong>改的是 IR，不是重新编译</strong>。这就是 transform 方言的全部卖点。</p>
+<div class="warn">
+<strong><code>custom op 'transform.structured.match' is unknown</code> —— 不是版本问题</strong>
+<p>我在 <code>pix-opt</code> 上跑同样的脚本，得到这个报错。第一反应是"23.1 里这个 op 改名了？"——不是。</p>
+<p>真相是：<strong>transform 方言的大部分 op 住在<em>扩展</em>里，不在方言本体里</strong>。<code>transform.structured.*</code> 由 linalg 的 transform 扩展提供，<code>transform.apply_registered_pass</code> 由核心扩展提供。<code>registerAllDialects(registry)</code> 注册不到它们，还要加一句：</p>
+<p><code>mlir::registerAllExtensions(registry);</code></p>
+<p>（CMake 那边链上 <code>MLIRRegisterAllExtensions</code>。）<code>mlir-opt</code> 自己当然是两句都有的，所以这个坑只在你写自己的驱动时才会撞上——而报错措辞完全不会提示你这一点。</p>
+</div><h2>handle 失效：几乎人人撞一次</h2>
+<p>上面那段 schedule 里，<code>tile_using_for</code> 产出了 <code>%tiled</code> 和两个 loop handle。<strong>原来的 <code>%mm</code> 从此失效</strong>——因为那个 <code>linalg.matmul</code> 已经被替换掉了，handle 指向的东西不存在了。</p>
+<p>故意用一次旧 handle：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%tiled, %loops:2 = transform.structured.tile_using_for %mm tile_sizes [4, 4] : …
+// %mm 已经失效，再用它：
+%tiled2, %loops2:2 = transform.structured.tile_using_for %mm tile_sizes [2, 2] : …</code></pre>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">inv18.mlir:14:26: error: op uses a handle invalidated by a previously executed transform op
+    %tiled2, %loops2:2 = transform.structured.tile_using_for %mm tile_sizes [2, 2]
+                         ^
+inv18.mlir:8:11: note: handle to invalidated ops
+    %mm = transform.structured.match ops{["linalg.matmul"]} in %root
+          ^</code></pre>
+</div><p>这个诊断质量很高：<strong>既指出用错的地方，也指出那个 handle 是哪来的</strong>。（对比第 16、17 章 dialect conversion 那些挂在 <code>builtin.module</code> 上的报错，差距很明显——transform 方言在设计时就把&quot;可诊断性&quot;当成了目标。）</p>
+<p>正确写法是一路用新 handle：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%tiled, %loops:2 = transform.structured.tile_using_for %mm tile_sizes [4, 4] : …
+%tiled2, %loops2:2 = transform.structured.tile_using_for %tiled tile_sizes [2, 2] : …</code></pre>
+</div><div class="keypoint">
+<strong>handle 失效不是 bug，是设计</strong>
+<p>为什么不让框架"自动更新" handle？因为**变换之后"原来那个 op"往往已经没有对应物了**。tile 之后，原 matmul 变成了两层循环加一个小 matmul——旧 handle 该指向哪个？没有正确答案。</p>
+<p>所以 transform 方言选择：<strong>让失效变成一个显式的、可诊断的错误</strong>，而不是悄悄给你一个语义模糊的 handle。这和第 14 章那个"被 erase 的地址被复用"的坑正好相反——那里是悄悄出错，这里是当场报错。</p>
+<p>实践上记一条：**每个变换 op 都要看清它产出哪些 handle，然后只用新的。** 想保住某个 handle 不失效，用 <code>transform.readonly</code> 之类的声明告诉框架"我不会改它"。</p>
+</div><h2>把模型自己跑一遍</h2>
+<p>handle 为什么会失效，用一个小模型看最清楚。下面这个解释器把 payload 里的 op 标上 id，变换时把旧 id 标死，用 handle 前检查它指向的 id 还活着——<strong>这正是真解释器做的事</strong>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20transform%20%E6%96%B9%E8%A8%80%E7%9A%84%20handle%2Fpayload%20%E6%A8%A1%E5%9E%8B%EF%BC%8C%E4%BB%A5%E5%8F%8A%20handle%20%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BC%9A%E5%A4%B1%E6%95%88%E3%80%82%0A%23%20%E4%B8%80%E5%8F%A5%E8%AF%9D%EF%BC%9Ahandle%20%E6%98%AF%22%E6%8C%87%E5%90%91%20payload%20%E9%87%8C%E4%B8%80%E7%BB%84%20op%20%E7%9A%84%E5%90%8D%E5%AD%97%22%EF%BC%8C%E8%80%8C%E5%8F%98%E6%8D%A2%E4%BC%9A**%E6%9B%BF%E6%8D%A2**%20op%EF%BC%8C%0A%23%20%E4%BA%8E%E6%98%AF%E6%97%A7%20handle%20%E6%8C%87%E5%90%91%E7%9A%84%E4%B8%9C%E8%A5%BF%E4%B8%8D%E5%AD%98%E5%9C%A8%E4%BA%86%E3%80%82%0A%0Aclass%20Payload%3A%0A%20%20%20%20%22%22%22%E8%A2%AB%E5%8F%98%E6%8D%A2%E7%9A%84%20IR%E3%80%82%E8%BF%99%E9%87%8C%E7%AE%80%E5%8C%96%E6%88%90%E4%B8%80%E4%B8%AA%20op%20%E5%88%97%E8%A1%A8%EF%BC%8C%E6%AF%8F%E4%B8%AA%20op%20%E6%9C%89%E5%90%8D%E5%AD%97%E5%92%8C%E5%94%AF%E4%B8%80%20id%E3%80%82%22%22%22%0A%20%20%20%20def%20__init__(self%2C%20ops)%3A%20self.ops%20%3D%20list(ops)%3B%20self.dead%20%3D%20set()%0A%20%20%20%20def%20alive(self%2C%20ids)%3A%20return%20%5Bi%20for%20i%20in%20ids%20if%20i%20not%20in%20self.dead%5D%0A%20%20%20%20def%20replace(self%2C%20old_id%2C%20new_ops)%3A%0A%20%20%20%20%20%20%20%20self.dead.add(old_id)%0A%20%20%20%20%20%20%20%20base%20%3D%20max(i%20for%20i%2C%20_%20in%20self.ops)%20%2B%201%0A%20%20%20%20%20%20%20%20new%20%3D%20%5B(base%20%2B%20k%2C%20n)%20for%20k%2C%20n%20in%20enumerate(new_ops)%5D%0A%20%20%20%20%20%20%20%20self.ops%20%2B%3D%20new%0A%20%20%20%20%20%20%20%20return%20%5Bi%20for%20i%2C%20_%20in%20new%5D%0A%20%20%20%20def%20show(self)%3A%0A%20%20%20%20%20%20%20%20return%20%22%2C%20%22.join(f%22%7Bn%7D%23%7Bi%7D%22%20for%20i%2C%20n%20in%20self.ops%20if%20i%20not%20in%20self.dead)%0A%0Aclass%20Interp%3A%0A%20%20%20%20def%20__init__(self%2C%20payload)%3A%20self.p%2C%20self.handles%20%3D%20payload%2C%20%7B%7D%0A%0A%20%20%20%20def%20match(self%2C%20name%2C%20want)%3A%0A%20%20%20%20%20%20%20%20ids%20%3D%20%5Bi%20for%20i%2C%20n%20in%20self.p.ops%20if%20n%20%3D%3D%20want%20and%20i%20not%20in%20self.p.dead%5D%0A%20%20%20%20%20%20%20%20self.handles%5Bname%5D%20%3D%20ids%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bname%7D%20%3D%20match%20%7Bwant!r%7D%20%E2%86%92%20%E6%8C%87%E5%90%91%20%7Bids%7D%22)%0A%0A%20%20%20%20def%20use(self%2C%20name)%3A%0A%20%20%20%20%20%20%20%20%22%22%22%E7%94%A8%E4%B8%80%E4%B8%AA%20handle%20%E4%B9%8B%E5%89%8D%E5%BF%85%E9%A1%BB%E6%A3%80%E6%9F%A5%E5%AE%83%E6%8C%87%E5%90%91%E7%9A%84%20op%20%E8%BF%98%E6%B4%BB%E7%9D%80%E2%80%94%E2%80%94%E8%BF%99%E5%B0%B1%E6%98%AF%E5%A4%B1%E6%95%88%E6%A3%80%E6%9F%A5%E3%80%82%22%22%22%0A%20%20%20%20%20%20%20%20ids%20%3D%20self.handles.get(name%2C%20%5B%5D)%0A%20%20%20%20%20%20%20%20dead%20%3D%20%5Bi%20for%20i%20in%20ids%20if%20i%20in%20self.p.dead%5D%0A%20%20%20%20%20%20%20%20if%20dead%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20raise%20RuntimeError(%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22op%20uses%20a%20handle%20invalidated%20by%20a%20previously%20executed%20transform%20op%5Cn%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22%20%20%20%20%20%20%EF%BC%88%7Bname%7D%20%E6%8C%87%E5%90%91%20%7Bids%7D%EF%BC%8C%E5%85%B6%E4%B8%AD%20%7Bdead%7D%20%E5%B7%B2%E8%A2%AB%E6%9B%BF%E6%8D%A2%E6%8E%89%EF%BC%89%22)%0A%20%20%20%20%20%20%20%20return%20ids%0A%0A%20%20%20%20def%20tile(self%2C%20src%2C%20out%2C%20sizes)%3A%0A%20%20%20%20%20%20%20%20ids%20%3D%20self.use(src)%0A%20%20%20%20%20%20%20%20produced%20%3D%20%5B%5D%0A%20%20%20%20%20%20%20%20for%20i%20in%20ids%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20new%20%3D%20self.p.replace(i%2C%20%5B%22scf.for%22%2C%20%22scf.for%22%2C%20%22linalg.matmul%22%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20produced%20%2B%3D%20new%5B-1%3A%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20tile%20%7Bsrc%7D(id%3D%7Bi%7D)%20sizes%3D%7Bsizes%7D%20%E2%86%92%20%E6%8D%A2%E6%88%90%20%7Bnew%7D%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22%7Bsrc%7D%20%E4%BB%8E%E6%AD%A4**%E5%A4%B1%E6%95%88**%22)%0A%20%20%20%20%20%20%20%20self.handles%5Bout%5D%20%3D%20produced%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bout%7D%20%3D%20%E6%96%B0%20handle%20%E2%86%92%20%7Bproduced%7D%22)%0A%0Afor%20title%2C%20script%20in%20%5B%0A%20%20%20%20(%22%E6%AD%A3%E7%A1%AE%EF%BC%9Atile%20%E4%B9%8B%E5%90%8E%E7%94%A8%E6%96%B0%20handle%22%2C%20%5B(%22match%22%2C%20%22%25mm%22%2C%20%22linalg.matmul%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22tile%22%2C%20%22%25mm%22%2C%20%22%25tiled%22%2C%20%5B4%2C%204%5D)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22tile%22%2C%20%22%25tiled%22%2C%20%22%25tiled2%22%2C%20%5B2%2C%202%5D)%5D)%2C%0A%20%20%20%20(%22%E9%94%99%E8%AF%AF%EF%BC%9Atile%20%E4%B9%8B%E5%90%8E%E5%8F%88%E7%94%A8%E6%97%A7%20handle%22%2C%20%5B(%22match%22%2C%20%22%25mm%22%2C%20%22linalg.matmul%22)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22tile%22%2C%20%22%25mm%22%2C%20%22%25tiled%22%2C%20%5B4%2C%204%5D)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22tile%22%2C%20%22%25mm%22%2C%20%22%25tiled2%22%2C%20%5B2%2C%202%5D)%5D)%2C%0A%5D%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91%22)%0A%20%20%20%20p%20%3D%20Payload(%5B(0%2C%20%22func.func%22)%2C%20(1%2C%20%22linalg.matmul%22)%2C%20(2%2C%20%22func.return%22)%5D)%0A%20%20%20%20it%20%3D%20Interp(p)%0A%20%20%20%20try%3A%0A%20%20%20%20%20%20%20%20for%20step%20in%20script%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20step%5B0%5D%20%3D%3D%20%22match%22%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20it.match(step%5B1%5D%2C%20step%5B2%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20it.tile(step%5B1%5D%2C%20step%5B2%5D%2C%20step%5B3%5D)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E2%86%92%20%E6%88%90%E5%8A%9F%E3%80%82payload%20%E7%8E%B0%E5%9C%A8%E6%98%AF%EF%BC%9A%7Bp.show()%7D%22)%0A%20%20%20%20except%20RuntimeError%20as%20e%3A%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E2%86%92%20error%3A%20%7Be%7D%22)"># transform 方言的 handle/payload 模型，以及 handle 为什么会失效。
+# 一句话：handle 是"指向 payload 里一组 op 的名字"，而变换会**替换** op，
+# 于是旧 handle 指向的东西不存在了。
+
+class Payload:
+    """被变换的 IR。这里简化成一个 op 列表，每个 op 有名字和唯一 id。"""
+    def __init__(self, ops): self.ops = list(ops); self.dead = set()
+    def alive(self, ids): return [i for i in ids if i not in self.dead]
+    def replace(self, old_id, new_ops):
+        self.dead.add(old_id)
+        base = max(i for i, _ in self.ops) + 1
+        new = [(base + k, n) for k, n in enumerate(new_ops)]
+        self.ops += new
+        return [i for i, _ in new]
+    def show(self):
+        return ", ".join(f"{n}#{i}" for i, n in self.ops if i not in self.dead)
+
+class Interp:
+    def __init__(self, payload): self.p, self.handles = payload, {}
+
+    def match(self, name, want):
+        ids = [i for i, n in self.p.ops if n == want and i not in self.p.dead]
+        self.handles[name] = ids
+        print(f"    {name} = match {want!r} → 指向 {ids}")
+
+    def use(self, name):
+        """用一个 handle 之前必须检查它指向的 op 还活着——这就是失效检查。"""
+        ids = self.handles.get(name, [])
+        dead = [i for i in ids if i in self.p.dead]
+        if dead:
+            raise RuntimeError(
+                f"op uses a handle invalidated by a previously executed transform op\n"
+                f"      （{name} 指向 {ids}，其中 {dead} 已被替换掉）")
+        return ids
+
+    def tile(self, src, out, sizes):
+        ids = self.use(src)
+        produced = []
+        for i in ids:
+            new = self.p.replace(i, ["scf.for", "scf.for", "linalg.matmul"])
+            produced += new[-1:]
+            print(f"    tile {src}(id={i}) sizes={sizes} → 换成 {new}，"
+                  f"{src} 从此**失效**")
+        self.handles[out] = produced
+        print(f"    {out} = 新 handle → {produced}")
+
+for title, script in [
+    ("正确：tile 之后用新 handle", [("match", "%mm", "linalg.matmul"),
+                                   ("tile", "%mm", "%tiled", [4, 4]),
+                                   ("tile", "%tiled", "%tiled2", [2, 2])]),
+    ("错误：tile 之后又用旧 handle", [("match", "%mm", "linalg.matmul"),
+                                     ("tile", "%mm", "%tiled", [4, 4]),
+                                     ("tile", "%mm", "%tiled2", [2, 2])]),
+]:
+    print(f"\n【{title}】")
+    p = Payload([(0, "func.func"), (1, "linalg.matmul"), (2, "func.return")])
+    it = Interp(p)
+    try:
+        for step in script:
+            if step[0] == "match":
+                it.match(step[1], step[2])
+            else:
+                it.tile(step[1], step[2], step[3])
+        print(f"  → 成功。payload 现在是：{p.show()}")
+    except RuntimeError as e:
+        print(f"  → error: {e}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【正确：tile 之后用新 handle】
+    %mm = match 'linalg.matmul' → 指向 [1]
+    tile %mm(id=1) sizes=[4, 4] → 换成 [3, 4, 5]，%mm 从此**失效**
+    %tiled = 新 handle → [5]
+    tile %tiled(id=5) sizes=[2, 2] → 换成 [6, 7, 8]，%tiled 从此**失效**
+    %tiled2 = 新 handle → [8]
+  → 成功。payload 现在是：func.func#0, func.return#2, scf.for#3, scf.for#4, scf.for#6, scf.for#7, linalg.matmul#8
+
+【错误：tile 之后又用旧 handle】
+    %mm = match 'linalg.matmul' → 指向 [1]
+    tile %mm(id=1) sizes=[4, 4] → 换成 [3, 4, 5]，%mm 从此**失效**
+    %tiled = 新 handle → [5]
+  → error: op uses a handle invalidated by a previously executed transform op
+      （%mm 指向 [1]，其中 [1] 已被替换掉）</code></pre>
+</div><p>两组的区别只有最后一步用了 <code>%mm</code> 还是 <code>%tiled</code>。注意成功那组的 payload：tile 两次之后有四个 <code>scf.for</code> 和一个 <code>linalg.matmul</code>，<strong>每次 tile 都是对上一次的结果做的</strong>。</p>
+<h2>和 pix 接上：从调度里驱动自己的 pass</h2>
+<p><code>transform.structured.*</code> 那些 op 只认实现了 <code>TilingInterface</code> 的 op（<code>linalg</code> 那批），pix 的 op 还不行——那是第 20 章的事。但有一个 op 让 transform 脚本能驱动<strong>任何已注册的 pass</strong>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --transform-interpreter
+module attributes {transform.with_named_sequence} {
+  func.func @driven_by_schedule(%a: tensor&lt;4x4xf32&gt;, %b: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; {
+    %r = pix.add %a, %b : tensor&lt;4x4xf32&gt;
+    return %r : tensor&lt;4x4xf32&gt;
+  }
+
+  transform.named_sequence @__transform_main(%root: !transform.any_op {transform.readonly}) {
+    %fns = transform.structured.match ops{["func.func"]} in %root
+      : (!transform.any_op) -&gt; !transform.any_op
+    %after = transform.apply_registered_pass "pix-cost-report" to %fns
+      : (!transform.any_op) -&gt; !transform.any_op
+    transform.yield
+  }
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --transform-interpreter input.mlir</code></div>
+</div><p>运行结果（payload 部分）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">  func.func @driven_by_schedule(%arg0: tensor&lt;4x4xf32&gt;, %arg1: tensor&lt;4x4xf32&gt;) -&gt; tensor&lt;4x4xf32&gt; attributes {pix.elements = 16 : i64, pix.num_ops = 1 : i64} {
+    %0 = pix.add %arg0, %arg1 : tensor&lt;4x4xf32&gt;
+    return %0 : tensor&lt;4x4xf32&gt;
+  }</code></pre>
+</div><p>那两个属性证明第 13 章写的 <code>pix-cost-report</code> 真的跑了——<strong>而且是被一段 IR 驱动的，不是命令行</strong>。</p>
+<p><code>apply_registered_pass</code> 还能带选项（<code>with options = { &quot;key&quot; = value }</code>），值可以是属性、<strong>也可以是 transform 的 param SSA 值</strong>。后者意味着：pass 的参数可以在调度里算出来，甚至由外层搜索循环生成。这一步跨出去，&quot;自动调优&quot;就有了落脚点。</p>
+<div class="concept">
+<svg viewBox="0 0 700 400" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c18b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c18o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c18g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">两套 IR 同时存在：schedule 用 handle 指着 payload</text>
+  <rect x="14" y="32" width="300" height="150" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="26" y="51" font-size="11" font-weight="bold" fill="#e06a3b">schedule（transform 方言的 IR）</text>
+  <text x="26" y="72" font-size="9" font-family="monospace" fill="#24292f">%mm = transform.structured.match</text>
+  <text x="26" y="85" font-size="9" font-family="monospace" fill="#24292f">         ops{["linalg.matmul"]} in %root</text>
+  <text x="26" y="104" font-size="9" font-family="monospace" fill="#24292f">%tiled, %loops:2 =</text>
+  <text x="26" y="117" font-size="9" font-family="monospace" fill="#24292f">  transform.structured.tile_using_for</text>
+  <text x="26" y="130" font-size="9" font-family="monospace" fill="#24292f">    %mm tile_sizes [4, 4]</text>
+  <text x="26" y="150" font-size="9" fill="#6b7280">这里的 SSA 值<tspan font-weight="bold">不是数据</tspan>，是 handle：</text>
+  <text x="26" y="165" font-size="9" fill="#6b7280">"指向 payload 里那组 op"的名字</text>
+  <text x="26" y="178" font-size="9" fill="#6b7280">tile 大小改的是 IR，不用重新编译</text>
+  <rect x="386" y="32" width="300" height="150" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="398" y="51" font-size="11" font-weight="bold" fill="#2b6cb0">payload（你真正要编译的代码）</text>
+  <text x="398" y="72" font-size="9" font-family="monospace" fill="#24292f">func.func @mm(...) {</text>
+  <text x="398" y="88" font-size="9" font-family="monospace" fill="#24292f">  linalg.matmul ins(...) outs(...)</text>
+  <text x="398" y="104" font-size="9" font-family="monospace" fill="#24292f">  return</text>
+  <text x="398" y="117" font-size="9" font-family="monospace" fill="#24292f">}</text>
+  <text x="398" y="140" font-size="9" fill="#6b7280">tile 之后：两层 scf.for + extract_slice</text>
+  <text x="398" y="154" font-size="9" fill="#6b7280">+ 一个 4x4 的 linalg.matmul</text>
+  <text x="398" y="170" font-size="9" fill="#3f9b5c">最内层<tspan font-weight="bold">仍是 linalg</tspan> —— 所以还能继续变换</text>
+  <path d="M 316 90 L 382 90" fill="none" stroke="#e06a3b" stroke-width="1.6" marker-end="url(#c18o)"/>
+  <text x="322" y="84" font-size="9" fill="#e06a3b">%mm 指向它</text>
+  <path d="M 382 128 L 318 128" fill="none" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c18b)"/>
+  <text x="322" y="142" font-size="9" fill="#2b6cb0">变换完产出新 handle</text>
+  <line x1="14" y1="198" x2="686" y2="198" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="218" font-size="11" font-weight="bold" fill="#e06a3b">handle 失效：变换会**替换** op，旧 handle 就没有指向物了</text>
+  <rect x="14" y="228" width="200" height="56" rx="5" fill="#fff" stroke="#6b7280"/>
+  <text x="24" y="247" font-size="9" font-family="monospace" fill="#24292f">%mm → [matmul#1]</text>
+  <text x="24" y="264" font-size="9" fill="#6b7280">match 之后，handle 有效</text>
+  <text x="24" y="278" font-size="9" fill="#3f9b5c">✓ 可以用</text>
+  <line x1="216" y1="256" x2="252" y2="256" stroke="#e06a3b" stroke-width="1.5" marker-end="url(#c18o)"/>
+  <text x="220" y="250" font-size="8" fill="#e06a3b">tile</text>
+  <rect x="254" y="228" width="200" height="56" rx="5" fill="#fdf1ec" stroke="#e06a3b"/>
+  <text x="264" y="247" font-size="9" font-family="monospace" fill="#24292f">matmul#1 被替换掉</text>
+  <text x="264" y="264" font-size="9" font-family="monospace" fill="#24292f">%tiled → [matmul#8]</text>
+  <text x="264" y="278" font-size="9" fill="#e06a3b">✗ %mm 从此失效</text>
+  <line x1="456" y1="256" x2="492" y2="256" stroke="#e06a3b" stroke-width="1.5" marker-end="url(#c18o)"/>
+  <rect x="494" y="228" width="192" height="56" rx="5" fill="#fff" stroke="#e06a3b" stroke-width="1.6"/>
+  <text x="504" y="246" font-size="9" fill="#e06a3b">再用 %mm →</text>
+  <text x="504" y="261" font-size="8" font-family="monospace" fill="#e06a3b">uses a handle invalidated by a</text>
+  <text x="504" y="273" font-size="8" font-family="monospace" fill="#e06a3b">previously executed transform op</text>
+  <rect x="14" y="298" width="672" height="46" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-dasharray="5 3"/>
+  <text x="26" y="317" font-size="10" fill="#24292f">这是<tspan font-weight="bold">设计</tspan>不是 bug：tile 之后"原来那个 op"没有唯一对应物，自动更新 handle 会给出语义模糊的结果。</text>
+  <text x="26" y="334" font-size="10" fill="#24292f">transform 方言选择当场报错（还点出 handle 的定义处），比第 14 章那个"地址被复用"的静默坑好得多。</text>
+  <rect x="14" y="352" width="672" height="44" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="370" font-size="10" fill="#24292f">和 pix 的接口：<tspan font-family="monospace">transform.apply_registered_pass "pix-cost-report" to %fns</tspan> —— 任何已注册的 pass 都能被调度驱动。</text>
+  <text x="26" y="387" font-size="10" fill="#24292f">选项值可以是 transform 的 param SSA 值，于是 pass 参数能在调度里算出来 —— 这是自动调优的落脚点。</text>
+</svg>
+<div class="caption">图 18-1　schedule 与 payload 两套 IR、handle 的指向关系，以及失效为什么是设计而非缺陷</div>
+</div><h2>这套东西解决了什么真问题</h2>
+<p>值得停下来问一句：为什么要发明这么一套？</p>
+<p><strong>第一，调度和实现解耦。</strong> 传统写法里，&quot;tile 成 32×32&quot;这个决定埋在某个 pass 的常量里。换成 64×64 要改代码、重编译、重跑。transform 方言里它是 IR 里的一个字面量。</p>
+<p><strong>第二，调度可以被生成和搜索。</strong> IR 就是数据。一个自动调优器可以生成上千份 schedule，跑一遍挑最快的——这是 Halide 和 TVM 那条路线在 MLIR 里的落地方式。第 15 章说 PDLL 的价值在&quot;pattern 能运行时加载&quot;，是同一个道理的另一半。</p>
+<p><strong>第三，可诊断。</strong> 调度是 IR，所以它有位置信息、能打印、能验证、能被 <code>mlir-opt</code> 检查。对比一长串 <code>--pass-pipeline=&#39;...&#39;</code> 字符串——那个东西错一个括号，报错完全没法读。</p>
+<p><strong>代价也要说清楚</strong>：多了一层要学的东西；<code>transform.structured.*</code> 只覆盖 linalg/tensor 那套结构化 op，自己的方言要接进去得实现 <code>TilingInterface</code> 这类接口（第 20、21 章会做）；而且这套 API 还在动。上游文档自己也说得很直白——它是&quot;面向调度专家&quot;的工具，不是所有人都需要。</p>
+<h2>动手：把 tile 大小做成参数</h2>
+<p>schedule 里的 tile 大小可以不是字面量，而是一个 <code>!transform.param&lt;i64&gt;</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">%sz = transform.param.constant 4 : i64 -&gt; !transform.param&lt;i64&gt;
+%tiled, %loops:2 = transform.structured.tile_using_for %mm tile_sizes [%sz, %sz]
+  : (!transform.any_op, !transform.param&lt;i64&gt;, !transform.param&lt;i64&gt;)
+    -&gt; (!transform.any_op, !transform.any_op, !transform.any_op)</code></pre>
+</div><p>改成 2、8、16 各跑一次，对比生成的 <code>scf.for</code> 的 <code>step</code>。<strong>这一步是自动调优的雏形</strong>：把这个 param 换成由外层逻辑生成的值，你就有了一个搜索空间。</p>
+<p><strong>再改一处</strong>：在 tile 之后加一句</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">MLIR</span></div>
+  <pre class="line-numbers"><code class="language-mlir">transform.print %tiled {name = "tiled op"} : !transform.any_op</code></pre>
+</div><p>它会把 handle 指向的 op 打到 stderr。这是调 schedule 时最直接的工具——<strong>transform 方言的调试手段就是往 IR 里插打印 op</strong>，因为调度本身就是 IR。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>两套 IR 同时存在</strong>：payload（你要编译的代码）和 schedule（transform 方言的 IR）。schedule 里的 SSA 值是 <strong>handle</strong>，指向 payload 里的一组 op，不是数据。</li>
+<li>类型分工清楚：<code>!transform.any_op</code> / <code>!transform.op&lt;&quot;name&quot;&gt;</code> 指 op，<code>!transform.any_value</code> 指 Value，<code>!transform.param&lt;T&gt;</code> 是编译期参数（<strong>不指向 op</strong>）。</li>
+<li><strong>handle 失效是设计，不是 bug</strong>。变换会替换 op，旧 handle 没有唯一对应物，自动更新只会给出语义模糊的结果。所以：<strong>看清每个变换 op 产出哪些新 handle，然后只用新的</strong>。</li>
+<li>那个报错质量很高——同时指出用错的位置<strong>和 handle 的定义处</strong>。transform 方言把可诊断性当成设计目标，这一点和 dialect conversion 形成鲜明对比。</li>
+<li><strong><code>custom op &#39;transform.structured.match&#39; is unknown</code> 不是版本问题</strong>：transform 方言的大部分 op 住在<strong>扩展</strong>里。自己写驱动时除了 <code>registerAllDialects</code> 还要 <code>registerAllExtensions</code>（CMake 链 <code>MLIRRegisterAllExtensions</code>）。<code>mlir-opt</code> 自带两句，所以这坑只在你写自己的工具时出现。</li>
+<li><strong>tiling 不改变语义</strong>：tile 之后最内层仍是 <code>linalg.matmul</code>，所以能继续 tile、继续融合。这是第 20 章&quot;linalg 为什么好变换&quot;的伏笔。</li>
+<li><strong><code>transform.apply_registered_pass</code> 是接入自己方言的最短路径</strong>：任何已注册的 pass 都能被调度驱动，选项值还能是 transform 的 param SSA 值——pass 参数可以在调度里算出来。</li>
+<li>三个真实收益：<strong>调度与实现解耦</strong>（改 IR 不改代码）、<strong>调度可被生成与搜索</strong>（自动调优的落脚点）、<strong>可诊断</strong>（调度是 IR，有位置、能打印、能验证）。代价是多一层概念，且 <code>transform.structured.*</code> 目前只覆盖结构化 op。</li>
+<li>调 schedule 的第一个工具是 <code>transform.print</code>——<strong>往 IR 里插打印 op</strong>，因为调度本身就是 IR。</li>
+</ul>
+<p><strong>pix 进度</strong>：<code>pix-opt</code> 补上 <code>registerAllExtensions</code>，于是它也能当 transform 方言的驱动器用。新增 <code>transform.mlir</code>：一段 schedule 用 <code>transform.apply_registered_pass</code> 驱动第 13 章那个 <code>pix-cost-report</code>，属性值证明它真的跑了。<code>check-pix</code> 从 14 涨到 15 个文件。</p>
+<p>第三部分最后一章讲<strong>分析与副作用</strong>。第 13 章我们写过一个分析，但那是自己遍历数出来的；这一章看 MLIR 自带的那几个：<code>DominanceInfo</code>、<code>MemoryEffects</code>（很多变换的前提——没有它，编译器不敢动任何可能碰内存的东西），以及稀疏数据流分析框架 <code>DataFlowSolver</code>。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch17.html">← 第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a>
+  <a class="nav-next" href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

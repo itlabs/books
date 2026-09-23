@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么还要一层 IR：LLVM IR 的天花板与 MLIR 的答案</a></li>
+<li><a href="ch02.html">第 2 章 IR 的形状：Operation / Region / Block / Value 与 LLVM IR 对照</a></li>
+<li><a href="ch03.html">第 3 章 读写 MLIR：通用格式、自定义格式与 mlir-opt 的日常用法</a></li>
+<li><a href="ch04.html">第 4 章 类型与属性：唯一化、MLIRContext 与内建类型</a></li>
+<li><a href="ch05.html">第 5 章 Trait 与 Interface：MLIR 复用的真正机关</a></li>
+<li><a href="ch06.html">第 6 章 方言全景：内建方言巡览与它们的分工</a></li>
+<li><a href="ch07.html">第 7 章 起一个 out-of-tree 方言：目录、CMake 与 mlir-tblgen 构建链</a></li>
+<li><a href="ch08.html">第 8 章 ODS（一）：用 TableGen 声明 Op、参数、结果与 assemblyFormat</a></li>
+<li><a href="ch09.html">第 9 章 ODS（二）：自定义类型与属性，!pix.kernel 是怎么来的</a></li>
+<li><a href="ch10.html">第 10 章 verifier 与不变式：把「不该出现的 IR」挡在门外</a></li>
+<li><a href="ch11.html">第 11 章 fold 与 canonicalize：常量折叠、恒等化简与收敛</a></li>
+<li><a href="ch12.html">第 12 章 pix 方言成型：完整 op 集、pix-opt 与 lit 测试</a></li>
+<li><a href="ch13.html">第 13 章 Pass 框架：嵌套 PassManager、分析缓存与并发执行</a></li>
+<li><a href="ch14.html">第 14 章 Pattern Rewrite 引擎：RewritePattern、benefit 与 greedy driver</a></li>
+<li><a href="ch15.html">第 15 章 声明式重写：DRR 与 PDLL，以及什么时候别用它们</a></li>
+<li><a href="ch16.html">第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a></li>
+<li class="active"><a href="ch17.html">第 17 章 Dialect Conversion（二）：materialization、1:N 转换与调试「转不过去」</a></li>
+<li><a href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR</a></li>
+<li><a href="ch19.html">第 19 章 分析与副作用：支配关系、MemoryEffects 与数据流框架</a></li>
+<li><a href="ch20.html">第 20 章 linalg：结构化操作、indexing map 与「为什么它好变换」</a></li>
+<li><a href="ch21.html">第 21 章 tiling 与 fusion：把 pix 的逐点与 stencil 变成分块循环</a></li>
+<li><a href="ch22.html">第 22 章 Bufferization：从 tensor 的值语义到 memref 的内存语义</a></li>
+<li><a href="ch23.html">第 23 章 vector 方言：向量化、mask 与按目标宽度展开</a></li>
+<li><a href="ch24.html">第 24 章 落到 LLVM：scf→cf、memref 描述符与 JIT 跑起来</a></li>
+<li><a href="ch25.html">第 25 章 落到 GPU：gpu 方言、kernel outlining 与三个出口</a></li>
+<li><a href="ch26.html">第 26 章 Triton：Python DSL 到 PTX，layout 系统是它的核心创造</a></li>
+<li><a href="ch27.html">第 27 章 IREE 与 flang：端到端 AI 编译栈与 Fortran 前端的两种用法</a></li>
+<li><a href="ch28.html">第 28 章 ClangIR 与未来：C++ 也变成方言，以及 MLIR 还没解决的问题</a></li>
+<li><a href="appendix-a.html">附录 A 搭建：构建 LLVM/MLIR、out-of-tree 模板与常用命令</a></li>
+<li><a href="appendix-b.html">附录 B 术语与对照表：LLVM ↔ MLIR 概念对照与缩写</a></li>
+<li><a href="appendix-c.html">附录 C 源码导览地图：想看某个机制去 mlir/ 的哪个目录</a></li></ul></nav>
+<main>
+<article>
+<h1>第 17 章 Dialect Conversion（二）：物化、1:N 展开与读懂「failed to legalize」</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 16 章结尾我们故意撞了一面墙：</p>
+<p><code>error: failed to legalize unresolved materialization from ('tensor&lt;3x3xf32&gt;') to ('!pix.kernel&lt;3 x 3&gt;') that remained live after conversion</code></p>
+<p>这一章把它拆干净。四件事：<strong>物化（materialization）</strong>到底在补什么洞、<code>addSourceMaterialization</code> 与 <code>addTargetMaterialization</code> <strong>方向怎么分</strong>、<strong>函数签名</strong>为什么需要专门一条 pattern（外加一条动态合法规则）、以及 <strong>1:N 展开</strong>——一个值变成好几个值时会发生什么。</p>
+<p>最后给一套<strong>读 <code>failed to legalize</code> 的系统方法</strong>：这句话有好几种变体，每一种都精确对应第 16 章那个四态模型里的一个位置。学会从报错反推是哪一态出了问题，这一章就值了。</p>
+<p>落地物：给 pix 加两个 cast op（物化必须有 op 可用——框架不会替你发明），把物化钩子装上，那面墙就通了。</p>
+</div><h2>物化在补什么洞</h2>
+<p>一句话：<strong>转换是逐步的，所以任何时刻 IR 里都可能同时存在新旧两种类型。</strong></p>
+<p>第 16 章那个例子里，<code>KernelLowering</code> 把 <code>pix.kernel</code> 的结果从 <code>!pix.kernel&lt;3 x 3&gt;</code> 换成了 <code>tensor&lt;3x3xf32&gt;</code>。但 <code>pix.convolve</code> 是 <code>Unknown</code>（我们没标它非法），partial 模式放它过去——<strong>它还在等一个 <code>!pix.kernel</code></strong>。</p>
+<p>driver 遇到这种&quot;接不上&quot;时不会立刻报错，而是插一个占位：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">%1 = "builtin.unrealized_conversion_cast"(%0) : (tensor&lt;3x3xf32&gt;) -&gt; !pix.kernel&lt;3 x 3&gt;</code></pre>
+</div><p>这个 op 的名字就说明了一切——<strong>unrealized</strong>，还没兑现。转换结束时如果它还在，就是那句报错。<strong>物化钩子就是兑现它的办法。</strong></p>
+<h3>先得有一个 op 能表达这个转换</h3>
+<p>这是最容易忽略的一步：<strong>框架不会替你发明 op</strong>。物化钩子的职责是&quot;造一个 op 把这组值转成那个类型&quot;，所以你的方言里必须有这么个 op。给 pix 加两个：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
+  <pre class="line-numbers"><code class="language-llvm">def Pix_ToKernelOp : Pix_Op&lt;"to_kernel", [Pure]&gt; {
+  let summary = "把一张权重张量看作一个卷积核（用于 source 物化）";
+  let arguments = (ins F32Tensor:$weights);
+  let results = (outs Pix_KernelType:$result);
+  let assemblyFormat = "$weights attr-dict `:` type($weights) `-&gt;` type($result)";
+}
+
+def Pix_FromKernelOp : Pix_Op&lt;"from_kernel", [Pure]&gt; {
+  let summary = "把一个卷积核看作权重张量（用于 target 物化）";
+  let arguments = (ins Pix_KernelType:$kernel);
+  let results = (outs F32Tensor:$result);
+  let assemblyFormat = "$kernel attr-dict `:` type($kernel) `-&gt;` type($result)";
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
+</div><p>两个方向都要有。它们是纯粹的表示转换、不做任何计算，所以都标 <code>Pure</code>。真实方言里这类 op 很常见（<code>memref.cast</code>、<code>tensor.cast</code>、<code>llvm.bitcast</code>），<code>builtin.unrealized_conversion_cast</code> 只是它们的通用占位版。</p>
+<h2>两个方向：source 还是 target</h2>
+<p>这是本章最容易记混的一点。先看官方注释怎么说（<code>mlir/include/mlir/Transforms/DialectConversion.h:194</code>）：</p>
+<blockquote>
+<p><strong>source</strong>: &quot;registers a materialization that will be called when converting a replacement value back to <strong>its original source type</strong>. This is used when some uses of the original value persist beyond the main conversion.&quot;</p>
+</blockquote>
+<blockquote>
+<p><strong>target</strong>: &quot;registers a materialization that will be called when converting a value to <strong>a target type</strong> according to a pattern&#39;s type converter.&quot;</p>
+</blockquote>
+<p>记法很简单：<strong>看你要造出来的那个类型属于哪一侧。</strong></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>要造的类型</th>
+<th>什么场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>addSourceMaterialization</code></td>
+<td><strong>旧</strong>类型（转换前的）</td>
+<td>新值已经产出，但还有<strong>老使用者</strong>活到了转换之后</td>
+</tr>
+<tr>
+<td><code>addTargetMaterialization</code></td>
+<td><strong>新</strong>类型（转换后的）</td>
+<td>手里是老值，而某条 pattern 需要新类型的操作数</td>
+</tr>
+</tbody></table>
+<p>我们那个例子要造的是 <code>!pix.kernel</code>（旧类型），所以是 <strong>source</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">addSourceMaterialization([](OpBuilder &amp;b, KernelType want,
+                            ValueRange inputs, Location loc) -&gt; Value {
+  if (inputs.empty())
+    return nullptr;
+  if (!isa&lt;RankedTensorType&gt;(inputs.front().getType()))
+    return nullptr;            // 不是我该管的，返回 nullptr 让框架去试别的钩子
+  return ToKernelOp::create(b, loc, want, inputs.front());
+});
+
+addTargetMaterialization([](OpBuilder &amp;b, RankedTensorType want,
+                            ValueRange inputs, Location loc) -&gt; Value {
+  if (inputs.size() != 1)
+    return nullptr;
+  if (!isa&lt;KernelType&gt;(inputs.front().getType()))
+    return nullptr;
+  return FromKernelOp::create(b, loc, want, inputs.front());
+});</code></pre>
+</div><p>回调签名是固定的 <code>Value(OpBuilder &amp;, T want, ValueRange inputs, Location)</code>，其中 <code>T</code> 是你要造的类型（框架据此做重载分发）。<strong>返回 <code>nullptr</code> 表示&quot;我物化不了，去试别的钩子&quot;</strong>——不是错误，是协作机制。</p>
+<p>装上之后，第 16 章那面墙通了：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-arith=lower-kernels=true
+func.func @kernel_used(%img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %k = pix.kernel dense&lt;1.0&gt; : tensor&lt;3x3xf32&gt; -&gt; !pix.kernel&lt;3 x 3&gt;
+  %c = pix.convolve %img, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  return %c : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-arith=lower-kernels=true input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @kernel_used(%arg0: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %cst = arith.constant dense&lt;1.000000e+00&gt; : tensor&lt;3x3xf32&gt;
+    %0 = pix.to_kernel %cst : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %1 = pix.convolve %arg0, %0 : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+    return %1 : tensor&lt;8x8xf32&gt;
+  }
+}</code></pre>
+</div><p><code>pix.kernel</code> 降成了 <code>arith.constant</code>，中间自动插入的 <code>pix.to_kernel</code> 把它接回 <code>pix.convolve</code>。<strong>注意我们没写任何代码去插那个 op</strong>——是 driver 在需要的位置调了我们的钩子。</p>
+<div class="note">
+<strong>那些 cast op 会一直留着吗</strong>
+<p>不会——只要下游也降完就没了。<code>pix.to_kernel(pix.from_kernel(%x))</code> 这种一来一回，给它们配一对 fold（第 11 章那种"返回已有的值"）就会自动消掉。真实下降管线结束时通常一个 cast 都不剩；剩下的那些恰好指出"这条路还没降完"，是很有用的信号。</p>
+</div><h2>函数签名：为什么要单独一条 pattern</h2>
+<p>签名里的类型<strong>不是任何 op 的操作数</strong>——函数的参数类型写在 <code>func.func</code> 的 <code>function_type</code> 属性里，块参数的类型跟着它。所以前面那些 <code>OpConversionPattern</code> 碰不到它们。</p>
+<p>上游给了现成的 pattern，但配套那一步更关键：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">populateFunctionOpInterfaceTypeConversionPattern&lt;func::FuncOp&gt;(patterns, converter);
+
+// 配套的关键一步：把 func.func 标成**动态合法**。
+// 签名还没转完时它非法，转完了就合法。
+target.addDynamicallyLegalOp&lt;func::FuncOp&gt;([&amp;converter](func::FuncOp fn) {
+  return converter.isSignatureLegal(fn.getFunctionType());
+});</code></pre>
+</div><div class="keypoint">
+<strong>签名转换 = 一条 pattern + 一条动态合法规则，缺一不可</strong>
+<p>只加 pattern 不加动态合法规则：<code>func.func</code> 会被 <code>addLegalDialect&lt;func::FuncDialect&gt;()</code> 判成静态合法，driver 根本不会去处理它，签名原样不动，pattern 白写。</p>
+<p>只加动态合法规则不加 pattern：<code>func.func</code> 被判非法，而没人能改它，于是 <code>failed to legalize operation 'func.func'</code>。</p>
+<p>这是第 16 章讲的 <code>addDynamicallyLegalOp</code> 最典型的用法：<strong>"合法"取决于转换进行到哪一步</strong>，只有动态规则表达得出来。</p>
+</div><p>实测：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-arith=convert-signatures=true
+func.func @takes_kernel(%k: !pix.kernel&lt;3 x 3&gt;, %img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %c = pix.convolve %img, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  return %c : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-arith=convert-signatures=true input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @takes_kernel(%arg0: tensor&lt;3x3xf32&gt;, %arg1: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %0 = pix.to_kernel %arg0 : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %1 = pix.convolve %arg1, %0 : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+    return %1 : tensor&lt;8x8xf32&gt;
+  }
+}</code></pre>
+</div><p>参数类型换了，而 source 物化自动把块参数接回 <code>!pix.kernel</code> 给 <code>pix.convolve</code> 用。<strong>两个机制配合起来，一行胶水代码都不用写。</strong></p>
+<h2>1:N 展开：一个值变成好几个</h2>
+<p>真实下降里这个场景极常见。最典型的是第 24 章要讲的 memref descriptor——一个 <code>memref&lt;8xf32&gt;</code> 展成&quot;基址、对齐地址、偏移、尺寸、步长&quot;一串标量。</p>
+<p><code>addConversion</code> 的 1:N 形式，回调多一个输出参数（<code>DialectConversion.h:154</code> 的注释写得很清楚）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// 1:N：往 out 里塞几个类型就展成几个值。塞 0 个表示"这个类型直接消失"。
+addConversion([](KernelType kty,
+                 SmallVectorImpl&lt;Type&gt; &amp;out) -&gt; std::optional&lt;LogicalResult&gt; {
+  MLIRContext *ctx = kty.getContext();
+  out.push_back(RankedTensorType::get({kty.getRows(), kty.getCols()},
+                                      Float32Type::get(ctx)));
+  out.push_back(IndexType::get(ctx));   // 半径
+  return success();
+});</code></pre>
+</div><p>（动机是真的：降成循环之后，边界处理需要半径当循环边界。）</p>
+<p>配合签名转换跑一下：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">MLIR（pix 方言）</span>
+    </div>
+  <pre class="line-numbers"><code class="language-mlir">// RUN: pix-opt %s --pix-to-arith='convert-signatures=true one-to-n=true'
+func.func @takes_kernel(%k: !pix.kernel&lt;3 x 3&gt;, %img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+  %c = pix.convolve %img, %k : !pix.kernel&lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+  return %c : tensor&lt;8x8xf32&gt;
+}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>pix-opt --pix-to-arith='convert-signatures=true one-to-n=true' input.mlir</code></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">module {
+  func.func @takes_kernel(%arg0: tensor&lt;3x3xf32&gt;, %arg1: index, %arg2: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
+    %0 = pix.to_kernel %arg0 : tensor&lt;3x3xf32&gt; -&gt; &lt;3 x 3&gt;
+    %1 = pix.convolve %arg2, %0 : &lt;3 x 3&gt;, tensor&lt;8x8xf32&gt;
+    return %1 : tensor&lt;8x8xf32&gt;
+  }
+}</code></pre>
+</div><p><strong>一个参数变成了两个</strong>，原来的 <code>%img</code> 被挤到第三位（<code>%arg2</code>）。物化钩子收到两个输入，取第一个装回 kernel。</p>
+<div class="warn">
+<strong>1:N 会让你的物化钩子收到多个输入</strong>
+<p>我第一版钩子里写的是 <code>if (inputs.size() != 1) return nullptr;</code>，看起来很稳妥。开了 1:N 之后立刻报错：</p>
+<p><code>failed to legalize unresolved materialization from ('tensor&lt;3x3xf32&gt;', 'index') to ('!pix.kernel&lt;3 x 3&gt;')</code></p>
+<p>报错里那个<strong>类型列表</strong>就是线索——括号里有两个类型，说明这是个 1:N 物化，而你的钩子只认 1 个输入。<strong>写物化钩子时，别用 <code>size() != 1</code> 当卫语句，要按"我认得哪些输入"来判断。</strong></p>
+<p>另一个连带影响：1:N 之后<strong>参数编号全变了</strong>。测试里硬写 <code>%arg1</code> 的地方会莫名失败——用第 12 章讲的 <code>%[[NAME:.*]]</code> 捕获能免疫这类改动。</p>
+</div><h2>把物化的四种命运跑一遍</h2>
+<p>上面四个场景（没钩子 / 有钩子 / 1:N 但钩子不认 / 1:N 且钩子能处理）可以在一个模型里连着看。它打出来的两句失败信息和真 <code>pix-opt</code> 的<strong>格式完全一致</strong>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%89%A9%E5%8C%96%E5%88%B0%E5%BA%95%E5%9C%A8%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%EF%BC%9F%E7%94%A8%E4%B8%80%E4%B8%AA%22%E7%B1%BB%E5%9E%8B%E8%B4%A6%E6%9C%AC%22%E6%A8%A1%E5%9E%8B%E7%9C%8B%E6%B8%85%E6%A5%9A%E3%80%82%0A%23%20%E6%A0%B8%E5%BF%83%E8%A7%82%E5%BF%B5%EF%BC%9A%E8%BD%AC%E6%8D%A2%E6%98%AF**%E9%80%90%E6%AD%A5**%E7%9A%84%EF%BC%8C%E6%89%80%E4%BB%A5%E4%BB%BB%E4%BD%95%E6%97%B6%E5%88%BB%20IR%20%E9%87%8C%E9%83%BD%E5%8F%AF%E8%83%BD%E5%90%8C%E6%97%B6%E5%AD%98%E5%9C%A8%E6%96%B0%E6%97%A7%E4%B8%A4%E7%A7%8D%E7%B1%BB%E5%9E%8B%EF%BC%8C%0A%23%20driver%20%E7%94%A8%20unrealized_conversion_cast%20%E5%8D%A0%E4%BD%8D%EF%BC%8C%E7%AD%89%E4%BD%A0%E6%B3%A8%E5%86%8C%E7%9A%84%E9%92%A9%E5%AD%90%E6%9D%A5%E5%85%91%E7%8E%B0%E3%80%82%0A%0Aclass%20Driver%3A%0A%20%20%20%20def%20__init__(self%2C%20type_rule%2C%20source_mat%3DNone%2C%20target_mat%3DNone)%3A%0A%20%20%20%20%20%20%20%20self.type_rule%20%3D%20type_rule%20%20%20%20%20%20%20%20%20%20%23%20%E6%97%A7%E7%B1%BB%E5%9E%8B%20-%3E%20%E6%96%B0%E7%B1%BB%E5%9E%8B%E5%88%97%E8%A1%A8%EF%BC%881%3AN%EF%BC%89%0A%20%20%20%20%20%20%20%20self.source_mat%2C%20self.target_mat%20%3D%20source_mat%2C%20target_mat%0A%20%20%20%20%20%20%20%20self.casts%20%3D%20%5B%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%AA%E5%85%91%E7%8E%B0%E7%9A%84%E5%8D%A0%E4%BD%8D%0A%0A%20%20%20%20def%20convert_value(self%2C%20name%2C%20old_ty)%3A%0A%20%20%20%20%20%20%20%20new%20%3D%20self.type_rule(old_ty)%0A%20%20%20%20%20%20%20%20if%20new%20is%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20%5B(name%2C%20old_ty)%5D%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bname%7D%3A%20%7Bold_ty%7D%20%E2%86%92%20%7B'%2C%20'.join(new)%7D%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%2B%20(%22%EF%BC%881%3AN%20%E5%B1%95%E5%BC%80%EF%BC%89%22%20if%20len(new)%20%3E%201%20else%20%22%22))%0A%20%20%20%20%20%20%20%20return%20%5B(f%22%7Bname%7D%23%7Bi%7D%22%2C%20t)%20for%20i%2C%20t%20in%20enumerate(new)%5D%0A%0A%20%20%20%20def%20need(self%2C%20values%2C%20want_ty%2C%20who)%3A%0A%20%20%20%20%20%20%20%20%22%22%22%E6%9C%89%E4%BA%BA%EF%BC%88who%EF%BC%89%E9%9C%80%E8%A6%81%20want_ty%EF%BC%8C%E4%BD%86%E6%89%8B%E9%87%8C%E6%98%AF%20values%E3%80%82%E5%87%91%E4%B8%8D%E4%B8%8A%E5%B0%B1%E8%A6%81%E7%89%A9%E5%8C%96%E3%80%82%22%22%22%0A%20%20%20%20%20%20%20%20types%20%3D%20%5Bt%20for%20_%2C%20t%20in%20values%5D%0A%20%20%20%20%20%20%20%20if%20types%20%3D%3D%20%5Bwant_ty%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bwho%7D%20%E6%8B%BF%E5%88%B0%E7%9A%84%E6%AD%A3%E6%98%AF%20%7Bwant_ty%7D%EF%BC%8C%E4%B8%8D%E7%94%A8%E7%89%A9%E5%8C%96%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20return%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%7Bwho%7D%20%E8%A6%81%20%7Bwant_ty%7D%EF%BC%8C%E6%89%8B%E9%87%8C%E6%98%AF%20(%7B'%2C%20'.join(types)%7D)%20%E2%80%94%E2%80%94%20%E9%9C%80%E8%A6%81%E7%89%A9%E5%8C%96%22)%0A%20%20%20%20%20%20%20%20%23%20%E6%96%B9%E5%90%91%E5%88%A4%E6%96%AD%EF%BC%9Awant%20%E6%98%AF%22%E5%8E%9F%E5%A7%8B%E7%9A%84%E6%BA%90%E7%B1%BB%E5%9E%8B%22%20%E2%86%92%20source%20%E7%89%A9%E5%8C%96%EF%BC%9B%E6%98%AF%22%E7%9B%AE%E6%A0%87%E7%B1%BB%E5%9E%8B%22%20%E2%86%92%20target%20%E7%89%A9%E5%8C%96%0A%20%20%20%20%20%20%20%20hook%20%3D%20self.source_mat%20if%20want_ty.startswith(%22!%22)%20else%20self.target_mat%0A%20%20%20%20%20%20%20%20kind%20%3D%20%22source%22%20if%20want_ty.startswith(%22!%22)%20else%20%22target%22%0A%20%20%20%20%20%20%20%20if%20hook%20is%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20self.casts.append((types%2C%20want_ty))%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%E6%B2%A1%E6%B3%A8%E5%86%8C%20%7Bkind%7D%20%E7%89%A9%E5%8C%96%E9%92%A9%E5%AD%90%20%E2%86%92%20%E6%8F%92%E4%B8%80%E4%B8%AA%20%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22unrealized_conversion_cast(%7B'%2C%20'.join(types)%7D)%20-%3E%20%7Bwant_ty%7D%20%E5%8D%A0%E4%BD%8D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20return%0A%20%20%20%20%20%20%20%20made%20%3D%20hook(types%2C%20want_ty)%0A%20%20%20%20%20%20%20%20if%20made%20is%20None%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20self.casts.append((types%2C%20want_ty))%0A%20%20%20%20%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%7Bkind%7D%20%E9%92%A9%E5%AD%90%E8%BF%94%E5%9B%9E%20nullptr%EF%BC%88%E5%AE%83%E4%B8%8D%E8%AE%A4%E8%BF%99%E7%BB%84%E8%BE%93%E5%85%A5%EF%BC%89%E2%86%92%20%E4%BB%8D%E6%98%AF%E5%8D%A0%E4%BD%8D%22)%0A%20%20%20%20%20%20%20%20%20%20%20%20return%0A%20%20%20%20%20%20%20%20print(f%22%20%20%20%20%20%20%7Bkind%7D%20%E7%89%A9%E5%8C%96%E6%88%90%E5%8A%9F%EF%BC%9A%E6%8F%92%E5%85%A5%20%7Bmade%7D%22)%0A%0A%20%20%20%20def%20finish(self)%3A%0A%20%20%20%20%20%20%20%20if%20not%20self.casts%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20return%20%22%E8%BD%AC%E6%8D%A2%E6%88%90%E5%8A%9F%22%0A%20%20%20%20%20%20%20%20bad%20%3D%20self.casts%5B0%5D%0A%20%20%20%20%20%20%20%20return%20(%22%E5%A4%B1%E8%B4%A5%EF%BC%9Afailed%20to%20legalize%20unresolved%20materialization%20from%20%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22(%7B'%2C%20'.join(repr(t)%20for%20t%20in%20bad%5B0%5D)%7D)%20to%20('%7Bbad%5B1%5D%7D')%22)%0A%0AKERNEL%20%3D%20%22!pix.kernel%3C3x3%3E%22%0A%0Adef%20rule_1to1(ty)%3A%20%20return%20%5B%22tensor%3C3x3xf32%3E%22%5D%20if%20ty%20%3D%3D%20KERNEL%20else%20None%0Adef%20rule_1toN(ty)%3A%20%20return%20%5B%22tensor%3C3x3xf32%3E%22%2C%20%22index%22%5D%20if%20ty%20%3D%3D%20KERNEL%20else%20None%0A%0Adef%20src_only_1(types%2C%20want)%3A%0A%20%20%20%20return%20f%22pix.to_kernel(%250)%22%20if%20len(types)%20%3D%3D%201%20else%20None%0Adef%20src_any(types%2C%20want)%3A%0A%20%20%20%20return%20f%22pix.to_kernel(%250)%22%20if%20types%20and%20types%5B0%5D.startswith(%22tensor%22)%20else%20None%0A%0ACASES%20%3D%20%5B%0A%20%20%20%20(%22%E2%91%A0%20%E4%B8%8D%E6%B3%A8%E5%86%8C%E4%BB%BB%E4%BD%95%E7%89%A9%E5%8C%96%E9%92%A9%E5%AD%90%22%2C%20rule_1to1%2C%20None%2C%20None)%2C%0A%20%20%20%20(%22%E2%91%A1%20%E6%B3%A8%E5%86%8C%20source%20%E7%89%A9%E5%8C%96%22%2C%20rule_1to1%2C%20src_only_1%2C%20None)%2C%0A%20%20%20%20(%22%E2%91%A2%20%E6%8D%A2%E6%88%90%201%3AN%EF%BC%8C%E4%BD%86%20source%20%E9%92%A9%E5%AD%90%E5%8F%AA%E8%AE%A4%201%20%E4%B8%AA%E8%BE%93%E5%85%A5%22%2C%20rule_1toN%2C%20src_only_1%2C%20None)%2C%0A%20%20%20%20(%22%E2%91%A3%201%3AN%20%2B%20%E8%83%BD%E5%A4%84%E7%90%86%E5%A4%9A%E8%BE%93%E5%85%A5%E7%9A%84%20source%20%E9%92%A9%E5%AD%90%22%2C%20rule_1toN%2C%20src_any%2C%20None)%2C%0A%5D%0Afor%20title%2C%20rule%2C%20sm%2C%20tm%20in%20CASES%3A%0A%20%20%20%20print(f%22%5Cn%E3%80%90%7Btitle%7D%E3%80%91%22)%0A%20%20%20%20d%20%3D%20Driver(rule%2C%20sm%2C%20tm)%0A%20%20%20%20vals%20%3D%20d.convert_value(%22%25k%22%2C%20KERNEL)%20%20%20%20%20%20%20%20%20%20%23%20pix.kernel%20%E7%9A%84%E7%BB%93%E6%9E%9C%E8%A2%AB%E6%8D%A2%E4%BA%86%E7%B1%BB%E5%9E%8B%0A%20%20%20%20d.need(vals%2C%20KERNEL%2C%20%22pix.convolve%EF%BC%88%E8%BF%98%E7%AD%89%E6%97%A7%E7%B1%BB%E5%9E%8B%EF%BC%89%22)%0A%20%20%20%20print(f%22%20%20%E2%86%92%20%7Bd.finish()%7D%22)"># 物化到底在解决什么？用一个"类型账本"模型看清楚。
+# 核心观念：转换是**逐步**的，所以任何时刻 IR 里都可能同时存在新旧两种类型，
+# driver 用 unrealized_conversion_cast 占位，等你注册的钩子来兑现。
+
+class Driver:
+    def __init__(self, type_rule, source_mat=None, target_mat=None):
+        self.type_rule = type_rule          # 旧类型 -&gt; 新类型列表（1:N）
+        self.source_mat, self.target_mat = source_mat, target_mat
+        self.casts = []                     # 未兑现的占位
+
+    def convert_value(self, name, old_ty):
+        new = self.type_rule(old_ty)
+        if new is None:
+            return [(name, old_ty)]
+        print(f"    {name}: {old_ty} → {', '.join(new)}"
+              + ("（1:N 展开）" if len(new) &gt; 1 else ""))
+        return [(f"{name}#{i}", t) for i, t in enumerate(new)]
+
+    def need(self, values, want_ty, who):
+        """有人（who）需要 want_ty，但手里是 values。凑不上就要物化。"""
+        types = [t for _, t in values]
+        if types == [want_ty]:
+            print(f"    {who} 拿到的正是 {want_ty}，不用物化")
+            return
+        print(f"    {who} 要 {want_ty}，手里是 ({', '.join(types)}) —— 需要物化")
+        # 方向判断：want 是"原始的源类型" → source 物化；是"目标类型" → target 物化
+        hook = self.source_mat if want_ty.startswith("!") else self.target_mat
+        kind = "source" if want_ty.startswith("!") else "target"
+        if hook is None:
+            self.casts.append((types, want_ty))
+            print(f"      没注册 {kind} 物化钩子 → 插一个 "
+                  f"unrealized_conversion_cast({', '.join(types)}) -&gt; {want_ty} 占位")
+            return
+        made = hook(types, want_ty)
+        if made is None:
+            self.casts.append((types, want_ty))
+            print(f"      {kind} 钩子返回 nullptr（它不认这组输入）→ 仍是占位")
+            return
+        print(f"      {kind} 物化成功：插入 {made}")
+
+    def finish(self):
+        if not self.casts:
+            return "转换成功"
+        bad = self.casts[0]
+        return ("失败：failed to legalize unresolved materialization from "
+                f"({', '.join(repr(t) for t in bad[0])}) to ('{bad[1]}')")
+
+KERNEL = "!pix.kernel&lt;3x3&gt;"
+
+def rule_1to1(ty):  return ["tensor&lt;3x3xf32&gt;"] if ty == KERNEL else None
+def rule_1toN(ty):  return ["tensor&lt;3x3xf32&gt;", "index"] if ty == KERNEL else None
+
+def src_only_1(types, want):
+    return f"pix.to_kernel(%0)" if len(types) == 1 else None
+def src_any(types, want):
+    return f"pix.to_kernel(%0)" if types and types[0].startswith("tensor") else None
+
+CASES = [
+    ("① 不注册任何物化钩子", rule_1to1, None, None),
+    ("② 注册 source 物化", rule_1to1, src_only_1, None),
+    ("③ 换成 1:N，但 source 钩子只认 1 个输入", rule_1toN, src_only_1, None),
+    ("④ 1:N + 能处理多输入的 source 钩子", rule_1toN, src_any, None),
+]
+for title, rule, sm, tm in CASES:
+    print(f"\n【{title}】")
+    d = Driver(rule, sm, tm)
+    vals = d.convert_value("%k", KERNEL)          # pix.kernel 的结果被换了类型
+    d.need(vals, KERNEL, "pix.convolve（还等旧类型）")
+    print(f"  → {d.finish()}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">
+【① 不注册任何物化钩子】
+    %k: !pix.kernel&lt;3x3&gt; → tensor&lt;3x3xf32&gt;
+    pix.convolve（还等旧类型） 要 !pix.kernel&lt;3x3&gt;，手里是 (tensor&lt;3x3xf32&gt;) —— 需要物化
+      没注册 source 物化钩子 → 插一个 unrealized_conversion_cast(tensor&lt;3x3xf32&gt;) -&gt; !pix.kernel&lt;3x3&gt; 占位
+  → 失败：failed to legalize unresolved materialization from ('tensor&lt;3x3xf32&gt;') to ('!pix.kernel&lt;3x3&gt;')
+
+【② 注册 source 物化】
+    %k: !pix.kernel&lt;3x3&gt; → tensor&lt;3x3xf32&gt;
+    pix.convolve（还等旧类型） 要 !pix.kernel&lt;3x3&gt;，手里是 (tensor&lt;3x3xf32&gt;) —— 需要物化
+      source 物化成功：插入 pix.to_kernel(%0)
+  → 转换成功
+
+【③ 换成 1:N，但 source 钩子只认 1 个输入】
+    %k: !pix.kernel&lt;3x3&gt; → tensor&lt;3x3xf32&gt;, index（1:N 展开）
+    pix.convolve（还等旧类型） 要 !pix.kernel&lt;3x3&gt;，手里是 (tensor&lt;3x3xf32&gt;, index) —— 需要物化
+      source 钩子返回 nullptr（它不认这组输入）→ 仍是占位
+  → 失败：failed to legalize unresolved materialization from ('tensor&lt;3x3xf32&gt;', 'index') to ('!pix.kernel&lt;3x3&gt;')
+
+【④ 1:N + 能处理多输入的 source 钩子】
+    %k: !pix.kernel&lt;3x3&gt; → tensor&lt;3x3xf32&gt;, index（1:N 展开）
+    pix.convolve（还等旧类型） 要 !pix.kernel&lt;3x3&gt;，手里是 (tensor&lt;3x3xf32&gt;, index) —— 需要物化
+      source 物化成功：插入 pix.to_kernel(%0)
+  → 转换成功</code></pre>
+</div><p>③ 和 ④ 的差别只在钩子的一个 <code>if</code>，而报错里那个类型列表 <code>(&#39;tensor&lt;3x3xf32&gt;&#39;, &#39;index&#39;)</code> 就是告诉你&quot;这是 1:N&quot;的唯一线索。</p>
+<h2>读懂 <code>failed to legalize</code>：一套系统方法</h2>
+<p>这句话有几种变体，<strong>每一种精确对应第 16 章那个四态模型里的一个位置</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>报错</th>
+<th>真正的含义</th>
+<th>先查什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>failed to legalize operation &#39;X&#39;</code></td>
+<td>X 是 <code>Illegal</code>，但没有 pattern 能换掉它</td>
+<td>你写了 X 的 pattern 吗？它注册进 <code>patterns</code> 了吗？<code>matchAndRewrite</code> 是不是提前 <code>return failure()</code> 了？</td>
+</tr>
+<tr>
+<td><code>failed to legalize operation &#39;builtin.module&#39;</code>（或别的外层 op）</td>
+<td>通常是 <strong>full 模式</strong>下某个内层 op 是 <code>Unknown</code></td>
+<td>把 <code>full</code> 换成 <code>partial</code> 看还报不报。报错指向外层 = 问题在里面</td>
+</tr>
+<tr>
+<td><code>failed to legalize unresolved materialization from (T1) to (T2)</code></td>
+<td>类型换了，但没人把它接回去</td>
+<td>要造的 T2 是旧类型还是新类型？据此决定注册 source 还是 target 钩子</td>
+</tr>
+<tr>
+<td>同上，但括号里有<strong>多个</strong>类型</td>
+<td>这是 <strong>1:N</strong> 物化</td>
+<td>钩子里是不是用 <code>size() != 1</code> 把它挡掉了</td>
+</tr>
+<tr>
+<td><code>failed to legalize operation &#39;func.func&#39;</code></td>
+<td>签名被判非法，却没有签名转换 pattern</td>
+<td>加 <code>populateFunctionOpInterfaceTypeConversionPattern</code></td>
+</tr>
+<tr>
+<td>签名<strong>根本没变</strong>，也不报错</td>
+<td><code>func.func</code> 被静态判成合法了</td>
+<td>加 <code>addDynamicallyLegalOp&lt;func::FuncOp&gt;</code> + <code>isSignatureLegal</code></td>
+</tr>
+</tbody></table>
+<p>光看报错还不够时，上 <code>--debug-only=dialect-conversion</code>（需要开断言的构建）。它给出<strong>逐 op 的判定与理由</strong>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt k16.mlir --pix-to-arith='lower-kernels=true no-materialize=true' \
+  --debug-only=dialect-conversion</code></pre>
+</div><p>运行结果（截取几段）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[dialect-conversion:1] Legalizing operation : 'func.func' (0x...) {
+[dialect-conversion:1] } -&gt; SUCCESS : operation marked legal by the target
+[dialect-conversion:1] Legalizing operation : 'pix.kernel' (0x...) {
+[dialect-conversion:1]   * Fold {
+[dialect-conversion:1]   } -&gt; FAILURE : unable to fold
+[dialect-conversion:1]   * Pattern : 'pix.kernel -&gt; ()' {
+[dialect-conversion:1]     ** Insert  : 'arith.constant' (0x...) (was detached)
+[dialect-conversion:1]     ** Replace : 'pix.kernel'(0x...)</code></pre>
+</div><p>判定词汇只有四种，各自的含义值得记住：</p>
+<table>
+<thead>
+<tr>
+<th>判定</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SUCCESS : operation marked legal by the target</code></td>
+<td>这个 op 在 target 里被判合法，driver 没碰它</td>
+</tr>
+<tr>
+<td><code>SUCCESS : pattern applied successfully</code></td>
+<td>某条 pattern 换掉了它</td>
+</tr>
+<tr>
+<td><code>FAILURE : no matched legalization pattern</code></td>
+<td><strong>它被判非法，但一条 pattern 都没匹配上</strong></td>
+</tr>
+<tr>
+<td><code>FAILURE : unable to fold</code></td>
+<td>driver 先试了常量折叠（这一步在 pattern 之前！），折不动</td>
+</tr>
+</tbody></table>
+<p>最后那条顺带解释了第 16 章那个 <code>ConstantLike</code> 断言为什么会在 dialect conversion 里炸：<strong>driver 对每个非法 op 都会先试一次 fold</strong>，而 <code>ConstantLike</code> 的 op 必须 foldable。</p>
+<div class="keypoint">
+<strong>排查顺序：从四态开始，不是从 pattern 开始</strong>
+<p>大多数人卡住时第一反应是去检查 pattern 有没有写对。但实践中<strong>一半以上的 <code>failed to legalize</code> 根本不是 pattern 的问题</strong>，而是：这个 op 在 target 里到底是哪一态？</p>
+<p>按这个顺序问：<strong>① 它是 Illegal 还是 Unknown？</strong>（决定了 partial 会不会放它过去）<strong>② 我用的是 partial 还是 full？</strong><strong>③ 类型变了吗？</strong>（变了就要想物化）<strong>④ 才轮到 pattern 有没有注册、会不会匹配。</strong></p>
+<p>把 `--debug-only=dialect-conversion` 的输出和这四个问题对着看，绝大多数问题在两分钟内能定位。</p>
+</div><div class="concept">
+<svg viewBox="0 0 700 400" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c17b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b6cb0"/></marker>
+    <marker id="c17o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e06a3b"/></marker>
+    <marker id="c17g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3f9b5c"/></marker>
+  </defs>
+  <text x="14" y="18" font-size="13" font-weight="bold" fill="#24292f">物化：driver 在"新旧类型接不上"的地方插占位，等你的钩子兑现</text>
+  <text x="14" y="42" font-size="10" font-weight="bold" fill="#2b6cb0">转换进行到一半的 IR</text>
+  <rect x="14" y="50" width="250" height="34" rx="5" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.6"/>
+  <text x="24" y="71" font-size="9" font-family="monospace" fill="#24292f">%0 = arith.constant : tensor&lt;3x3xf32&gt;</text>
+  <text x="270" y="71" font-size="9" fill="#3f9b5c">已换成新类型</text>
+  <rect x="14" y="120" width="250" height="34" rx="5" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.6"/>
+  <text x="24" y="141" font-size="9" font-family="monospace" fill="#24292f">pix.convolve %img, ??? : !pix.kernel</text>
+  <text x="270" y="141" font-size="9" fill="#e06a3b">还在等旧类型（它是 Unknown）</text>
+  <path d="M 139 86 L 139 118" fill="none" stroke="#e06a3b" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#c17o)"/>
+  <text x="147" y="106" font-size="9" fill="#e06a3b">接不上</text>
+  <rect x="400" y="86" width="286" height="52" rx="6" fill="#fff" stroke="#e06a3b" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="410" y="105" font-size="10" font-weight="bold" fill="#e06a3b">driver 插一个占位</text>
+  <text x="410" y="123" font-size="9" font-family="monospace" fill="#24292f">builtin.unrealized_conversion_cast</text>
+  <text x="410" y="134" font-size="8" fill="#6b7280">名字里的 unrealized 就是"还没兑现"</text>
+  <line x1="268" y1="112" x2="396" y2="112" stroke="#e06a3b" stroke-width="1.4" marker-end="url(#c17o)"/>
+  <line x1="543" y1="140" x2="543" y2="166" stroke="#2b6cb0" stroke-width="1.6" marker-end="url(#c17b)"/>
+  <text x="551" y="158" font-size="9" fill="#2b6cb0">转换结束时还在？</text>
+  <rect x="400" y="170" width="286" height="46" rx="6" fill="#fdf1ec" stroke="#e06a3b" stroke-width="1.8"/>
+  <text x="410" y="188" font-size="9" fill="#e06a3b">failed to legalize unresolved</text>
+  <text x="410" y="202" font-size="9" fill="#e06a3b">materialization from (T1…) to (T2)</text>
+  <text x="410" y="213" font-size="8" fill="#6b7280">括号里几个类型 = 是不是 1:N 的唯一线索</text>
+  <line x1="14" y1="236" x2="686" y2="236" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="14" y="256" font-size="11" font-weight="bold" fill="#24292f">两个钩子，按"<tspan fill="#e06a3b">你要造出来的那个类型</tspan>"分方向</text>
+  <rect x="14" y="266" width="330" height="76" rx="6" fill="#eef4fb" stroke="#2b6cb0" stroke-width="1.8"/>
+  <text x="26" y="285" font-size="10" font-weight="bold" fill="#2b6cb0">addSourceMaterialization</text>
+  <text x="26" y="302" font-size="9" fill="#24292f">要造的是<tspan font-weight="bold">旧</tspan>类型（!pix.kernel）</text>
+  <text x="26" y="317" font-size="9" fill="#24292f">场景：新值已产出，老使用者还活着</text>
+  <text x="26" y="334" font-size="9" font-family="monospace" fill="#6b7280">→ 插 pix.to_kernel</text>
+  <rect x="356" y="266" width="330" height="76" rx="6" fill="#f0f8f2" stroke="#3f9b5c" stroke-width="1.8"/>
+  <text x="368" y="285" font-size="10" font-weight="bold" fill="#2f7a45">addTargetMaterialization</text>
+  <text x="368" y="302" font-size="9" fill="#24292f">要造的是<tspan font-weight="bold">新</tspan>类型（tensor）</text>
+  <text x="368" y="317" font-size="9" fill="#24292f">场景：手里是老值，pattern 要新类型</text>
+  <text x="368" y="334" font-size="9" font-family="monospace" fill="#6b7280">→ 插 pix.from_kernel</text>
+  <rect x="14" y="352" width="672" height="42" rx="6" fill="#f7f8fa" stroke="#6b7280" stroke-dasharray="5 3"/>
+  <text x="26" y="370" font-size="10" fill="#24292f">前提：<tspan font-weight="bold">你的方言里得有能表达这个转换的 op</tspan>——框架不会替你发明。钩子返回 nullptr = "我不管"，框架会去试别的。</text>
+  <text x="26" y="387" font-size="10" fill="#24292f">签名转换要<tspan font-weight="bold">两样一起</tspan>：populateFunctionOpInterfaceTypeConversionPattern + addDynamicallyLegalOp&lt;func.func&gt;(isSignatureLegal)。</text>
+</svg>
+<div class="caption">图 17-1　占位与兑现的全过程，以及两个钩子的方向判据。少了任一环，就会得到那句「unresolved materialization」</div>
+</div><h2>动手：把两个 cast op 消掉</h2>
+<p>现在 IR 里留着 <code>pix.to_kernel</code>。真实管线里这些 cast 应该在下降完成后自动消失。给它们配一对 fold：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// pix.to_kernel(pix.from_kernel(%k)) → %k
+OpFoldResult ToKernelOp::fold(FoldAdaptor adaptor) {
+  if (auto inner = getWeights().getDefiningOp&lt;FromKernelOp&gt;())
+    if (inner.getKernel().getType() == getType())
+      return inner.getKernel();
+  return {};
+}</code></pre>
+</div><p>（反方向同理。别忘了在 <code>.td</code> 里加 <code>let hasFolder = 1;</code>。）写完构造一个一来一回的 IR 验一下：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt /tmp/roundtrip.mlir --canonicalize</code></pre>
+</div><p><strong>再改一处</strong>：把 <code>addSourceMaterialization</code> 注释掉，然后依次跑</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">pix-opt k16.mlir --pix-to-arith=lower-kernels=true
+pix-opt k16.mlir --pix-to-arith=lower-kernels=true --debug-only=dialect-conversion</code></pre>
+</div><p>对着上面那张表，从报错反推是四态里哪一态出了问题。<strong>这个练习比读十遍文档有用</strong>——dialect conversion 的调试能力基本上就是&quot;见过足够多的失败长什么样&quot;。</p>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><strong>物化补的洞是&quot;转换逐步进行，新旧类型会共存&quot;</strong>。driver 在接不上的地方插 <code>builtin.unrealized_conversion_cast</code> 占位（名字里的 <em>unrealized</em> 就是&quot;还没兑现&quot;），转换结束时还在就报错。</li>
+<li><strong>前提是你的方言里有能表达这个转换的 op</strong>——框架不会替你发明。我们为此给 pix 加了 <code>pix.to_kernel</code> / <code>pix.from_kernel</code>，两个方向都要有。</li>
+<li><strong>方向判据：看你要造出来的那个类型。</strong> 造<strong>旧</strong>类型 → <code>addSourceMaterialization</code>（新值已产出、老使用者还活着）；造<strong>新</strong>类型 → <code>addTargetMaterialization</code>（手里是老值、pattern 要新类型）。</li>
+<li>钩子签名 <code>Value(OpBuilder &amp;, T want, ValueRange inputs, Location)</code>，<strong>返回 <code>nullptr</code> 表示&quot;我不管&quot;</strong>，框架会去试别的钩子——这是协作机制，不是错误。</li>
+<li><strong>签名转换要两样一起</strong>：<code>populateFunctionOpInterfaceTypeConversionPattern</code> 这条 pattern，<strong>加上</strong> <code>addDynamicallyLegalOp&lt;func::FuncOp&gt;(isSignatureLegal)</code>。只加 pattern，<code>func.func</code> 被静态判合法、签名根本不会变；只加动态规则，得到 <code>failed to legalize operation &#39;func.func&#39;</code>。</li>
+<li><strong>1:N 用 <code>addConversion</code> 的两参数形式</strong>（往 <code>SmallVectorImpl&lt;Type&gt;&amp;</code> 里塞几个就展成几个，塞 0 个表示类型消失）。它会让你的<strong>物化钩子收到多个输入</strong>——别拿 <code>size() != 1</code> 当卫语句。1:N 还会让参数编号全变，测试里用 <code>%[[NAME:.*]]</code> 捕获而不是硬写 <code>%arg1</code>。</li>
+<li><strong>读 <code>failed to legalize</code> 的方法：从四态反推，不是从 pattern 开始。</strong> 依次问：它是 Illegal 还是 Unknown → 我用的 partial 还是 full → 类型变了吗 → 最后才是 pattern。报错里的<strong>类型列表</strong>告诉你是不是 1:N；报错<strong>指向外层 op</strong> 通常意味着 full 模式下有内层 <code>Unknown</code>。</li>
+<li><code>--debug-only=dialect-conversion</code> 给逐 op 判定，四种判定词各有精确含义。其中 <code>FAILURE : unable to fold</code> 说明 <strong>driver 对每个非法 op 都会先试一次 fold</strong>——这解释了第 16 章那个 <code>ConstantLike</code> 断言为什么在这里炸。</li>
+</ul>
+<p><strong>pix 进度</strong>：新增 <code>pix.to_kernel</code> / <code>pix.from_kernel</code> 两个物化用的 cast op；<code>PixTypeConverter</code> 装上 source 与 target 两个钩子，并支持 1:N 展开；<code>pix-to-arith</code> 增加 <code>no-materialize</code>、<code>convert-signatures</code>、<code>one-to-n</code> 三个选项，四条 RUN 行把&quot;物化成功 / 缺钩子失败 / 签名转换 / 1:N&quot;全部守住。<code>check-pix</code> 从 13 涨到 14 个文件。</p>
+<p>第三部分还剩两章。下一章讲 <strong>transform 方言</strong>——把&quot;什么时候用哪条变换&quot;本身写成 IR。第 15 章讲 PDLL 时提过这个思路（pattern 成了 IR），transform 方言把它推到了调度层面：tile 多大、先融合还是先向量化，这些决定不再硬编码在 pass 里，而是写成一段可以被读、被生成、被搜索的 IR。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch16.html">← 第 16 章 Dialect Conversion（一）：TypeConverter、ConversionTarget 与部分转换</a>
+  <a class="nav-next" href="ch18.html">第 18 章 Transform 方言：把「怎么变换」本身写成 IR →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
