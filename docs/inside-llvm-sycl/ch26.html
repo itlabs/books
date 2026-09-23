@@ -208,6 +208,67 @@ module {
 <div class="note">
 <strong>为什么值得单独做成一个 pass</strong>
 在经典路径里，「把 <code>if</code> 变成基本块」和「生成 <code>if</code> 里面的代码」是同一次遍历里交织完成的：<code>CGStmt.cpp</code> 一边创建 <code>llvm::BasicBlock</code>、一边 <code>EmitBlock</code>、一边递归下降。在 CIR 里这两件事被分开：CIRGen 只负责造出结构化的 <code>cir.if</code>，扁平化是后面一个独立、可单独测试、输入输出都能落盘的 pass。代价是多跑一趟 IR；收益是在这两者之间，你有一个「控制流还是结构化的」时刻可以做事。
+</div><h2>动手（一）：把这个 pass 自己跑一遍</h2>
+<p>上面那个测试是本章<strong>最容易亲手复现</strong>的一件事——它不需要 C++ 源码、不需要走前端，只要一个 <code>cir-opt</code>。把 RUN 行去掉，剩下的部分存成文件：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cat &gt; if.cir &lt;&lt;'EOF'
+!s32i = !cir.int&lt;s, 32&gt;
+module {
+  cir.func @foo(%arg0: !s32i) -&gt; !s32i {
+    %4 = cir.cast int_to_bool %arg0 : !s32i -&gt; !cir.bool
+    cir.if %4 {
+      %5 = cir.const #cir.int&lt;1&gt; : !s32i
+      cir.return %5 : !s32i
+    } else {
+      %5 = cir.const #cir.int&lt;0&gt; : !s32i
+      cir.return %5 : !s32i
+    }
+    cir.return %arg0 : !s32i
+  }
+}
+EOF
+
+# 什么 pass 都不跑，只解析 + 验证 + 重新打印
+cir-opt if.cir -o -
+
+# 跑扁平化，对照上面那组 CHECK 行读输出
+cir-opt if.cir -cir-flatten-cfg -o -</code></pre>
+</div><p>第一条命令值得单独跑一次：它证明了 <code>.cir</code> 是<strong>真正的一等文本格式</strong>——手写的模块能被解析、通过验证器、再原样打印回来。第 1 章给 IR 定的三条指标（能落盘、有独立工具、能人肉审查），到这里才算在 AST→LLVM IR 这一段上全部兑现。</p>
+<p>四个改动，每个都对应本章前面的一个论断，建议依次试：</p>
+<table>
+<thead>
+<tr>
+<th>改什么</th>
+<th>看什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>删掉 <code>else { ... }</code> 整块</td>
+<td><code>cir.if</code> 只剩一个 region；扁平化后 <code>^bb3</code> 不再是 <code>no predecessors</code>——因为现在有一条路能走到它</td>
+</tr>
+<tr>
+<td>把 <code>%4</code> 换成 <code>%arg0</code>（类型不对）</td>
+<td>验证器直接报错。<strong>这是 <code>!cir.bool</code> 这个专用类型换来的好处</strong>，不是 <code>i1</code> 那种「什么都能塞」</td>
+</tr>
+<tr>
+<td>把 <code>cir.if</code> 换成 <code>cir.while</code> / <code>cir.for</code></td>
+<td>扁平化后出现回边，块数明显增加。对照图 26-1 数一数</td>
+</tr>
+<tr>
+<td>在外层再套一个 <code>cir.scope { ... }</code></td>
+<td>嵌套一层，扁平化后块数怎么变</td>
+</tr>
+</tbody></table>
+<p>想把这条路走到底——从手写 CIR 一直到 LLVM IR，全程不碰 C++：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 先扁平化（cir-translate 要求控制流已经是基本块形态），再翻成 LLVM IR
+cir-opt if.cir -cir-flatten-cfg -o if-flat.cir
+cir-translate if-flat.cir --cir-to-llvmir -o -</code></pre>
+</div><div class="note">
+<strong>两个可能踩到的坑</strong>
+一是 <code>cir-translate</code> 对模块级属性有要求（目标三元组、数据布局），缺了会报错——第 25 章末尾那个手写模块示例里的 <code>cir.triple</code> 和 <code>dlti.dl_spec</code> 就是补这个的，照抄加在 <code>module</code> 后面即可。二是<strong>顺序不能颠倒</strong>：直接对带 <code>cir.if</code> 的模块跑 <code>--cir-to-llvmir</code> 会失败，因为降级到 LLVM 方言的那套 pattern 只认基本块，不认 region。这个「必须先扁平化」的约束，就是第 25 章讲的 <code>populateCIRPreLoweringPasses()</code> 里那串顺序契约在命令行上的投影——你现在是手动在履行它。
 </div><h2>类：<code>!cir.struct</code> 把布局讲明白</h2>
 <p>C++ 的类在 LLVM IR 里是 <code>%class.Foo = type { i32, ptr, [3 x i8] }</code>——一串按顺序排列的字段类型，没有名字、没有继承关系、padding 和真实成员长得一样。CIR 的 <code>!cir.struct</code> 保留得多得多。</p>
 <p>它有三种形态（<code>CIRTypes.td</code> 里明确列出）：<strong>具名且完整</strong>、<strong>具名但不完整</strong>、<strong>匿名</strong>。而且每个成员都带一个「种类」标记：</p>
@@ -481,7 +542,7 @@ module {
 <div class="warn">
 <strong>别把「有这个 pass」当成「这个特性完全能用」</strong>
 异常、协程、成员指针这些主题在 CIR 里<strong>操作和类型都已经定义好了</strong>，但这不等于任意 C++ 程序加上 <code>-fclangir</code> 就能编过。上游的推进方式是「先立表示，再逐个特性把 CIRGen 补齐并加 parity 测试」，所以你会看到大量 <code>NYI</code>（not yet implemented）的报错。判断某个特性到什么程度了，最可靠的办法是去 <code>clang/test/CIR/</code> 下找对应的测试文件——<strong>有测试就有支持，测试覆盖到哪就支持到哪</strong>。写作时那里的文件数大致是：<code>CodeGen/</code> 489、<code>IR/</code> 141、<code>CodeGenOpenACC/</code> 85、<code>Transforms/</code> 53、<code>Lowering/</code> 45、<code>CodeGenHIP/</code> 29、<code>CodeGenCUDA/</code> 22、<code>CodeGenCXX/</code> 20、<code>CodeGenOpenCL/</code> 11、<code>CodeGenSYCL/</code> 3。
-</div><h2>动手：两条退出路径，为什么清理代码要写两遍</h2>
+</div><h2>动手（二）：两条退出路径，为什么清理代码要写两遍</h2>
 <p><code>cir.cleanup.scope</code> 有两个 region：body 和 cleanup；<code>cir.try</code> 有一个 <code>cleanup</code> 属性，文档说它表示「即使异常没被捕获，从 try region 异常退出时也有清理要做」。为什么需要这些？下面这个能在浏览器里跑的小程序把原因摆出来：同一段带 RAII 对象的嵌套代码，正常退出和异常 unwind 走的是<strong>两条不同的清理路径</strong>，析构的对象集合和顺序都不一样。点 <strong>▶ 运行</strong>。</p>
 <div class="code-block runnable">
   <div class="code-head"><span class="lang-tag">Python</span>

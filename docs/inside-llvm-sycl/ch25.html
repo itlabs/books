@@ -238,18 +238,51 @@ cir.scope {
 <strong>「更高层」的准确含义</strong>
 别把 CIR 想成「更抽象所以更模糊」。它和 LLVM IR 一样是 SSA、一样有显式的 load/store、一样能验证。差别在于它<strong>额外保留了一批前端知道、后端不需要的事实</strong>：作用域、有符号性、变量名、类的继承结构、异常的作用域嵌套（第 26 章）、CUDA 的地址空间语义（第 27 章）。这些事实在降到 LLVM IR 的过程中会被逐步丢弃——但在丢弃之前，它们可以被利用。
 </div><h2>上手：<code>-fclangir</code> 和 <code>-emit-cir</code></h2>
-<p>驱动层的开关定义在 <code>clang/include/clang/Options/Options.td</code>（注意这个文件从 <code>clang/include/clang/Driver/</code> 搬过来了）。核心的两个：</p>
+<h3>第 0 步：确认你的 clang 真的支持 CIR</h3>
+<p>这一步不能跳，因为<strong>跳过它你会以为自己在跑 CIR，其实一步都没进去</strong>。</p>
+<p>CIR 默认不编进 clang，要 <code>-DCLANG_ENABLE_CIR=ON</code> 重新构建（附录 A 第 5 节把整个过程走了一遍）。而「没编进去」的表现形式非常坑：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">终端</span></div>
-  <pre class="line-numbers"><code class="language-bash"># 用 CIR 路径编译（默认关闭；关掉是 -fno-clangir）
-clang -fclangir -c foo.cpp -o foo.o
+  <pre class="line-numbers"><code class="language-bash"># ⚠️ 这条命令【不能】用来判断你的 clang 支不支持 CIR
+clang++ -fclangir -c foo.cpp -o foo.o
+echo $?        # → 0。产物正常，零警告。但很可能根本没走 CIR。</code></pre>
+</div><p>原因在 <code>clang/lib/FrontendTool/ExecuteCompilerInvocation.cpp</code>：分派是<strong>编译期</strong>开关，没开 CIR 时 <code>#if</code> 整块被预处理掉，直接落到经典那一支。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">  case EmitLLVM: {
+#if CLANG_ENABLE_CIR
+    if (UseCIR)
+      return std::make_unique&lt;cir::EmitLLVMAction&gt;();
+#endif
+    return std::make_unique&lt;EmitLLVMAction&gt;();   // ← 没开 CIR 就直接走到这
+  }</code></pre>
+</div><p>只有 <code>case EmitCIR:</code> 那一支带 <code>#else</code> 报错。所以判定要用 <code>-emit-cir</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># ✅ 决定性测试，只有三种结果
+clang++ -emit-cir foo.cpp -o foo.cir
 
-# 只走到 cir 方言就停下，把 .cir 文本打印出来
-clang -fclangir -Xclang -emit-cir -S foo.cpp -o foo.cir
+# ① 老 clang（这个 flag 还不存在）：
+#      error: unknown argument: '-emit-cir'
+# ② 新 clang 但没开 CIR：
+#      error: clang IR support not available, rebuild clang with -DCLANG_ENABLE_CIR=ON
+# ③ 开了：安静地写出 foo.cir —— 这时才可以往下走</code></pre>
+</div><p>别指望现成的二进制省事：发行版 clang 包不开这个开关，<strong>Compiler Explorer 上的 trunk clang 也不开</strong>。第五部分是唯一需要你自己建编译器的部分。</p>
+<h3>两个核心开关</h3>
+<p>驱动层的开关定义在 <code>clang/include/clang/Options/Options.td</code>（注意这个文件从 <code>clang/include/clang/Driver/</code> 搬过来了）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 走 CIR 路径编译到目标文件（默认关闭；显式关掉是 -fno-clangir，两者 last-wins）
+clang++ -fclangir -c foo.cpp -o foo.o
 
-# cc1 层直接调用（lit 测试里最常见的写法）
-clang -cc1 -triple x86_64-unknown-linux-gnu -fclangir -emit-cir foo.cpp -o -</code></pre>
-</div><p><code>-fclangir</code> 在 Options.td 里是一个 <code>BoolFOption</code>，绑到 <code>FrontendOpts&lt;&quot;UseClangIRPipeline&quot;&gt;</code>，<code>DefaultFalse</code>；它的正向说明是「Use the ClangIR pipeline to compile」，反向是「Use the AST -&gt; LLVM pipeline to compile」——<strong>社区自己就把这两条路径写成了一对开关</strong>。<code>-emit-cir</code> 的帮助文本是「Build ASTs and then lower to ClangIR」。</p>
+# 只走到 cir 方言就停下，把 .cir 文本写出来
+clang++ -emit-cir foo.cpp -o foo.cir
+
+# cc1 层直接调用（lit 测试里最常见的写法，-triple 要自己给全）
+clang++ -cc1 -triple x86_64-unknown-linux-gnu -emit-cir foo.cpp -o -</code></pre>
+</div><p><code>-emit-cir</code> 有两个容易写错的地方：它是<strong>驱动层</strong>选项（<code>Visibility&lt;[ClangOption, CC1Option]&gt;</code>），<strong>不需要</strong> <code>-Xclang</code> 包一层；它属于 <code>Action_Group</code>，本身就是一个 action（和 <code>-c</code>、<code>-S</code> 同级），<strong>再加 <code>-S</code> 会得到</strong> <code>warning: argument unused during compilation: &#39;-S&#39;</code>。另外它隐含打开 CIR 管线（<code>CompilerInvocation.cpp</code> 里 <code>if (Args.hasArg(OPT_emit_cir)) Opts.UseClangIRPipeline = true;</code>），所以 <code>-fclangir</code> 可以省。</p>
+<p><code>-fclangir</code> 在 Options.td 里是一个 <code>BoolFOption</code>，绑到 <code>FrontendOpts&lt;&quot;UseClangIRPipeline&quot;&gt;</code>，<code>DefaultFalse</code>；它的正向说明是「Use the ClangIR pipeline to compile」，反向是「Use the AST -&gt; LLVM pipeline to compile」——<strong>社区自己就把这两条路径写成了一对开关</strong>。<code>-emit-cir</code> 的帮助文本是「Build ASTs and then lower to ClangIR」。</p>
+<p>还有一个安静的例外值得知道：如果输入本身已经是 LLVM IR（比如 OpenMP offloading 的后端阶段），<code>-fclangir</code> 会被<strong>直接忽略</strong>——<code>CompilerInvocation.cpp</code> 里有一句 <code>if (Opts.UseClangIRPipeline &amp;&amp; DashX.getLanguage() == Language::LLVM_IR) Opts.UseClangIRPipeline = false;</code>。CIR 是源码级管线，没有 AST 就没它的事。</p>
 <p>除此之外还有一组调试与实验用的开关，值得记住，因为它们直接对应「CIR 是可观察的」这个卖点：</p>
 <table>
 <thead>
@@ -385,10 +418,10 @@ if (enableCallConvLowering)
 <code>clang/lib/CIR/Lowering/</code> 下目前只有 <code>DirectToLLVM/</code>：从 <code>cir</code> 方言直接降到 MLIR 的 LLVM 方言，再出 LLVM IR。孵化器 <code>llvm/clangir</code> 里还有一条 <code>ThroughMLIR/</code>，先降到 MLIR 的通用方言（<code>scf</code>、<code>memref</code>、<code>affine</code> 之类）再往下走——那条路才是「用上 MLIR 生态里现成的循环/多面体优化」的野心所在，但它没有上游，也不是当前的主线。本章讲的一切都走 <code>DirectToLLVM</code>。
 </div><h2>对照第三层：三条 RUN 线把对照制度化</h2>
 <p>前两层对照是「作者写代码时的参照」。第三层最关键：对照被<strong>写进了测试的形状里</strong>，成了制度。</p>
-<p>打开 <code>clang/test/CIR/</code> 下几乎任何一个 CodeGen 测试，开头都是这样三条 RUN 线：</p>
+<p>打开 <code>clang/test/CIR/</code> 下几乎任何一个 CodeGen 测试，开头都是这样三条 RUN 线（下面是 <strong>lit 测试的原文</strong>，<code>%clang_cc1</code>、<code>%s</code>、<code>%t</code> 都是 lit 的替换变量，<strong>复制到 shell 里跑不通</strong>；可直接执行的等价形式在本节末尾）：</p>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">终端</span></div>
-  <pre class="line-numbers"><code class="language-bash">// RUN: %clang_cc1 ... -fclangir -emit-cir  %s -o %t.cir
+  <div class="code-head"><span class="lang-tag">lit 测试 RUN 行（不可直接执行）</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// RUN: %clang_cc1 ... -fclangir -emit-cir  %s -o %t.cir
 // RUN: FileCheck --input-file=%t.cir %s --check-prefix=CIR
 // RUN: %clang_cc1 ... -fclangir -emit-llvm %s -o %t-cir.ll
 // RUN: FileCheck --input-file=%t-cir.ll %s --check-prefix=LLVM
@@ -421,6 +454,50 @@ if (enableCallConvLowering)
 <div class="warn">
 <strong>parity 是一条极苛刻的验收线</strong>
 「产出等价的 LLVM IR」听起来温和，实际上意味着：CIR 必须把 C++ 的每一个阴暗角落——位域布局、虚基类偏移、异常表、各目标的调用约定分类规则、<code>__attribute__</code> 的语义——全部重新实现一遍，而且结果要和一个演化了二十年、里面塞满了「为了兼容某版 GCC 的某个行为」的实现对齐。这就是为什么进度以「支持了哪些 C++ 特性」为单位缓慢推进，而不是一口气切换。也是为什么 <code>-fclangir</code> 默认是关的。
+</div><h2>自己跑一遍这个对照</h2>
+<p>前面那三条 RUN 线是 lit 的写法，不能直接粘到 shell 里。把它翻成可执行的形式只需要三条命令——这是整章最值得你亲手做一次的事，因为**「两条路径产出等价但不相同的 LLVM IR」这句话，看别人的 CHECK 行永远不如自己 diff 一次**。</p>
+<p>先准备一个能暴露差异的小例子（虚函数是最好的靶子，原因下面会说）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">C++</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// vcall.cpp
+struct A {
+  virtual ~A();
+  virtual void f();
+  virtual void g();
+};
+void callee(A *a) { a-&gt;g(); }</code></pre>
+</div><p>然后三条命令，对应那三条 RUN 线：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># ① CIR 路径停在 cir 方言（对应 CIR 前缀）
+clang++ -emit-cir vcall.cpp -o vcall.cir
+
+# ② CIR 路径一直走到 LLVM IR（对应 LLVM 前缀）
+clang++ -fclangir -S -emit-llvm vcall.cpp -o cir.ll
+
+# ③ 经典路径的 LLVM IR（对应 OGCG 前缀）—— 只差一个 -fclangir
+clang++            -S -emit-llvm vcall.cpp -o ogcg.ll
+
+# 然后把后两个摆在一起看
+diff -u ogcg.ll cir.ll | head -60</code></pre>
+</div><p>三件事请自己确认，每一件都对应本章的一个论断：</p>
+<ol>
+<li><strong><code>vcall.cir</code> 里读得出源码结构。</strong> 找 <code>cir.func</code>、找参数名、找 <code>cir.vtable.get_vptr</code> 这一串——第 26 章会逐个讲。对比一下 <code>ogcg.ll</code> 里同一段是 <code>load ptr</code> + <code>getelementptr</code> + <code>load ptr</code> + <code>call</code>，看不出「这是一次虚调用」。</li>
+<li><strong><code>diff</code> 不是空的，但差异是局部的。</strong> 两份 IR 的函数签名、基本块结构、调用序列应当一致；差异集中在取虚表项那个 <code>getelementptr</code> 上——本章前面那个 <code>inrange(-16, 8)</code> vs <code>(i8, ptr @_ZTV1A, i64 16)</code> 的例子就是它。这正是「语义等价，不是文本相同」的现场。</li>
+<li><strong>把 <code>-O2</code> 加上，再 diff 一次。</strong> 差异通常会显著缩小甚至消失——因为中端优化会把两种写法归一化。这解释了为什么 parity 的验收线定在语义而不是文本：定在文本上，这条路根本走不动。</li>
+</ol>
+<p>想看得更细，把中间过程截开：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash"># 看 CIRGen 刚吐出来、还没跑任何 pass 的样子
+clang++ -emit-cir -fclangir-disable-passes vcall.cpp -o raw.cir
+diff -u raw.cir vcall.cir        # 这个 diff 就是那一串 CIR pass 干的活
+
+# 借 MLIR 的插桩，在某个 pass 之前截一刀（第 27 章会大量用这招）
+clang++ -emit-cir -mmlir -mlir-print-ir-before=cir-flatten-cfg vcall.cpp -o /dev/null</code></pre>
+</div><div class="note">
+<strong>命令跑不通的两种常见原因</strong>
+一是 <code>error: clang IR support not available</code>——你的 clang 没开 <code>CLANG_ENABLE_CIR</code>，回到本节开头的第 0 步。二是某个 C++ 特性还没实现，报的是 <code>NYI</code> / <code>not yet implemented</code> 之类——这是 CIR 现阶段的正常状态，不是你的环境问题。遇到就把例子改简单些；想知道哪些能用，去数 <code>clang/test/CIR/</code> 下的测试（本章末尾反复强调的那个方法）。
 </div><h2>对照第四层：代价和收益</h2>
 <p>把上面三层放在一起，你就能自己判断这件事值不值得，而不是听结论。</p>
 <p><strong>代价，很直白。</strong> 一是要重新实现一遍 CodeGen，工作量以人年计；二是编译时间和内存会增加——多了一层 IR、多了一串 pass、多了 MLIR 的验证器；三是维护面变宽，在 <code>-fclangir</code> 默认打开之前，任何 CodeGen 的改动理论上都要考虑两条路径；四是引入了对 MLIR 的依赖，Clang 的构建不再只依赖 LLVM 核心。</p>
@@ -459,8 +536,8 @@ if (enableCallConvLowering)
 </tbody></table>
 <p>于是一个 CIR pass 的测试可以完全不碰 C++ 源码，就像这样（<code>clang/test/CIR/Transforms/</code> 下的测试都是这个样子）：</p>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">终端</span></div>
-  <pre class="line-numbers"><code class="language-bash">// RUN: cir-opt %s -cir-flatten-cfg -o - | FileCheck %s</code></pre>
+  <div class="code-head"><span class="lang-tag">lit 测试 RUN 行（不可直接执行）</span></div>
+  <pre class="line-numbers"><code class="language-cpp">// RUN: cir-opt %s -cir-flatten-cfg -o - | FileCheck %s</code></pre>
 </div><p>输入是手写的 <code>.cir</code>，输出用 FileCheck 校验。你甚至可以手写一个只有几行的模块，把目标三元组和数据布局直接写在模块属性上：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>

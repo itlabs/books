@@ -217,6 +217,10 @@ renderer.code = function (token) {
     // 命令是 inside-mlir 的教学重点，对着 clang 的 Attr.td 没有意义——
     // 后者走的是 clang-tblgen，也不是 ODS）。
     "tablegen-norun": { prism: "language-mlir", tag: "TableGen" },
+    // lit 测试里的 RUN 行。它们在 .c/.cpp 测试文件里本来就是 // 注释，所以按
+    // cpp 高亮；标签写明"不可直接执行"，因为 %clang_cc1 / %s / %t 是 lit 的
+    // 替换变量，读者复制到 shell 里必然失败。
+    "lit-norun":    { prism: "language-cpp", tag: "lit 测试 RUN 行（不可直接执行）" },
     "cir-norun":    { prism: "language-mlir", tag: "ClangIR（cir 方言）" },
     "mlir-norun":   { prism: "language-mlir", tag: "MLIR" },
   };
