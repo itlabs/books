@@ -283,7 +283,7 @@ print("同一个文件，两处 include，各取所需 —— 加 op 只改 .td�
 <p>方言声明本身很短（<code>include/Pix/PixDialect.td</code>）：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_Dialect : Dialect {
   // 这个名字就是 IR 里的前缀：pix.add、pix.convolve……
   let name = "pix";
   let summary = "一个小型图像处理方言（《深入 MLIR》贯穿案例）";
@@ -298,7 +298,7 @@ class Pix_Op&lt;string mnemonic, list&lt;Trait&gt; traits = []&gt;
 </div><p>第一个 op 也很短（<code>include/Pix/PixOps.td</code>）。第 8 章会把 ODS 的每个部分拆开细讲，这里只求跑通：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
   let summary = "两张图逐点相加";
 
   let arguments = (ins F32Tensor:$lhs, F32Tensor:$rhs);

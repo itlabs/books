@@ -62,7 +62,7 @@ lib/Pix/Transforms/CostPasses.cpp         ← 三个 pass 的实现</code></pre>
 </div><p>ODS 那边异常简单，一个 pass 就是一行 <code>Pass&lt;命令行名字, 作用在哪种 op 上&gt;</code>：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def PixCostReport : Pass&lt;"pix-cost-report", "::mlir::func::FuncOp"&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def PixCostReport : Pass&lt;"pix-cost-report", "::mlir::func::FuncOp"&gt; {
   let summary = "统计本函数的 pix 计算量，写成属性";
   let description = [{ … }];
 }</code></pre>
@@ -572,7 +572,7 @@ func.func @scattered(%img: tensor&lt;8x8xf32&gt;) -&gt; tensor&lt;8x8xf32&gt; {
 <p>pass 可以带命令行选项。在 <code>Passes.td</code> 里给 <code>PixCostReport</code> 加一个：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def PixCostReport : Pass&lt;"pix-cost-report", "::mlir::func::FuncOp"&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def PixCostReport : Pass&lt;"pix-cost-report", "::mlir::func::FuncOp"&gt; {
   let summary = "统计本函数的 pix 计算量，写成属性";
   let options = [
     Option&lt;"skipEmpty", "skip-empty", "bool", /*default=*/"false",

@@ -76,7 +76,7 @@ let name = "hlfir"</code></pre>
 </div><p>比数量更能说明问题的是<strong>复用面</strong>。前面二十几章我们一直在讲&quot;降到 <code>linalg</code> 就白拿整条链&quot;（第 20 章），那 flang 用了多少上游方言？答案在 <code>FIRDialect.td</code> 里：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">let dependentDialects = [
+  <pre class="line-numbers"><code class="language-mlir">let dependentDialects = [
   // Arith dialect provides FastMathFlagsAttr
   // supported by some FIR operations.
   "mlir::arith::ArithDialect",

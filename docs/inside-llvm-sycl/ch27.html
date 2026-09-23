@@ -95,7 +95,7 @@ CIR 侧：<code>clang/lib/CIR/CodeGen/CIRGenCUDANV.cpp</code>、<code>CIRGenCUDA
 <p>最后一行是全章的枢纽。<code>__global__</code> 函数在两趟里<strong>名字都不一样</strong>：设备端是它自己的 mangled name，主机端是一个前缀了 <code>__device_stub__</code> 的存根函数（stub）。你在主机端 <code>kernel&lt;&lt;&lt;...&gt;&gt;&gt;(...)</code> 写下的那次「调用」，调的是这个 stub；stub 的职责是把参数打包好、把配置取回来，然后交给运行时。</p>
 <p>于是一个信息断链出现了：主机端的 stub 需要知道<strong>设备端那个 kernel 叫什么名字</strong>，才能在注册时把两者对上。经典 CodeGen 靠 IRGen 内部的数据结构记住这件事。CIR 的做法是——把它写在 IR 上。</p>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <div class="code-head"><span class="lang-tag">TableGen</span></div>
   <pre class="line-numbers"><code class="language-mlir">def CIR_CUDAKernelNameAttr : CIR_Attr&lt;"CUDAKernelName", "cu.kernel_name"&gt; {
   let summary = "Device-side function name for this stub.";
   let description =
@@ -216,7 +216,7 @@ cir.if %b {
 <p>CUDA 里 <code>__device__</code> / <code>__constant__</code> / <code>__shared__</code> 三个限定符，最终会变成 LLVM IR 上的 <code>addrspace(1)</code> / <code>addrspace(4)</code> / <code>addrspace(3)</code>——这三个数字是 <strong>NVPTX 后端的约定</strong>，换成 AMDGCN 就是另一套数字。经典 CodeGen 的做法是在 IRGen 里直接查表、直接写下数字。</p>
 <p>CIR 把这一步<strong>拆成了两个属性</strong>。<code>clang/include/clang/CIR/Dialect/IR/CIRAttrs.td</code>：</p>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <div class="code-head"><span class="lang-tag">TableGen</span></div>
   <pre class="line-numbers"><code class="language-mlir">def CIR_LangAddressSpaceAttr : CIR_Attr&lt;"LangAddressSpace", "lang_address_space", [
     DeclareAttrInterfaceMethods&lt;MemorySpaceAttrInterface&gt;]&gt; {
   // 例：!cir.ptr&lt;!s32i, lang_address_space(offload_local)&gt;
@@ -339,7 +339,7 @@ store i32 %val, ptr addrspacecast (ptr addrspace(3) @_ZZ2fnvE1j to ptr)</code></
 <p>CUDA 的运行模型要求主机端在程序启动时告诉运行时三件事：设备二进制在哪、有哪些 kernel、有哪些 <code>__device__</code>/<code>__constant__</code> 变量。这套「注册基础设施」在经典 CodeGen 里由 <code>CGCUDANV.cpp</code> 的 <code>makeModuleCtorFunction()</code> 在 IRGen 收尾时直接吐成 LLVM IR。</p>
 <p>CIR 换了个顺序：CIRGen 只在 IR 上<strong>挂属性</strong>，展开留给降级阶段。<code>CIRCUDAAttrs.td</code> 里一共四个属性，除了前面见过的 <code>cu.kernel_name</code>，还有：</p>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <div class="code-head"><span class="lang-tag">TableGen</span></div>
   <pre class="line-numbers"><code class="language-mlir">def CIR_CUDAExternallyInitializedAttr
     : CIR_Attr&lt;"CUDAExternallyInitialized", "cu.externally_initialized"&gt; {
   let description = [{

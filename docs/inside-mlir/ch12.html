@@ -56,7 +56,7 @@
 <p>枚举属性的写法第 9 章已经走过一遍（<code>#pix.border&lt;clamp|zero|wrap&gt;</code>），照抄就是——<strong>这正是要点：这套东西是有套路的，第二个枚举应该毫无悬念。</strong></p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_ReduceKind : I32EnumAttr&lt;"ReduceKind", "全图归约的方式", [
+  <pre class="line-numbers"><code class="language-mlir">def Pix_ReduceKind : I32EnumAttr&lt;"ReduceKind", "全图归约的方式", [
       I32EnumAttrCase&lt;"Sum", 0, "sum"&gt;,
       I32EnumAttrCase&lt;"Max", 1, "max"&gt;,
       I32EnumAttrCase&lt;"Min", 2, "min"&gt;
@@ -74,7 +74,7 @@ def Pix_ReduceKindAttr : EnumAttr&lt;Pix_Dialect, Pix_ReduceKind, "reduce_kind"&
 <p>用 <code>DefaultValuedAttr</code> 就没这个问题：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_ReduceOp : Pix_Op&lt;"reduce", [Pure]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_ReduceOp : Pix_Op&lt;"reduce", [Pure]&gt; {
   let arguments = (ins F32Tensor:$image,
                        DefaultValuedAttr&lt;Pix_ReduceKindAttr,
                                          "ReduceKind::Sum"&gt;:$kind);

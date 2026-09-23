@@ -67,7 +67,7 @@
 <p>类型定义放在一个新文件 <code>include/Pix/PixTypes.td</code>：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">class Pix_Type&lt;string name, string typeMnemonic, list&lt;Trait&gt; traits = []&gt;
+  <pre class="line-numbers"><code class="language-mlir">class Pix_Type&lt;string name, string typeMnemonic, list&lt;Trait&gt; traits = []&gt;
     : TypeDef&lt;Pix_Dialect, name, traits&gt; {
   let mnemonic = typeMnemonic;
 }
@@ -229,7 +229,7 @@ context 里一共存了 2 个类型：[('kernel', 3, 3), ('kernel', 1, 5)]
 <p><strong>第一步，定义枚举本身</strong>（生成一个 C++ <code>enum class BorderMode</code>）：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_BorderMode : I32EnumAttr&lt;"BorderMode", "卷积的边界处理方式", [
+  <pre class="line-numbers"><code class="language-mlir">def Pix_BorderMode : I32EnumAttr&lt;"BorderMode", "卷积的边界处理方式", [
       I32EnumAttrCase&lt;"Clamp", 0, "clamp"&gt;,  // 取最近的边界像素
       I32EnumAttrCase&lt;"Zero",  1, "zero"&gt;,   // 界外当 0
       I32EnumAttrCase&lt;"Wrap",  2, "wrap"&gt;    // 环绕到另一侧
@@ -241,7 +241,7 @@ context 里一共存了 2 个类型：[('kernel', 3, 3), ('kernel', 1, 5)]
 </div><p><strong>第二步，把枚举包成一个真正的方言属性</strong>：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_BorderModeAttr : EnumAttr&lt;Pix_Dialect, Pix_BorderMode, "border"&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_BorderModeAttr : EnumAttr&lt;Pix_Dialect, Pix_BorderMode, "border"&gt; {
   let assemblyFormat = "`&lt;` $value `&gt;`";
 }</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
@@ -269,7 +269,7 @@ add_public_tablegen_target(MLIRPixAttrsIncGen)</code></pre>
 <p>方言那边还要开两个开关，否则 <code>!pix.kernel&lt;…&gt;</code> 和 <code>#pix.border&lt;…&gt;</code> 没人解析：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_Dialect : Dialect {
   // …
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
@@ -296,7 +296,7 @@ add_public_tablegen_target(MLIRPixAttrsIncGen)</code></pre>
 </div><h2>用起来：<code>pix.kernel</code> 与 <code>pix.convolve</code></h2>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_KernelOp : Pix_Op&lt;"kernel", [Pure, ConstantLike]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_KernelOp : Pix_Op&lt;"kernel", [Pure, ConstantLike]&gt; {
   let arguments = (ins ElementsAttr:$weights);
   let results = (outs Pix_KernelType:$result);
   let assemblyFormat = "$weights attr-dict `-&gt;` type($result)";
