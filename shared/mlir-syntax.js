@@ -38,6 +38,21 @@
     },
   });
 
+  // ODS（TableGen）里的 `$image`、`$result`、`$_builder`：llvm 的 variable 规则
+  // 只认 % @ ! # 四个前缀，`$` 不在其中。不加这条的话，`$` 本身不着色，紧跟的
+  // 名字被 keyword 规则吃掉——于是 `$border`（引用 attribute）和 `` `border` ``
+  // （要打印进 IR 的字面量）同色，assemblyFormat 里这两者常紧挨着出现，看不出区别。
+  //
+  // 插入点必须是 "label" 而不是 "variable"：Prism 按规则顺序对整串依次扫描，
+  // 排在 variable 之前就会先匹配到符号内部的 `$`，把 `@_Z3foo$clone` 劈成
+  // variable(`@_Z3foo`) + (`$clone`)。排在 variable 之后、keyword 之前才两头都对。
+  Prism.languages.insertBefore("mlir", "label", {
+    "ods-arg": {
+      pattern: /\$[\w$]+/,
+      alias: "variable",
+    },
+  });
+
   // `!pix.image<...>`、`#map`、`@my_func`、`%arg0` 交给 llvm 原有的 variable 规则即可，
   // 它已经覆盖了 % @ ! # 四个前缀。
 })(typeof Prism !== "undefined" ? Prism : null);
