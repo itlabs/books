@@ -209,7 +209,7 @@ module {
 <strong>为什么值得单独做成一个 pass</strong>
 在经典路径里，「把 <code>if</code> 变成基本块」和「生成 <code>if</code> 里面的代码」是同一次遍历里交织完成的：<code>CGStmt.cpp</code> 一边创建 <code>llvm::BasicBlock</code>、一边 <code>EmitBlock</code>、一边递归下降。在 CIR 里这两件事被分开：CIRGen 只负责造出结构化的 <code>cir.if</code>，扁平化是后面一个独立、可单独测试、输入输出都能落盘的 pass。代价是多跑一趟 IR；收益是在这两者之间，你有一个「控制流还是结构化的」时刻可以做事。
 </div><h2>动手（一）：把这个 pass 自己跑一遍</h2>
-<p>上面那个测试是本章<strong>最容易亲手复现</strong>的一件事——它不需要 C++ 源码、不需要走前端，只要一个 <code>cir-opt</code>。把 RUN 行去掉，剩下的部分存成文件：</p>
+<p>上面那个测试是本章<strong>最容易亲手复现</strong>的一件事——不需要 C++ 源码、不走前端，只要一个 <code>cir-opt</code>。把 RUN 行去掉，剩下的存成文件：</p>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">终端</span></div>
   <pre class="line-numbers"><code class="language-bash">cat &gt; if.cir &lt;&lt;'EOF'
@@ -229,46 +229,63 @@ module {
 }
 EOF
 
-# 什么 pass 都不跑，只解析 + 验证 + 重新打印
-cir-opt if.cir -o -
-
-# 跑扁平化，对照上面那组 CHECK 行读输出
-cir-opt if.cir -cir-flatten-cfg -o -</code></pre>
-</div><p>第一条命令值得单独跑一次：它证明了 <code>.cir</code> 是<strong>真正的一等文本格式</strong>——手写的模块能被解析、通过验证器、再原样打印回来。第 1 章给 IR 定的三条指标（能落盘、有独立工具、能人肉审查），到这里才算在 AST→LLVM IR 这一段上全部兑现。</p>
-<p>四个改动，每个都对应本章前面的一个论断，建议依次试：</p>
-<table>
-<thead>
-<tr>
-<th>改什么</th>
-<th>看什么</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>删掉 <code>else { ... }</code> 整块</td>
-<td><code>cir.if</code> 只剩一个 region；扁平化后 <code>^bb3</code> 不再是 <code>no predecessors</code>——因为现在有一条路能走到它</td>
-</tr>
-<tr>
-<td>把 <code>%4</code> 换成 <code>%arg0</code>（类型不对）</td>
-<td>验证器直接报错。<strong>这是 <code>!cir.bool</code> 这个专用类型换来的好处</strong>，不是 <code>i1</code> 那种「什么都能塞」</td>
-</tr>
-<tr>
-<td>把 <code>cir.if</code> 换成 <code>cir.while</code> / <code>cir.for</code></td>
-<td>扁平化后出现回边，块数明显增加。对照图 26-1 数一数</td>
-</tr>
-<tr>
-<td>在外层再套一个 <code>cir.scope { ... }</code></td>
-<td>嵌套一层，扁平化后块数怎么变</td>
-</tr>
-</tbody></table>
-<p>想把这条路走到底——从手写 CIR 一直到 LLVM IR，全程不碰 C++：</p>
+cir-opt if.cir -o -                      # 只解析 + 验证 + 重新打印
+cir-opt if.cir -cir-flatten-cfg -o -     # 跑扁平化</code></pre>
+</div><p>第一条命令值得单独跑一次：它证明 <code>.cir</code> 是<strong>真正的一等文本格式</strong>——手写的模块能被解析、通过验证器、原样打印回来（顺带把 <code>%4</code>/<code>%5</code> 重新编号成 <code>%0</code>/<code>%1</code>）。第 1 章给 IR 定的三条指标，到这里才算在 AST→LLVM IR 这一段上全部兑现。</p>
+<p>第二条命令的实际输出，和本节前面那组 CHECK 行逐行对得上：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">ClangIR（cir 方言）</span></div>
+  <pre class="line-numbers"><code class="language-mlir">!s32i = !cir.int&lt;s, 32&gt;
+module {
+  cir.func @foo(%arg0: !s32i) -&gt; !s32i {
+    %0 = cir.cast int_to_bool %arg0 : !s32i -&gt; !cir.bool
+    cir.brcond %0 ^bb1, ^bb2
+  ^bb1:  // pred: ^bb0
+    %1 = cir.const #cir.int&lt;1&gt; : !s32i
+    cir.return %1 : !s32i
+  ^bb2:  // pred: ^bb0
+    %2 = cir.const #cir.int&lt;0&gt; : !s32i
+    cir.return %2 : !s32i
+  ^bb3:  // no predecessors
+    cir.return %arg0 : !s32i
+  }
+}</code></pre>
+</div><p>三个改动，建议依次试：</p>
+<p><strong>① 删掉 <code>else { ... }</code> 整块。</strong> <code>cir.if</code> 只剩一个 region，扁平化后<strong>连 <code>^bb3</code> 都不存在了</strong>——只有 <code>^bb0</code> / <code>^bb1</code> / <code>^bb2</code>，其中 <code>^bb2</code> 就是原来 <code>if</code> 之后的那段代码，而且它有前驱（<code>// pred: ^bb0</code>）。对比一下有 <code>else</code> 的版本：那里两个分支都 <code>return</code> 了，续行块才变成孤岛。<strong>块的数量不取决于源码写了几个构造，而取决于控制流实际怎么汇合</strong>。</p>
+<p><strong>② 把 <code>cir.if %4</code> 改成 <code>cir.if %arg0</code>（类型不对）。</strong> 立刻被拦住，而且报错发生在<strong>解析阶段</strong>，比验证器更早：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">if-bad.cir:5:12: error: use of value '%arg0' expects different type than prior uses: '!cir.bool' vs '!cir.int&lt;s, 32&gt;'
+    cir.if %arg0 {
+           ^
+if-bad.cir:3:17: note: prior use here</code></pre>
+</div><p>这是 <code>!cir.bool</code> 作为<strong>专用类型</strong>换来的好处——不是 LLVM IR 里 <code>i1</code> 那种「什么都能塞进去」。</p>
+<p><strong>③ 把 <code>cir.if</code> 换成 <code>cir.while</code> / <code>cir.for</code>，或在外面再套一层 <code>cir.scope</code>。</strong> 扁平化后出现回边、块数增加，对照图 26-1 数一数。</p>
+<h3>走到底：从手写 CIR 到 LLVM IR，全程不碰 C++</h3>
 <div class="code-block">
   <div class="code-head"><span class="lang-tag">终端</span></div>
-  <pre class="line-numbers"><code class="language-bash"># 先扁平化（cir-translate 要求控制流已经是基本块形态），再翻成 LLVM IR
-cir-opt if.cir -cir-flatten-cfg -o if-flat.cir
-cir-translate if-flat.cir --cir-to-llvmir -o -</code></pre>
-</div><div class="note">
-<strong>两个可能踩到的坑</strong>
-一是 <code>cir-translate</code> 对模块级属性有要求（目标三元组、数据布局），缺了会报错——第 25 章末尾那个手写模块示例里的 <code>cir.triple</code> 和 <code>dlti.dl_spec</code> 就是补这个的，照抄加在 <code>module</code> 后面即可。二是<strong>顺序不能颠倒</strong>：直接对带 <code>cir.if</code> 的模块跑 <code>--cir-to-llvmir</code> 会失败，因为降级到 LLVM 方言的那套 pattern 只认基本块，不认 region。这个「必须先扁平化」的约束，就是第 25 章讲的 <code>populateCIRPreLoweringPasses()</code> 里那串顺序契约在命令行上的投影——你现在是手动在履行它。
+  <pre class="line-numbers"><code class="language-bash">cir-translate if.cir --cir-to-llvmir -o -</code></pre>
+</div><p>实测输出（<code>-O0</code> 形态，注意最后那个块）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
+  <pre class="line-numbers"><code class="language-llvm">define i32 @foo(i32 %0) {
+  %2 = icmp ne i32 %0, 0
+  br i1 %2, label %3, label %4
+
+3:                                                ; preds = %1
+  ret i32 1
+
+4:                                                ; preds = %1
+  ret i32 0
+
+5:                                                ; No predecessors!
+  ret i32 %0
+}</code></pre>
+</div><p><code>cir.brcond</code> → <code>br i1</code>，<code>cir.cast int_to_bool</code> → <code>icmp ne</code>，而那个 <code>no predecessors</code> 的块<strong>一路活到了 LLVM IR</strong>（<code>; No predecessors!</code> 是 LLVM 打印器的说法）——它要等中端的死代码消除才会消失。</p>
+<div class="note">
+<strong>两件和直觉相反的事，实测得出</strong>
+一、<strong>不需要先手动扁平化</strong>。<code>--cir-to-llvmir</code> 内部跑的是完整的降级管线（<code>lowerDirectlyFromCIRToLLVMIR()</code>，含那串 pre-lowering pass），所以先 <code>cir-opt -cir-flatten-cfg</code> 再翻、和直接翻，产出<strong>逐字节相同</strong>。手动跑一遍 <code>cir-opt</code> 的价值不在于「必须」，而在于你能把中间那一步<strong>看见并存下来</strong>——这正是有落盘格式的意义。<br>
+二、<strong>模块级属性可以不写</strong>。缺 <code>cir.triple</code> / <code>dlti.dl_spec</code> 只会得到一条警告：<code>warning: no target triple provided, assuming x86_64-unknown-linux-gnu</code>，然后自动按宿主机推导数据布局（源码里是 <code>prepareCIRModuleForTranslation()</code> 干的）。警告后面会跟着把整个模块打印一遍当 note，很吵，但退出码是 0。想要确定的目标，照第 25 章那个手写模块示例把 <code>cir.triple</code> 加上。
 </div><h2>类：<code>!cir.struct</code> 把布局讲明白</h2>
 <p>C++ 的类在 LLVM IR 里是 <code>%class.Foo = type { i32, ptr, [3 x i8] }</code>——一串按顺序排列的字段类型，没有名字、没有继承关系、padding 和真实成员长得一样。CIR 的 <code>!cir.struct</code> 保留得多得多。</p>
 <p>它有三种形态（<code>CIRTypes.td</code> 里明确列出）：<strong>具名且完整</strong>、<strong>具名但不完整</strong>、<strong>匿名</strong>。而且每个成员都带一个「种类」标记：</p>
