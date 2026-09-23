@@ -56,7 +56,7 @@
 <p>先看分量。给 pix 加一个有副作用的 op：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_TraceOp : Pix_Op&lt;"trace", [MemoryEffects&lt;[MemWrite]&gt;]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_TraceOp : Pix_Op&lt;"trace", [MemoryEffects&lt;[MemWrite]&gt;]&gt; {
   let summary = "把一张图输出出去（调试用），有可观察的副作用";
   let arguments = (ins F32Tensor:$image);
   let assemblyFormat = "$image attr-dict `:` type($image)";

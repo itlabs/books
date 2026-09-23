@@ -89,7 +89,7 @@ public:
 <h2><code>arguments</code> 与 <code>results</code>：类型约束从哪来</h2>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">let arguments = (ins F32Tensor:$lhs, F32Tensor:$rhs);
+  <pre class="line-numbers"><code class="language-mlir">let arguments = (ins F32Tensor:$lhs, F32Tensor:$rhs);
 let results = (outs F32Tensor:$result);</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
 </div><p><code>(ins …)</code> / <code>(outs …)</code> 里的每一项是 <strong>约束:$名字</strong>。约束这个词要理解准：它不是&quot;类型&quot;，而是<strong>对类型的谓词</strong>。<code>F32Tensor</code> 的意思是&quot;元素类型为 f32 的张量&quot;，形状没管；<code>AnyRankedTensor</code> 是&quot;有阶的张量，元素类型随意&quot;。</p>
@@ -137,7 +137,7 @@ let results = (outs F32Tensor:$result);</code></pre>
 <p>属性也写在 <code>arguments</code> 里（这点第一次见会觉得奇怪，但它符合 MLIR 的模型：操作数与属性都是 op 的&quot;输入&quot;）：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">let arguments = (ins F32Tensor:$image,
+  <pre class="line-numbers"><code class="language-mlir">let arguments = (ins F32Tensor:$image,
                      I64Attr:$radius,                          // 必须给
                      DefaultValuedAttr&lt;I64Attr, "1"&gt;:$stride,   // 不给就是 1
                      UnitAttr:$fast);                          // 在/不在就是全部信息</code></pre>
@@ -146,7 +146,7 @@ let results = (outs F32Tensor:$result);</code></pre>
 <p><code>pix.scale</code> 是&quot;整张图乘一个标量&quot;，两个操作数一个是张量一个是标量，<code>SameOperandsAndResultType</code> 显然用不了。换成只约束需要相等的那一对：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_ScaleOp : Pix_Op&lt;"scale", [Pure, AllTypesMatch&lt;["image", "result"]&gt;]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_ScaleOp : Pix_Op&lt;"scale", [Pure, AllTypesMatch&lt;["image", "result"]&gt;]&gt; {
   let arguments = (ins F32Tensor:$image, F32:$factor);
   let results = (outs F32Tensor:$result);
   let assemblyFormat = "$image `,` $factor attr-dict `:` type($result)";
@@ -167,7 +167,7 @@ let results = (outs F32Tensor:$result);</code></pre>
 <p>第 3 章讲过自定义格式只是糖，而通用格式才是真相。<code>assemblyFormat</code> 就是配这个糖的小语言：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";</code></pre>
+  <pre class="line-numbers"><code class="language-mlir">let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
 </div><p>元素表：</p>
 <table>
@@ -205,7 +205,7 @@ let results = (outs F32Tensor:$result);</code></pre>
 <p>三个例子，对应三种常见情况：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">// ① 结果类型与操作数相同 → 只打印一个类型
+  <pre class="line-numbers"><code class="language-mlir">// ① 结果类型与操作数相同 → 只打印一个类型
 let assemblyFormat = "$image `,` $factor attr-dict `:` type($result)";
 
 // ② 结果类型与操作数不同 → 两个都要打印，中间用字面量分开
@@ -361,7 +361,7 @@ for label, fmt in [("写对了（有 attr-dict）", GOOD), ("漏了 attr-dict", 
 <p><code>pix.pipeline</code> 是个容器 op：自己不算任何东西，只把一段处理流程围起来，好让后面的变换把它当整体处理。</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
+  <pre class="line-numbers"><code class="language-mlir">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
     SingleBlockImplicitTerminator&lt;"YieldOp"&gt;,
     RecursiveMemoryEffects]&gt; {
   let results = (outs F32Tensor:$result);
@@ -379,7 +379,7 @@ for label, fmt in [("写对了（有 attr-dict）", GOOD), ("漏了 attr-dict", 
 <p>配套的终结符：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_YieldOp : Pix_Op&lt;"yield", [Pure, ReturnLike, Terminator,
+  <pre class="line-numbers"><code class="language-mlir">def Pix_YieldOp : Pix_Op&lt;"yield", [Pure, ReturnLike, Terminator,
                                    HasParent&lt;"PipelineOp"&gt;]&gt; {
   let arguments = (ins Variadic&lt;F32Tensor&gt;:$values);
   let builders = [OpBuilder&lt;(ins), [{ /* 什么都不用做：造一个空的 yield */ }]&gt;];

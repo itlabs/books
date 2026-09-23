@@ -65,7 +65,7 @@
 <p>这是最容易忽略的一步：<strong>框架不会替你发明 op</strong>。物化钩子的职责是&quot;造一个 op 把这组值转成那个类型&quot;，所以你的方言里必须有这么个 op。给 pix 加两个：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_ToKernelOp : Pix_Op&lt;"to_kernel", [Pure]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_ToKernelOp : Pix_Op&lt;"to_kernel", [Pure]&gt; {
   let summary = "把一张权重张量看作一个卷积核（用于 source 物化）";
   let arguments = (ins F32Tensor:$weights);
   let results = (outs Pix_KernelType:$result);

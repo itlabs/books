@@ -198,7 +198,7 @@ print("注意两处 [verify] / [verifyRegions] 看到的是同一个 pix.yield�
 <p>ODS 里开个开关：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_TransposeOp : Pix_Op&lt;"transpose", [Pure]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_TransposeOp : Pix_Op&lt;"transpose", [Pure]&gt; {
   // …
   let hasVerifier = 1;
 }</code></pre>
@@ -262,7 +262,7 @@ note: see current operation: %0 = "pix.transpose"(%arg0) : (tensor&lt;4x8xf32&gt
 <p>ODS 侧开 <code>genVerifyDecl</code>：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_KernelType : Pix_Type&lt;"Kernel", "kernel"&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_KernelType : Pix_Type&lt;"Kernel", "kernel"&gt; {
   let parameters = (ins "int64_t":$rows, "int64_t":$cols);
   let genVerifyDecl = 1;
 }</code></pre>
@@ -298,7 +298,7 @@ func.func @f(%k: !pix.kernel&lt;2 x 4&gt;) {
 <p>我们走路二。ODS 里加一行：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
+  <pre class="line-numbers"><code class="language-mlir">def Pix_PipelineOp : Pix_Op&lt;"pipeline", [
     SingleBlockImplicitTerminator&lt;"YieldOp"&gt;,
     RecursiveMemoryEffects,
     DeclareOpInterfaceMethods&lt;RegionBranchOpInterface,

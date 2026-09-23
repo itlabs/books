@@ -191,9 +191,12 @@ renderer.code = function (token) {
     // ODS 定义。CE 没有 mlir-tblgen，只高亮 + 给出生成命令（看生成了什么是第 8 章的重点）。
     const cmd =
       "mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td";
+    // 高亮用 mlir 而不是 llvm：TableGen 的注释是 //，而 prism-llvm 的
+    // comment 规则是 /;.*/ ——用 llvm 会把 `let ... ;` 的结尾分号涂成注释
+    // （一路吃到行尾），同时真正的 // 注释行按代码上色，两头都错。
     return `<div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">${escape(code)}</code></pre>
+  <pre class="line-numbers"><code class="language-mlir">${escape(code)}</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>${escape(cmd)}</code></div>
 </div>`;
   }

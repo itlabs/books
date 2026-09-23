@@ -118,7 +118,7 @@
 <p><strong>trait 回答的是&quot;是/不是&quot;这类不带参数的问题。</strong> 它在 C++ 里是模板 mixin，附加在 op 类上；在 ODS 里就是 op 定义里那个方括号列表（第 8 章你会亲手写）：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
   // ...
 }</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
@@ -250,7 +250,7 @@ if (auto loopOp = dyn_cast&lt;LoopLikeOpInterface&gt;(op)) {
 <p><code>Pure</code> 是全书出现频率最高的 trait，但它其实是个<strong>组合</strong>。源码里只有一行（<code>mlir/include/mlir/Interfaces/SideEffectInterfaces.td</code>）：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pure : TraitList&lt;[AlwaysSpeculatable, NoMemoryEffect]&gt;;</code></pre>
+  <pre class="line-numbers"><code class="language-mlir">def Pure : TraitList&lt;[AlwaysSpeculatable, NoMemoryEffect]&gt;;</code></pre>
   <div class="local-cmd"><span class="local-cmd-label">生成代码：</span><code>mlir-tblgen -gen-op-decls -I $(llvm-config --includedir) PixOps.td</code></div>
 </div><p>拆开看：</p>
 <ul>

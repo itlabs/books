@@ -103,7 +103,7 @@
 <p>pix 里有三处：加全零图、乘系数 1、双重转置。ODS 那边只是开个开关：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_AddOp : Pix_Op&lt;"add", [Pure, Commutative, SameOperandsAndResultType]&gt; {
   // …
   let hasFolder = 1;        // 加一张全零图等于没加
   let hasCanonicalizer = 1; // add %x, %x → scale %x, 2.0（下一节）
@@ -206,7 +206,7 @@ func.func @double_transpose(%img: tensor&lt;4x8xf32&gt;) -&gt; tensor&lt;4x8xf32
 </div><p>默认返回 <code>nullptr</code>，意思是&quot;我落不了这个常量&quot;。框架于是<strong>放弃那次折叠</strong>——它不能崩，也没什么可报的，就当没发生。于是你看到一个完全正常、却什么都没做的 <code>fold</code>。补上开关和实现：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_Dialect : Dialect {
   // …
   let hasConstantMaterializer = 1;
 }</code></pre>
@@ -321,7 +321,7 @@ PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/</code
 <p>正解是在方言上声明依赖：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def Pix_Dialect : Dialect {
+  <pre class="line-numbers"><code class="language-mlir">def Pix_Dialect : Dialect {
   // …
   // 想创建某个方言的 op，那个方言必须已经加载进 MLIRContext。
   let dependentDialects = ["::mlir::arith::ArithDialect"];

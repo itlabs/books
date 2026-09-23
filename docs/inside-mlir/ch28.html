@@ -494,7 +494,7 @@ func.func @on_i32(%p: i32) {
 <p>顺便解释一个可能让你意外的事实。<code>clang/include/clang/Basic/DiagnosticDriverKinds.td</code> 里有这么一条警告：</p>
 <div class="code-block cpp">
   <div class="code-head"><span class="lang-tag">TableGen / ODS</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def warn_drv_openacc_without_cir
+  <pre class="line-numbers"><code class="language-mlir">def warn_drv_openacc_without_cir
     : Warning&lt;"OpenACC directives will result in no runtime behavior; use "
               "-fclangir to enable runtime effect"&gt;,
       InGroup&lt;SourceUsesOpenACC&gt;;</code></pre>
