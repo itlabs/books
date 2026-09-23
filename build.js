@@ -213,6 +213,10 @@ renderer.code = function (token) {
     "llvm":         { prism: "language-llvm", tag: "LLVM IR" },
     "llvm-norun":   { prism: "language-llvm", tag: "LLVM IR" },
     "spirv-norun":  { prism: "language-llvm", tag: "SPIR-V" },
+    // 引用自上游的 .td 原文：只高亮、不给"生成代码"页脚（那条 mlir-tblgen
+    // 命令是 inside-mlir 的教学重点，对着 clang 的 Attr.td 没有意义——
+    // 后者走的是 clang-tblgen，也不是 ODS）。
+    "tablegen-norun": { prism: "language-mlir", tag: "TableGen" },
     "cir-norun":    { prism: "language-mlir", tag: "ClangIR（cir 方言）" },
     "mlir-norun":   { prism: "language-mlir", tag: "MLIR" },
   };

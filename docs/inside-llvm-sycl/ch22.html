@@ -116,8 +116,8 @@
 <h3>① Attr.td：定义属性</h3>
 <p><code>clang/include/clang/Basic/Attr.td:3927</code>：</p>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">LLVM IR</span></div>
-  <pre class="line-numbers"><code class="language-llvm">def SYCLReqdWorkGroupSize : InheritableAttr, LanguageOptionsSpecificAttr {
+  <div class="code-head"><span class="lang-tag">TableGen</span></div>
+  <pre class="line-numbers"><code class="language-mlir">def SYCLReqdWorkGroupSize : InheritableAttr, LanguageOptionsSpecificAttr {
   let Spellings = [GNU&lt;"reqd_work_group_size"&gt;,
                    CXX11&lt;"cl", "reqd_work_group_size"&gt;,
                    CXX11&lt;"sycl", "reqd_work_group_size"&gt;];
