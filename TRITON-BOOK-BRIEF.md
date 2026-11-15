@@ -135,18 +135,34 @@
 | ` ```cuda ` / ` ```cuda-norun ` | 已有，带 CE 按钮 |
 | ` ```python ` | 浏览器真运行（Pyodide），只能用标准库 |
 | ` ```python-norun ` / ` ```bash ` | 已有 |
-| ` ```mlir-norun ` | 已有，带 MLIR 高亮。用于贴 TTIR / TTGIR |
+| ` ```mlir-norun ` | 已有，带 MLIR 高亮。本书贴 TTIR / TTGIR 改用下面的 `ttir-norun` / `ttgir-norun` |
 
-### 7.2 批次 0 要加的
+### 7.2 批次 0 加的（2026-11-15 已加进 `build.js`，并用浏览器实测过）
 
 | 围栏 | 用途 | 按钮 / 底部命令 |
 | --- | --- | --- |
-| ` ```triton-ir ` | 完整的 Triton 程序，点开在 CE 里看 TTIR / TTGIR / PTX（**不需要 GPU**） | 「🔬 在 Compiler Explorer 看 IR」，编译器 id 默认 `triton_nvidia_370`；块首 `# CE: triton_amd_370` 可切换到 AMD |
-| ` ```gluon ` / ` ```gluon-norun ` | Gluon kernel | 只高亮 + 本地命令，标注所需架构（如「需 Hopper 及以上」） |
-| ` ```helion ` / ` ```helion-norun ` | Helion kernel | 只高亮 + `pip install helion` 本地命令 |
-| ` ```ttgir-norun ` | 可选：如果 `mlir-norun` 的高亮对 `#ttg.blocked<{…}>` 这类 encoding 属性效果不好，就在 `mlir-syntax.js` 里加几条规则 | 无 |
+| ` ```triton ` | **本书里**：完整、能在真机上跑的 Triton 程序 | 只高亮；页脚是 `python main.py` 加上块首 `# arch:` 标明的平台（GPU 书的 `triton` 块不受影响，仍是原来的页脚） |
+| ` ```triton-ir ` | 完整的 Triton **或 Gluon** 程序，点开在 CE 里看各级 IR（**不需要 GPU**） | 「🔬 在 Compiler Explorer 看 IR」：打开「源码 / 编译器 / Device Viewer」三栏，Device Viewer 直接停在要看的那一级 |
+| ` ```gluon ` / ` ```gluon-norun ` | Gluon kernel | 只高亮 + 本地命令 + 平台 |
+| ` ```helion ` / ` ```helion-norun ` | Helion kernel | 只高亮 + `pip install helion torch` + 平台 |
+| ` ```ttir-norun ` / ` ```ttgir-norun ` | 贴真 dump 出来的 TTIR / TTGIR | 无按钮。高亮在 MLIR 之上另加了三条规则（`mlir-syntax.js` 里的 `ttgir` 语言，`mlir` 语言本身没动）：layout 别名与 encoding（`#blocked1`、`#ttg.nvidia_mma`、`#ttig.dpas`）加粗着色，方言 op（`tt.load`、`ttg.convert_layout`）着色，layout 参数（`sizePerThread`、`kWidth`、`order`）着色 |
 
-批次 0 必须先实测 CE 的 Triton 接口：它对源码有什么要求（是否需要 `triton.compile` 驱动代码、怎么选看哪一级 IR），以及 3.7.0 和 3.9.0 的 IR 差异会不会影响正文。
+**块首注释**（普通 Python 注释，留在代码里；`build.js` 和将来的 verify 脚本读同一行）：
+
+- `# arch: sm80 xpu`：这个块要在哪些平台上跑，空格分隔，满足其一即可。取值 `any` / `sm80` / `sm86` / `sm90` / `sm100` / `cdna3` / `xpu`。**`triton`、`gluon`、`helion` 块不写这一行，构建直接报错。**
+- `# CE: triton_amd_370`，或 `# CE: triton_nvidia_370 --arch 90`：只对 `triton-ir` 块，用来换编译器、传 wrapper 参数。不写时 NVIDIA 默认 `--arch 86`（A10，与真机一致），AMD 用 CE 的默认值 `gfx942`。
+- `# IR: ttir`：只对 `triton-ir` 块，指定 Device Viewer 一打开停在哪一级，默认 `ttgir`。取值 `source` / `ttir` / `ttgir` / `llir` / `ptx` / `sass` / `amdgcn`。
+
+**CE 的 Triton 接口实测结论**（读的是 compiler-explorer 仓库的 `etc/scripts/triton_wrapper.py`，并用 API 和无头浏览器实测）：
+
+1. **源码必须真的启动一次 kernel**。CE 把整个脚本 import 一遍，只编译被启动的 kernel；只定义不启动，CE 返回 `<No output file>`。不需要 `triton.compile` 一类的驱动代码。
+2. **张量是 `FakeTensor`，driver 是 `MagicMock`**：只编译、不运行。所以 **`triton-ir` 块写 `device="cuda"`**（ROCm 版 torch 也叫 `"cuda"`）。§3.1 要求的 `DEVICE = triton.runtime.driver.active.get_active_torch_device()` 在 CE 上返回的是 MagicMock，`torch.randn(device=DEVICE)` 会直接报错。**§3.1 的「不写死 `"cuda"`」只适用于真机上跑的 `triton` / `gluon` / `helion` 块，`triton-ir` 块例外**。
+3. **各级 IR 在 Device Viewer 面板里**，名字是 `<kernel> [stage N].<ir>`；主面板只显示 PTX / AMDGCN。stage 的数目和编号因组合而异：NVIDIA 上的 Triton 是 source、ttir、ttgir、llir、ptx、sass 六级；AMD 没有 sass，第 5 级是 amdgcn；**Gluon 没有 ttir**，所以 ttgir 是第 2 级。`build.js` 会现算编号。
+4. CE 的分享链接有两种格式。clientstate 格式打不开 Device Viewer，所以 `triton-ir` 用的是另一种：`https://godbolt.org/#` 后面跟完整的 GoldenLayout JSON。
+5. wrapper 参数只有 `--backend`、`--arch`、`--warp_size` 三个。用户参数追加在默认参数后面，argparse 取最后一次出现的值，所以 `--arch 86` 能覆盖默认的 90。实测 `--arch 86` 出的是 `#ttg.nvidia_mma` version 2，PTX 里是 `mma.sync`，和 A10 真机一致；默认的 sm_90 出的是 version 3，PTX 里是 `wgmma`。AMD 不用传 `--warp_size 64`，HIP 后端会自己把 `threads-per-warp` 定成 64。
+6. CE 偶尔超时（SIGKILL，code 143），重试一次就好。
+7. **CE 会按源码行给 Python 源码和 Device Viewer 里的 IR 上同样的底色**。这正好对应 §4「每一段 IR 都要能指回它来自哪一行 `tl.*`」，正文可以引导读者去看。
+8. **3.7.0 和 3.9.0 的 IR 差异**：拿 64×64×64 的 `tl.dot` 比过，sm_86 的 TTGIR 两边都是 46 行，layout 和 op 完全相同，只差 3.9.0 的 module 属性多了一个 `"ttng.two-ctas" = false`。3.9.0 那份是在 Max 1100 那台机器上，用 triton-xpu 自带的 NVIDIA 后端加 `triton.compile(ASTSource(...), target=GPUTarget("cuda", 86, 32))` 编出来的，**不需要 NVIDIA GPU**。正文贴的 IR 一律用这种办法从 3.9.0 dump；CE 只给读者自己动手看。流水线、persistent 这些复杂情况到 ch13 以后再逐个比较，有差异就按 §14 第 2 项加 `warn` 框。
 
 ### 7.3 随书校验脚本
 
@@ -312,7 +328,8 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 ### 15.3 下一步
 1. ~~Max 1100 跑到 14/14~~（已完成）；~~固化 `verify/env-xpu.sh.example`~~（已完成）。据此写附录 A 的「Intel GPU」一节。
 2. 改过的 `probe-env.py`（`tl.dot` 没有矩阵 layout 判 FAIL；打印 `LIBRARY_PATH`、`ocloc`）请作者在 A10 上再跑一次，确认仍是 14/14。
-3. 继续批次 0 的其余部分（§12）：在 `build.js` 里加 `triton-ir` / `gluon` / `helion` 围栏，并实测 CE 的 Triton 接口；写 `book.json`；搭 minillm 包的骨架；写 `verify/` 的其余脚本。
+3. ~~`build.js` 加 `triton-ir` / `gluon` / `helion` / `ttgir-norun` 围栏，实测 CE 的 Triton 接口~~（已完成，见 §7.2）；~~`book.json`~~（已完成）。
+4. 批次 0 剩下的（§12）：minillm 包的骨架；`verify/` 的其余脚本（`verify-triton.sh` 读 `# arch:`，`CE=1` 模式走 CE API；`verify-minillm.sh`；`verify-outputs.py`）；本书的 `README.md`（首页）；附录 A。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
 - 每本书自成一体，与本仓库其它书重复没关系（§1）。
