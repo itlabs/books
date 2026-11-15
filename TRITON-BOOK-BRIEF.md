@@ -384,6 +384,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - 跑 `bench_matmul.py`，对比指针版和 host 端创建 descriptor 的 `matmul_desc`。
   - **预测**：sm_86 上 kernel 里创建的 descriptor 编成 `cp.async`，应当和指针版接近；host 端创建的编成 `ld.global` 加 `st.shared`，没有异步拷贝，可能更慢。
   - 如果实测发现 descriptor 在 A10 上更快，要改 `prefer_descriptor()`，并修改 ch08「该用哪种写法」那张表。
+- **ch09**：
+  - 跑 `verify-minillm.sh`，看 `tests/test_codegen.py` 在 NVIDIA 上能不能通过（Intel 专属的那一项应当跳过）。
+  - 跑本章的 `device_print` 块，看 NVIDIA 上的打印格式（Max 1100 上是 `pid (1, 0, 0) idx (0) x: 0.000000`）。
+  - 试一试 fp16 的 8×8 `tl.dot`，应当报 `Input shapes should have M >= 1, N >= 1 and K >= 16`（离线编译已证实）。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
