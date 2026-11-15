@@ -66,7 +66,7 @@
 - Python 环境一律用 **uv**（`uv venv`、`uv pip install`），不用 `python -m venv` 加 pip。给读者看的安装命令是否也统一成 uv，到写附录 A 时再定（§14）。
 - 批次 0 要在两台机器上各搭一遍环境，核对驱动版本能否跑 Triton 3.9.0。GPU 书当时那台 NVIDIA 机器上是 nvcc 11.5；Triton 的 wheel 自带 ptxas，nvcc 版本不要紧，关键是驱动。
 - **A10 的驱动约束**（2026-11-15 实测 `probe-env.py`）：驱动 550.163.01，最高支持 CUDA 12.4，**暂不升级**。PyTorch 与 Triton 的配套关系是：torch 2.15.0 配 triton ~=3.9.0，但只有 CUDA 13.2 版，要求驱动 ≥ 580；torch 2.14.1 配 triton ~=3.8.0，有 CUDA 12.6 版。**已实测**（2026-11-15）：torch 2.14.1+cu126，再用 `--no-deps` 强装 triton 3.9.0，在 550 驱动上通过了 vector add、`tl.dot`（`#ttg.nvidia_mma`）、`do_bench`（x*2 约 473 GB/s，标称 600 GB/s）、解释器、Gluon（含 `nvidia/ampere`）和 proton 的检查。**基线保持 Triton 3.9.0。** 复测时 `torch.compile`（Inductor）和 Helion 1.5.2 的固定 Config kernel 也通过了，`probe-env.py` 14/14 全过。**A10 环境就此定下。**
-  - Max 1100 不需要绕：torch 2.15.0+xpu 自带依赖 `triton-xpu~=3.9.0`，正好与基线一致。
+  - Max 1100 不需要绕：torch 2.15.0+xpu 自带依赖 `triton-xpu~=3.9.0`，正好与基线一致。**已实测**（2026-11-15）：`probe-env.py --helion` 14/14 全过，`tl.dot` 的 layout 是 `#ttig.dpas`（`threadsPerWarp = 16`），`do_bench` 的 x*2 约 531 GB/s。环境变量见 `verify/env-xpu.sh.example`，踩过的坑见 §15.2。**Max 1100 环境就此定下。**
   - A10 上的装法：`uv pip install --no-config torch==2.14.1 --index-url https://download.pytorch.org/whl/cu126`，再装 `helion packaging`，最后 `uv pip install --no-config triton==3.9.0 --no-deps`。
   - **坑 1**：Helion 1.5.2 运行时要导入 `packaging`，但它的依赖声明里漏写了这个包，要手动装。写进附录 A。
   - **坑 2**：Triton 3.9 在未设置 `TRITON_DEFAULT_FP_FUSION` 时会发警告：3.9 默认**开启** FP fusion（乘加融合成 FMA），3.10 将改为默认关闭。这会影响数值结果的逐位一致性，写进 ch07（精度）、ch09（数值对比）和附录 C。
@@ -292,21 +292,26 @@ PR 节奏沿用 MLIR 书：**全书写完再开一个 PR**（若有不同意见�
 - `books/inside-triton/verify/probe-env.py`：只读的环境探测脚本，共 14 项，每项独立 try，最后汇总。会打印 venv 状态、`LD_LIBRARY_PATH`、`CXX`、`CPATH`、PATH 里能找到的编译器、驱动与设备信息，然后跑 vector add、`tl.dot`、`do_bench`、解释器、`torch.compile`、Gluon、proton、Helion。用法：`<venv>/bin/python probe-env.py --helion`。
 - **A10：14/14 通过**（torch 2.14.1+cu126，再 `--no-deps` 强装 triton 3.9.0；装法见 §3.1）。
 
-### 15.2 Max 1100：进行到一半
+### 15.2 Max 1100：14/14 通过（2026-11-15）
 装法：`uv venv` 建在**本地盘**（XPU 版 torch 加 oneAPI 运行时有好几 GB），然后
 `uv pip install --no-config --python <venv>/bin/python torch==2.15.0 --index-url https://download.pytorch.org/whl/xpu`，再装 `helion packaging`。
 torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 
-目前状态：`import torch` 正常，`torch.xpu` 能看到设备（448 EU，sub-group 16/32，约 48 GB），Gluon 有 `gluon.language.intel`（导出 `IntelDPASLayout`）。**Triton 的 Intel driver 还没起来**。一路踩到的坑（每一条都要写进附录 A）：
+设备：448 EU，sub-group 16/32，约 48 GB；Gluon 有 `gluon.language.intel`（导出 `IntelDPASLayout`）。环境变量的完整组合固化在 `verify/env-xpu.sh.example`（只放占位路径），从 `env -i` 的干净环境里只 source 这一份文件，就能跑到 14/14。一路踩到的坑（每一条都要写进附录 A）：
 
 1. **自己编译的 DPC++（intel/llvm）出现在 `LD_LIBRARY_PATH` 里**：pip 装的 `libsycl.so.9` 会链到那份更旧的 `libur_loader.so.0`，报 `undefined symbol: urKernelSetArgLocal, version LIBUR_LOADER_0.12`。原因是 `LD_LIBRARY_PATH` 的优先级高于 wheel 自带的 RUNPATH。解法：从 `LD_LIBRARY_PATH` 里去掉那个构建目录。
 2. **反过来，把 `LD_LIBRARY_PATH` 整个清空也不行**：如果 Level Zero loader（`libze_loader`）和 GPU 用户态驱动不在系统目录里、只靠 `LD_LIBRARY_PATH` 才找得到，清空之后 `sycl-ls` 里就没有 `level_zero:gpu` 这一行，`torch.xpu` 看到 0 个设备，Triton 报 `0 active drivers`。解法：`LD_LIBRARY_PATH` 里只保留 Level Zero loader 和 GPU 驱动所在的目录。
-3. **Triton 自己挑编译器**：Intel driver 首次运行时要现场编一段 C++ 胶水代码。`python/triton/runtime/build.py` 的挑法是 `knobs.intel.sycl_compiler`，然后 PATH 里的 `icpx`，然后 `dpclang++`。它挑中了自己编译的 `dpclang++`，而那份编译器的 SYCL 头文件与 pip 装的运行时版本不一致。准备的解法：设 `CXX=g++`，这样它就不加 `-fsycl`，SYCL 头文件改从 pip 包 `intel-sycl-rt` 里取（逻辑见 `backends/intel/driver.py` 的 `find_sycl_icpx`）。
-4. **缺 Level Zero 头文件**：胶水代码要 `#include <level_zero/ze_api.h>`，pip 包不提供（PyPI 上没有 Level Zero 的开发包）。解法：系统装 `level-zero-dev`，或者用 `CPATH` 指向一份现成的 Level Zero `include/`（intel/llvm 的构建目录里通常就有）。
+3. **Triton 自己挑编译器**：Intel driver 首次运行时要现场编一段 C++ 胶水代码。`python/triton/runtime/build.py` 的挑法是 `knobs.intel.sycl_compiler`，然后 PATH 里的 `icpx`，然后 `dpclang++`。它挑中了自己编译的 `dpclang++`，而那份编译器的 SYCL 头文件与 pip 装的运行时版本不一致。解法：设 `CXX=g++`，这样它就不加 `-fsycl`，SYCL 头文件改从 pip 包 `intel-sycl-rt` 里取（逻辑见 `backends/intel/driver.py` 的 `find_sycl_icpx`）。
+4. **缺 Level Zero 头文件**：胶水代码要 `#include <level_zero/ze_api.h>`，pip 包不提供（PyPI 上没有 Level Zero 的开发包）。解法：系统装 `level-zero-dev`，或者用 `CPATH` 指向一份现成的 Level Zero `include/`（Level Zero loader 的发行包里通常带 `include/level_zero/`，最好用和 loader 同版本的那份；intel/llvm 的构建目录里也有）。
+5. **链接时找不到 `-lze_loader`**：`LD_LIBRARY_PATH` 只管运行时，链接器看的是 `LIBRARY_PATH`。解法：`LIBRARY_PATH` 指向 `libze_loader.so` 所在的目录。
+6. **`ocloc` 不在 PATH 里**，有两种后果：
+   - 明的：`torch.compile`（Inductor）和 Helion 报 `FileNotFoundError: 'ocloc'`，因为它们要生成原生二进制（`backends/intel/compiler.py` 的 `make_zebin`）。
+   - **暗的（重要）**：Intel driver 通过查询 OpenCL 扩展来判断设备能力（`cl_intel_subgroup_matrix_multiply_accumulate` 等）。机器上没有 OpenCL 平台时（`clinfo -l` 是空的，`sycl-ls` 只有 `level_zero:gpu`），会退回走 Level Zero 的 `ext_oneapi_supports_cl_extension`，而这条路需要 `ocloc`（见 `backends/intel/extension_utils.c`）。找不到 `ocloc` 时异常被吞掉、返回 False，结果是 target 里 `has_subgroup_matrix_multiply_accumulate: False`，**`tl.dot` 算得对，但 TTGIR 里没有 `#ttig.dpas`，不走矩阵单元**，也没有任何报错或警告。这一条除了写进附录 A，也是 ch23「后端怎么探测硬件能力」和 ch09「结果对不代表编译对」的现成例子。`probe-env.py` 现在把这种情况判为 FAIL。
+   - 解法：把 GPU 用户态驱动里带的 `ocloc` 所在目录加进 PATH。
 
 ### 15.3 下一步
-1. 在 Max 1100 上用第 3、4 条的解法（`CXX=g++` + `CPATH`）重跑 `probe-env.py --helion`，目标是 14/14。重点看：`tl.dot` 的矩阵 layout 应当是 DPAS 而不是 `mma`；Helion 在 XPU 上能否跑通。
-2. 跑通后把可用的环境变量组合固化成 `verify/env-xpu.sh.example`（只放占位路径），并据此写附录 A 的「Intel GPU」一节。
+1. ~~Max 1100 跑到 14/14~~（已完成）；~~固化 `verify/env-xpu.sh.example`~~（已完成）。据此写附录 A 的「Intel GPU」一节。
+2. 改过的 `probe-env.py`（`tl.dot` 没有矩阵 layout 判 FAIL；打印 `LIBRARY_PATH`、`ocloc`）请作者在 A10 上再跑一次，确认仍是 14/14。
 3. 继续批次 0 的其余部分（§12）：在 `build.js` 里加 `triton-ir` / `gluon` / `helion` 围栏，并实测 CE 的 Triton 接口；写 `book.json`；搭 minillm 包的骨架；写 `verify/` 的其余脚本。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）

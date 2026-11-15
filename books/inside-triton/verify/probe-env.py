@@ -74,12 +74,13 @@ if sys.prefix == sys.base_prefix:
           "多半是 PATH、alias 或 shell 函数把 python 指到了别处；"
           "可以直接用 <venv>/bin/python probe-env.py 来跑。")
 for var in ("CUDA_VISIBLE_DEVICES", "ZE_AFFINITY_MASK", "ONEAPI_ROOT",
-            "LD_LIBRARY_PATH", "LD_PRELOAD", "CC", "CXX", "CPATH",
+            "LD_LIBRARY_PATH", "LD_PRELOAD", "CC", "CXX", "CPATH", "LIBRARY_PATH",
             "TRITON_HOME", "TRITON_CACHE_DIR"):
     if os.environ.get(var):
         print(f"{var}={os.environ[var]}")
 # Triton 的驱动在首次运行时会现场编一段 C/C++ 胶水代码；它挑哪个编译器，取决于 PATH 里有什么
-for tool in ("icpx", "dpclang++", "clang++", "g++", "gcc"):
+# Intel 后端还要用 ocloc：没有 OpenCL 平台时靠它查询设备扩展（DPAS 等），AOT 生成二进制也靠它
+for tool in ("icpx", "dpclang++", "clang++", "g++", "gcc", "ocloc"):
     if shutil.which(tool):
         print(f"which {tool}: {shutil.which(tool)}")
 
@@ -275,7 +276,12 @@ def _dot():
     ttgir = str(getattr(k, "asm", {}).get("ttgir", ""))
     import re
     mma = sorted(set(re.findall(r"#[\w.]*(?:mma|dpas)[\w.]*", ttgir)))
-    return f"max abs err = {err:.2e}; ttgir 里的矩阵 layout: {mma or '未找到'}"
+    if not mma:
+        # 结果是对的，但没用上矩阵单元（tensor core / DPAS），性能会差一个量级。
+        # Intel 上最常见的原因：没有 OpenCL 平台、PATH 里又没有 ocloc，扩展查询悄悄返回 False。
+        raise AssertionError(f"结果正确（max abs err = {err:.2e}），但 ttgir 里没有 mma/dpas layout，"
+                             "tl.dot 没用上矩阵单元")
+    return f"max abs err = {err:.2e}; ttgir 里的矩阵 layout: {mma}"
 
 
 _dot()
