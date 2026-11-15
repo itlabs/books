@@ -85,7 +85,12 @@ for cmd in (["nvidia-smi", "--query-gpu=name,driver_version,compute_cap,memory.t
     if out is not None:
         print(f"$ {' '.join(cmd)}\n{out}\n")
         if cmd[0] == "nvidia-smi":
-            break  # 第一条成功就不必再跑完整版
+            # 驱动支持的最高 CUDA 版本只在完整输出的表头里
+            full = run_cmd(["nvidia-smi"]) or ""
+            cuda_line = [ln for ln in full.splitlines() if "CUDA Version" in ln]
+            if cuda_line:
+                print("驱动表头:", cuda_line[0].strip(" |"), "\n")
+            break  # 不必再跑完整版
 if shutil.which("nvcc"):
     print("$ nvcc --version\n" + (run_cmd(["nvcc", "--version"]) or ""))
 
@@ -168,8 +173,14 @@ def _target():
         raise SkipCheck("triton 不可用")
     drv = triton.runtime.driver.active
     target = drv.get_current_target()
-    DEVICE = drv.get_active_torch_device()
-    return f"driver={type(drv).__name__} target={target} DEVICE={DEVICE}"
+    note = ""
+    try:
+        DEVICE = drv.get_active_torch_device()
+    except AttributeError:
+        # 老版本 Triton（如 3.1）没有这个 API：按后端名退回到 torch 设备
+        DEVICE = torch.device("xpu" if target.backend == "xpu" else "cuda")
+        note = "（老版本 Triton 无 get_active_torch_device，已按 backend 退回）"
+    return f"driver={type(drv).__name__} target={target} DEVICE={DEVICE}{note}"
 
 
 _target()
