@@ -74,7 +74,7 @@
 易变点，写到哪里就要提醒读者去核对：
 
 - Gluon 的模块路径、layout 类名、架构子包（`nvidia/{ampere,hopper,blackwell,rubin}`、`amd/{cdna3,cdna4,cdna5,rdna3,rdna4,gfx1250}`）都可能改。
-- 访存 API 正在迁移：指针 → block pointer（`tl.make_block_ptr`）→ tensor descriptor。写之前查清 3.9.0 里哪种是推荐写法、哪种已标弃用。
+- 访存 API 正在迁移：指针 → block pointer（`tl.make_block_ptr`）→ tensor descriptor。**已核实（2026-11-15）：3.9.0 里 `tl.make_block_ptr` 和 `tl.advance` 已经移除**，只剩一句 `raise NotImplementedError("Block pointers have been removed in favor of the tensor descriptor API")`（`python/triton/language/core.py`）。推荐写法是 tensor descriptor。
 - 调试和 dump 用的环境变量（`TRITON_INTERPRET`、`MLIR_ENABLE_DUMP`、`TRITON_KERNEL_DUMP`、`TRITON_CACHE_DIR` 等）一律 grep `python/triton/knobs.py`（或对应位置）核对，不凭记忆写。
 - Helion 的 `Config` 字段（`block_sizes`、`range_warp_specializes`、`pid_type`、`indexing` 等）以 1.5.2 的 `helion/runtime/config.py` 为准。
 - 不确定的 API 一律用 `-norun` 代码块，并写得通用；**绝不编造不存在的 API、pass 或环境变量**。
@@ -217,7 +217,7 @@ books/inside-triton/verify/verify-outputs.py           # 正文贴的运行结�
 - **ch05 tl 语言核心。** 指针算术、广播、`load` / `store` 的 `mask` 与 `other`、`tl.where`、类型提升规则，以及 2D 张量的 stride 计算。
 - **ch06 归约与逐行算子。** softmax、rmsnorm：一行放得进一个 block 和放不进时的两种写法、online softmax。
 - **ch07 `tl.dot` 与第一个 GEMM。** tile 分解、累加器精度、TF32 / fp16 / bf16 的误差，以及「为什么结果和 PyTorch 差 1e-3」。
-- **ch08 访存的三种写法。** 裸指针、block pointer、tensor descriptor 各有什么取舍，3.9.0 推荐哪种，以及它们在 IR 里长得有什么不同（预告第四部分）。
+- **ch08 访存的三种写法。** 裸指针、block pointer（**3.9.0 已移除**，只讲历史和怎么迁移）、tensor descriptor（kernel 里的 `tl.make_tensor_descriptor` 和 host 端的写法）各有什么取舍，以及它们在 IR 里长得有什么不同（预告第四部分）。**Max 1100 实测：同一个 GEMM，tensor descriptor 版本 122–138 TFLOP/s，指针版本只有 13–18 TFLOP/s**，这一章是 Intel 后端「写法决定性能」的主场。
 - **ch09 调试与测试。** `TRITON_INTERPRET=1`、`tl.device_print`、`tl.device_assert`；数值对比的容差怎么定；典型错误（越界、mask 漏写、constexpr 误用）及其报错样子。
 - **ch10 接入 PyTorch。** `torch.library.triton_op` / custom op、autograd、在 `torch.compile` 里调用，以及顺便看一眼 Inductor 自己生成的 Triton 代码。
 

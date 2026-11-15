@@ -33,7 +33,7 @@
 | 一块数据 | 没有；每个线程自己算下标 | `tl.arange(0, BLOCK)` 构造的块，`BLOCK` 必须是 2 的幂 | `gl.arange(0, BLOCK, layout=…)`，**必须给 layout** | `for tile in hl.tile(n): … x[tile] …` | `cute.zipped_divide`、`cute.local_tile` 把张量切成 tile |
 | 元素怎么分给线程（layout） | 你写的下标公式本身 | 编译器（TTGIR 里的 `#ttg.blocked` 等，第 3、20 章） | 你写：`gl.BlockedLayout(size_per_thread, threads_per_warp, warps_per_cta, order)` 等 | 编译器（生成 Triton 以后再由 Triton 推导） | 你写：`cute.make_layout`、`cute.make_layout_tv` |
 | 读写全局内存 | 指针加下标 | `tl.load` / `tl.store`，用 `mask`、`other` 处理边界 | `gl.load` / `gl.store` | 张量下标 `x[tile]`，边界的 mask 由 Helion 生成 | `cute.copy` |
-| 结构化的访存描述 | — | `tl.make_block_ptr`、`tl.make_tensor_descriptor`（第 8 章） | — | 编译器（`Config(indexing=…)` 可以选） | — |
+| 结构化的访存描述 | — | `tl.make_tensor_descriptor`（第 8 章；旧的 `tl.make_block_ptr` 在 3.9.0 里已经移除） | — | 编译器（`Config(indexing=…)` 可以选） | — |
 | shared memory | `__shared__` | 编译器 | `gl.allocate_shared_memory(element_ty, shape, layout)` | 编译器 | `cutlass.utils.SmemAllocator`，再 `allocate_tensor` |
 | 换 layout | 你自己经过 shared memory 搬 | 编译器插入 `ttg.convert_layout`（第 21 章） | `gl.convert_layout(value, layout)` | 编译器 | — |
 | 异步拷贝（全局 → shared） | `cp.async`、`cuda::memcpy_async` | 编译器（由 `num_stages` 触发，第 13 章） | `gluon.language.nvidia.ampere.async_copy` 的 `async_copy_global_to_shared`、`commit_group`、`wait_group` | 编译器（`Config(range_num_stages=…)`） | `cute.nvgpu.cpasync.CopyG2SOp`，配合 `cute.arch.cp_async_commit_group`、`cp_async_wait_group` |
