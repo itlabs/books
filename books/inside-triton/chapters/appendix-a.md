@@ -163,7 +163,7 @@ source env-xpu.sh
 **Gluon** 和 **proton**（Triton 自带的 profiler）都随 Triton 一起装好了，不用另装：
 
 - Gluon 在 `triton.experimental.gluon`。名字里的 `experimental` 是真的，API 每个版本都可能变（第 24 章）；
-- proton 在 `triton.profiler`（第 11 章）。
+- proton 在 `triton.profiler`（第 11 章）。采集不需要额外的包，但查看结果的 `proton-viewer` 要用到 `pandas` 和 `llnl-hatchet`，它们不随 Triton 一起安装：`uv pip install pandas llnl-hatchet`。
 
 **Helion**（第 26 章）要单独装：
 
