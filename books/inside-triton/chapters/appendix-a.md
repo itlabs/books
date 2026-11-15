@@ -104,7 +104,7 @@ Intel GPU 要装两样东西：内核驱动，以及用户态的 Level Zero 运�
 sudo apt install libze1 libze-intel-gpu1 intel-opencl-icd intel-ocloc libze-dev
 ```
 
-装完用 oneAPI 的 `sycl-ls` 看一眼（也可以等第 6 节体检脚本告诉你）：输出里要有一行 `[level_zero:gpu]`。没有这一行，后面什么都跑不起来。
+装完用 oneAPI 的 `sycl-ls` 看一眼（也可以等第 6 节体检脚本告诉你）：输出里要有一行 `[level_zero:gpu]`。没有这一行，后面什么都跑不起来。再用 `clinfo -l` 看一眼，应当列出你的 GPU。这一条 Triton 用不到，但 PyTorch 的部分算子要用，见 3.3 节表格的最后一行。
 
 另外还要一个 C++ 编译器，`g++` 就行，原因见 3.3 节。
 
@@ -136,10 +136,11 @@ Intel 后端第一次运行时要**现场编一段 C++ 胶水代码**（`spirv_u
 | `fatal error: 'level_zero/ze_api.h' file not found` | 胶水代码要 `#include <level_zero/ze_api.h>`，pip 包里不带这个头文件 | 装 `libze-dev`，或者用 `CPATH` 指向一份 Level Zero 的 `include/`，最好和 loader 同版本 |
 | `ld: cannot find -lze_loader` | 链接器不看 `LD_LIBRARY_PATH`，它看的是 `LIBRARY_PATH` | `LIBRARY_PATH` 指向 `libze_loader.so` 所在的目录 |
 | `torch.compile` 或 Helion 报 `FileNotFoundError: 'ocloc'` | 要生成原生二进制时得调用 `ocloc` | 把 `ocloc` 所在的目录加进 `PATH` |
+| `F.scaled_dot_product_attention` 等算子报 `RuntimeError: could not create a primitive`；设 `ONEDNN_VERBOSE=1` 能看到 `OpenCL device not found` | 这些算子走 oneDNN，而 oneDNN 要通过 OpenCL ICD loader 找到 GPU。`/etc/OpenCL/vendors/` 下没有 GPU 的 `.icd` 文件（`clinfo -l` 是空的，或者只有 CPU） | 装 `intel-opencl-icd`；或者自己建一个目录，放一个 `.icd` 文件，内容是 GPU 驱动里 `libigdrcl.so` 的绝对路径，再用 `OCL_ICD_VENDORS` 指向这个目录。Triton 本身不受影响 |
 
 Triton 挑 C++ 编译器的顺序是：先看 **`CXX`**；没设 `CXX`，再依次找 `TRITON_INTEL_SYCL_COMPILER` 指定的编译器、`icpx`、`dpclang++`，最后退到 `clang++`、`g++`。挑中 SYCL 编译器时它会加 `-fsycl`，此时用的是那个编译器自带的 SYCL 头文件；挑中普通 C++ 编译器时，头文件改从 pip 包 `intel-sycl-rt` 里取，正好和运行时同版本。逻辑在 Intel 后端的 `triton/runtime/build.py`。所以只要设了 `CXX=g++`，机器上装了几份 oneAPI 都不会互相干扰。
 
-最后一条 `ocloc` 还有一个**不报错**的后果，单独说：
+`ocloc` 那一条还有一个**不报错**的后果，单独说：
 
 <div class="warn">
 <strong>没有 <code>ocloc</code>，<code>tl.dot</code> 照样算对，但不走矩阵单元</strong>
