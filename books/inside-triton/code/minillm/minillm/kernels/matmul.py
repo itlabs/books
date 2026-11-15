@@ -1,4 +1,4 @@
-"""矩阵乘 C = A @ B（第 7 章：朴素的 tile 版本）。
+"""矩阵乘 C = A @ B（第 7 章：朴素的 tile 版本；第 8 章：tensor descriptor 版本）。
 
 每个 program 算 C 的一个 BLOCK_M × BLOCK_N 的 tile：沿 K 方向循环，每次读 A 的一条 BLOCK_M × BLOCK_K、
 B 的一条 BLOCK_K × BLOCK_N，用 tl.dot 乘起来，累加进一个 fp32 的累加器。
@@ -7,6 +7,9 @@ B 的一条 BLOCK_K × BLOCK_N，用 tl.dot 乘起来，累加进一个 fp32 的
 import torch
 import triton
 import triton.language as tl
+from triton.tools.tensor_descriptor import TensorDescriptor
+
+from ..device import DEVICE
 
 
 @triton.jit
@@ -47,3 +50,65 @@ def matmul(a: torch.Tensor, b: torch.Tensor, BLOCK_M: int = 128, BLOCK_N: int = 
                          BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, ACC_DTYPE=acc_dtype,
                          num_warps=num_warps)
     return c
+
+
+# ---------------------------------------------------------------- 第 8 章 ----
+# tensor descriptor 版本：不再逐个元素地算地址，而是告诉编译器「这是一个 M×K 的矩阵，
+# stride 是多少，我每次要读一个 BLOCK_M × BLOCK_K 的块」。越界的部分由 descriptor 自己处理
+# （读的时候填 0，写的时候不写），kernel 里不用写 mask。
+@triton.jit
+def _matmul_desc_kernel(a_desc, b_desc, c_desc, K,
+                        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        a = a_desc.load([pid_m * BLOCK_M, k])           # 块左上角的坐标，单位是元素
+        b = b_desc.load([k, pid_n * BLOCK_N])
+        acc = tl.dot(a, b, acc)
+    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc.to(c_desc.dtype))
+
+
+def descriptor_ok(*tensors) -> bool:
+    """TensorDescriptor 的要求（python/triton/tools/tensor_descriptor.py）：
+    基地址 16 字节对齐、除最后一维外的 stride 是 16 字节的倍数、最后一维连续。"""
+    return all(t.data_ptr() % 16 == 0 and t.stride(-1) == 1 and
+               all(s * t.element_size() % 16 == 0 for s in t.stride()[:-1]) for t in tensors)
+
+
+def matmul_desc(a: torch.Tensor, b: torch.Tensor, BLOCK_M: int = 256, BLOCK_N: int = 256, BLOCK_K: int = 32,
+                num_warps: int = 32) -> torch.Tensor:
+    assert a.dim() == 2 and b.dim() == 2 and a.shape[1] == b.shape[0], f"形状不对：{a.shape} @ {b.shape}"
+    M, K = a.shape
+    _, N = b.shape
+    c = torch.empty(M, N, device=a.device, dtype=a.dtype)
+    assert descriptor_ok(a, b, c), "不满足 tensor descriptor 的对齐要求，请用 matmul()"
+    a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K])
+    b_desc = TensorDescriptor.from_tensor(b, [BLOCK_K, BLOCK_N])
+    c_desc = TensorDescriptor.from_tensor(c, [BLOCK_M, BLOCK_N])
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    _matmul_desc_kernel[grid](a_desc, b_desc, c_desc, K, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+                              num_warps=num_warps)
+    return c
+
+
+def prefer_descriptor() -> bool:
+    """哪些平台默认走 descriptor（第 8 章的实测与分析）：
+    - Intel GPU：descriptor 能编成二维块读写（2D block IO），Max 1100 上快约 10 倍；
+    - NVIDIA Hopper（sm_90）及以上：能编成 TMA；
+    - 其它（包括 A10 这样的 Ampere）：host 端 descriptor 在 sm_86 上编成普通的读取再写 shared memory，
+      没有用上异步拷贝，未必比指针版快，所以默认还是走指针版。"""
+    if DEVICE.type == "xpu":
+        return True
+    if DEVICE.type == "cuda" and torch.version.cuda is not None:
+        return torch.cuda.get_device_capability() >= (9, 0)
+    return False
+
+
+def mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """minillm 默认使用的矩阵乘：能用 descriptor 就用，否则退回指针版。"""
+    n = b.shape[1]
+    out_ok = n * a.element_size() % 16 == 0       # 输出是新分配的连续张量，它的行 stride 就是 N
+    if prefer_descriptor() and a.shape[0] and n and out_ok and descriptor_ok(a, b):
+        return matmul_desc(a, b)
+    return matmul(a, b)

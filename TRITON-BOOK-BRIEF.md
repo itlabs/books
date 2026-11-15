@@ -379,6 +379,11 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch07**：
   - 跑精度实验（第二个 `triton` 块）。**预测**：`tf32x3`、`bf16x3` 走矩阵单元，速度介于 TF32 和 `ieee` 之间，误差接近 `ieee`。
   - 跑 `bench_matmul.py`。**预测**：指针版在 A10 上和 `torch.matmul` 的差距比 Max 1100 上的 12 倍小得多。官方教程的指针写法在 NVIDIA 上是能接近 cuBLAS 的。
+- **ch08**（这一项最重要，`minillm.mm` 在 A10 上默认走哪条路就看它）：
+  - 跑第一个 `triton` 块，对比指针版和 kernel 里创建 descriptor 的版本。
+  - 跑 `bench_matmul.py`，对比指针版和 host 端创建 descriptor 的 `matmul_desc`。
+  - **预测**：sm_86 上 kernel 里创建的 descriptor 编成 `cp.async`，应当和指针版接近；host 端创建的编成 `ld.global` 加 `st.shared`，没有异步拷贝，可能更慢。
+  - 如果实测发现 descriptor 在 A10 上更快，要改 `prefer_descriptor()`，并修改 ch08「该用哪种写法」那张表。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）

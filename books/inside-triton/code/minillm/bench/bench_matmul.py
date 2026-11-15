@@ -1,4 +1,4 @@
-"""第 7 章：朴素 tile GEMM 的性能，和 torch.matmul 比。
+"""第 7、8 章：朴素 tile GEMM（指针版、tensor descriptor 版）的性能，和 torch.matmul 比。
 
     python bench/bench_matmul.py
 
@@ -8,7 +8,7 @@ import torch
 import triton
 
 from minillm import DEVICE
-from minillm.kernels.matmul import matmul
+from minillm.kernels.matmul import matmul, matmul_desc
 
 
 def main():
@@ -19,9 +19,13 @@ def main():
         a = torch.randn(M, K, device=DEVICE, dtype=dtype)
         b = torch.randn(K, N, device=DEVICE, dtype=dtype)
         print(f"  {str(dtype).removeprefix('torch.')}")
-        for name, fn in (("minillm（128×128×32）", lambda: matmul(a, b)), ("torch.matmul", lambda: a @ b)):
+        cases = [("指针版 128×128×32", lambda: matmul(a, b)),
+                 ("指针版 256×256×32", lambda: matmul(a, b, 256, 256, 32, 32)),
+                 ("descriptor 256×256×32", lambda: matmul_desc(a, b)),
+                 ("torch.matmul", lambda: a @ b)]
+        for name, fn in cases:
             ms = triton.testing.do_bench(fn)
-            print(f"    {name:22} {ms:6.3f} ms  {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")
+            print(f"    {name:24} {ms:6.3f} ms  {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")
 
 
 if __name__ == "__main__":

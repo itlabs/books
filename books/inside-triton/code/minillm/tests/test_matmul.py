@@ -40,3 +40,35 @@ def test_fp16_accumulator_is_worse(device):
     b = torch.randn(8192, 64, device=device, dtype=torch.float16)
     ref = a.double() @ b.double()
     assert rel_err(matmul(a, b, 64, 64, 32, 4, tl.float16), ref) > 3 * rel_err(matmul(a, b, 64, 64, 32, 4), ref)
+
+
+# ---------------------------------------------------------------- 第 8 章 ----
+from minillm.kernels.matmul import descriptor_ok, matmul_desc, mm  # noqa: E402
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("mnk", [(256, 256, 64), (1000, 776, 1032), (8, 4096, 512), (2048, 2048, 4096)])
+def test_matmul_desc(device, dtype, mnk):
+    # 1000×776×1032：都不是 tile 的整数倍，但行 stride 都是 16 字节的倍数，descriptor 能用；
+    # 越界的部分由 descriptor 自己处理（读到 0、不写）
+    m, n, k = mnk
+    a = torch.randn(m, k, device=device, dtype=dtype)
+    b = torch.randn(k, n, device=device, dtype=dtype)
+    assert descriptor_ok(a, b)
+    assert rel_err(matmul_desc(a, b), a.double() @ b.double()) < TOL[dtype]
+
+
+def test_descriptor_ok_rejects(device):
+    x = torch.randn(64, 777, device=device, dtype=torch.float16)      # 行 stride 1554 字节，不是 16 的倍数
+    assert not descriptor_ok(x)
+    y = torch.randn(64, 64, device=device, dtype=torch.float16).t()    # 最后一维不连续
+    assert not descriptor_ok(y)
+
+
+@pytest.mark.parametrize("mnk", [(1000, 776, 1032), (333, 777, 1029), (1, 4096, 512)])
+def test_mm_dispatch(device, mnk):
+    # mm 在能用 descriptor 时用 descriptor，否则退回指针版；两条路都要算对
+    m, n, k = mnk
+    a = torch.randn(m, k, device=device, dtype=torch.float16)
+    b = torch.randn(k, n, device=device, dtype=torch.float16)
+    assert rel_err(mm(a, b), a.double() @ b.double()) < TOL[torch.float16]
