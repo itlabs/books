@@ -297,7 +297,7 @@ PR 节奏沿用 MLIR 书：**全书写完再开一个 PR**（若有不同意见�
 3. **PyTorch 版本**：批次 0 里选与 Triton 3.9.0 配套的那一版。
 4. **书名**：暂定《深入 Triton》（Inside Triton），与《深入 MLIR》成系列；另一个备选是《Triton：从写对到写快》。
 5. **分支与 PR**：在分支 `inside-triton` 上做；PR 节奏默认全书一个。
-6. **读者的安装命令用不用 uv**：作者自己的环境用 uv（§3.1）。正文和附录 A 给读者的命令可以有三种写法：全用 uv；全用 pip；uv 为主、附 pip 对照。写附录 A 时再定。
+6. ~~**读者的安装命令用不用 uv**~~ **已定（2026-11-15）：以 uv 为主，附 pip 对照**。正文和附录里的命令一律写 `uv venv` / `uv pip install`。附录 A 第 1 节给了一张 uv ↔ pip 的逐条对照表，正文不再逐条重复 pip 的写法。
 
 ## 15. 进度与交接（换机器、换会话时从这里接着做）
 
@@ -333,7 +333,16 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
    - `verify-triton` 默认**离线**编译 `triton-ir` 块，用的是 `verify/triton_ir_local.py`：做法和 CE 一样，FakeTensor 加 mock driver，在本机用 3.9.0 编 NVIDIA / AMD 目标，**不需要对应的 GPU**。正文里的 `ttgir-norun` 块也用它来取 3.9.0 的真 IR。`CE=1` 时改走 CE 的 API。
    - 两种模式都在 Max 1100 上测过：本机能跑的块通过，`sm90` 的块跳过，故意写错的块报失败。`triton-ir` 块覆盖了 NVIDIA、AMD、Gluon 三种情况；`# IR:` 写了不存在的一级时也会报错。
    - 公司网络要走代理时，`CE=1` 需要 `https_proxy`。连不上时脚本会立刻报错退出，不会每个块都干等到超时。
-5. 批次 0 剩下的（§12）：`verify-outputs.py`（等第一章有「运行结果」块时再写，规则照 MLIR 书那份）；本书的 `README.md`（首页）；附录 A。
+5. ~~附录 A~~（已完成：`chapters/appendix-a.md`）。写的时候顺带核实或订正了几件事：
+   - PyPI 上的 triton 3.9.0 **没有 cp310 和 cp313 的 wheel**，本书定用 Python 3.12。
+   - torch 2.15.0 只有 `cu132`、`xpu`、`cpu` 三个版本；ROCm 索引上最新只到 2.14.1+rocm7.2。
+   - `triton` 和 `triton-xpu` 装进的是同一个 `triton/` 目录，会互相覆盖。
+   - **FP fusion 的警告只在 NVIDIA 和 AMD 上出现**：这两个后端走 `knobs.language.fp_fusion_enabled()`，Intel 后端直接读 `default_fp_fusion`，开关同样有效，但不发警告。
+   - Helion 缺 `packaging` 时，**`import helion` 就会失败**（`helion/_compat.py` 的顶层 import），不是等到运行 kernel。
+   - Intel 后端挑 C++ 编译器时 **`CXX` 优先**；没设 `CXX` 才依次找 `TRITON_INTEL_SYCL_COMPILER`、`icpx`、`dpclang++`、`clang++`、`g++`。
+   - 纯 CPU 环境（`torch==2.15.0+cpu` 加 `triton==3.9.0 numpy`）实测过：`TRITON_INTERPRET=1` 和 `triton_ir_local.py` 都能用。
+   - `probe-env.py` 的说明和结尾提示改成了面向读者的写法。
+6. 批次 0 剩下的（§12）：`verify-outputs.py`（等第一章有「运行结果」块时再写，规则照 MLIR 书那份）；本书的 `README.md`（首页）。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
 - 每本书自成一体，与本仓库其它书重复没关系（§1）。

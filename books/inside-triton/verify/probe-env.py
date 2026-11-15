@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""《深入 Triton》批次 0：验证机环境探测。
+"""《深入 Triton》环境体检（附录 A）：装好环境、换了机器或升级版本以后先跑它。
 
-在 A10 和 Max 1100 两台机器上各跑一次，把完整输出贴回来：
+    <venv>/bin/python probe-env.py            # 基本探测 + 几个小 kernel
+    <venv>/bin/python probe-env.py --helion   # 额外试一个固定 Config 的 Helion kernel
 
-    python3 probe-env.py            # 基本探测 + 三个小 kernel
-    python3 probe-env.py --helion   # 额外试一个固定 Config 的 Helion kernel
+用 venv 里的 python 直接跑，免得 PATH、alias 把 python 指到别处（脚本会检查并警告）。
 
 脚本只读、不安装任何东西。每一项单独 try，某一项失败不影响后面的项；
 最后打印一份汇总，失败项附带异常信息。
@@ -430,5 +430,6 @@ section("汇总")
 for name, status, detail in RESULTS:
     print(f"{status:4} | {name}" + (f" | {detail}" if status != "OK" and detail else ""))
 fails = sum(1 for _, s, _ in RESULTS if s == "FAIL")
-print(f"\n共 {len(RESULTS)} 项，失败 {fails} 项。请把从头到尾的完整输出贴回来。")
+print(f"\n共 {len(RESULTS)} 项，失败 {fails} 项。"
+      + ("失败项的报错和 traceback 在上面对应的 [FAIL] 行；常见原因见附录 A。" if fails else ""))
 sys.exit(1 if fails else 0)
