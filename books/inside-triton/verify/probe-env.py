@@ -228,8 +228,9 @@ def _asm():
         raise SkipCheck("拿不到 CompiledKernel.asm")
     keys = list(ADD_KERNEL.asm.keys())
     ttgir = ADD_KERNEL.asm.get("ttgir", "")
+    # 只要 layout 别名定义（如 #blocked = #ttg.blocked<...>），不要 #loc
     layout_lines = [ln.strip() for ln in str(ttgir).splitlines()
-                    if ln.lstrip().startswith("#")][:3]
+                    if ln.lstrip().startswith("#") and "= #ttg." in ln][:3]
     print("  asm keys:", keys)
     for ln in layout_lines:
         print("  ttgir layout:", ln[:160])
@@ -263,8 +264,8 @@ def _dot():
     if err > 1e-2:
         raise AssertionError(f"max abs err = {err}")
     ttgir = str(getattr(k, "asm", {}).get("ttgir", ""))
-    mma = sorted({tok.split("<")[0] for tok in ttgir.replace("=", " ").split()
-                  if tok.startswith("#") and ("mma" in tok or "dpas" in tok)})
+    import re
+    mma = sorted(set(re.findall(r"#[\w.]*(?:mma|dpas)[\w.]*", ttgir)))
     return f"max abs err = {err:.2e}; ttgir 里的矩阵 layout: {mma or '未找到'}"
 
 
