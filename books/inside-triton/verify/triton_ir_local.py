@@ -83,7 +83,7 @@ def collect(out_dir):
             continue
         name = json.load(open(meta)).get("name") or os.path.splitext(os.path.basename(meta))[0]
         d = os.path.dirname(meta)
-        stages = {}
+        stages = {"json": open(meta, encoding="utf-8").read()}   # 编译元数据：shared memory 用量、num_warps 等
         for st in STAGES:
             files = glob.glob(os.path.join(d, f"*.{st}"))
             if files:
@@ -98,7 +98,7 @@ def main():
     ap.add_argument("--backend", choices=["cuda", "hip"])
     ap.add_argument("--arch")
     ap.add_argument("--out", help="把各级 IR 写成 <kernel>.<stage> 放进这个目录")
-    ap.add_argument("--show", help="把某一级 IR 打到 stdout，例如 ttgir")
+    ap.add_argument("--show", help="把某一级 IR 打到 stdout，例如 ttgir；json 是编译元数据")
     ap.add_argument("--json", action="store_true", help="以 JSON 打印 {kernel: [有哪些 stage]}（给 verify 脚本用）")
     a = ap.parse_args()
 

@@ -354,6 +354,9 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - L2 只有 6 MB，所以实验 1 的「L2 台阶」只会出现在 1–4 MiB 附近，而且会和启动开销搅在一起，未必看得出来。
   - fp16 矩阵乘不超过标称的 125 TFLOP/s；显存拷贝应在 600 GB/s 以下（probe 的 x*2 测到约 473 GB/s）。
   - 结果出来后，在第 2 章的 roofline 一节补一张 A10 的对照。
+- **ch03**：
+  - 把 CUDA 的 `add_kernel` 完整程序存成 `add.cu`，用 `nvcc -O3 -arch=sm_86 add.cu -o add && ./add` 跑一次。CE 上只验证过它能编译，正文还没有贴它的运行结果，请把输出贴回来。
+  - 跑一次第二个 `triton` 块（跨步读取）。**预测**：NVIDIA 取数据的粒度是 32 字节的 sector，平台从 `STRIDE=8` 就开始，而不像 Max 1100 那样从 16 开始。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
