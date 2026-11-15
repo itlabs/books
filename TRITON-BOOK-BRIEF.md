@@ -372,6 +372,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch04**：
   - 用空的缓存目录把 `life.py`（第一个 `triton` 块）跑两次，正文「动手」第 1 题需要 NVIDIA 上的数字。**预测**：「初始化 driver」比 Max 1100 小得多；第一次调用仍然有一笔几百毫秒的 `triton_key()`（PyPI 的 `libtriton.so` 是 477 MB，Intel 的是 1.2 GB）。
   - 跑 `verify-minillm.sh`，以及 `bench/bench_pointwise.py`。**预测**：`silu_mul` 快 1.6 倍左右；A10 的 L2 小，可能更接近 1.7。
+- **ch05、ch06**：
+  - 跑 ch05 的 `copy2d` 块和 ch06 的溢出实验。
+  - 跑 `bench_softmax.py`、`bench_rmsnorm.py`。
+  - **预测**：NVIDIA 没有自动换大寄存器模式这一步，所以 32768 列、4 个 warp 的溢出会更严重；online 和三遍的比值在长行上仍然约为 4/3。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
