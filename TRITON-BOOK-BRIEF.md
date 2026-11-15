@@ -64,7 +64,8 @@
 - 示例代码**与设备无关**：统一写 `DEVICE = triton.runtime.driver.active.get_active_torch_device()`（以 3.9.0 源码核对过的写法为准），不写死 `"cuda"`。
 - 每个代码块都要标注它所需的最低架构（§7.3），正文里的性能数字要写明是 A10 还是 Max 1100 测的。
 - 批次 0 要在两台机器上各搭一遍环境，核对驱动版本能否跑 Triton 3.9.0。GPU 书当时那台 NVIDIA 机器上是 nvcc 11.5；Triton 的 wheel 自带 ptxas，nvcc 版本不要紧，关键是驱动。
-- **A10 的驱动约束**（2026-11-15 实测 `probe-env.py`）：驱动 550.163.01，最高支持 CUDA 12.4，**暂不升级**。PyTorch 与 Triton 的配套关系是：torch 2.15.0 配 triton ~=3.9.0，但只有 CUDA 13.2 版，要求驱动 ≥ 580；torch 2.14.1 配 triton ~=3.8.0，有 CUDA 12.6 版。**已实测**（2026-11-15）：torch 2.14.1+cu126，再用 `--no-deps` 强装 triton 3.9.0，在 550 驱动上通过了 vector add、`tl.dot`（`#ttg.nvidia_mma`）、`do_bench`（x*2 约 473 GB/s，标称 600 GB/s）、解释器、Gluon（含 `nvidia/ampere`）和 proton 的检查。**基线保持 Triton 3.9.0。** 还要确认的是 `torch.compile` 和 Helion：它们依赖 Inductor，而 torch 2.14.1 原本配的是 triton 3.8，版本不配套时最容易出问题。
+- **A10 的驱动约束**（2026-11-15 实测 `probe-env.py`）：驱动 550.163.01，最高支持 CUDA 12.4，**暂不升级**。PyTorch 与 Triton 的配套关系是：torch 2.15.0 配 triton ~=3.9.0，但只有 CUDA 13.2 版，要求驱动 ≥ 580；torch 2.14.1 配 triton ~=3.8.0，有 CUDA 12.6 版。**已实测**（2026-11-15）：torch 2.14.1+cu126，再用 `--no-deps` 强装 triton 3.9.0，在 550 驱动上通过了 vector add、`tl.dot`（`#ttg.nvidia_mma`）、`do_bench`（x*2 约 473 GB/s，标称 600 GB/s）、解释器、Gluon（含 `nvidia/ampere`）和 proton 的检查。**基线保持 Triton 3.9.0。** 复测时 `torch.compile`（Inductor）和 Helion 1.5.2 的固定 Config kernel 也通过了，`probe-env.py` 14/14 全过。**A10 环境就此定下。**
+  - Max 1100 不需要绕：torch 2.15.0+xpu 自带依赖 `triton-xpu~=3.9.0`，正好与基线一致。
   - A10 上的装法：`uv pip install --no-config torch==2.14.1 --index-url https://download.pytorch.org/whl/cu126`，再装 `helion packaging`，最后 `uv pip install --no-config triton==3.9.0 --no-deps`。
   - **坑 1**：Helion 1.5.2 运行时要导入 `packaging`，但它的依赖声明里漏写了这个包，要手动装。写进附录 A。
   - **坑 2**：Triton 3.9 在未设置 `TRITON_DEFAULT_FP_FUSION` 时会发警告：3.9 默认**开启** FP fusion（乘加融合成 FMA），3.10 将改为默认关闭。这会影响数值结果的逐位一致性，写进 ch07（精度）、ch09（数值对比）和附录 C。
