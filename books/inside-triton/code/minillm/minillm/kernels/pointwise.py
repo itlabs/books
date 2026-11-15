@@ -54,3 +54,20 @@ def silu_mul(gate: torch.Tensor, up: torch.Tensor, BLOCK: int = 1024) -> torch.T
     if n:
         _silu_mul_kernel[(triton.cdiv(n, BLOCK),)](gate, up, out, n, BLOCK=BLOCK)
     return out
+
+
+@triton.jit
+def _silu_mul_bwd_kernel(grad_ptr, gate_ptr, up_ptr, dgate_ptr, dup_ptr, n, BLOCK: tl.constexpr):
+    """silu_mul 的反向（第 10 章）。设 s = sigmoid(g)：
+         d out / d up   = silu(g) = g · s
+         d out / d gate = up · s · (1 + g · (1 − s))
+    读 3 个张量、写 2 个，一个 kernel 做完。"""
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    dy = tl.load(grad_ptr + offs, mask=mask).to(tl.float32)
+    g = tl.load(gate_ptr + offs, mask=mask).to(tl.float32)
+    u = tl.load(up_ptr + offs, mask=mask).to(tl.float32)
+    s = tl.sigmoid(g)
+    tl.store(dup_ptr + offs, (dy * g * s).to(dup_ptr.dtype.element_ty), mask=mask)
+    tl.store(dgate_ptr + offs, (dy * u * s * (1 + g * (1 - s))).to(dgate_ptr.dtype.element_ty), mask=mask)

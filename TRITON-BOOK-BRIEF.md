@@ -328,7 +328,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 ### 15.2b 批次进度（2026-11-15）
 - **批次 0**：完成。还剩 `verify-outputs.py`，等第一个需要逐字节比对的批次再写，规则照 MLIR 书那份：性能数字只核量级，末尾空白不计。
 - **批次 1**：完成。ch01–04 和附录 B 都已写完，`verify-triton.sh` 在 Max 1100 上 7/7 通过；浏览器模拟器的输出都逐字节核对过；每章的 SVG 都截图检查过。A10 上要补测的东西见 §15.5。
-- **下一步**：批次 2（ch05–10）。
+- **批次 2**：完成（2026-11-15）。ch05–10 都已写完；minillm 有 `pointwise`、`softmax`、`norm`、`matmul`（指针版 / descriptor 版 / `mm`）、`ops.py`（`triton_op` 加反向），共 126 个测试；`verify-triton.sh` 全书通过。
+  - 写作中订正过的事实：block pointer 在 3.9.0 已移除；`tl.dot` 的形状下限由各后端的 `min_dot_size` 决定（NVIDIA 只限 K，Intel 退回 FMA）。
+  - 写作中新发现、写进正文的坑：Intel 后端的 `tf32x3` / `bf16x3` 不走矩阵单元；解释器不查越界；`triton_op` 加 host 端 `TensorDescriptor` 在 `torch.compile` 后会被删掉。
+- **下一步**：批次 3（ch11–17）。ch15、ch16 的 Hopper 部分仍按 §14 第 1 项待定。
 - **写作流程**（每章都照这个来）：
   1. 先在 Max 1100 上把要用的数字测出来，或者用 `triton_ir_local.py` 取 3.9.0 的 IR；
   2. 写正文，运行结果先留占位符；
@@ -388,6 +391,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - 跑 `verify-minillm.sh`，看 `tests/test_codegen.py` 在 NVIDIA 上能不能通过（Intel 专属的那一项应当跳过）。
   - 跑本章的 `device_print` 块，看 NVIDIA 上的打印格式（Max 1100 上是 `pid (1, 0, 0) idx (0) x: 0.000000`）。
   - 试一试 fp16 的 8×8 `tl.dot`，应当报 `Input shapes should have M >= 1, N >= 1 and K >= 16`（离线编译已证实）。
+- **ch10**：
+  - 跑 `verify-minillm.sh`（`test_ops.py` 在 NVIDIA 上走的是指针版 mm）。
+  - 跑 MLP 的四种对比。
+  - 复现「`triton_op` + host 端 `TensorDescriptor` + `torch.compile`」，看 NVIDIA 上是不是同样会被删掉。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）

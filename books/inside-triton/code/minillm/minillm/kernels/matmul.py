@@ -112,3 +112,20 @@ def mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     if prefer_descriptor() and a.shape[0] and n and out_ok and descriptor_ok(a, b):
         return matmul_desc(a, b)
     return matmul(a, b)
+
+
+@triton.jit
+def _matmul_desc_dev_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_bk, stride_cm,
+                            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    """和 _matmul_desc_kernel 一样，只是 descriptor 在 kernel 里创建（第 8 章的两种创建方式）。
+    第 10 章的 minillm.ops.mm 用它：在 torch 2.15.0 + triton-xpu 3.9.0 上实测，
+    torch.compile 遇到 triton_op 里传 host 端 TensorDescriptor 的 kernel，会把这次调用整个删掉。"""
+    a_desc = tl.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [K, N], [stride_bk, 1], [BLOCK_K, BLOCK_N])
+    c_desc = tl.make_tensor_descriptor(c_ptr, [M, N], [stride_cm, 1], [BLOCK_M, BLOCK_N])
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        acc = tl.dot(a_desc.load([pid_m * BLOCK_M, k]), b_desc.load([k, pid_n * BLOCK_N]), acc)
+    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc.to(c_desc.dtype))
