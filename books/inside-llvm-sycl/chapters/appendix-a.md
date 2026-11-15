@@ -110,7 +110,87 @@ clang++ -fsycl hello.cpp -o hello    # -fsycl 触发第 12 章那套两趟编译
 
 跑通了，说明你的工具链**编译期（`-fsycl`）+ 运行期（找到设备并执行）**两头都对了。想看中间产物，把正文各章的诊断标志加上（下节）。
 
-## 5. 常用命令速查
+## 5. 额外：构建一个支持 ClangIR 的编译器
+
+第五部分（第 25–27 章）要用的东西，前面那套构建**给不了**——ClangIR 默认是关的，而且这个「关」有一个很坑的表现形式，先说清楚。
+
+### 5.1 先确认你手上的 clang 到底支不支持
+
+<div class="warn">
+<strong>别用 <code>-fclangir -c</code> 判断，它会骗你</strong>
+<code>-fclangir</code> 无条件定义在 <code>Options.td</code> 里，驱动也无条件把它转发给 <code>-cc1</code>。但真正的分派在 <code>clang/lib/FrontendTool/ExecuteCompilerInvocation.cpp</code> 里是<strong>编译期</strong>开关：没开 <code>CLANG_ENABLE_CIR</code> 时 <code>#if</code> 整块被预处理掉，直接落到经典 CodeGen 那一支。于是 <code>clang -fclangir -c foo.cpp</code> <strong>退出码 0、产物正常、一句警告都没有</strong>——你以为走了 CIR，其实一步都没进去。
+</div>
+
+判定要用 `-emit-cir`，只有它那一支带 `#else` 报错：
+
+```bash
+# 决定性测试：这条命令只有两种结果
+clang++ -emit-cir hello.cpp -o hello.cir
+
+# ① 老版本 clang（-fclangir 还不存在）：
+#    clang++: error: unknown argument: '-emit-cir'
+# ② 新版本但没开 CIR：
+#    error: clang IR support not available, rebuild clang with -DCLANG_ENABLE_CIR=ON
+# ③ 开了 CIR：安静地写出 hello.cir
+```
+
+两点顺带说明，都和正文里常见的误解有关：
+
+- `-emit-cir` 是**驱动层**选项（`Visibility<[ClangOption, CC1Option]>`），**不需要** `-Xclang` 包一层。
+- 它属于 `Action_Group`，本身就是一个 action（和 `-c`、`-S` 同级），所以**不要**再加 `-S`，加了会得到 `warning: argument unused during compilation: '-S'`。而且它隐含打开 CIR 管线（`CompilerInvocation.cpp` 里 `if (Args.hasArg(OPT_emit_cir)) Opts.UseClangIRPipeline = true;`），连 `-fclangir` 都可以省。
+
+别指望现成的二进制：发行版的 clang 包默认不开这个开关，**Compiler Explorer 上的 `clang_trunk` 也没开**（实测同样报 `rebuild clang with -DCLANG_ENABLE_CIR=ON`）。要跑 CIR 只能自己建。
+
+### 5.2 构建的三个硬约束
+
+| 约束 | 说明 |
+|---|---|
+| `-DCLANG_ENABLE_CIR=ON` | 没有 `option()` 声明，默认即未设置（关） |
+| 必须启用 MLIR | `clang/CMakeLists.txt` 里直接 `FATAL_ERROR: Cannot build ClangIR without MLIR enabled`。好消息是 `llvm/CMakeLists.txt` 会在你只写 `clang` 时自动把 `mlir` 追加进 `LLVM_ENABLE_PROJECTS`（而且标成 dependency-only，不建 MLIR 全套工具和测试） |
+| 不支持 standalone 构建 | `FATAL_ERROR: ClangIR is not yet supported in the standalone build` |
+
+### 5.3 两条路：透传给 configure.py，或另起一个精简构建
+
+如果你就想在现有的 DPC++ 构建上加 CIR，用第 1 节提过的 `--cmake-opt` 透传：
+
+```bash
+python llvm/buildbot/configure.py \
+    --build-type=Release \
+    --cmake-opt=-DCLANG_ENABLE_CIR=ON
+```
+
+但更推荐**另起一个目录**，只建 CIR 需要的东西。理由是 DPC++ 那套构建挂着 `sycl`、`llvm-spirv`、`sycl-jit`、`opencl`、`compiler-rt` 一整串外部项目，改配置会触发大范围重配重建，而 CIR 一个都用不到：
+
+```bash
+# 在 llvm/ 的父目录（即源码树根）
+cmake -G Ninja -S llvm -B build-cir \
+    -DLLVM_ENABLE_PROJECTS="clang;mlir" \
+    -DCLANG_ENABLE_CIR=ON \
+    -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DLLVM_TARGETS_TO_BUILD="host;NVPTX" \
+    -DLLVM_USE_LINKER=lld -DLLVM_PARALLEL_LINK_JOBS=1
+
+ninja -C build-cir -j4 clang cir-opt cir-translate
+```
+
+逐项说明为什么是这些值：
+
+- **`host;NVPTX`**：第 27 章的 CUDA 例子需要 NVPTX 后端。只做 CPU 那部分（第 25、26 章）`host` 就够。
+- **`lld` + `LLVM_PARALLEL_LINK_JOBS=1`**：链接 clang 是整个构建里最吃内存的一步。内存紧（≤16 GB，尤其 WSL）时这两个都要设，否则容易被 OOM killer 直接杀掉，连带整个 shell。`-j4` 起步，还爆就 `-j2`。
+- **`cir-opt` / `cir-translate` 要显式点名**：它们不在默认 target 里。
+- **`llvm-lit` 不是 ninja target**（写成 `ninja llvm-lit` 会报 `unknown target`）——它是 `configure_file` 在配置阶段就生成的脚本，配完就在 `build-cir/bin/llvm-lit`。
+
+### 5.4 建完之后先跑测试
+
+<div class="note">
+<strong>CIR 的 lit 测试挂在 <code>check-clang</code> 上，但可以只跑那一块</strong>
+没有单独的 <code>check-clang-cir</code> target：<code>clang/test/lit.cfg.py</code> 在 <code>CLANG_ENABLE_CIR</code> 打开时加一个 <code>cir-support</code> feature，CIR 的测试靠它放行。所以想只验 CIR，先把测试依赖建齐、再把 lit 指到那一个目录：
+<pre>ninja -C build-cir clang-test-depends
+build-cir/bin/llvm-lit -sv clang/test/CIR</pre>
+<code>clang/test/CIR/</code> 下有近千个测试文件（本书写作时 933 个）。它们是第 25–27 章全部论断的事实来源——与其信书，不如让它们自己说话。
+</div>
+
+## 6. 常用命令速查
 
 把全书用到的"看内部"的命令汇总成一张表——它们是你验证正文每个论断的手术刀：
 
@@ -126,6 +206,13 @@ clang++ -fsycl hello.cpp -o hello    # -fsycl 触发第 12 章那套两趟编译
 | 运行时 UR 调用跟踪 | `SYCL_UR_TRACE=1 ./prog` | 第 18 章 |
 | 打开设备代码 sanitizer | `-fsanitize=address`（配 compiler-rt） | 第 19 章 |
 | 跑 LIT 测试 | `llvm-lit sycl/test/path/to/test.cpp` | 第 24 章 |
+| 确认 clang 支不支持 CIR | `clang++ -emit-cir x.cpp -o -`（**别用 `-fclangir -c` 判定**） | 第 25 章、本附录 5.1 |
+| 看 CIR 文本 | `clang++ -emit-cir x.cpp -o x.cir` | 第 25 章 |
+| 两条路径的 LLVM IR 对照 | `clang++ -fclangir -S -emit-llvm x.cpp -o cir.ll` 再去掉 `-fclangir` 编一遍，`diff` | 第 25 章 |
+| 在 CIR 管线中间截一刀 | `-mmlir -mlir-print-ir-before=cir-target-lowering` | 第 25、27 章 |
+| 单跑一个 CIR pass（手写 `.cir`） | `cir-opt x.cir -cir-flatten-cfg -o -` | 第 26 章 |
+| CIR → LLVM IR | `cir-translate --cir-to-llvmir x.cir -o -` | 第 25 章 |
+| 只跑 CIR 的 lit 测试 | `llvm-lit -sv clang/test/CIR` | 本附录 5.4 |
 
 <div class="keypoint">
 <strong>三步走：configure.py → compile.py → 覆盖 PATH/LD_LIBRARY_PATH</strong>

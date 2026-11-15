@@ -122,8 +122,8 @@
 <li>feature-test 宏定义对不对：<code>#ifdef</code> 检测宏在预期条件下有定义、值正确。</li>
 </ul>
 <div class="code-block">
-  <div class="code-head"><span class="lang-tag">终端</span></div>
-  <pre class="line-numbers"><code class="language-bash"># LIT 测试长这样（示意）：一个 .cpp 里嵌 RUN 行 + CHECK/expected 断言
+  <div class="code-head"><span class="lang-tag">lit 测试 RUN 行（不可直接执行）</span></div>
+  <pre class="line-numbers"><code class="language-cpp"># LIT 测试长这样（示意）：一个 .cpp 里嵌 RUN 行 + CHECK/expected 断言
 # RUN: %clangxx -fsycl -fsycl-device-only -S -emit-llvm %s -o - | FileCheck %s
 # CHECK: define {{.*}} @{{.*}}scale{{.*}} #[[ATTR:[0-9]+]]
 # CHECK: attributes #[[ATTR]] = { {{.*}}"sycl-nd-range-kernel"="3"{{.*}} }</code></pre>
