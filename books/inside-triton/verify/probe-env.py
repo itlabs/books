@@ -69,6 +69,10 @@ section("系统")
 print("platform :", platform.platform())
 print("python   :", sys.version.replace("\n", " "))
 print("executable:", sys.executable)
+if sys.prefix == sys.base_prefix:
+    print("!! 警告：当前 python 不在任何 venv 里。如果你以为已经激活了 venv，"
+          "多半是 PATH、alias 或 shell 函数把 python 指到了别处；"
+          "可以直接用 <venv>/bin/python probe-env.py 来跑。")
 for var in ("CUDA_VISIBLE_DEVICES", "ZE_AFFINITY_MASK", "ONEAPI_ROOT",
             "TRITON_HOME", "TRITON_CACHE_DIR"):
     if os.environ.get(var):
