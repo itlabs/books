@@ -64,6 +64,7 @@
 - 示例代码**与设备无关**：统一写 `DEVICE = triton.runtime.driver.active.get_active_torch_device()`（以 3.9.0 源码核对过的写法为准），不写死 `"cuda"`。
 - 每个代码块都要标注它所需的最低架构（§7.3），正文里的性能数字要写明是 A10 还是 Max 1100 测的。
 - 批次 0 要在两台机器上各搭一遍环境，核对驱动版本能否跑 Triton 3.9.0。GPU 书当时那台 NVIDIA 机器上是 nvcc 11.5；Triton 的 wheel 自带 ptxas，nvcc 版本不要紧，关键是驱动。
+- **A10 的驱动约束**（2026-11-15 实测 `probe-env.py`）：驱动 550.163.01，最高支持 CUDA 12.4，**暂不升级**。PyTorch 与 Triton 的配套关系是：torch 2.15.0 配 triton ~=3.9.0，但只有 CUDA 13.2 版，要求驱动 ≥ 580；torch 2.14.1 配 triton ~=3.8.0，有 CUDA 12.6 版。正在验证的方案是：torch 2.14.1+cu126，再用 `--no-deps` 强装 triton 3.9.0。如果 3.9.0 编出来的 kernel 在 550 驱动上加载不了，全书基线就退到 **Triton 3.8.x**（Max 1100 那边也跟着对齐）。
 
 易变点，写到哪里就要提醒读者去核对：
 
