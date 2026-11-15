@@ -357,6 +357,9 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch03**：
   - 把 CUDA 的 `add_kernel` 完整程序存成 `add.cu`，用 `nvcc -O3 -arch=sm_86 add.cu -o add && ./add` 跑一次。CE 上只验证过它能编译，正文还没有贴它的运行结果，请把输出贴回来。
   - 跑一次第二个 `triton` 块（跨步读取）。**预测**：NVIDIA 取数据的粒度是 32 字节的 sector，平台从 `STRIDE=8` 就开始，而不像 Max 1100 那样从 16 开始。
+- **ch04**：
+  - 用空的缓存目录把 `life.py`（第一个 `triton` 块）跑两次，正文「动手」第 1 题需要 NVIDIA 上的数字。**预测**：「初始化 driver」比 Max 1100 小得多；第一次调用仍然有一笔几百毫秒的 `triton_key()`（PyPI 的 `libtriton.so` 是 477 MB，Intel 的是 1.2 GB）。
+  - 跑 `verify-minillm.sh`，以及 `bench/bench_pointwise.py`。**预测**：`silu_mul` 快 1.6 倍左右；A10 的 L2 小，可能更接近 1.7。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
