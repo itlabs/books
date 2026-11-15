@@ -74,7 +74,7 @@ if sys.prefix == sys.base_prefix:
           "多半是 PATH、alias 或 shell 函数把 python 指到了别处；"
           "可以直接用 <venv>/bin/python probe-env.py 来跑。")
 for var in ("CUDA_VISIBLE_DEVICES", "ZE_AFFINITY_MASK", "ONEAPI_ROOT",
-            "TRITON_HOME", "TRITON_CACHE_DIR"):
+            "LD_LIBRARY_PATH", "LD_PRELOAD", "TRITON_HOME", "TRITON_CACHE_DIR"):
     if os.environ.get(var):
         print(f"{var}={os.environ[var]}")
 
@@ -347,7 +347,16 @@ def _gluon():
         if os.path.isdir(d):
             subs = sorted(s for s in os.listdir(d)
                           if not s.startswith("_") and s != "__pycache__")
-            archs.append(f"{vendor}: {[s.removesuffix('.py') for s in subs]}")
+            names = [s.removesuffix('.py') for s in subs]
+            if not names:
+                # 没有架构子包（如 intel 只有 _layouts.py）：改报模块导出的名字
+                try:
+                    mod = importlib.import_module(
+                        f"triton.experimental.gluon.language.{vendor}")
+                    names = ["exports:"] + list(getattr(mod, "__all__", []))
+                except Exception as e:  # noqa: BLE001
+                    names = [f"<import 失败: {type(e).__name__}: {e}>"]
+            archs.append(f"{vendor}: {names}")
     return "; ".join(archs) or "没有厂商子包"
 
 
