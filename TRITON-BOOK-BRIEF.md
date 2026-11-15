@@ -325,6 +325,18 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
    - **暗的（重要）**：Intel driver 通过查询 OpenCL 扩展来判断设备能力（`cl_intel_subgroup_matrix_multiply_accumulate` 等）。机器上没有 OpenCL 平台时（`clinfo -l` 是空的，`sycl-ls` 只有 `level_zero:gpu`），会退回走 Level Zero 的 `ext_oneapi_supports_cl_extension`，而这条路需要 `ocloc`（见 `backends/intel/extension_utils.c`）。找不到 `ocloc` 时异常被吞掉、返回 False，结果是 target 里 `has_subgroup_matrix_multiply_accumulate: False`，**`tl.dot` 算得对，但 TTGIR 里没有 `#ttig.dpas`，不走矩阵单元**，也没有任何报错或警告。这一条除了写进附录 A，也是 ch23「后端怎么探测硬件能力」和 ch09「结果对不代表编译对」的现成例子。`probe-env.py` 现在把这种情况判为 FAIL。
    - 解法：把 GPU 用户态驱动里带的 `ocloc` 所在目录加进 PATH。
 
+### 15.2b 批次进度（2026-11-15）
+- **批次 0**：完成。还剩 `verify-outputs.py`，等第一个需要逐字节比对的批次再写，规则照 MLIR 书那份：性能数字只核量级，末尾空白不计。
+- **批次 1**：完成。ch01–04 和附录 B 都已写完，`verify-triton.sh` 在 Max 1100 上 7/7 通过；浏览器模拟器的输出都逐字节核对过；每章的 SVG 都截图检查过。A10 上要补测的东西见 §15.5。
+- **下一步**：批次 2（ch05–10）。
+- **写作流程**（每章都照这个来）：
+  1. 先在 Max 1100 上把要用的数字测出来，或者用 `triton_ir_local.py` 取 3.9.0 的 IR；
+  2. 写正文，运行结果先留占位符；
+  3. 用 `verify/blocks.py` 从章节里原样抽出代码块重跑，把真实输出填回去，再按输出修正正文里的数字和结论；
+  4. 浏览器模拟器的输出逐字节比对；
+  5. 构建，用 Playwright 截图检查 SVG；
+  6. 查公开信息，然后提交。
+
 ### 15.3 下一步
 1. ~~Max 1100 跑到 14/14~~（已完成）；~~固化 `verify/env-xpu.sh.example`~~（已完成）。据此写附录 A 的「Intel GPU」一节。
 2. 改过的 `probe-env.py`（`tl.dot` 没有矩阵 layout 判 FAIL；打印 `LIBRARY_PATH`、`ocloc`）请作者在 A10 上再跑一次，确认仍是 14/14。
