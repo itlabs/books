@@ -51,7 +51,7 @@
 
 ### 3.1 验证硬件（2026-11-14 定）
 
-两台机器，都**不在**写作用的这台 WSL 上（WSL 里没有 GPU）：
+两台机器。2026-11-15 起，**写作也挪到 Max 1100 那台机器上**，Intel 这条线可以边写边测；A10 在另一台机器上，脚本写好后由作者本人去跑，再把输出贴回来：
 
 | 机器 | 架构 | 角色 |
 | --- | --- | --- |
@@ -63,6 +63,7 @@
 由此带来的写作约束：
 - 示例代码**与设备无关**：统一写 `DEVICE = triton.runtime.driver.active.get_active_torch_device()`（以 3.9.0 源码核对过的写法为准），不写死 `"cuda"`。
 - 每个代码块都要标注它所需的最低架构（§7.3），正文里的性能数字要写明是 A10 还是 Max 1100 测的。
+- Python 环境一律用 **uv**（`uv venv`、`uv pip install`），不用 `python -m venv` 加 pip。给读者看的安装命令是否也统一成 uv，到写附录 A 时再定（§14）。
 - 批次 0 要在两台机器上各搭一遍环境，核对驱动版本能否跑 Triton 3.9.0。GPU 书当时那台 NVIDIA 机器上是 nvcc 11.5；Triton 的 wheel 自带 ptxas，nvcc 版本不要紧，关键是驱动。
 - **A10 的驱动约束**（2026-11-15 实测 `probe-env.py`）：驱动 550.163.01，最高支持 CUDA 12.4，**暂不升级**。PyTorch 与 Triton 的配套关系是：torch 2.15.0 配 triton ~=3.9.0，但只有 CUDA 13.2 版，要求驱动 ≥ 580；torch 2.14.1 配 triton ~=3.8.0，有 CUDA 12.6 版。**已实测**（2026-11-15）：torch 2.14.1+cu126，再用 `--no-deps` 强装 triton 3.9.0，在 550 驱动上通过了 vector add、`tl.dot`（`#ttg.nvidia_mma`）、`do_bench`（x*2 约 473 GB/s，标称 600 GB/s）、解释器、Gluon（含 `nvidia/ampere`）和 proton 的检查。**基线保持 Triton 3.9.0。** 复测时 `torch.compile`（Inductor）和 Helion 1.5.2 的固定 Config kernel 也通过了，`probe-env.py` 14/14 全过。**A10 环境就此定下。**
   - Max 1100 不需要绕：torch 2.15.0+xpu 自带依赖 `triton-xpu~=3.9.0`，正好与基线一致。
@@ -279,4 +280,37 @@ PR 节奏沿用 MLIR 书：**全书写完再开一个 PR**（若有不同意见�
 2. **CE 版本落后。** CE 目前最高只有 Triton 3.7.0，基线是 3.9.0。建议：正文按 3.9.0 写，`triton-ir` 块用 CE 上最新的版本，两者 IR 有差异的地方用 `warn` 框提醒。等 CE 更新以后，把默认编译器 id 改一处即可。
 3. **PyTorch 版本**：批次 0 里选与 Triton 3.9.0 配套的那一版。
 4. **书名**：暂定《深入 Triton》（Inside Triton），与《深入 MLIR》成系列；另一个备选是《Triton：从写对到写快》。
-5. **分支与 PR**：在新分支 `inside-triton` 上做；PR 节奏默认全书一个。
+5. **分支与 PR**：在分支 `inside-triton` 上做；PR 节奏默认全书一个。
+6. **读者的安装命令用不用 uv**：作者自己的环境用 uv（§3.1）。正文和附录 A 给读者的命令可以有三种写法：全用 uv；全用 pip；uv 为主、附 pip 对照。写附录 A 时再定。
+
+## 15. 进度与交接（换机器、换会话时从这里接着做）
+
+> 仓库是**公开**的。下面只写通用描述，不写任何机器的主机名、用户名、内部路径或内部驱动构建名。
+
+### 15.1 已完成（批次 0 进行中）
+- 本 BRIEF 草案。
+- `books/inside-triton/verify/probe-env.py`：只读的环境探测脚本，共 14 项，每项独立 try，最后汇总。会打印 venv 状态、`LD_LIBRARY_PATH`、`CXX`、`CPATH`、PATH 里能找到的编译器、驱动与设备信息，然后跑 vector add、`tl.dot`、`do_bench`、解释器、`torch.compile`、Gluon、proton、Helion。用法：`<venv>/bin/python probe-env.py --helion`。
+- **A10：14/14 通过**（torch 2.14.1+cu126，再 `--no-deps` 强装 triton 3.9.0；装法见 §3.1）。
+
+### 15.2 Max 1100：进行到一半
+装法：`uv venv` 建在**本地盘**（XPU 版 torch 加 oneAPI 运行时有好几 GB），然后
+`uv pip install --no-config --python <venv>/bin/python torch==2.15.0 --index-url https://download.pytorch.org/whl/xpu`，再装 `helion packaging`。
+torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
+
+目前状态：`import torch` 正常，`torch.xpu` 能看到设备（448 EU，sub-group 16/32，约 48 GB），Gluon 有 `gluon.language.intel`（导出 `IntelDPASLayout`）。**Triton 的 Intel driver 还没起来**。一路踩到的坑（每一条都要写进附录 A）：
+
+1. **自己编译的 DPC++（intel/llvm）出现在 `LD_LIBRARY_PATH` 里**：pip 装的 `libsycl.so.9` 会链到那份更旧的 `libur_loader.so.0`，报 `undefined symbol: urKernelSetArgLocal, version LIBUR_LOADER_0.12`。原因是 `LD_LIBRARY_PATH` 的优先级高于 wheel 自带的 RUNPATH。解法：从 `LD_LIBRARY_PATH` 里去掉那个构建目录。
+2. **反过来，把 `LD_LIBRARY_PATH` 整个清空也不行**：如果 Level Zero loader（`libze_loader`）和 GPU 用户态驱动不在系统目录里、只靠 `LD_LIBRARY_PATH` 才找得到，清空之后 `sycl-ls` 里就没有 `level_zero:gpu` 这一行，`torch.xpu` 看到 0 个设备，Triton 报 `0 active drivers`。解法：`LD_LIBRARY_PATH` 里只保留 Level Zero loader 和 GPU 驱动所在的目录。
+3. **Triton 自己挑编译器**：Intel driver 首次运行时要现场编一段 C++ 胶水代码。`python/triton/runtime/build.py` 的挑法是 `knobs.intel.sycl_compiler`，然后 PATH 里的 `icpx`，然后 `dpclang++`。它挑中了自己编译的 `dpclang++`，而那份编译器的 SYCL 头文件与 pip 装的运行时版本不一致。准备的解法：设 `CXX=g++`，这样它就不加 `-fsycl`，SYCL 头文件改从 pip 包 `intel-sycl-rt` 里取（逻辑见 `backends/intel/driver.py` 的 `find_sycl_icpx`）。
+4. **缺 Level Zero 头文件**：胶水代码要 `#include <level_zero/ze_api.h>`，pip 包不提供（PyPI 上没有 Level Zero 的开发包）。解法：系统装 `level-zero-dev`，或者用 `CPATH` 指向一份现成的 Level Zero `include/`（intel/llvm 的构建目录里通常就有）。
+
+### 15.3 下一步
+1. 在 Max 1100 上用第 3、4 条的解法（`CXX=g++` + `CPATH`）重跑 `probe-env.py --helion`，目标是 14/14。重点看：`tl.dot` 的矩阵 layout 应当是 DPAS 而不是 `mma`；Helion 在 XPU 上能否跑通。
+2. 跑通后把可用的环境变量组合固化成 `verify/env-xpu.sh.example`（只放占位路径），并据此写附录 A 的「Intel GPU」一节。
+3. 继续批次 0 的其余部分（§12）：在 `build.js` 里加 `triton-ir` / `gluon` / `helion` 围栏，并实测 CE 的 Triton 接口；写 `book.json`；搭 minillm 包的骨架；写 `verify/` 的其余脚本。
+
+### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
+- 每本书自成一体，与本仓库其它书重复没关系（§1）。
+- 篇幅不设上限，判据是内容实不实在（§1、§13）。
+- 只用公开信息（§13）。仓库是公开的，交接记录也一样。
+- Python 环境用 uv（§3.1）。
