@@ -309,6 +309,23 @@ def _interp():
 
 _interp()
 
+@check("torch.compile（Inductor 生成 Triton kernel）")
+def _compile():
+    need_device()
+
+    def f(x):
+        return torch.softmax(x * 2.0, dim=-1) + 1.0
+
+    x = torch.randn(256, 1024, device=DEVICE)
+    cf = torch.compile(f)
+    err = (cf(x) - f(x)).abs().max().item()
+    if err > 1e-5:
+        raise AssertionError(f"max abs err = {err}")
+    return f"max abs err = {err:.1e}（torch 与 triton 版本不配套时，这一项最容易先坏）"
+
+
+_compile()
+
 # --------------------------------------------------------- 生态组件 ----
 section("Gluon / proton / Helion")
 
@@ -347,7 +364,8 @@ _proton()
 @check("import helion")
 def _helion_import():
     h = importlib.import_module("helion")
-    return f"helion {getattr(h, '__version__', '?')}"
+    ver = getattr(h, "__version__", None) or md.version("helion")
+    return f"helion {ver}"
 
 
 _helion_ok = _helion_import()
@@ -360,6 +378,9 @@ def _helion_run():
     if not _helion_ok:
         raise SkipCheck("helion 不可用")
     need_device()
+    # hl 必须是模块级全局名：在函数里局部 import 的话，kernel 引用它会被
+    # Helion 当成闭包，报 ClosuresNotSupported
+    global helion, hl
     import helion
     import helion.language as hl
 
