@@ -30,7 +30,7 @@ bench/                 triton.testing.do_bench 的性能测量
 | --- | --- | --- |
 | ch04 | `add`、`silu_mul` | 完成（`kernels/pointwise.py`） |
 | ch06 | `rmsnorm`、`softmax` | 完成（`kernels/norm.py`、`kernels/softmax.py`） |
-| ch07 | `matmul`（朴素 tile 版） | 未开始 |
+| ch07 | `matmul`（朴素 tile 版） | 完成（`kernels/matmul.py`） |
 | ch08 | `matmul` 改用 tensor descriptor | 未开始 |
 | ch10 | 全部包成 `torch.library` custom op | 未开始 |
 | ch12–15 | `matmul` 逐步优化 | 未开始 |
