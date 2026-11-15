@@ -74,9 +74,14 @@ if sys.prefix == sys.base_prefix:
           "多半是 PATH、alias 或 shell 函数把 python 指到了别处；"
           "可以直接用 <venv>/bin/python probe-env.py 来跑。")
 for var in ("CUDA_VISIBLE_DEVICES", "ZE_AFFINITY_MASK", "ONEAPI_ROOT",
-            "LD_LIBRARY_PATH", "LD_PRELOAD", "TRITON_HOME", "TRITON_CACHE_DIR"):
+            "LD_LIBRARY_PATH", "LD_PRELOAD", "CC", "CXX", "CPATH",
+            "TRITON_HOME", "TRITON_CACHE_DIR"):
     if os.environ.get(var):
         print(f"{var}={os.environ[var]}")
+# Triton 的驱动在首次运行时会现场编一段 C/C++ 胶水代码；它挑哪个编译器，取决于 PATH 里有什么
+for tool in ("icpx", "dpclang++", "clang++", "g++", "gcc"):
+    if shutil.which(tool):
+        print(f"which {tool}: {shutil.which(tool)}")
 
 section("驱动与设备工具")
 for cmd in (["nvidia-smi", "--query-gpu=name,driver_version,compute_cap,memory.total",
