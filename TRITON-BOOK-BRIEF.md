@@ -329,7 +329,11 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 1. ~~Max 1100 跑到 14/14~~（已完成）；~~固化 `verify/env-xpu.sh.example`~~（已完成）。据此写附录 A 的「Intel GPU」一节。
 2. 改过的 `probe-env.py`（`tl.dot` 没有矩阵 layout 判 FAIL；打印 `LIBRARY_PATH`、`ocloc`）请作者在 A10 上再跑一次，确认仍是 14/14。
 3. ~~`build.js` 加 `triton-ir` / `gluon` / `helion` / `ttgir-norun` 围栏，实测 CE 的 Triton 接口~~（已完成，见 §7.2）；~~`book.json`~~（已完成）。
-4. 批次 0 剩下的（§12）：minillm 包的骨架；`verify/` 的其余脚本（`verify-triton.sh` 读 `# arch:`，`CE=1` 模式走 CE API；`verify-minillm.sh`；`verify-outputs.py`）；本书的 `README.md`（首页）；附录 A。
+4. ~~minillm 包骨架~~（已完成：`code/minillm/`，`pip install -e '.[test]'`；`tests/test_env.py` 是环境冒烟测试）。~~`verify-triton.sh`、`verify-minillm.sh`~~（已完成，用法见 `verify/README.md`）。
+   - `verify-triton` 默认**离线**编译 `triton-ir` 块，用的是 `verify/triton_ir_local.py`：做法和 CE 一样，FakeTensor 加 mock driver，在本机用 3.9.0 编 NVIDIA / AMD 目标，**不需要对应的 GPU**。正文里的 `ttgir-norun` 块也用它来取 3.9.0 的真 IR。`CE=1` 时改走 CE 的 API。
+   - 两种模式都在 Max 1100 上测过：本机能跑的块通过，`sm90` 的块跳过，故意写错的块报失败。`triton-ir` 块覆盖了 NVIDIA、AMD、Gluon 三种情况；`# IR:` 写了不存在的一级时也会报错。
+   - 公司网络要走代理时，`CE=1` 需要 `https_proxy`。连不上时脚本会立刻报错退出，不会每个块都干等到超时。
+5. 批次 0 剩下的（§12）：`verify-outputs.py`（等第一章有「运行结果」块时再写，规则照 MLIR 书那份）；本书的 `README.md`（首页）；附录 A。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
 - 每本书自成一体，与本仓库其它书重复没关系（§1）。
