@@ -151,7 +151,9 @@ def _desc_ok(t):
 
 def _use_descriptor(a, b):
     # 只在 Intel GPU 上走 descriptor（第 8 章）；descriptor 在 kernel 里创建，原因见 _matmul_desc_dev_kernel
-    return DEVICE.type == "xpu" and b.shape[1] * a.element_size() % 16 == 0 and _desc_ok(a) and _desc_ok(b)
+    size = a.element_size()
+    return (DEVICE.type == "xpu" and b.shape[1] * size % 16 == 0 and a.shape[1] * size % 16 == 0
+            and _desc_ok(a) and _desc_ok(b))
 
 
 @triton_op("minillm::mm", mutates_args=())
@@ -164,7 +166,9 @@ def mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     if _use_descriptor(a, b):
         grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256),)     # 第 12 章：一维 grid + L2 swizzle
         wrap_triton(_mm._matmul_grouped_kernel)[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0),
-                                                      BLOCK_M=256, BLOCK_N=256, BLOCK_K=32, GROUP_M=8, num_warps=32)
+                                                      BLOCK_M=256, BLOCK_N=256, BLOCK_K=32, GROUP_M=8,
+                                                      HINT_ALIGN=_mm.needs_align_hint(N, K, a.stride(0), b.stride(0)),
+                                                      num_warps=32)
     else:
         grid = (triton.cdiv(M, 128), triton.cdiv(N, 128))
         wrap_triton(_mm._matmul_kernel)[grid](a, b, c, M, N, K, *a.stride(), *b.stride(), *c.stride(),

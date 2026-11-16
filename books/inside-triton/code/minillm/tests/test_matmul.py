@@ -100,3 +100,36 @@ def test_matmul_tuned(device):
         assert rel_err(matmul_tuned(a, b), a.double() @ b.double()) < TOL[torch.bfloat16]
     keys = [k for k in _matmul_tuned_kernel.cache if k[1:3] == (1024, 1024)]
     assert len(keys) == 1, f"同一个 M 分档应该只调优一次，实际：{keys}"
+
+
+import triton  # noqa: E402
+
+from minillm import DEVICE  # noqa: E402
+from minillm.kernels.matmul import _matmul_grouped_kernel  # noqa: E402
+
+
+@pytest.mark.skipif(DEVICE.type != "xpu", reason="ttig.block_io 是 Intel 后端的标注")
+def test_grouped_align_hint(device):
+    # 第 15 章：N = 3000 是 8 的倍数、不是 16 的倍数。不加 HINT_ALIGN，Intel 上 B、C 的读写会丢掉 2D block IO
+    a = torch.randn(3000, 512, device=device, dtype=torch.bfloat16)
+    b = torch.randn(512, 3000, device=device, dtype=torch.bfloat16)
+    torch.testing.assert_close(mm(a, b), a @ b, atol=0.5, rtol=0.05)
+    c = torch.empty(3000, 3000, device=device, dtype=torch.bfloat16)
+    k = _matmul_grouped_kernel[(triton.cdiv(3000, 256) ** 2,)](a, b, c, 3000, 3000, 512, 512, 3000, 3000,
+                                                               BLOCK_M=256, BLOCK_N=256, BLOCK_K=32, GROUP_M=8,
+                                                               HINT_ALIGN=True, num_warps=32)
+    assert k.asm["ttgir"].count('ttig.block_io = "row_major"') >= 3
+
+
+from minillm.kernels.matmul import matmul_persistent, prefer_descriptor  # noqa: E402
+
+
+@pytest.mark.skipif(not prefer_descriptor(), reason="persistent 版用的是 descriptor")
+@pytest.mark.parametrize("shape", [(512, 512, 512), (1000, 776, 1032), (3000, 3000, 64), (256, 4096, 128)])
+@pytest.mark.parametrize("num_progs", [None, 1, 7])
+def test_matmul_persistent(device, shape, num_progs):
+    # 第 15 章：每个 program 循环处理好几个 tile；num_progs=1 时一个 program 包揽全部，7 不整除 tile 数
+    M, N, K = shape
+    a = torch.randn(M, K, device=device, dtype=torch.bfloat16)
+    b = torch.randn(K, N, device=device, dtype=torch.bfloat16)
+    torch.testing.assert_close(matmul_persistent(a, b, num_progs=num_progs), a @ b, atol=0.5, rtol=0.05)

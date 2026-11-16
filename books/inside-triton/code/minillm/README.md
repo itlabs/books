@@ -35,7 +35,7 @@ bench/                 triton.testing.do_bench 的性能测量
 | ch10 | 全部包成 `torch.library` custom op | 完成（`minillm/ops.py`，`triton_op` + 反向） |
 | ch12 | `matmul` 改成一维 grid + L2 swizzle | 完成（`matmul_grouped`；Intel 上 `mm` 用它） |
 | ch14 | `matmul` 的 autotune | 完成（`matmul_tuned`：按 M 分档，用寄存器模型剪枝） |
-| ch15 | Hopper 及以上的特性 | 未开始 |
+| ch15 | persistent 版；`mm` 的对齐提示 | 完成（`matmul_persistent`；`HINT_ALIGN` 修掉 N = 3000 时的 16 TFLOP/s） |
 | ch16 | `matmul_fp8`、block-scaled | 未开始 |
 | ch17 | FlashAttention 前向 | 完成（`kernels/attention.py`、`ops.attention`；反向暂用 PyTorch） |
 | ch25 | Gluon 版 `matmul` | 未开始 |
