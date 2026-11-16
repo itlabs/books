@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 21 章 Layout 系统（二）：linear layout 与 convert_layout</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li class="active"><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 21 章 Layout 系统（二）：linear layout 与 convert_layout</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 20 章讲了五种 layout，每种有自己的参数：<code>sizePerThread</code>、<code>instrShape</code>、<code>vec</code>/<code>perPhase</code>……编译器要在它们之间转换，难道要为每一对写一套代码？Triton 的答案是 <strong>linear layout</strong>：所有 layout 都换算成同一种形式，一组「基」，转换、判断、优化都只对这一种形式做（<code>include/triton/Tools/LinearLayout.h</code>）。</p>
+<p>读完你会拿到三样东西。一是 linear layout 是什么：硬件位置的每一个二进制位对应一个坐标，其余靠异或推出来；读得懂 TTGIR 里的 <code>#ttg.linear&lt;{register = [[0, 1], ...], lane = ..., warp = ...}&gt;</code>，包括「基是 [0, 0]」意味着什么。二是 <code>convert_layout</code> 的三种实现，从源码（<code>lib/Analysis/Utility.cpp</code>）到实测：只换寄存器的编号，不花时间；在 warp 内换线程，用 shuffle，每次 1.1 微秒；跨 warp，经过 shared memory，每次 19.0 微秒，贵 17 倍（Max 1100，64 MiB 的数据；用 Gluon 精确地指定 layout 测出来的）。三是一个浏览器里的模拟器，判断任意两个 layout 之间的转换属于哪一种；它会告诉你，为什么第 17 章的 FlashAttention 在 Ampere 上，把 softmax 的结果喂给第二次 <code>tl.dot</code> 不需要搬任何数据。</p>
+</div><h2>用「基」描述一个 layout</h2>
+<p><code>LinearLayout.h</code> 开头有一大段注释，第一句话就是定义：</p>
+<blockquote>
+<p>a linear layout (LL) is a function that maps from a &quot;hardware location&quot; to a &quot;logical tensor index&quot;.</p>
+</blockquote>
+<p><strong>硬件位置</strong>是一个三元组：第几个寄存器、第几个线程（lane）、第几个 warp（还有一维 block，多 CTA 时才用，本书不涉及）。<strong>逻辑坐标</strong>就是张量的下标 (行, 列)。layout 就是从前者到后者的函数。</p>
+<p>关键在「线性」：不需要把整张表列出来，<strong>只要给出每个二进制位对应的坐标</strong>，其余的位置用异或算出来。比如 lane 5 = 二进制 101 = lane 1 ⊕ lane 4，它持有的坐标就是「lane 1 的坐标 ⊕ lane 4 的坐标」。每一维有几个二进制位，就给几个<strong>基</strong>（basis）。</p>
+<p>拿第 20 章那个 <code>tile2d</code> 的 <code>#blocked&lt;sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]&gt;</code>（64×64）换算一下：</p>
+<ul>
+<li><strong>寄存器</strong>：一个线程有 8 个连续的列，是 3 个二进制位，基是 (0, 1)、(0, 2)、(0, 4)；沿行重复 4 轮（第 0、16、32、48 行），又是 2 个位，基是 (16, 0)、(32, 0)。一共 5 个基，32 个寄存器。</li>
+<li><strong>线程</strong>：一行 8 个线程，每个往右 8 列：(0, 8)、(0, 16)、(0, 32)；4 行线程：(1, 0)、(2, 0)。一共 5 个基，32 个线程。</li>
+<li><strong>warp</strong>：4 个 warp 沿行排开，每个往下 4 行：(4, 0)、(8, 0)。</li>
+</ul>
+<p>检查一下：线程 w0.9（第 0 个 warp 的 9 号线程，9 = 1 + 8）持有的第一个元素在 (0, 8) ⊕ (1, 0) = (1, 8)，对照第 20 章模拟器的图，第 1 行、第 8 列开始的那一格正是 w0.9。</p>
+<p>TTGIR 里的 <code>#ttg.linear</code> 就是直接把这些基写出来。第 17 章的 FlashAttention 编到 sm_86，K 读进寄存器时用的是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">#linear = #ttg.linear&lt;{register = [[0, 1], [0, 8], [0, 16], [0, 32], [0, 64], [8, 0], [16, 0], [32, 0]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[0, 0], [0, 0], [0, 0]], block = []}&gt;</code></pre>
+</div><p>一个 64×128 的块：8 个寄存器基（256 个寄存器）、5 个线程基（32 个线程）、3 个 warp 基（8 个 warp）。注意 <strong>warp 的三个基全是 [0, 0]</strong>：不管哪个 warp，坐标都不变。也就是说，<strong>8 个 warp 持有完全相同的数据</strong>。这正是 FlashAttention 需要的：8 个 warp 各算 Q 的不同行，但每个 warp 都要用到整块 K。「基是零」就是 linear layout 表示「复制」的方式；第 20 章 <code>#slice</code> 里「8 个线程持有同一个结果」，换成 linear layout，也是有 3 个线程基为零。</p>
+<p>为什么要用异或？因为 GPU 上的映射几乎都是 2 的幂上的位操作，而第 20 章的 swizzle（列号和行号异或）恰好也是线性的。于是寄存器、shared memory、mma、swizzle，<strong>全都能写成同一种形式</strong>。<code>toLinearLayout()</code>（<code>lib/Dialect/TritonGPU/IR/LinearLayoutConversions.cpp</code>）负责把每一种具体的 layout 换算成基。</p>
+<h2>两个 layout 之间要搬什么</h2>
+<p>有了统一的形式，「从 layout A 转到 layout B 要搬哪些数据」就变成了一个代数问题。<code>minimalCvtLayout</code>（还是 <code>LinearLayoutConversions.cpp</code>）先算出 <code>dst.invertAndCompose(src)</code>，也就是 src⁻¹ ∘ dst（<code>LinearLayout.h</code> 的定义：<code>A.invertAndCompose(B)</code> 是 B⁻¹ ∘ A）：对 dst 的每一个硬件位置，它要的那个元素现在在 src 的哪个硬件位置。再从最慢的维度（warp）开始，把「位置没变」的维度去掉。剩下的维度，就是这次转换真正要动的地方。<code>lib/Analysis/Utility.cpp</code> 据此分成三种：</p>
+<table>
+<thead>
+<tr>
+<th>剩下的维度</th>
+<th>判断函数</th>
+<th>怎么实现</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>没有，或者只有 register</td>
+<td><code>cvtReordersRegisters</code></td>
+<td>只是寄存器换个编号：编译器在生成代码时直接用另一个寄存器，<strong>不产生任何指令</strong></td>
+</tr>
+<tr>
+<td>lane（但没有 warp）</td>
+<td><code>cvtNeedsWarpShuffle</code></td>
+<td>warp 内的线程交换数据：<strong>shuffle</strong> 指令</td>
+</tr>
+<tr>
+<td>warp</td>
+<td><code>cvtNeedsSharedMemory</code></td>
+<td>跨 warp：先写进 <strong>shared memory</strong>，同步，再按新 layout 读出来</td>
+</tr>
+</tbody></table>
+<p>（shuffle 那一档还有额外的条件：两个 layout 都得是「置换」，也就是没有复制；分解出来的交换步数不能太多。不满足就退回 shared memory。）</p>
+<p>在浏览器里试一试。下面的模拟器用基描述 layout，暴力地对 src 的每一个硬件位置，查它的元素在 dst 里由谁持有，看看动了哪几个维度，和 <code>minimalCvtLayout</code> 的思路一样（方向反过来，结论相同）。只用标准库，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20linear%20layout%EF%BC%9A%E7%94%A8%E3%80%8C%E5%9F%BA%E3%80%8D%E6%8F%8F%E8%BF%B0%E4%B8%80%E4%B8%AA%20layout%EF%BC%8C%E5%86%8D%E5%88%A4%E6%96%AD%E4%B8%80%E6%AC%A1%20convert_layout%20%E8%A6%81%E6%90%AC%E5%88%B0%E5%93%AA%E4%B8%80%E7%BA%A7%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0A%23%0A%23%20%E4%B8%80%E4%B8%AA%20layout%20%E6%8A%8A%E7%A1%AC%E4%BB%B6%E4%BD%8D%E7%BD%AE%EF%BC%88%E7%AC%AC%E5%87%A0%E4%B8%AA%E5%AF%84%E5%AD%98%E5%99%A8%E3%80%81%E7%AC%AC%E5%87%A0%E4%B8%AA%E7%BA%BF%E7%A8%8B%E3%80%81%E7%AC%AC%E5%87%A0%E4%B8%AA%20warp%EF%BC%89%E6%98%A0%E5%B0%84%E5%88%B0%E5%BC%A0%E9%87%8F%E5%9D%90%E6%A0%87%20(%E8%A1%8C%2C%20%E5%88%97)%E3%80%82%0A%23%20%E7%BA%BF%E6%80%A7%E7%9A%84%E6%84%8F%E6%80%9D%E6%98%AF%EF%BC%9A%E4%BD%8D%E7%BD%AE%E7%9A%84%E6%AF%8F%E4%B8%80%E4%B8%AA%E4%BA%8C%E8%BF%9B%E5%88%B6%E4%BD%8D%E5%AF%B9%E5%BA%94%E4%B8%80%E4%B8%AA%E3%80%8C%E5%9F%BA%E3%80%8D%E5%9D%90%E6%A0%87%EF%BC%8C%E4%BD%8D%E7%BD%AE%E7%9A%84%E5%9D%90%E6%A0%87%20%3D%20%E6%89%80%E6%9C%89%E4%B8%BA%201%20%E7%9A%84%E4%BD%8D%E7%9A%84%E5%9F%BA%E5%81%9A%E5%BC%82%E6%88%96%E3%80%82%0Afrom%20itertools%20import%20product%0A%0ADIMS%20%3D%20(%22register%22%2C%20%22lane%22%2C%20%22warp%22)%0A%0A%0Adef%20apply(layout%2C%20hw)%3A%0A%20%20%20%20r%20%3D%20c%20%3D%200%0A%20%20%20%20for%20dim%20in%20DIMS%3A%0A%20%20%20%20%20%20%20%20for%20bit%2C%20(br%2C%20bc)%20in%20enumerate(layout%5Bdim%5D)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20hw%5Bdim%5D%20%3E%3E%20bit%20%26%201%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20r%20%5E%3D%20br%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20c%20%5E%3D%20bc%0A%20%20%20%20return%20r%2C%20c%0A%0A%0Adef%20positions(layout)%3A%0A%20%20%20%20sizes%20%3D%20%5Brange(1%20%3C%3C%20len(layout%5Bd%5D))%20for%20d%20in%20DIMS%5D%0A%20%20%20%20return%20%5Bdict(zip(DIMS%2C%20p))%20for%20p%20in%20product(*sizes)%5D%0A%0A%0Adef%20classify(src%2C%20dst)%3A%0A%20%20%20%20%22%22%22%E4%BB%BF%E7%85%A7%20lib%2FAnalysis%2FUtility.cpp%EF%BC%9A%E6%95%B0%E6%8D%AE%E8%A6%81%E4%B8%8D%E8%A6%81%E6%8D%A2%E5%AF%84%E5%AD%98%E5%99%A8%E3%80%81%E6%8D%A2%E7%BA%BF%E7%A8%8B%E3%80%81%E6%8D%A2%20warp%E3%80%82%22%22%22%0A%20%20%20%20holders%20%3D%20%7B%7D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%9D%90%E6%A0%87%20%E2%86%92%20dst%20%E9%87%8C%E6%8C%81%E6%9C%89%E5%AE%83%E7%9A%84%E6%89%80%E6%9C%89%E4%BD%8D%E7%BD%AE%0A%20%20%20%20for%20hw%20in%20positions(dst)%3A%0A%20%20%20%20%20%20%20%20holders.setdefault(apply(dst%2C%20hw)%2C%20%5B%5D).append(hw)%0A%20%20%20%20moved%20%3D%20set()%0A%20%20%20%20for%20hw%20in%20positions(src)%3A%0A%20%20%20%20%20%20%20%20options%20%3D%20holders%5Bapply(src%2C%20hw)%5D%0A%20%20%20%20%20%20%20%20best%20%3D%20min(options%2C%20key%3Dlambda%20h%3A%20(h%5B%22warp%22%5D%20!%3D%20hw%5B%22warp%22%5D%2C%20h%5B%22lane%22%5D%20!%3D%20hw%5B%22lane%22%5D%2C%20h%5B%22register%22%5D%20!%3D%20hw%5B%22register%22%5D))%0A%20%20%20%20%20%20%20%20for%20dim%20in%20DIMS%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20best%5Bdim%5D%20!%3D%20hw%5Bdim%5D%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20moved.add(dim)%0A%20%20%20%20if%20%22warp%22%20in%20moved%3A%0A%20%20%20%20%20%20%20%20return%20%22%E8%B7%A8%20warp%EF%BC%9A%E8%A6%81%E7%BB%8F%E8%BF%87%20shared%20memory%22%0A%20%20%20%20if%20%22lane%22%20in%20moved%3A%0A%20%20%20%20%20%20%20%20return%20%22%E5%9C%A8%20warp%20%E5%86%85%E6%8D%A2%E7%BA%BF%E7%A8%8B%EF%BC%9A%E7%94%A8%20shuffle%22%0A%20%20%20%20if%20%22register%22%20in%20moved%3A%0A%20%20%20%20%20%20%20%20return%20%22%E5%8F%AA%E6%98%AF%E5%AF%84%E5%AD%98%E5%99%A8%E9%87%8D%E6%96%B0%E7%BC%96%E5%8F%B7%EF%BC%9A%E4%B8%8D%E7%94%A8%E6%90%AC%E6%95%B0%E6%8D%AE%22%0A%20%20%20%20return%20%22%E5%AE%8C%E5%85%A8%E4%B8%80%E6%A0%B7%EF%BC%9A%E4%BB%80%E4%B9%88%E9%83%BD%E4%B8%8D%E7%94%A8%E5%81%9A%22%0A%0A%0Adef%20L(register%2C%20lane%2C%20warp)%3A%0A%20%20%20%20return%20%7B%22register%22%3A%20register%2C%20%22lane%22%3A%20lane%2C%20%22warp%22%3A%20warp%7D%0A%0A%0A%23%20%E2%91%A0%20%E7%AC%AC%2021%20%E7%AB%A0%20Gluon%20%E5%AE%9E%E9%AA%8C%E9%87%8C%E7%9A%84%E5%9B%9B%E7%A7%8D%E8%BD%AC%E6%8D%A2%EF%BC%8864%C3%9764%EF%BC%8C4%20%E4%B8%AA%20warp%EF%BC%8C%E6%AF%8F%E4%B8%AA%20warp%2032%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%EF%BC%89%0AREG%20%3D%20%5B(0%2C%201)%2C%20(0%2C%202)%2C%20(0%2C%2032)%2C%20(16%2C%200)%2C%20(32%2C%200)%5D%0ALANE%20%3D%20%5B(0%2C%204)%2C%20(0%2C%208)%2C%20(0%2C%2016)%2C%20(1%2C%200)%2C%20(2%2C%200)%5D%0AWARP%20%3D%20%5B(4%2C%200)%2C%20(8%2C%200)%5D%0ASRC%20%3D%20L(REG%2C%20LANE%2C%20WARP)%0Aprint(%22%E2%91%A0%20%E4%BB%8E%E5%9F%BA%E5%87%86%20layout%20%E8%BD%AC%E5%88%B0%EF%BC%9A%22)%0Afor%20name%2C%20dst%20in%20((%22%E5%90%8C%E4%B8%80%E4%B8%AA%20layout%22%2C%20SRC)%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22%E5%8F%AA%E6%8D%A2%E5%AF%84%E5%AD%98%E5%99%A8%E7%9A%84%E9%A1%BA%E5%BA%8F%22%2C%20L(%5BREG%5B1%5D%2C%20REG%5B0%5D%5D%20%2B%20REG%5B2%3A%5D%2C%20LANE%2C%20WARP))%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22%E5%AF%84%E5%AD%98%E5%99%A8%E5%92%8C%E7%BA%BF%E7%A8%8B%E4%BA%A4%E6%8D%A2%E4%B8%80%E7%BB%B4%22%2C%20L(%5BLANE%5B0%5D%5D%20%2B%20REG%5B1%3A%5D%2C%20%5BREG%5B0%5D%5D%20%2B%20LANE%5B1%3A%5D%2C%20WARP))%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20(%22%E7%BA%BF%E7%A8%8B%E5%92%8C%20warp%20%E4%BA%A4%E6%8D%A2%E4%B8%80%E7%BB%B4%22%2C%20L(REG%2C%20LANE%5B%3A3%5D%20%2B%20%5BWARP%5B0%5D%5D%20%2B%20LANE%5B4%3A%5D%2C%20%5BLANE%5B3%5D%5D%20%2B%20WARP%5B1%3A%5D)))%3A%0A%20%20%20%20print(f%22%20%20%7Bname%3A12%7D%20%E2%86%92%20%7Bclassify(SRC%2C%20dst)%7D%22)%0A%0A%23%20%E2%91%A1%20FlashAttention%EF%BC%88%E7%AC%AC%2017%20%E7%AB%A0%EF%BC%89%E5%9C%A8%20sm_86%20%E4%B8%8A%E7%9A%84%E4%B8%A4%E6%AC%A1%20convert_layout%E3%80%82%0A%23%20mma.sync%20m16n8%20%E7%9A%84%E7%B4%AF%E5%8A%A0%E5%99%A8%EF%BC%88PTX%20ISA%EF%BC%89%EF%BC%9A%E7%BA%BF%E7%A8%8B%20t%20%E6%8C%81%E6%9C%89%E7%AC%AC%20t%2F4%20%E8%A1%8C%E3%80%81%E7%AC%AC%202%C2%B7(t%254)%20%E5%92%8C%20%2B1%20%E5%88%97%EF%BC%8C%E4%BB%A5%E5%8F%8A%E4%B8%8B%E9%9D%A2%E7%AC%AC%208%20%E8%A1%8C%E3%80%82%0A%23%2016%C3%9716%20%E7%9A%84%20P%20%E7%94%B1%E4%B8%A4%E6%9D%A1%20m16n8%20%E6%8B%BC%E6%88%90%EF%BC%9A%E7%AC%AC%E4%B8%89%E4%B8%AA%E5%AF%84%E5%AD%98%E5%99%A8%E5%9F%BA%E6%98%AF%E3%80%8C%E5%8F%B3%E8%BE%B9%E9%82%A3%E4%B8%80%E6%9D%A1%E3%80%8D%E3%80%82%0AACC_16x16%20%3D%20L(%5B(0%2C%201)%2C%20(8%2C%200)%2C%20(0%2C%208)%5D%2C%20%5B(0%2C%202)%2C%20(0%2C%204)%2C%20(1%2C%200)%2C%20(2%2C%200)%2C%20(4%2C%200)%5D%2C%20%5B%5D)%0A%23%20mma.sync%20m16n8k16%20%E7%9A%84%20A%20%E6%93%8D%E4%BD%9C%E6%95%B0%EF%BC%88fp16%EF%BC%8CPTX%20ISA%EF%BC%89%EF%BC%9Aa0..a7%20%E4%BE%9D%E6%AC%A1%E6%98%AF%20(%E8%A1%8C%2C%20%E5%88%97)%E3%80%81(%E8%A1%8C%2C%20%E5%88%97%2B1)%E3%80%81(%E8%A1%8C%2B8%2C%20%E2%80%A6)%E3%80%81(%E2%80%A6%2C%20%E5%88%97%2B8)%0AA_16x16%20%3D%20L(%5B(0%2C%201)%2C%20(8%2C%200)%2C%20(0%2C%208)%5D%2C%20%5B(0%2C%202)%2C%20(0%2C%204)%2C%20(1%2C%200)%2C%20(2%2C%200)%2C%20(4%2C%200)%5D%2C%20%5B%5D)%0Aprint(%22%E2%91%A1%20FlashAttention%20%E9%87%8C%20P%20%E4%BB%8E%E7%B4%AF%E5%8A%A0%E5%99%A8%E5%8F%98%E6%88%90%E7%AC%AC%E4%BA%8C%E6%AC%A1%20tl.dot%20%E7%9A%84%20A%20%E6%93%8D%E4%BD%9C%E6%95%B0%EF%BC%9A%22%20%2B%20classify(ACC_16x16%2C%20A_16x16))%0A%23%20%E8%BE%93%E5%87%BA%E4%BB%8E%20%23mma%EF%BC%88warpsPerCTA%20%3D%20%5B8%2C%201%5D%EF%BC%8C%E6%AF%8F%E4%B8%AA%20warp%2016%20%E8%A1%8C%EF%BC%89%E8%BD%AC%E6%88%90%20store%20%E7%94%A8%E7%9A%84%20%23blocked%3C%5B1%2C8%5D%2C%5B2%2C16%5D%2C%5B8%2C1%5D%3E%EF%BC%8C128%C3%97128%0AMMA_OUT%20%3D%20L(%5B(0%2C%201)%2C%20(8%2C%200)%2C%20(0%2C%208)%2C%20(0%2C%2016)%2C%20(0%2C%2032)%2C%20(0%2C%2064)%5D%2C%20%5B(0%2C%202)%2C%20(0%2C%204)%2C%20(1%2C%200)%2C%20(2%2C%200)%2C%20(4%2C%200)%5D%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%5B(16%2C%200)%2C%20(32%2C%200)%2C%20(64%2C%200)%5D)%0ABLOCKED_OUT%20%3D%20L(%5B(0%2C%201)%2C%20(0%2C%202)%2C%20(0%2C%204)%2C%20(16%2C%200)%2C%20(32%2C%200)%2C%20(64%2C%200)%5D%2C%20%5B(0%2C%208)%2C%20(0%2C%2016)%2C%20(0%2C%2032)%2C%20(0%2C%2064)%2C%20(1%2C%200)%5D%2C%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%5B(2%2C%200)%2C%20(4%2C%200)%2C%20(8%2C%200)%5D)%0Aprint(%22%20%20%20%E8%BE%93%E5%87%BA%E4%BB%8E%20%23mma%20%E8%BD%AC%E6%88%90%20%23blocked%20%E5%86%8D%E5%86%99%E5%9B%9E%E6%98%BE%E5%AD%98%EF%BC%9A%22%20%2B%20classify(MMA_OUT%2C%20BLOCKED_OUT))"># linear layout：用「基」描述一个 layout，再判断一次 convert_layout 要搬到哪一级。只用标准库。
+#
+# 一个 layout 把硬件位置（第几个寄存器、第几个线程、第几个 warp）映射到张量坐标 (行, 列)。
+# 线性的意思是：位置的每一个二进制位对应一个「基」坐标，位置的坐标 = 所有为 1 的位的基做异或。
+from itertools import product
+
+DIMS = ("register", "lane", "warp")
+
+
+def apply(layout, hw):
+    r = c = 0
+    for dim in DIMS:
+        for bit, (br, bc) in enumerate(layout[dim]):
+            if hw[dim] &gt;&gt; bit &amp; 1:
+                r ^= br
+                c ^= bc
+    return r, c
+
+
+def positions(layout):
+    sizes = [range(1 &lt;&lt; len(layout[d])) for d in DIMS]
+    return [dict(zip(DIMS, p)) for p in product(*sizes)]
+
+
+def classify(src, dst):
+    """仿照 lib/Analysis/Utility.cpp：数据要不要换寄存器、换线程、换 warp。"""
+    holders = {}                                       # 坐标 → dst 里持有它的所有位置
+    for hw in positions(dst):
+        holders.setdefault(apply(dst, hw), []).append(hw)
+    moved = set()
+    for hw in positions(src):
+        options = holders[apply(src, hw)]
+        best = min(options, key=lambda h: (h["warp"] != hw["warp"], h["lane"] != hw["lane"], h["register"] != hw["register"]))
+        for dim in DIMS:
+            if best[dim] != hw[dim]:
+                moved.add(dim)
+    if "warp" in moved:
+        return "跨 warp：要经过 shared memory"
+    if "lane" in moved:
+        return "在 warp 内换线程：用 shuffle"
+    if "register" in moved:
+        return "只是寄存器重新编号：不用搬数据"
+    return "完全一样：什么都不用做"
+
+
+def L(register, lane, warp):
+    return {"register": register, "lane": lane, "warp": warp}
+
+
+# ① 第 21 章 Gluon 实验里的四种转换（64×64，4 个 warp，每个 warp 32 个线程）
+REG = [(0, 1), (0, 2), (0, 32), (16, 0), (32, 0)]
+LANE = [(0, 4), (0, 8), (0, 16), (1, 0), (2, 0)]
+WARP = [(4, 0), (8, 0)]
+SRC = L(REG, LANE, WARP)
+print("① 从基准 layout 转到：")
+for name, dst in (("同一个 layout", SRC),
+                  ("只换寄存器的顺序", L([REG[1], REG[0]] + REG[2:], LANE, WARP)),
+                  ("寄存器和线程交换一维", L([LANE[0]] + REG[1:], [REG[0]] + LANE[1:], WARP)),
+                  ("线程和 warp 交换一维", L(REG, LANE[:3] + [WARP[0]] + LANE[4:], [LANE[3]] + WARP[1:]))):
+    print(f"  {name:12} → {classify(SRC, dst)}")
+
+# ② FlashAttention（第 17 章）在 sm_86 上的两次 convert_layout。
+# mma.sync m16n8 的累加器（PTX ISA）：线程 t 持有第 t/4 行、第 2·(t%4) 和 +1 列，以及下面第 8 行。
+# 16×16 的 P 由两条 m16n8 拼成：第三个寄存器基是「右边那一条」。
+ACC_16x16 = L([(0, 1), (8, 0), (0, 8)], [(0, 2), (0, 4), (1, 0), (2, 0), (4, 0)], [])
+# mma.sync m16n8k16 的 A 操作数（fp16，PTX ISA）：a0..a7 依次是 (行, 列)、(行, 列+1)、(行+8, …)、(…, 列+8)
+A_16x16 = L([(0, 1), (8, 0), (0, 8)], [(0, 2), (0, 4), (1, 0), (2, 0), (4, 0)], [])
+print("② FlashAttention 里 P 从累加器变成第二次 tl.dot 的 A 操作数：" + classify(ACC_16x16, A_16x16))
+# 输出从 #mma（warpsPerCTA = [8, 1]，每个 warp 16 行）转成 store 用的 #blocked&lt;[1,8],[2,16],[8,1]&gt;，128×128
+MMA_OUT = L([(0, 1), (8, 0), (0, 8), (0, 16), (0, 32), (0, 64)], [(0, 2), (0, 4), (1, 0), (2, 0), (4, 0)],
+            [(16, 0), (32, 0), (64, 0)])
+BLOCKED_OUT = L([(0, 1), (0, 2), (0, 4), (16, 0), (32, 0), (64, 0)], [(0, 8), (0, 16), (0, 32), (0, 64), (1, 0)],
+                [(2, 0), (4, 0), (8, 0)])
+print("   输出从 #mma 转成 #blocked 再写回显存：" + classify(MMA_OUT, BLOCKED_OUT))</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">① 从基准 layout 转到：
+  同一个 layout   → 完全一样：什么都不用做
+  只换寄存器的顺序     → 只是寄存器重新编号：不用搬数据
+  寄存器和线程交换一维   → 在 warp 内换线程：用 shuffle
+  线程和 warp 交换一维 → 跨 warp：要经过 shared memory
+② FlashAttention 里 P 从累加器变成第二次 tl.dot 的 A 操作数：完全一样：什么都不用做
+   输出从 #mma 转成 #blocked 再写回显存：跨 warp：要经过 shared memory</code></pre>
+</div><p>第 ① 部分是四种人为构造的转换：基准 layout 每个线程 4 个相邻的列，32 个线程排成 4 行 × 8 列，4 个 warp 沿行排开；然后分别交换两个寄存器基、交换一个寄存器基和一个线程基、交换一个线程基和一个 warp 基。下一节在真机上测它们。</p>
+<p>第 ② 部分是第 17 章那个编到 sm_86 的指针版 FlashAttention（128 × 64，8 个 warp），最终 TTGIR 里仅剩的两次 <code>convert_layout</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">%acc_94 = ttg.convert_layout %acc_90 : tensor&lt;128x64xf16, #mma&gt; -&gt; tensor&lt;128x64xf16, #ttg.dot_op&lt;{opIdx = 0, parent = #mma, kWidth = 2}&gt;&gt;
+%9 = ttg.convert_layout %8 : tensor&lt;128x128xf16, #mma&gt; -&gt; tensor&lt;128x128xf16, #blocked&gt;</code></pre>
+</div><ul>
+<li>第一次在循环里：softmax 的结果 P 还在第一次 <code>tl.dot</code> 的累加器 layout（<code>#mma</code>）上，要变成第二次 <code>tl.dot</code> 的 A 操作数（<code>#dot_op</code>）。模拟器按 PTX 指令集手册里 <code>mma.sync m16n8k16</code> 的 fragment 排布写出两个 layout 的基，结论是<strong>完全一样</strong>：两条相邻的 m16n8 指令的累加器，拼起来恰好就是一条 m16n8k16 的 A 操作数（fp16，<code>kWidth = 2</code>）。所以这次转换什么都不用做。这是 FlashAttention 能在 Ampere 上高效运行的一个关键巧合：如果这里要经过 shared memory，循环里每一轮都要多一次往返。</li>
+<li>第二次在循环外，把输出转成写回显存用的 <code>#blocked</code>：warp 的基从「每个 warp 16 行」变成了「每个 warp 2 行」，要跨 warp，经过 shared memory。但它只在最后做一次，代价摊得很薄。</li>
+</ul>
+<h2>真机上测三种转换</h2>
+<p>第 ① 部分那四种转换，能在真机上测吗？用 Triton 写不行：layout 是编译器选的，你没法指定「我要这个 layout」。但 <strong>Gluon</strong>（第 24、25 章）可以：它是 Triton 的下一层，layout 由你写明。下面先借用一下，用 <code>ttgl.DistributedLinearLayout</code> 直接给出基，让一个张量在两个 layout 之间来回转 64 次，每次中间加 1，免得被编译器优化掉：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Gluon (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import re
+import time
+
+import torch
+import triton
+from triton.experimental import gluon
+from triton.experimental.gluon import language as ttgl
+from minillm import DEVICE
+
+N = 64
+
+
+@gluon.jit
+def roundtrip(x_ptr, y_ptr, SRC: ttgl.constexpr, DST: ttgl.constexpr, N: ttgl.constexpr, REPS: ttgl.constexpr):
+    base = ttgl.program_id(0) * N * N
+    r = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, SRC))
+    c = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, SRC))
+    offs = base + r[:, None] * N + c[None, :]
+    x = ttgl.load(x_ptr + offs)
+    for _ in range(REPS):
+        x = ttgl.convert_layout(ttgl.convert_layout(x, DST) + 1.0, SRC)   # 去一趟、加 1、再回来
+    ttgl.store(y_ptr + offs, x)
+
+
+def ll(reg, lane, warp):
+    return ttgl.DistributedLinearLayout(reg_bases=reg, lane_bases=lane, warp_bases=warp, block_bases=[], shape=[N, N])
+
+
+# 基准 layout：每个线程 4 个相邻的列；一个 warp 32 个线程排成 4 行 × 8 列；4 个 warp 沿行排开
+REG = [[0, 1], [0, 2], [0, 32], [16, 0], [32, 0]]
+LANE = [[0, 4], [0, 8], [0, 16], [1, 0], [2, 0]]
+WARP = [[4, 0], [8, 0]]
+SRC = ll(REG, LANE, WARP)
+DSTS = {
+    "同一个 layout": SRC,
+    "只换寄存器的顺序": ll([REG[1], REG[0]] + REG[2:], LANE, WARP),
+    "寄存器和线程交换一维": ll([LANE[0]] + REG[1:], [REG[0]] + LANE[1:], WARP),
+    "线程和 warp 交换一维": ll(REG, LANE[:3] + [WARP[0]] + LANE[4:], [LANE[3]] + WARP[1:]),
+}
+progs = 4096                                   # 4096 个 program，每个 64×64 个 fp32：一共 64 MiB
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，triton {triton.__version__}，64×64 fp32，4 个 warp，{progs} 个 program")
+x = torch.randn(progs * N * N, device=DEVICE)
+y = torch.empty_like(x)
+for name, dst in DSTS.items():
+    ts = {}
+    for reps in (0, 64):
+        f = lambda: roundtrip[(progs,)](x, y, SRC, dst, N, reps, num_warps=4)
+        k = f()
+        torch.testing.assert_close(y, x + reps)
+        time.sleep(1)
+        ts[reps] = triton.testing.do_bench(f)
+    shuffles = len(re.findall(r"shuffle|shfl", k.asm["llir"], flags=re.I))
+    per = (ts[64] - ts[0]) / (64 * 2) * 1e3                  # 一次 convert_layout（加上一次加法），微秒
+    print(f"  {name:12}  shared memory {k.metadata.shared:5} 字节  LLVM IR 里 shuffle {shuffles:3} 处  "
+          f"每次 {per:6.2f} 微秒", flush=True)</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；Gluon 在 triton.experimental 下，API 随版本变</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，64×64 fp32，4 个 warp，4096 个 program
+  同一个 layout    shared memory     0 字节  LLVM IR 里 shuffle   0 处  每次   0.13 微秒
+  只换寄存器的顺序      shared memory     0 字节  LLVM IR 里 shuffle   0 处  每次   0.10 微秒
+  寄存器和线程交换一维    shared memory     0 字节  LLVM IR 里 shuffle  35 处  每次   1.12 微秒
+  线程和 warp 交换一维  shared memory  2048 字节  LLVM IR 里 shuffle   0 处  每次  18.96 微秒</code></pre>
+</div><p>和模拟器的判断一致，三档的代价差了两个数量级：</p>
+<ul>
+<li><strong>只换寄存器的编号</strong>和「同一个 layout」一样快。0.1 微秒左右是循环里那次加法的时间，转换本身没有代价，LLVM IR 里也找不到任何搬数据的指令。</li>
+<li><strong>warp 内换线程</strong>：LLVM IR 里出现了 35 处 shuffle，每次 1.1 微秒，大约是加法的 10 倍。</li>
+<li><strong>跨 warp</strong>：用了 2048 字节的 shared memory，每次 19.0 微秒，比 shuffle 又贵了 17 倍。（2048 字节比整个张量小得多：编译器分几批交换，每批用同一块缓冲区。）这次转换搬的是 64 MiB 的数据，相当于读一遍、写一遍显存的时间的十分之一左右。在一个访存受限的 kernel 里多一次这样的转换，可能就是 10% 的性能。</li>
+</ul>
+<p>同样的四个 kernel 用 3.9.0 离线编到 sm_86，分类完全相同：第二种 PTX 里没有 shuffle 也没有 shared memory；第三种有 32 条 <code>shfl.sync</code>；第四种用 2048 字节 shared memory，16 条 <code>st.shared</code>。</p>
+<h2>编译器怎样减少转换</h2>
+<p>既然跨 warp 的转换这么贵，编译器就要想办法少做。主力是 <code>tritongpu-remove-layout-conversions</code>（Intel 有自己的一份 <code>TritonIntelGPURemoveLayoutConversions</code>）。它做的事情大致是：从那些 layout 定死了的 op（<code>tt.dot</code> 的结果必须是 <code>#mma</code>，<code>tt.load</code> 最好是 coalesce 选的那个）出发，把 layout 沿着数据流向前、向后传播，让中间的逐元素运算直接在需要的 layout 上算；必要时把一些便宜的运算<strong>重算一遍</strong>（rematerialization），而不是把结果转过去。</p>
+<p>在同一个 FlashAttention kernel（sm_86）上，用 <code>MLIR_ENABLE_DUMP</code>（第 18 章）数一数每个 pass 之前 IR 里有多少个 <code>ttg.convert_layout</code>：</p>
+<table>
+<thead>
+<tr>
+<th>时机</th>
+<th align="right"><code>convert_layout</code> 的个数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>convert-triton-to-tritongpu</code> 之后</td>
+<td align="right">31</td>
+</tr>
+<tr>
+<td><code>coalesce</code> 之后</td>
+<td align="right">39</td>
+</tr>
+<tr>
+<td>第一次 <code>remove-layout-conversions</code> 之后</td>
+<td align="right">7</td>
+</tr>
+<tr>
+<td><code>accelerate-matmul</code> 之后（<code>tt.dot</code> 换成 <code>#mma</code>，插入到 <code>#dot_op</code> 的转换）</td>
+<td align="right">15</td>
+</tr>
+<tr>
+<td>第二次 <code>remove-layout-conversions</code> 之后</td>
+<td align="right">5</td>
+</tr>
+<tr>
+<td>最终的 TTGIR</td>
+<td align="right">2</td>
+</tr>
+</tbody></table>
+<p><code>convert-triton-to-tritongpu</code> 和 <code>coalesce</code>、<code>accelerate-matmul</code> 这些 pass 只管「我这个 op 想要什么 layout」，不管全局，需要时就插一个转换；<code>remove-layout-conversions</code> 再回过头来清理。sm_86 的流水线里它一共跑了四次。最终剩下的两个，就是上一节分析的那两个：一个不用搬数据，一个在循环外只做一次。</p>
+<p>这也给了一个读 IR 的检查清单：<strong>看 TTGIR 里还剩哪些 <code>convert_layout</code>，它们在不在循环里，属于三档中的哪一档</strong>。在循环里、又要经过 shared memory 的那种，最值得怀疑。下一章用这个思路，回到第 17 章那个没有解释的现象。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>在模拟器里构造一个 shuffle 不了的转换。</strong> 让 dst 有一个线程基为 [0, 0]（两个线程持有同一个数据，也就是复制），从 SRC 转过去，模拟器怎么判断？<code>Utility.cpp</code> 里 <code>isPermutationMatrixLayout</code> 那个条件是在防什么？</li>
+<li><strong>测 shuffle 和 shared memory 的分界。</strong> 在 Gluon 实验里，把「寄存器和线程交换一维」改成交换两维、三维（把更多的寄存器基和线程基对调）。shuffle 的条数怎么变？交换到第几维时，编译器改用了 shared memory？</li>
+<li><strong>找你自己 kernel 里的转换。</strong> 用第 12 章的 <code>_matmul_grouped_kernel</code> 或者第 6 章的 softmax，在你的 GPU 上看最终的 TTGIR 里有几个 <code>convert_layout</code>，各在哪里，用模拟器的思路判断它们属于哪一档。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>linear layout（<code>include/triton/Tools/LinearLayout.h</code>）：把（寄存器, 线程, warp）映射到张量坐标，每个二进制位一个「基」，其余位置靠异或。所有 layout（blocked、slice、mma、dot_op、swizzled shared）都能换算成它（<code>toLinearLayout()</code>）。基为 [0, 0] 表示复制：第 17 章 sm_86 上 K 的 <code>#linear</code> 里 warp 基全是零，8 个 warp 持有同一块 K。</li>
+<li><code>convert_layout</code> 的三档（<code>lib/Analysis/Utility.cpp</code>）：算出 <code>src⁻¹ ∘ dst</code>、去掉不变的维度之后，只剩寄存器 → 不产生指令；剩下线程 → warp 内 shuffle；剩下 warp → 经过 shared memory。Max 1100 上实测（64 MiB，Gluon 指定 layout）：约 0、1.1、19.0 微秒；sm_86 上的分类相同。</li>
+<li>FlashAttention 在 Ampere 上：P 从 <code>#mma</code> 累加器转成 <code>#dot_op</code> 的 A 操作数，基完全相同，不用搬数据；输出转 <code>#blocked</code> 要跨 warp，但只在循环外做一次。</li>
+<li><code>remove-layout-conversions</code> 沿数据流传播 layout、必要时重算，把转换压到最少：FlashAttention 在 sm_86 上从 39 个降到 2 个。读 TTGIR 时，留意循环里那些要经过 shared memory 的转换。</li>
+</ul>
+<p>下一章挑几个关键的 pass 细看：coalesce、accelerate-matmul、remove-layout-conversions、pipeliner，以及 Intel 的 <code>ReduceVariableLiveness</code>，并用读 IR 的办法，解释第 17 章里「因果 attention 关掉一个 pass 反而快了 24%」。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch20.html">← 第 20 章 Layout 系统（一）</a>
+  <a class="nav-next" href="ch22.html">第 22 章 关键 pass 与性能定位 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

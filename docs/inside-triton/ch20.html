@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 20 章 Layout 系统（一）</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li class="active"><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 20 章 Layout 系统（一）</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 18 章看到，从 TTIR 到 TTGIR，op 几乎不变，变的是张量的类型：<code>tensor&lt;256xf32&gt;</code> 变成了 <code>tensor&lt;256xf32, #blocked&gt;</code>。后面那个 <code>#blocked</code> 就是 <strong>layout</strong>：它说明这个张量的每一个元素放在哪个 warp、哪个线程的哪个寄存器里（或者 shared memory 的哪个位置）。TTIR 里的「一块」只是一个数学上的数组，TTGIR 里它才真正落到硬件上。</p>
+<p>读完你会拿到三样东西。一是五种 layout 各自描述了什么：<code>#blocked</code>（逐元素运算和访存）、<code>#slice</code>（归约以后）、<code>#mma</code> / <code>#ttig.dpas</code>（矩阵单元的累加器）、<code>#dot_op</code>（矩阵单元的输入）、<code>#shared</code>（shared memory 里的排布），每种都配一个 3.9.0 的真实例子，sm_86 和 Max 1100 并排。二是一个浏览器里能跑的模拟器：把 TTGIR 里的参数抄进去，画出每个元素归谁；它会告诉你一个 64×64 的 fp16 块，每个线程恰好读 16 字节；<code>tl.max(x, axis=1)</code> 的结果被 8 个线程同时持有；NVIDIA 和 Intel 的矩阵单元，累加器的分法截然不同。三是 swizzle：同样是读 8 行，不做 swizzle 时 8 行全挤在同一个 bank 上，做了以后一个 bank 一行。</p>
+</div><h2>为什么需要 layout</h2>
+<p>GPU 上没有「一个 1024 个元素的张量」这种东西，只有线程和它们的寄存器。一个 program 有 <code>num_warps × 每个 warp 的线程数</code> 个线程（第 2 章），张量的每一个元素都必须落在其中某个（或某几个）线程的某个寄存器里，或者放在 shared memory 里。<strong>layout 就是这个映射</strong>：给定一个元素的坐标，说出它在哪个 warp、哪个线程、第几个寄存器。</p>
+<p>为什么要把它写进 IR，而不是在最后生成代码时再定？因为它决定了几乎所有的性能：</p>
+<ul>
+<li><strong>访存</strong>：一个线程持有的元素在内存里连不连续，决定了能不能用一条向量指令读 16 字节（第 5 章的合并访存）。</li>
+<li><strong>矩阵单元</strong>：<code>mma.sync</code>、<code>wgmma</code>、DPAS 都规定了输入、输出必须以什么方式分布在线程上，错了就用不了。</li>
+<li><strong>归约</strong>：沿某一维求和，参与的线程是在同一个 warp 里（用 shuffle，很快），还是跨 warp（要经过 shared memory）。</li>
+</ul>
+<p>不同的 op 想要不同的 layout，而 layout 不同的两个张量不能直接运算，中间要插一个 <code>ttg.convert_layout</code> 搬数据，这是要花代价的（第 21 章）。所以编译器要在整个 kernel 的范围内权衡：<strong>给每个张量选一个 layout，让需要转换的地方尽量少</strong>。这正是 TTGIR 这一级存在的理由。</p>
+<p>下面这个 kernel 有三个函数，分别对应本章的三类 layout：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton → TTGIR</span>
+    <a class="ce-btn" href="https://godbolt.org/#%7B%22version%22%3A4%2C%22content%22%3A%5B%7B%22type%22%3A%22row%22%2C%22content%22%3A%5B%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22codeEditor%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22source%22%3A%22%23%20IR%3A%20ttgir%5Cnimport%20torch%5Cnimport%20triton%5Cnimport%20triton.language%20as%20tl%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20tile2d(x_ptr%2C%20y_ptr%2C%20stride%2C%20BM%3A%20tl.constexpr%2C%20BN%3A%20tl.constexpr)%3A%5Cn%20%20%20%20r%20%3D%20tl.arange(0%2C%20BM)%5B%3A%2C%20None%5D%5Cn%20%20%20%20c%20%3D%20tl.arange(0%2C%20BN)%5BNone%2C%20%3A%5D%5Cn%20%20%20%20tl.store(y_ptr%20%2B%20r%20*%20stride%20%2B%20c%2C%20tl.load(x_ptr%20%2B%20r%20*%20stride%20%2B%20c)%20*%202)%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20rowmax(x_ptr%2C%20y_ptr%2C%20stride%2C%20BM%3A%20tl.constexpr%2C%20BN%3A%20tl.constexpr)%3A%5Cn%20%20%20%20r%20%3D%20tl.arange(0%2C%20BM)%5Cn%20%20%20%20c%20%3D%20tl.arange(0%2C%20BN)%5Cn%20%20%20%20x%20%3D%20tl.load(x_ptr%20%2B%20r%5B%3A%2C%20None%5D%20*%20stride%20%2B%20c%5BNone%2C%20%3A%5D)%5Cn%20%20%20%20tl.store(y_ptr%20%2B%20r%2C%20tl.max(x%2C%20axis%3D1))%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20dot(a_ptr%2C%20b_ptr%2C%20c_ptr%2C%20M%3A%20tl.constexpr%2C%20N%3A%20tl.constexpr%2C%20K%3A%20tl.constexpr)%3A%5Cn%20%20%20%20m%20%3D%20tl.arange(0%2C%20M)%5Cn%20%20%20%20n%20%3D%20tl.arange(0%2C%20N)%5Cn%20%20%20%20k%20%3D%20tl.arange(0%2C%20K)%5Cn%20%20%20%20a%20%3D%20tl.load(a_ptr%20%2B%20m%5B%3A%2C%20None%5D%20*%20K%20%2B%20k%5BNone%2C%20%3A%5D)%5Cn%20%20%20%20b%20%3D%20tl.load(b_ptr%20%2B%20k%5B%3A%2C%20None%5D%20*%20N%20%2B%20n%5BNone%2C%20%3A%5D)%5Cn%20%20%20%20tl.store(c_ptr%20%2B%20m%5B%3A%2C%20None%5D%20*%20N%20%2B%20n%5BNone%2C%20%3A%5D%2C%20tl.dot(a%2C%20b))%5Cn%5Cn%5Cnt%20%3D%20torch.empty(64%2C%2064%2C%20device%3D%5C%22cuda%5C%22%2C%20dtype%3Dtorch.float16)%5Cnc%20%3D%20torch.empty(64%2C%2064%2C%20device%3D%5C%22cuda%5C%22%2C%20dtype%3Dtorch.float32)%5Cntile2d%5B(1%2C)%5D(t%2C%20t%2C%2064%2C%20BM%3D64%2C%20BN%3D64)%5Cnrowmax%5B(1%2C)%5D(t%2C%20t%2C%2064%2C%20BM%3D64%2C%20BN%3D64)%5Cndot%5B(1%2C)%5D(t%2C%20t%2C%20c%2C%20M%3D64%2C%20N%3D64%2C%20K%3D64)%22%2C%22lang%22%3A%22triton%22%7D%7D%2C%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22compiler%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22source%22%3A1%2C%22lang%22%3A%22triton%22%2C%22compiler%22%3A%22triton_nvidia_370%22%2C%22options%22%3A%22--arch%2086%22%7D%7D%2C%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22device%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22editorid%22%3A1%2C%22treeid%22%3A0%2C%22compilerName%22%3A%22triton_nvidia_370%22%2C%22device%22%3A%22tile2d%20%5Bstage%203%5D.ttgir%22%7D%7D%5D%7D%5D%7D" target="_blank" rel="noopener">🔬 在 Compiler Explorer 看 IR</a></div>
+  <pre class="line-numbers"><code class="language-python"># IR: ttgir
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def tile2d(x_ptr, y_ptr, stride, BM: tl.constexpr, BN: tl.constexpr):
+    r = tl.arange(0, BM)[:, None]
+    c = tl.arange(0, BN)[None, :]
+    tl.store(y_ptr + r * stride + c, tl.load(x_ptr + r * stride + c) * 2)
+
+
+@triton.jit
+def rowmax(x_ptr, y_ptr, stride, BM: tl.constexpr, BN: tl.constexpr):
+    r = tl.arange(0, BM)
+    c = tl.arange(0, BN)
+    x = tl.load(x_ptr + r[:, None] * stride + c[None, :])
+    tl.store(y_ptr + r, tl.max(x, axis=1))
+
+
+@triton.jit
+def dot(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr):
+    m = tl.arange(0, M)
+    n = tl.arange(0, N)
+    k = tl.arange(0, K)
+    a = tl.load(a_ptr + m[:, None] * K + k[None, :])
+    b = tl.load(b_ptr + k[:, None] * N + n[None, :])
+    tl.store(c_ptr + m[:, None] * N + n[None, :], tl.dot(a, b))
+
+
+t = torch.empty(64, 64, device="cuda", dtype=torch.float16)
+c = torch.empty(64, 64, device="cuda", dtype=torch.float32)
+tile2d[(1,)](t, t, 64, BM=64, BN=64)
+rowmax[(1,)](t, t, 64, BM=64, BN=64)
+dot[(1,)](t, t, c, M=64, N=64, K=64)</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">不需要 GPU：</span><code>CE 只编译不运行（triton_nvidia_370 --arch 86）；Device 面板里可切换 source / TTIR / TTGIR / LLVM IR / PTX / SASS</code></div>
+</div><p>用 3.9.0 编到 sm_86（离线），并在 Max 1100 上运行，从两边的 TTGIR 里把 layout 的定义抄出来，下面逐个讲。</p>
+<h2><code>#blocked</code>：逐元素运算和访存</h2>
+<p><code>tile2d</code> 读一个 64×64 的 fp16 块。两个后端给出的 layout 一模一样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">#blocked = #ttg.blocked&lt;{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}&gt;</code></pre>
+</div><p>四个参数，每个都是「每一维各多少」：</p>
+<ul>
+<li><strong><code>sizePerThread = [1, 8]</code></strong>：一个线程持有 1 行 × 8 列的一小块。</li>
+<li><strong><code>threadsPerWarp = [4, 8]</code></strong>：一个 warp 的 32 个线程排成 4 行 × 8 列。</li>
+<li><strong><code>warpsPerCTA = [4, 1]</code></strong>：4 个 warp 沿行方向排开。</li>
+<li><strong><code>order = [1, 0]</code></strong>：给线程编号时，第 1 维（列）变化最快。这一点决定了线程 0 和线程 1 是左右相邻，还是上下相邻。</li>
+</ul>
+<p>三者相乘，一轮能覆盖 (1·4·4) × (8·8·1) = 16 × 64 个元素，这叫一个 <strong>CTA tile</strong>。张量是 64 × 64，比它大，于是沿行方向<strong>重复 4 轮</strong>：同一个线程在第 0、16、32、48 行各拿一块。张量比 CTA tile 小的那一维则反过来，好几个线程会拿到同一个元素（复制）。</p>
+<p>在浏览器里画出来看。下面的模拟器只用标准库，参数都是照着 TTGIR 抄的，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20layout%20%E6%A8%A1%E6%8B%9F%E5%99%A8%EF%BC%9A%E6%AF%8F%E4%B8%AA%E5%85%83%E7%B4%A0%E5%BD%92%E5%93%AA%E4%B8%AA%20warp%E3%80%81%E5%93%AA%E4%B8%AA%E7%BA%BF%E7%A8%8B%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%EF%BC%8C%E5%8F%82%E6%95%B0%E7%85%A7%E7%9D%80%20TTGIR%20%E6%8A%84%E3%80%82%0A%0A%0Adef%20blocked(shape%2C%20size_per_thread%2C%20threads_per_warp%2C%20warps_per_cta%2C%20order)%3A%0A%20%20%20%20%22%22%22%23ttg.blocked%EF%BC%9A%E8%BF%94%E5%9B%9E%20%7B(%E8%A1%8C%2C%20%E5%88%97)%3A%20(warp%2C%20%E7%BA%BF%E7%A8%8B)%7D%E3%80%82%22%22%22%0A%20%20%20%20owners%20%3D%20%7B%7D%0A%20%20%20%20for%20idx%20in%20_all_indices(shape)%3A%0A%20%20%20%20%20%20%20%20coord_t%2C%20coord_w%20%3D%20%5B%5D%2C%20%5B%5D%0A%20%20%20%20%20%20%20%20for%20d%20in%20range(len(shape))%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%80%E4%B8%AA%20CTA%20tile%20%E6%98%AF%20size_per_thread%20%C2%B7%20threads_per_warp%20%C2%B7%20warps_per_cta%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%9B%0A%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%BC%A0%E9%87%8F%E6%9B%B4%E5%A4%A7%E6%97%B6%EF%BC%8C%E5%90%8C%E4%B8%80%E6%89%B9%E7%BA%BF%E7%A8%8B%E5%86%8D%E6%9D%A5%E4%B8%80%E8%BD%AE%EF%BC%88%E6%AF%8F%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%A4%9A%E7%94%A8%E5%87%A0%E4%B8%AA%E5%AF%84%E5%AD%98%E5%99%A8%EF%BC%89%EF%BC%8C%E6%89%80%E4%BB%A5%E5%85%88%E5%AF%B9%20tile%20%E5%8F%96%E6%A8%A1%0A%20%20%20%20%20%20%20%20%20%20%20%20x%20%3D%20idx%5Bd%5D%20%25%20(size_per_thread%5Bd%5D%20*%20threads_per_warp%5Bd%5D%20*%20warps_per_cta%5Bd%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20coord_t.append((x%20%2F%2F%20size_per_thread%5Bd%5D)%20%25%20threads_per_warp%5Bd%5D)%0A%20%20%20%20%20%20%20%20%20%20%20%20coord_w.append((x%20%2F%2F%20(size_per_thread%5Bd%5D%20*%20threads_per_warp%5Bd%5D))%20%25%20warps_per_cta%5Bd%5D)%0A%20%20%20%20%20%20%20%20owners%5Bidx%5D%20%3D%20(_linear(coord_w%2C%20warps_per_cta%2C%20order)%2C%20_linear(coord_t%2C%20threads_per_warp%2C%20order))%0A%20%20%20%20return%20owners%0A%0A%0Adef%20_all_indices(shape)%3A%0A%20%20%20%20if%20len(shape)%20%3D%3D%201%3A%0A%20%20%20%20%20%20%20%20return%20%5B(i%2C)%20for%20i%20in%20range(shape%5B0%5D)%5D%0A%20%20%20%20return%20%5B(i%2C%20j)%20for%20i%20in%20range(shape%5B0%5D)%20for%20j%20in%20range(shape%5B1%5D)%5D%0A%0A%0Adef%20_linear(coord%2C%20sizes%2C%20order)%3A%0A%20%20%20%20%22%22%22order%5B0%5D%20%E6%98%AF%E5%8F%98%E5%8C%96%E6%9C%80%E5%BF%AB%E7%9A%84%E9%82%A3%E4%B8%80%E7%BB%B4%E3%80%82%22%22%22%0A%20%20%20%20lin%2C%20mul%20%3D%200%2C%201%0A%20%20%20%20for%20d%20in%20order%3A%0A%20%20%20%20%20%20%20%20lin%20%2B%3D%20coord%5Bd%5D%20*%20mul%0A%20%20%20%20%20%20%20%20mul%20*%3D%20sizes%5Bd%5D%0A%20%20%20%20return%20lin%0A%0A%0Adef%20slice_owners(parent%2C%20dim%2C%20i)%3A%0A%20%20%20%20%22%22%22%23ttg.slice%3Cdim%2C%20parent%3E%EF%BC%9A%E6%B2%BF%20dim%20%E5%BD%92%E7%BA%A6%E4%BB%A5%E5%90%8E%EF%BC%8C%E7%AC%AC%20i%20%E4%B8%AA%E5%85%83%E7%B4%A0%E5%BD%92%20parent%20%E9%87%8C%E3%80%8C%E9%82%A3%E4%B8%80%E8%A1%8C%EF%BC%88%E5%88%97%EF%BC%89%E3%80%8D%E7%9A%84%E6%89%80%E6%9C%89%E7%BA%BF%E7%A8%8B%E3%80%82%22%22%22%0A%20%20%20%20return%20sorted(%7Bo%20for%20idx%2C%20o%20in%20parent.items()%20if%20idx%5B1%20-%20dim%5D%20%3D%3D%20i%7D)%0A%0A%0Adef%20show(title%2C%20rows%2C%20cols%2C%20label%2C%20col_step%3D1)%3A%0A%20%20%20%20print(title)%0A%20%20%20%20for%20r%20in%20range(rows)%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%22%20%2B%20%22%20%22.join(f%22%7Blabel(r%2C%20c)%3A%3E6%7D%22%20for%20c%20in%20range(0%2C%20cols%2C%20col_step)))%0A%0A%0A%23%20%E2%91%A0%20tile2d%20%E7%9A%84%20%23blocked%EF%BC%88sm_86%20%E5%92%8C%20Max%201100%20%E4%B8%80%E6%A0%B7%EF%BC%89%EF%BC%9A64%C3%9764%20%E7%9A%84%20fp16%EF%BC%8C%E5%8F%AA%E7%94%BB%E5%89%8D%2016%20%E8%A1%8C%EF%BC%9B%E6%AF%8F%208%20%E5%88%97%E4%B8%80%E6%A0%BC%0Aown%20%3D%20blocked((64%2C%2064)%2C%20%5B1%2C%208%5D%2C%20%5B4%2C%208%5D%2C%20%5B4%2C%201%5D%2C%20%5B1%2C%200%5D)%0Ashow(%22%E2%91%A0%20%23blocked%3CsizePerThread%3D%5B1%2C8%5D%2C%20threadsPerWarp%3D%5B4%2C8%5D%2C%20warpsPerCTA%3D%5B4%2C1%5D%2C%20order%3D%5B1%2C0%5D%3E%EF%BC%8C64%C3%9764%EF%BC%8C%22%0A%20%20%20%20%20%22%E5%89%8D%2016%20%E8%A1%8C%EF%BC%8C%E6%AF%8F%E6%A0%BC%208%20%E5%88%97%EF%BC%88w%20%E5%8F%B7.%E7%BA%BF%E7%A8%8B%E5%8F%B7%EF%BC%89%22%2C%2016%2C%2064%2C%20lambda%20r%2C%20c%3A%20%22w%25d.%25d%22%20%25%20own%5B(r%2C%20c)%5D%2C%20col_step%3D8)%0Aregs%20%3D%20sum(1%20for%20v%20in%20own.values()%20if%20v%20%3D%3D%20(0%2C%200))%0Aprint(f%22%20%20%E7%BA%BF%E7%A8%8B%20w0.0%20%E4%B8%80%E5%85%B1%E6%8C%81%E6%9C%89%20%7Bregs%7D%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%9A%E7%AC%AC%200%E3%80%8116%E3%80%8132%E3%80%8148%20%E8%A1%8C%EF%BC%8C%E6%AF%8F%E8%A1%8C%208%20%E4%B8%AA%E8%BF%9E%E7%BB%AD%E7%9A%84%20fp16%EF%BC%8816%20%E5%AD%97%E8%8A%82%EF%BC%8C%E4%B8%80%E6%AC%A1%E5%90%91%E9%87%8F%E8%AF%BB%E5%8F%96%EF%BC%89%22)%0A%0A%23%20%E2%91%A1%20slice%EF%BC%9Arowmax%20%E6%B2%BF%E7%AC%AC%201%20%E7%BB%B4%E5%BD%92%E7%BA%A6%E4%BB%A5%E5%90%8E%EF%BC%8C%E7%AC%AC%20r%20%E8%A1%8C%E7%9A%84%E6%9C%80%E5%A4%A7%E5%80%BC%E5%BD%92%E8%B0%81%EF%BC%9F%0Arow0%20%3D%20slice_owners(own%2C%201%2C%200)%0Aprint(f%22%E2%91%A1%20%23slice%3Cdim%3D1%2C%20parent%3D%E4%B8%8A%E9%9D%A2%E7%9A%84%20%23blocked%3E%EF%BC%9A%E7%AC%AC%200%20%E8%A1%8C%E7%9A%84%E7%BB%93%E6%9E%9C%E8%A2%AB%20%7Blen(row0)%7D%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%E5%90%8C%E6%97%B6%E6%8C%81%E6%9C%89%EF%BC%9A%22%0A%20%20%20%20%20%20%2B%20%22%20%22.join(%22w%25d.%25d%22%20%25%20o%20for%20o%20in%20row0))%0A%0A%23%20%E2%91%A2%20NVIDIA%20mma.sync%20m16n8%20%E7%9A%84%E7%B4%AF%E5%8A%A0%E5%99%A8%EF%BC%88PTX%20ISA%20%E8%A7%84%E5%AE%9A%E7%9A%84%20fragment%20%E6%8E%92%E5%B8%83%EF%BC%89%EF%BC%9A%E4%B8%80%E4%B8%AA%20warp%E3%80%81%E4%B8%80%E6%9D%A1%E6%8C%87%E4%BB%A4%0Ashow(%22%E2%91%A2%20%23nvidia_mma%EF%BC%88version%202%EF%BC%89%E7%9A%84%E4%B8%80%E6%9D%A1%20mma.sync%20m16n8%EF%BC%9A16%C3%978%20%E7%9A%84%E7%B4%AF%E5%8A%A0%E5%99%A8%EF%BC%8C%E6%AF%8F%E6%A0%BC%E6%98%AF%E7%BA%BF%E7%A8%8B%E5%8F%B7%22%2C%2016%2C%208%2C%0A%20%20%20%20%20lambda%20r%2C%20c%3A%20str((r%20%25%208)%20*%204%20%2B%20c%20%2F%2F%202))%0Aprint(%22%20%20%E6%AF%8F%E4%B8%AA%E7%BA%BF%E7%A8%8B%204%20%E4%B8%AA%20fp32%EF%BC%9A%E7%AC%AC%20r%E3%80%81r%2B8%20%E8%A1%8C%EF%BC%8C%E7%9B%B8%E9%82%BB%E7%9A%84%E4%B8%A4%E5%88%97%22)%0A%0A%23%20%E2%91%A3%20Intel%20DPAS%EF%BC%88repeatCount%3D8%EF%BC%8CexecutionSize%3D16%EF%BC%89%E7%9A%84%E7%B4%AF%E5%8A%A0%E5%99%A8%EF%BC%9A%E4%B8%80%E4%B8%AA%20warp%EF%BC%8816%20%E4%B8%AA%E7%BA%BF%E7%A8%8B%EF%BC%89%E3%80%81%E4%B8%80%E6%9D%A1%E6%8C%87%E4%BB%A4%0Ashow(%22%E2%91%A3%20%23ttig.dpas%20%E7%9A%84%E4%B8%80%E6%9D%A1%20DPAS%EF%BC%9A8%C3%9716%20%E7%9A%84%E7%B4%AF%E5%8A%A0%E5%99%A8%EF%BC%8C%E6%AF%8F%E6%A0%BC%E6%98%AF%E7%BA%BF%E7%A8%8B%E5%8F%B7%22%2C%208%2C%2016%2C%20lambda%20r%2C%20c%3A%20str(c))%0Aprint(%22%20%20%E6%AF%8F%E4%B8%AA%E7%BA%BF%E7%A8%8B%208%20%E4%B8%AA%20fp32%EF%BC%9A%E8%87%AA%E5%B7%B1%E9%82%A3%E4%B8%80%E5%88%97%E7%9A%84%208%20%E8%A1%8C%EF%BC%8C%E6%AF%8F%E4%B8%80%E8%A1%8C%E5%8D%A0%E4%B8%80%E4%B8%AA%E5%AF%84%E5%AD%98%E5%99%A8%22)%0A%0A%23%20%E2%91%A4%20shared%20memory%20%E7%9A%84%20swizzle%EF%BC%9A%23swizzled_shared%3Cvec%3D8%2C%20perPhase%3D1%2C%20maxPhase%3D8%3E%EF%BC%8C64%C3%9764%20%E7%9A%84%20fp16%EF%BC%8C%E4%B8%80%E8%A1%8C%20128%20%E5%AD%97%E8%8A%82%0Adef%20bank(r%2C%20c%2C%20swizzle)%3A%0A%20%20%20%20if%20swizzle%3A%0A%20%20%20%20%20%20%20%20phase%20%3D%20(r%20%2F%2F%201)%20%25%208%0A%20%20%20%20%20%20%20%20c%20%3D%20((c%20%2F%2F%208)%20%5E%20phase)%20*%208%20%2B%20c%20%25%208%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%BB%A5%208%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%8816%20%E5%AD%97%E8%8A%82%EF%BC%89%E4%B8%BA%E5%8D%95%E4%BD%8D%EF%BC%8C%E5%92%8C%E8%A1%8C%E5%8F%B7%E5%81%9A%E5%BC%82%E6%88%96%0A%20%20%20%20byte%20%3D%20r%20*%2064%20*%202%20%2B%20c%20*%202%0A%20%20%20%20return%20(byte%20%2F%2F%204)%20%25%2032%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%2032%20%E4%B8%AA%20bank%EF%BC%8C%E6%AF%8F%E4%B8%AA%204%20%E5%AD%97%E8%8A%82%0A%0A%0Afor%20swz%20in%20(False%2C%20True)%3A%0A%20%20%20%20%23%20ldmatrix%20%E4%B8%80%E6%AC%A1%E8%AF%BB%208%20%E8%A1%8C%20%C3%97%208%20%E4%B8%AA%20fp16%EF%BC%88%E6%AF%8F%E8%A1%8C%2016%20%E5%AD%97%E8%8A%82%EF%BC%89%EF%BC%8C8%20%E8%A1%8C%E5%90%8C%E6%97%B6%E8%AF%BB%EF%BC%9A%E7%9C%8B%E5%AE%83%E4%BB%AC%E8%90%BD%E5%9C%A8%E5%93%AA%E4%BA%9B%20bank%20%E4%B8%8A%0A%20%20%20%20banks%20%3D%20%5Bbank(r%2C%200%2C%20swz)%20for%20r%20in%20range(8)%5D%0A%20%20%20%20worst%20%3D%20max(banks.count(b)%20for%20b%20in%20banks)%0A%20%20%20%20print(f%22%E2%91%A4%20%7B'%E6%9C%89'%20if%20swz%20else%20'%E6%B2%A1%E6%9C%89'%7D%20swizzle%EF%BC%9A%E8%AF%BB%E7%AC%AC%200%E2%80%937%20%E8%A1%8C%E7%9A%84%E7%AC%AC%200%E2%80%937%20%E5%88%97%EF%BC%8C%E8%B5%B7%E5%A7%8B%20bank%20%E6%98%AF%20%7Bbanks%7D%EF%BC%8C%E6%9C%80%E5%A4%9A%20%7Bworst%7D%20%E8%A1%8C%E6%8C%A4%E5%9C%A8%E5%90%8C%E4%B8%80%E4%B8%AA%20bank%20%E4%B8%8A%22)"># layout 模拟器：每个元素归哪个 warp、哪个线程。只用标准库，参数照着 TTGIR 抄。
+
+
+def blocked(shape, size_per_thread, threads_per_warp, warps_per_cta, order):
+    """#ttg.blocked：返回 {(行, 列): (warp, 线程)}。"""
+    owners = {}
+    for idx in _all_indices(shape):
+        coord_t, coord_w = [], []
+        for d in range(len(shape)):
+            # 一个 CTA tile 是 size_per_thread · threads_per_warp · warps_per_cta 个元素；
+            # 张量更大时，同一批线程再来一轮（每个线程多用几个寄存器），所以先对 tile 取模
+            x = idx[d] % (size_per_thread[d] * threads_per_warp[d] * warps_per_cta[d])
+            coord_t.append((x // size_per_thread[d]) % threads_per_warp[d])
+            coord_w.append((x // (size_per_thread[d] * threads_per_warp[d])) % warps_per_cta[d])
+        owners[idx] = (_linear(coord_w, warps_per_cta, order), _linear(coord_t, threads_per_warp, order))
+    return owners
+
+
+def _all_indices(shape):
+    if len(shape) == 1:
+        return [(i,) for i in range(shape[0])]
+    return [(i, j) for i in range(shape[0]) for j in range(shape[1])]
+
+
+def _linear(coord, sizes, order):
+    """order[0] 是变化最快的那一维。"""
+    lin, mul = 0, 1
+    for d in order:
+        lin += coord[d] * mul
+        mul *= sizes[d]
+    return lin
+
+
+def slice_owners(parent, dim, i):
+    """#ttg.slice&lt;dim, parent&gt;：沿 dim 归约以后，第 i 个元素归 parent 里「那一行（列）」的所有线程。"""
+    return sorted({o for idx, o in parent.items() if idx[1 - dim] == i})
+
+
+def show(title, rows, cols, label, col_step=1):
+    print(title)
+    for r in range(rows):
+        print("  " + " ".join(f"{label(r, c):&gt;6}" for c in range(0, cols, col_step)))
+
+
+# ① tile2d 的 #blocked（sm_86 和 Max 1100 一样）：64×64 的 fp16，只画前 16 行；每 8 列一格
+own = blocked((64, 64), [1, 8], [4, 8], [4, 1], [1, 0])
+show("① #blocked&lt;sizePerThread=[1,8], threadsPerWarp=[4,8], warpsPerCTA=[4,1], order=[1,0]&gt;，64×64，"
+     "前 16 行，每格 8 列（w 号.线程号）", 16, 64, lambda r, c: "w%d.%d" % own[(r, c)], col_step=8)
+regs = sum(1 for v in own.values() if v == (0, 0))
+print(f"  线程 w0.0 一共持有 {regs} 个元素：第 0、16、32、48 行，每行 8 个连续的 fp16（16 字节，一次向量读取）")
+
+# ② slice：rowmax 沿第 1 维归约以后，第 r 行的最大值归谁？
+row0 = slice_owners(own, 1, 0)
+print(f"② #slice&lt;dim=1, parent=上面的 #blocked&gt;：第 0 行的结果被 {len(row0)} 个线程同时持有："
+      + " ".join("w%d.%d" % o for o in row0))
+
+# ③ NVIDIA mma.sync m16n8 的累加器（PTX ISA 规定的 fragment 排布）：一个 warp、一条指令
+show("③ #nvidia_mma（version 2）的一条 mma.sync m16n8：16×8 的累加器，每格是线程号", 16, 8,
+     lambda r, c: str((r % 8) * 4 + c // 2))
+print("  每个线程 4 个 fp32：第 r、r+8 行，相邻的两列")
+
+# ④ Intel DPAS（repeatCount=8，executionSize=16）的累加器：一个 warp（16 个线程）、一条指令
+show("④ #ttig.dpas 的一条 DPAS：8×16 的累加器，每格是线程号", 8, 16, lambda r, c: str(c))
+print("  每个线程 8 个 fp32：自己那一列的 8 行，每一行占一个寄存器")
+
+# ⑤ shared memory 的 swizzle：#swizzled_shared&lt;vec=8, perPhase=1, maxPhase=8&gt;，64×64 的 fp16，一行 128 字节
+def bank(r, c, swizzle):
+    if swizzle:
+        phase = (r // 1) % 8
+        c = ((c // 8) ^ phase) * 8 + c % 8                  # 以 8 个元素（16 字节）为单位，和行号做异或
+    byte = r * 64 * 2 + c * 2
+    return (byte // 4) % 32                                   # 32 个 bank，每个 4 字节
+
+
+for swz in (False, True):
+    # ldmatrix 一次读 8 行 × 8 个 fp16（每行 16 字节），8 行同时读：看它们落在哪些 bank 上
+    banks = [bank(r, 0, swz) for r in range(8)]
+    worst = max(banks.count(b) for b in banks)
+    print(f"⑤ {'有' if swz else '没有'} swizzle：读第 0–7 行的第 0–7 列，起始 bank 是 {banks}，最多 {worst} 行挤在同一个 bank 上")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">① #blocked&lt;sizePerThread=[1,8], threadsPerWarp=[4,8], warpsPerCTA=[4,1], order=[1,0]&gt;，64×64，前 16 行，每格 8 列（w 号.线程号）
+    w0.0   w0.1   w0.2   w0.3   w0.4   w0.5   w0.6   w0.7
+    w0.8   w0.9  w0.10  w0.11  w0.12  w0.13  w0.14  w0.15
+   w0.16  w0.17  w0.18  w0.19  w0.20  w0.21  w0.22  w0.23
+   w0.24  w0.25  w0.26  w0.27  w0.28  w0.29  w0.30  w0.31
+    w1.0   w1.1   w1.2   w1.3   w1.4   w1.5   w1.6   w1.7
+    w1.8   w1.9  w1.10  w1.11  w1.12  w1.13  w1.14  w1.15
+   w1.16  w1.17  w1.18  w1.19  w1.20  w1.21  w1.22  w1.23
+   w1.24  w1.25  w1.26  w1.27  w1.28  w1.29  w1.30  w1.31
+    w2.0   w2.1   w2.2   w2.3   w2.4   w2.5   w2.6   w2.7
+    w2.8   w2.9  w2.10  w2.11  w2.12  w2.13  w2.14  w2.15
+   w2.16  w2.17  w2.18  w2.19  w2.20  w2.21  w2.22  w2.23
+   w2.24  w2.25  w2.26  w2.27  w2.28  w2.29  w2.30  w2.31
+    w3.0   w3.1   w3.2   w3.3   w3.4   w3.5   w3.6   w3.7
+    w3.8   w3.9  w3.10  w3.11  w3.12  w3.13  w3.14  w3.15
+   w3.16  w3.17  w3.18  w3.19  w3.20  w3.21  w3.22  w3.23
+   w3.24  w3.25  w3.26  w3.27  w3.28  w3.29  w3.30  w3.31
+  线程 w0.0 一共持有 32 个元素：第 0、16、32、48 行，每行 8 个连续的 fp16（16 字节，一次向量读取）
+② #slice&lt;dim=1, parent=上面的 #blocked&gt;：第 0 行的结果被 8 个线程同时持有：w0.0 w0.1 w0.2 w0.3 w0.4 w0.5 w0.6 w0.7
+③ #nvidia_mma（version 2）的一条 mma.sync m16n8：16×8 的累加器，每格是线程号
+       0      0      1      1      2      2      3      3
+       4      4      5      5      6      6      7      7
+       8      8      9      9     10     10     11     11
+      12     12     13     13     14     14     15     15
+      16     16     17     17     18     18     19     19
+      20     20     21     21     22     22     23     23
+      24     24     25     25     26     26     27     27
+      28     28     29     29     30     30     31     31
+       0      0      1      1      2      2      3      3
+       4      4      5      5      6      6      7      7
+       8      8      9      9     10     10     11     11
+      12     12     13     13     14     14     15     15
+      16     16     17     17     18     18     19     19
+      20     20     21     21     22     22     23     23
+      24     24     25     25     26     26     27     27
+      28     28     29     29     30     30     31     31
+  每个线程 4 个 fp32：第 r、r+8 行，相邻的两列
+④ #ttig.dpas 的一条 DPAS：8×16 的累加器，每格是线程号
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
+  每个线程 8 个 fp32：自己那一列的 8 行，每一行占一个寄存器
+⑤ 没有 swizzle：读第 0–7 行的第 0–7 列，起始 bank 是 [0, 0, 0, 0, 0, 0, 0, 0]，最多 8 行挤在同一个 bank 上
+⑤ 有 swizzle：读第 0–7 行的第 0–7 列，起始 bank 是 [0, 4, 8, 12, 16, 20, 24, 28]，最多 1 行挤在同一个 bank 上</code></pre>
+</div><p>看第 ① 张图：一行 64 个元素被 8 个线程分掉，每个线程 8 个连续的 fp16，正好 <strong>16 字节</strong>，一条 128 位的向量读取（<code>ld.global.v4</code> 这一类）。这不是巧合：<code>tritongpu-coalesce</code> 这个 pass（<code>ttgir</code> 段里紧跟在 <code>convert-triton-to-tritongpu</code> 后面）根据「最内维连续」和「每个线程最多读 16 字节」来定 <code>sizePerThread</code>。换成 1D 的拷贝，fp32 时它选 <code>sizePerThread = [4]</code>（4 × 4 字节），fp16 时选 <code>[8]</code>（8 × 2 字节），两个后端都一样：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">// copy1d，fp32
+#blocked = #ttg.blocked&lt;{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}&gt;
+// copy1d，fp16
+#blocked = #ttg.blocked&lt;{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}&gt;</code></pre>
+</div><p>注意 Max 1100 上这里的 <code>threadsPerWarp</code> 也是 32，不是 16。第 12 章说过，Intel 后端只在有 <code>tl.dot</code> 的 kernel 里用 16 个线程的 warp，其它 kernel 用 32（module 属性 <code>&quot;ttg.threads-per-warp&quot; = 32</code>）。</p>
+<h2><code>#slice</code>：归约以后</h2>
+<p><code>rowmax</code> 对同一个 64×64 的块沿第 1 维（每一行）求最大值。结果是 64 个数，它的类型是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">}) : (tensor&lt;64x64xf32, #blocked1&gt;) -&gt; tensor&lt;64xf32, #ttg.slice&lt;{dim = 1, parent = #blocked1}&gt;&gt;</code></pre>
+</div><p><code>#ttg.slice&lt;{dim = 1, parent = #blocked1}&gt;</code> 的意思是：<strong>把 parent 那个二维 layout 的第 1 维「切掉」</strong>。第 r 个结果，归 parent 里持有第 r 行的所有线程。模拟器的第 ② 条算出来：第 0 行被 8 个线程（w0.0 到 w0.7）分着读，归约以后，这 8 个线程<strong>每一个都持有同一个结果</strong>。</p>
+<p>这说明了归约是怎么做的：8 个线程先各自对自己的 8 个元素求最大值，再在 warp 内用 shuffle 两两交换、比较，三轮以后，8 个线程手里都是整行的最大值。因为这 8 个线程在同一个 warp 里，整个归约不需要 shared memory。如果 <code>threadsPerWarp</code> 和 <code>warpsPerCTA</code> 把一行分到了几个 warp 上，就得经过 shared memory 了，这正是第 6 章 softmax 里 <code>num_warps</code> 影响性能的原因之一。</p>
+<p><code>#slice</code> 也出现在相反的方向上：<code>tl.arange(0, 64)[:, None]</code>。<code>tl.arange</code> 生成的一维张量是 <code>tensor&lt;64xi32, #ttg.slice&lt;{dim = 1, parent = #blocked1}&gt;&gt;</code>，<code>[:, None]</code>（<code>tt.expand_dims</code>）把它变成 <code>tensor&lt;64x1xi32, #blocked1&gt;</code>。编译器在 TTIR 到 TTGIR 时就给 <code>arange</code> 挑好了 slice layout，使得 expand 之后<strong>不需要搬任何数据</strong>。</p>
+<h2><code>#mma</code> 和 <code>#dot_op</code>：矩阵单元</h2>
+<p><code>dot</code> 做一个 64×64×64 的 <code>tl.dot</code>。这里两个后端分道扬镳：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">// sm_86
+#mma = #ttg.nvidia_mma&lt;{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}&gt;
+// Max 1100
+#mma = #ttig.dpas&lt;{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}&gt;</code></pre>
+</div><p><code>#mma</code> 描述的是<strong>累加器（<code>tl.dot</code> 的结果）<strong>怎样分布：它不是由「每个线程几个、每个 warp 几个线程」这种自由参数决定的，而是由</strong>矩阵指令的硬件规定</strong>决定的。</p>
+<ul>
+<li><strong>sm_86 的 <code>nvidia_mma</code> version 2</strong> 对应 Ampere 的 <code>mma.sync.m16n8k16</code>。<code>instrShape = [16, 8]</code>：一条指令算一个 16×8 的累加器块。这 128 个 fp32 在一个 warp 的 32 个线程里怎么分，是 PTX 指令集手册规定的。模拟器的第 ③ 张图：线程 t 持有第 t/4 行和第 t/4 + 8 行、第 2·(t%4) 和 2·(t%4)+1 列，一共 4 个数。<code>warpsPerCTA = [2, 2]</code>：4 个 warp 排成 2×2，每个 warp 负责 32×32 的一块，也就是 2×4 = 8 条指令的结果。</li>
+<li><strong>Intel 的 <code>ttig.dpas</code></strong> 对应 DPAS 指令。<code>executionSize = 16</code>：一条指令的 N 是 16，正好是一个 warp（16 个线程）；<code>repeatCount = 8</code>：M 是 8。模拟器的第 ④ 张图：<strong>线程 i 持有第 i 列的全部 8 行</strong>，每一行在一个寄存器里。<code>repCluster = [4, 2]</code>：每个 warp 一次做 4×2 = 8 条 DPAS，拼成 32×32 的块（<code>C = [32, 32]</code>）。</li>
+</ul>
+<p>两种分法截然不同：NVIDIA 一个线程拿两行、每行两个相邻的数；Intel 一个线程拿一整列。这直接影响 <code>tl.dot</code> 之后的运算：比如第 17 章 FlashAttention 里沿行求最大值（<code>tl.max(qk, 1)</code>），在 Intel 的 DPAS layout 上，一行的 16 个数分在 16 个线程里，要做 warp 内的归约；在 NVIDIA 的 layout 上，一行的 8 个数只分在 4 个线程里。</p>
+<p><strong><code>#dot_op</code></strong> 描述 <code>tl.dot</code> 的两个输入。第 15、17 章的 IR 里见过：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">tensor&lt;256x128xbf16, #ttg.dot_op&lt;{opIdx = 0, parent = #mma, kWidth = 1}&gt;&gt;     // A：opIdx = 0
+tensor&lt;128x64xbf16, #ttg.dot_op&lt;{opIdx = 1, parent = #mma, kWidth = 2}&gt;&gt;      // B：opIdx = 1</code></pre>
+</div><p>它总是挂在一个 <code>#mma</code> 上（<code>parent = #mma</code>）：输入怎么分布，完全由「输出要怎么分布」和指令的规定推出来，<code>opIdx</code> 说明是左边还是右边的操作数，<code>kWidth</code> 说明每个线程沿 K 方向连续持有几个元素。所以一个 <code>tl.dot</code> 的三个张量，layout 是<strong>一起</strong>决定的，选好 <code>#mma</code>，另外两个就确定了。这件事由 <code>tritongpu-accelerate-matmul</code>（Intel 上是 <code>TritonIntelGPUAccelerateMatmul</code>）完成：它把 <code>tt.dot</code> 的结果从 <code>#blocked</code> 换成 <code>#mma</code>，在输入前插入到 <code>#dot_op</code> 的 <code>convert_layout</code>。</p>
+<p>在 Max 1100 上，<code>dot</code> 的 TTGIR 里<strong>没有任何 <code>#blocked</code></strong>：两次 load 直接读成了 <code>#dot_op</code> layout。Intel 的 2D block IO 能按 DPAS 要的方式把数据直接读进寄存器（第 8 章）。sm_86 上则还有两个 <code>#blocked</code>（给 load 用）和一个 <code>#shared</code>：数据先按 <code>#blocked</code> 读进来，存进 shared memory，再按 <code>#dot_op</code> 读出来。为什么要绕这一圈？下一节。</p>
+<h2><code>#shared</code>：shared memory 里的排布</h2>
+<p>sm_86 的 <code>dot</code> 里还有一个：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">#shared = #ttg.swizzled_shared&lt;{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}&gt;</code></pre>
+</div><p>前面的 layout 描述的都是寄存器。<code>#shared</code> 描述的是一个块<strong>在 shared memory 里怎么摆</strong>，它挂在 <code>!ttg.memdesc&lt;64x64xf16, #shared, #smem&gt;</code> 这种类型上（<code>memdesc</code> 是「一块内存的描述」，不是寄存器里的张量）。</p>
+<p>为什么要专门描述？因为 shared memory 分成 32 个 <strong>bank</strong>，每个 bank 4 字节宽，同一时刻每个 bank 只能服务一个地址。<code>mma.sync</code> 的输入要用 <code>ldmatrix</code> 从 shared memory 读：一次读 8 行，每行 16 字节（8 个 fp16）。如果 64×64 的块按行原样存放，一行 64 × 2 = 128 字节，正好 32 个 bank 一圈，<strong>每一行的第 0 列都落在 bank 0 上</strong>。8 行同时读，全挤在同一组 bank 上，只能一行一行地排队（8 路 bank conflict）。</p>
+<p><strong>swizzle</strong> 的办法是：存的时候，把每一行以 <code>vec</code> 个元素（这里 8 个 fp16，16 字节）为单位，和行号做异或，打乱位置：</p>
+<blockquote>
+<p>实际列 = ((列 / vec) ⊕ ((行 / perPhase) mod maxPhase)) · vec + 列 mod vec</p>
+</blockquote>
+<p>第 0 行不变，第 1 行的每个 16 字节块和 1 异或（第 0 块和第 1 块互换），第 2 行和 2 异或……模拟器的第 ⑤ 条算出来：不 swizzle 时，读第 0–7 行的第 0–7 列，8 行的起始 bank 全是 0；swizzle 以后是 0、4、8、……、28，<strong>8 行落在 8 组不同的 bank 上，一次就能读完</strong>。<code>vec</code>、<code>perPhase</code>、<code>maxPhase</code> 就是这个公式的三个参数，编译器根据元素大小、行宽和读的方式（<code>ldmatrix</code> 还是别的）来选。</p>
+<p>Hopper 上的 <code>#ttg.nvmma_shared&lt;{swizzlingByteWidth = 128, ...}&gt;</code>（第 15 章）是同一个思路，只是 swizzle 的方式由 TMA 和 <code>wgmma</code> 的硬件规定，参数换成了「按多少字节做 swizzle」。Intel 后端在这个 kernel 里不需要 shared memory，第 15 章那个 persistent 的坑里出现过的 <code>local_alloc</code>，就是 block IO 丢了以后不得不走 shared local memory 的结果。</p>
+<h2>一张总表</h2>
+<table>
+<thead>
+<tr>
+<th>layout</th>
+<th>描述什么</th>
+<th>参数由谁决定</th>
+<th>本章的例子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>#ttg.blocked</code></td>
+<td>寄存器里的通用分布</td>
+<td>编译器（<code>coalesce</code> 按访存选）</td>
+<td>逐元素运算、<code>tt.load</code>、<code>tt.store</code></td>
+</tr>
+<tr>
+<td><code>#ttg.slice&lt;dim, parent&gt;</code></td>
+<td>parent 去掉一维</td>
+<td>由 parent 推出</td>
+<td>归约的结果、<code>tl.arange</code></td>
+</tr>
+<tr>
+<td><code>#ttg.nvidia_mma</code> / <code>#ttig.dpas</code></td>
+<td>矩阵单元的累加器</td>
+<td>硬件指令的规定 + <code>warpsPerCTA</code></td>
+<td><code>tl.dot</code> 的结果</td>
+</tr>
+<tr>
+<td><code>#ttg.dot_op&lt;opIdx, parent&gt;</code></td>
+<td>矩阵单元的输入</td>
+<td>由 parent（<code>#mma</code>）推出</td>
+<td><code>tl.dot</code> 的 A、B</td>
+</tr>
+<tr>
+<td><code>#ttg.swizzled_shared</code> / <code>#ttg.nvmma_shared</code></td>
+<td>shared memory 里的摆放</td>
+<td>避免 bank conflict / 硬件规定</td>
+<td>矩阵乘的操作数缓冲区</td>
+</tr>
+</tbody></table>
+<p>还有一种第 17 章里出现过、这一章没有讲的：<code>#ttg.linear</code>（sm_86 上 K 的转置用到了它）。它是一种「什么分布都能表示」的通用形式，前面这几种都能写成它。第 21 章专门讲它，以及 <code>convert_layout</code> 什么时候便宜、什么时候贵。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>在模拟器里换参数。</strong> 把第 ① 张图的 <code>order</code> 改成 <code>[0, 1]</code>，同一个线程的 8 个元素还连续吗？对一个按行存放的矩阵，这样的 layout 读起来会怎样？再把 <code>sizePerThread</code> 改成 <code>[1, 4]</code>，看每一行要几个线程。</li>
+<li><strong>看归约跨不跨 warp。</strong> 用本章的 <code>rowmax</code>，把块换成 64×256、<code>num_warps=4</code>，在 Compiler Explorer 里看 <code>#blocked1</code> 变成了什么，第 0 行被几个 warp 分着读？TTGIR 后面的 LLVM IR 里有没有出现 shared memory？</li>
+<li><strong>换一个 bank 宽度。</strong> 在模拟器的第 ⑤ 条里把元素换成 fp32（一行 256 字节），<code>vec</code> 应该取几，swizzle 才能让 8 行落在不同的 bank 上？</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>layout 是「张量的元素放在哪个 warp、哪个线程、哪个寄存器（或 shared memory 的哪里）」的映射，写在张量类型上（<code>tensor&lt;64x64xf16, #blocked&gt;</code>）。TTIR 没有它，TTGIR 有，这是两级 IR 的本质区别。</li>
+<li><code>#blocked</code>：<code>sizePerThread × threadsPerWarp × warpsPerCTA</code> 是一个 CTA tile，<code>order</code> 决定线程编号的方向；张量更大就重复，更小就复制。<code>coalesce</code> 按「最内维连续、每个线程 16 字节」来选：fp32 是 4 个，fp16 是 8 个。</li>
+<li><code>#slice&lt;dim, parent&gt;</code>：归约的结果，被 parent 里同一行的所有线程同时持有；同一行在一个 warp 内时，归约只要 shuffle。</li>
+<li><code>#mma</code> 由矩阵指令决定：sm_86 的 <code>mma.sync m16n8</code> 一个线程拿两行两列共 4 个数；Intel DPAS 一个线程拿一整列 8 个数。<code>#dot_op</code> 由 <code>#mma</code> 推出，三者一起由 accelerate-matmul 选定。Max 1100 上 load 直接读成 <code>#dot_op</code>，sm_86 上要经过 <code>#shared</code>。</li>
+<li><code>#shared</code>：shared memory 32 个 bank，一行 128 字节时不 swizzle 会 8 路冲突；<code>vec</code>、<code>perPhase</code>、<code>maxPhase</code> 定义了「以 vec 个元素为单位和行号异或」的 swizzle，让 8 行落在 8 组 bank 上。</li>
+</ul>
+<p>下一章：linear layout，一种统一表示所有 layout 的线性代数形式，以及 <code>convert_layout</code> 的三种实现方式（什么都不做、warp 内 shuffle、经过 shared memory）和它们的代价。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch19.html">← 第 19 章 编译管线全景</a>
+  <a class="nav-next" href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

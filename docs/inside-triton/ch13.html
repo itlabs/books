@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 GEMM 优化（二）：软件流水</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li class="active"><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 13 章 GEMM 优化（二）：软件流水</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>GEMM 的循环每一轮都要先把 A、B 的一段从显存搬进来，再交给矩阵单元算。如果「搬」和「算」一前一后地做，矩阵单元有一大半时间在等数据。<strong>软件流水（software pipelining）</strong>就是让它们重叠：算这一段的同时，后面几段的数据已经在路上了。Triton 里控制它的只有一个参数：<code>num_stages</code>。</p>
+<p>读完你会拿到三样东西。一是 <code>num_stages</code> 在两种硬件上到底变成了什么：在 NVIDIA 上，它是 <code>num_stages − 1</code> 份 shared memory 缓冲区加上异步拷贝；在 Intel 上，它是「提前几轮发出预取」，shared memory 一个字节也不用。两者都有真实的 IR 为证。二是 stage 为什么不是越多越好：NVIDIA 上每多一级就多 16 KiB 的 shared memory，一个 SM 上能同时驻留的 program 随之变少，你会在浏览器里看到 4 级比 5 级更快的情形；Intel 上，实测 2 级最快，再加反而变慢。三是超出预算时的真实报错：<code>OutOfResources: out of resource: shared memory</code>。</p>
+</div><h2>不流水的时候</h2>
+<p>先看最朴素的执行方式：每一轮读一段 A、B，等数据到齐了再算，算完再读下一段。读一段要等几百个周期（显存延迟，第 2 章），算一段只要几十个。于是时间线是这样的：</p>
+<div class="concept">
+<svg viewBox="0 0 720 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <g font-size="12.5" font-weight="bold" fill="#374151"><text x="20" y="30">num_stages = 1：不流水</text><text x="20" y="140">num_stages = 3：两段读取同时在路上</text></g>
+  <g font-size="11.5" fill="#6b7280"><text x="20" y="62">读</text><text x="20" y="92">算</text><text x="20" y="172">读</text><text x="20" y="222">算</text></g>
+  <g font-size="11" text-anchor="middle">
+    <rect x="60" y="48" width="80" height="22" fill="#d1d5db"/><text x="100" y="63">读 0</text>
+    <rect x="140" y="78" width="40" height="22" fill="#2b6cb0"/><text x="160" y="93" fill="#ffffff">算 0</text>
+    <rect x="180" y="48" width="80" height="22" fill="#d1d5db"/><text x="220" y="63">读 1</text>
+    <rect x="260" y="78" width="40" height="22" fill="#2b6cb0"/><text x="280" y="93" fill="#ffffff">算 1</text>
+    <rect x="300" y="48" width="80" height="22" fill="#d1d5db"/><text x="340" y="63">读 2</text>
+    <rect x="380" y="78" width="40" height="22" fill="#2b6cb0"/><text x="400" y="93" fill="#ffffff">算 2</text>
+    <rect x="420" y="48" width="80" height="22" fill="#d1d5db"/><text x="460" y="63">读 3</text>
+    <rect x="500" y="78" width="40" height="22" fill="#2b6cb0"/><text x="520" y="93" fill="#ffffff">算 3</text>
+    <rect x="540" y="48" width="80" height="22" fill="#d1d5db"/><text x="580" y="63">读 4</text>
+    <rect x="620" y="78" width="40" height="22" fill="#2b6cb0"/><text x="640" y="93" fill="#ffffff">算 4</text>
+    <rect x="60" y="158" width="80" height="20" fill="#d1d5db"/><text x="100" y="172">读 0</text>
+    <rect x="60" y="182" width="80" height="20" fill="#d1d5db"/><text x="100" y="196">读 1</text>
+    <rect x="140" y="158" width="80" height="20" fill="#e5e7eb"/><text x="180" y="172">读 2</text>
+    <rect x="180" y="182" width="80" height="20" fill="#e5e7eb"/><text x="220" y="196">读 3</text>
+    <rect x="220" y="158" width="80" height="20" fill="#d1d5db"/><text x="260" y="172">读 4</text>
+    <rect x="140" y="208" width="40" height="22" fill="#2b6cb0"/><text x="160" y="223" fill="#ffffff">算 0</text>
+    <rect x="180" y="208" width="40" height="22" fill="#2b6cb0"/><text x="200" y="223" fill="#ffffff">算 1</text>
+    <rect x="220" y="208" width="40" height="22" fill="#2b6cb0"/><text x="240" y="223" fill="#ffffff">算 2</text>
+    <rect x="260" y="208" width="40" height="22" fill="#2b6cb0"/><text x="280" y="223" fill="#ffffff">算 3</text>
+    <rect x="300" y="208" width="40" height="22" fill="#2b6cb0"/><text x="320" y="223" fill="#ffffff">算 4</text>
+  </g>
+  <line x1="660" y1="105" x2="660" y2="112" stroke="#e06a3b" stroke-width="2"/><text x="660" y="124" font-size="11.5" text-anchor="middle" fill="#e06a3b">第 5 段算完</text>
+  <line x1="340" y1="234" x2="340" y2="242" stroke="#3f9b5c" stroke-width="2"/><text x="340" y="254" font-size="11.5" text-anchor="middle" fill="#3f9b5c">第 5 段算完：快了一倍多</text>
+</svg>
+<div class="caption">图 13-1　软件流水的时间线（读一段的时间按算一段的两倍画）。灰色是从显存读一段 A、B，蓝色是用矩阵单元算这一段。上面不流水：矩阵单元三分之二的时间在等。下面 num_stages = 3：开始算第 i 段的同时，就发出第 i+2 段的读取，两段读取总在路上，矩阵单元几乎不停</div>
+</div><p>流水的思想很简单：<strong>开始算第 i 段的时候，就把第 i + (S−1) 段的读取发出去</strong>，S 是 stage 的级数。只要同时在路上的读取足够多，矩阵单元每算完一段，下一段已经到了。这和第 2 章「warp 越多越能藏延迟」是同一个道理，只是这里在一个 program 内部做。</p>
+<h2>NVIDIA：shared memory 缓冲区 + 异步拷贝</h2>
+<p>在 NVIDIA 上，「同时在路上的读取」需要地方放：数据先异步地搬进 shared memory，等用的时候再读进寄存器。把 minillm 的指针版 GEMM（fp16，128×128×32，8 个 warp）用 3.9.0 编到 sm_86，<code>num_stages</code> 从 1 到 6，看编译出来的东西（附录 A 第 8 节的离线编译，不需要 GPU）：</p>
+<table>
+<thead>
+<tr>
+<th align="right"><code>num_stages</code></th>
+<th align="right">shared memory</th>
+<th align="right">缓冲区份数</th>
+<th align="right">TTGIR 里的 <code>async_copy_global_to_local</code></th>
+<th align="right">PTX 里的 <code>cp.async</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="right">1</td>
+<td align="right">32 KiB</td>
+<td align="right">0</td>
+<td align="right">0</td>
+<td align="right">0</td>
+</tr>
+<tr>
+<td align="right">2</td>
+<td align="right">32 KiB</td>
+<td align="right">1</td>
+<td align="right">4</td>
+<td align="right">8</td>
+</tr>
+<tr>
+<td align="right">3</td>
+<td align="right">32 KiB</td>
+<td align="right">2</td>
+<td align="right">6</td>
+<td align="right">12</td>
+</tr>
+<tr>
+<td align="right">4</td>
+<td align="right">48 KiB</td>
+<td align="right">3</td>
+<td align="right">8</td>
+<td align="right">16</td>
+</tr>
+<tr>
+<td align="right">5</td>
+<td align="right">64 KiB</td>
+<td align="right">4</td>
+<td align="right">10</td>
+<td align="right">20</td>
+</tr>
+<tr>
+<td align="right">6</td>
+<td align="right">80 KiB</td>
+<td align="right">5</td>
+<td align="right">12</td>
+<td align="right">24</td>
+</tr>
+</tbody></table>
+<ul>
+<li><strong>缓冲区份数 = <code>num_stages − 1</code></strong>，每份放一段 A 和一段 B：(128×32 + 32×128) × 2 字节 = 16 KiB。第 7 章看到的 <code>ttg.local_alloc : () -&gt; !ttg.memdesc&lt;2x128x32xf16, ...&gt;</code> 里的那个 <code>2</code>，就是 <code>num_stages = 3</code> 的两份缓冲区。</li>
+<li><strong><code>cp.async</code> 是 Ampere 的异步拷贝指令</strong>：线程发出拷贝请求以后不必等数据到，可以继续往下执行，数据由硬件直接搬进 shared memory。TTGIR 里对应的是 <code>ttg.async_copy_global_to_local</code>、<code>ttg.async_commit_group</code>、<code>ttg.async_wait</code>。负责这一变换的是 Triton 的 pipeliner pass（<code>lib/Dialect/TritonGPU/Transforms/Pipeliner/</code> 目录，第 22 章细讲）。</li>
+<li><code>num_stages</code> 为 1 到 3 时 shared memory 都是 32 KiB，大于缓冲区本身的用量。我推测是 kernel 结尾那个 <code>convert_layout</code>（第 7 章）也要经过 shared memory，它需要的暂存空间（128×128 个 fp16 正好是 32 KiB）比两份缓冲区还大，编译器按两者中较大的那个分配。</li>
+</ul>
+<p>NVIDIA 后端 <code>num_stages</code> 的默认值是 3（<code>CUDAOptions</code> 里的 <code>num_stages: int = 3</code>）。</p>
+<h3>stage 为什么不是越多越好</h3>
+<p>每多一级就多 16 KiB 的 shared memory。shared memory 是每个 SM 上所有 program 共用的（第 2 章），一个 program 用得越多，一个 SM 上能同时驻留的 program 就越少，而<strong>同时驻留的 program，本身也是在互相藏延迟</strong>。</p>
+<p>下面的模型把两件事放在一起算：一个 program 内部，stage 越多，流水越满；但 A10 每个 SM 只有 100 KB 的 shared memory，stage 越多，能放下的 program 越少。只用标准库，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E8%BD%AF%E4%BB%B6%E6%B5%81%E6%B0%B4%EF%BC%9AS%20%E7%BA%A7%20stage%20%E6%97%B6%EF%BC%8C%E4%B8%80%E4%B8%AA%20program%20%E6%B2%BF%20K%20%E5%BE%AA%E7%8E%AF%E7%9A%84%E6%97%B6%E9%97%B4%E7%BA%BF%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0A%23%0A%23%20%E6%AF%8F%E4%B8%80%E8%BD%AE%EF%BC%9A%E5%85%88%E6%8A%8A%E8%BF%99%E4%B8%80%E6%AE%B5%20A%E3%80%81B%20%E4%BB%8E%E6%98%BE%E5%AD%98%E6%90%AC%E8%BF%9B%E6%9D%A5%EF%BC%88%E5%BB%B6%E8%BF%9F%20LOAD%20%E4%B8%AA%E5%8D%95%E4%BD%8D%EF%BC%8C%E4%B8%8D%E5%8D%A0%E8%AE%A1%E7%AE%97%E5%8D%95%E5%85%83%EF%BC%89%EF%BC%8C%E5%86%8D%E7%94%A8%E7%9F%A9%E9%98%B5%E5%8D%95%E5%85%83%E7%AE%97%EF%BC%88COMPUTE%20%E4%B8%AA%E5%8D%95%E4%BD%8D%EF%BC%89%E3%80%82%0A%23%20%E6%9C%89%20S%20%E7%BA%A7%20stage%EF%BC%8C%E5%B0%B1%E6%9C%89%20S-1%20%E4%BB%BD%E7%BC%93%E5%86%B2%E5%8C%BA%EF%BC%9A%E6%9C%80%E5%A4%9A%E5%8F%AF%E4%BB%A5%E6%8F%90%E5%89%8D%20S-1%20%E8%BD%AE%E5%8F%91%E5%87%BA%E8%AF%BB%E5%8F%96%EF%BC%8C%E4%B8%80%E8%BE%B9%E7%AE%97%E8%BF%99%E4%B8%80%E8%BD%AE%EF%BC%8C%E4%B8%80%E8%BE%B9%E7%AD%89%E5%90%8E%E9%9D%A2%E5%87%A0%E8%BD%AE%E7%9A%84%E6%95%B0%E6%8D%AE%E3%80%82%0A%23%20%E4%B8%80%E6%AE%B5%E6%95%B0%E6%8D%AE%E4%BB%8E%E7%BC%93%E5%86%B2%E5%8C%BA%E8%AF%BB%E8%BF%9B%E5%AF%84%E5%AD%98%E5%99%A8%E3%80%81%E5%BC%80%E5%A7%8B%E8%AE%A1%E7%AE%97%E7%9A%84%E9%82%A3%E4%B8%80%E5%88%BB%EF%BC%8C%E8%BF%99%E4%BB%BD%E7%BC%93%E5%86%B2%E5%8C%BA%E5%B0%B1%E5%8F%AF%E4%BB%A5%E7%BB%99%E5%90%8E%E9%9D%A2%E7%9A%84%E8%AF%BB%E5%8F%96%E7%94%A8%E4%BA%86%E3%80%82%0A%23%20S%20%3D%201%20%E8%A1%A8%E7%A4%BA%E4%B8%8D%E6%B5%81%E6%B0%B4%EF%BC%9A%E8%AF%BB%E5%AE%8C%E6%89%8D%E7%AE%97%EF%BC%8C%E7%AE%97%E5%AE%8C%E6%89%8D%E8%AF%BB%E4%B8%8B%E4%B8%80%E6%AE%B5%E3%80%82%0A%0A%0Adef%20run(stages%2C%20n_iter%2C%20load%2C%20compute)%3A%0A%20%20%20%20ahead%20%3D%20max(stages%20-%201%2C%201)%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%80%E5%A4%9A%E5%90%8C%E6%97%B6%E5%9C%A8%E8%B7%AF%E4%B8%8A%E7%9A%84%E8%AF%BB%E5%8F%96%EF%BC%88S%3D1%20%E6%97%B6%E4%B9%9F%E5%BE%97%E6%9C%89%201%20%E4%BB%BD%E7%BC%93%E5%86%B2%E5%8C%BA%EF%BC%89%0A%20%20%20%20compute_start%20%3D%20%5B0.0%5D%20*%20n_iter%0A%20%20%20%20compute_end%20%3D%200.0%0A%20%20%20%20for%20i%20in%20range(n_iter)%3A%0A%20%20%20%20%20%20%20%20if%20stages%20%3D%3D%201%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20issue%20%3D%20compute_end%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%8D%E6%B5%81%E6%B0%B4%EF%BC%9A%E4%B8%8A%E4%B8%80%E6%AE%B5%E7%AE%97%E5%AE%8C%E6%89%8D%E8%AF%BB%E8%BF%99%E4%B8%80%E6%AE%B5%0A%20%20%20%20%20%20%20%20else%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%BC%93%E5%86%B2%E5%8C%BA%E5%9C%A8%E3%80%8C%E5%BC%80%E5%A7%8B%E8%AE%A1%E7%AE%97%E3%80%8D%E6%97%B6%E5%B0%B1%E7%A9%BA%E5%87%BA%E6%9D%A5%E4%BA%86%EF%BC%88%E6%95%B0%E6%8D%AE%E5%B7%B2%E7%BB%8F%E8%AF%BB%E8%BF%9B%E5%AF%84%E5%AD%98%E5%99%A8%EF%BC%89%EF%BC%8C%E5%8F%AF%E4%BB%A5%E7%AB%8B%E5%88%BB%E5%8F%91%E5%87%BA%E4%B8%8B%E4%B8%80%E6%AC%A1%E8%AF%BB%E5%8F%96%0A%20%20%20%20%20%20%20%20%20%20%20%20issue%20%3D%200.0%20if%20i%20%3C%20ahead%20else%20compute_start%5Bi%20-%20ahead%5D%0A%20%20%20%20%20%20%20%20arrive%20%3D%20issue%20%2B%20load%0A%20%20%20%20%20%20%20%20compute_start%5Bi%5D%20%3D%20max(arrive%2C%20compute_end)%20%20%20%20%20%20%20%20%20%20%23%20%E6%95%B0%E6%8D%AE%E5%88%B0%E4%BA%86%E3%80%81%E4%B8%8A%E4%B8%80%E6%AE%B5%E4%B9%9F%E7%AE%97%E5%AE%8C%E4%BA%86%EF%BC%8C%E6%89%8D%E8%83%BD%E7%AE%97%0A%20%20%20%20%20%20%20%20compute_end%20%3D%20compute_start%5Bi%5D%20%2B%20compute%0A%20%20%20%20return%20compute_end%0A%0A%0AN_ITER%20%3D%20128%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%204096%20%2F%20BLOCK_K(32)%20%E8%BD%AE%0ASTAGE_KB%20%3D%2016%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%AF%8F%E4%BB%BD%E7%BC%93%E5%86%B2%E5%8C%BA%EF%BC%9A128%C3%9732%20%2B%2032%C3%97128%20%E4%B8%AA%20fp16%20%3D%2016%20KiB%EF%BC%88%E7%AC%AC%2013%20%E7%AB%A0%E7%9A%84%20sm_86%20%E6%95%B0%E6%8D%AE%EF%BC%89%0ASMEM_PER_SM_KB%20%3D%20100%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20A10%EF%BC%88sm_86%EF%BC%89%E6%AF%8F%E4%B8%AA%20SM%20%E7%9A%84%20shared%20memory%0Afor%20load%2C%20compute%20in%20((8%2C%201)%2C%20(4%2C%201))%3A%0A%20%20%20%20print(f%22%E8%AF%BB%E4%B8%80%E6%AE%B5%E8%A6%81%20%7Bload%7D%20%E4%B8%AA%E5%8D%95%E4%BD%8D%E3%80%81%E7%AE%97%E4%B8%80%E6%AE%B5%E8%A6%81%20%7Bcompute%7D%20%E4%B8%AA%E5%8D%95%E4%BD%8D%EF%BC%9A%22)%0A%20%20%20%20print(%22%20%20stages%20%20%20%E5%8D%95%E4%B8%AA%20program%20%E7%9A%84%E5%88%A9%E7%94%A8%E7%8E%87%20%20%20shared%2Fprogram%20%20%20%E6%AF%8F%E4%B8%AA%20SM%20%E8%83%BD%E6%94%BE%E5%87%A0%E4%B8%AA%20%20%20%E5%90%88%E8%AE%A1%EF%BC%88%E7%B2%97%E4%BC%B0%EF%BC%89%22)%0A%20%20%20%20for%20s%20in%20range(1%2C%208)%3A%0A%20%20%20%20%20%20%20%20t%20%3D%20run(s%2C%20N_ITER%2C%20load%2C%20compute)%0A%20%20%20%20%20%20%20%20smem%20%3D%20max(s%20-%201%2C%201)%20*%20STAGE_KB%0A%20%20%20%20%20%20%20%20util%2C%20fit%20%3D%20N_ITER%20*%20compute%20%2F%20t%2C%20SMEM_PER_SM_KB%20%2F%2F%20smem%0A%20%20%20%20%20%20%20%20%23%20%E5%90%8C%E4%B8%80%E4%B8%AA%20SM%20%E4%B8%8A%E7%9A%84%E5%87%A0%E4%B8%AA%20program%20%E8%BD%AE%E6%B5%81%E7%94%A8%E7%9F%A9%E9%98%B5%E5%8D%95%E5%85%83%EF%BC%9A%E5%90%88%E8%AE%A1%20%E2%89%88%20min(1%2C%20%E5%8D%95%E4%B8%AA%E7%9A%84%E5%88%A9%E7%94%A8%E7%8E%87%20%C3%97%20%E4%B8%AA%E6%95%B0)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bs%3A6%7D%20%20%20%7Butil%3A19.0%25%7D%20%20%20%7Bsmem%3A11%7D%20KiB%20%20%20%7Bfit%3A14%7D%20%20%20%7Bmin(1.0%2C%20util%20*%20fit)%3A9.0%25%7D%22)%0A%20%20%20%20print()"># 软件流水：S 级 stage 时，一个 program 沿 K 循环的时间线。只用标准库。
+#
+# 每一轮：先把这一段 A、B 从显存搬进来（延迟 LOAD 个单位，不占计算单元），再用矩阵单元算（COMPUTE 个单位）。
+# 有 S 级 stage，就有 S-1 份缓冲区：最多可以提前 S-1 轮发出读取，一边算这一轮，一边等后面几轮的数据。
+# 一段数据从缓冲区读进寄存器、开始计算的那一刻，这份缓冲区就可以给后面的读取用了。
+# S = 1 表示不流水：读完才算，算完才读下一段。
+
+
+def run(stages, n_iter, load, compute):
+    ahead = max(stages - 1, 1)            # 最多同时在路上的读取（S=1 时也得有 1 份缓冲区）
+    compute_start = [0.0] * n_iter
+    compute_end = 0.0
+    for i in range(n_iter):
+        if stages == 1:
+            issue = compute_end           # 不流水：上一段算完才读这一段
+        else:
+            # 缓冲区在「开始计算」时就空出来了（数据已经读进寄存器），可以立刻发出下一次读取
+            issue = 0.0 if i &lt; ahead else compute_start[i - ahead]
+        arrive = issue + load
+        compute_start[i] = max(arrive, compute_end)          # 数据到了、上一段也算完了，才能算
+        compute_end = compute_start[i] + compute
+    return compute_end
+
+
+N_ITER = 128                              # 4096 / BLOCK_K(32) 轮
+STAGE_KB = 16                             # 每份缓冲区：128×32 + 32×128 个 fp16 = 16 KiB（第 13 章的 sm_86 数据）
+SMEM_PER_SM_KB = 100                      # A10（sm_86）每个 SM 的 shared memory
+for load, compute in ((8, 1), (4, 1)):
+    print(f"读一段要 {load} 个单位、算一段要 {compute} 个单位：")
+    print("  stages   单个 program 的利用率   shared/program   每个 SM 能放几个   合计（粗估）")
+    for s in range(1, 8):
+        t = run(s, N_ITER, load, compute)
+        smem = max(s - 1, 1) * STAGE_KB
+        util, fit = N_ITER * compute / t, SMEM_PER_SM_KB // smem
+        # 同一个 SM 上的几个 program 轮流用矩阵单元：合计 ≈ min(1, 单个的利用率 × 个数)
+        print(f"  {s:6}   {util:19.0%}   {smem:11} KiB   {fit:14}   {min(1.0, util * fit):9.0%}")
+    print()</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">读一段要 8 个单位、算一段要 1 个单位：
+  stages   单个 program 的利用率   shared/program   每个 SM 能放几个   合计（粗估）
+       1                   11%            16 KiB                6         67%
+       2                   12%            16 KiB                6         75%
+       3                   25%            32 KiB                3         75%
+       4                   37%            48 KiB                2         74%
+       5                   49%            64 KiB                1         49%
+       6                   61%            80 KiB                1         61%
+       7                   72%            96 KiB                1         72%
+
+读一段要 4 个单位、算一段要 1 个单位：
+  stages   单个 program 的利用率   shared/program   每个 SM 能放几个   合计（粗估）
+       1                   20%            16 KiB                6        100%
+       2                   25%            16 KiB                6        100%
+       3                   50%            32 KiB                3        100%
+       4                   74%            48 KiB                2        100%
+       5                   97%            64 KiB                1         97%
+       6                   97%            80 KiB                1         97%
+       7                   97%            96 KiB                1         97%</code></pre>
+</div><p>第一组是读延迟比较长的情形：单个 program 的利用率随 stage 一路上升，但到了 5 级，每个 program 要 64 KiB，一个 SM 只放得下一个，「合计」反而从 74% 掉到了 49%。第二组读得快一些，3、4 级就已经能把矩阵单元喂饱，再加 stage 毫无收益，只是白白占了 shared memory。<strong>最好的 stage 数取决于读延迟和计算时间的比例，也取决于 shared memory 和寄存器的预算</strong>，这正是第 14 章要交给 autotune 去搜索的东西之一。这个模型只算了 shared memory 对驻留数的限制，真实 GPU 上寄存器也会限制它（第 12 章）。</p>
+<h3>超出预算</h3>
+<p>shared memory 有硬性的上限。Triton 在加载 kernel 时检查它（<code>python/triton/compiler/compiler.py</code>），超出就抛 <code>OutOfResources</code>。在 Max 1100 上用指针版 GEMM 配一个很大的 tile（256×256×256），每个 program 需要 256 KiB，上限是 128 KiB：</p>
+<p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">OutOfResources out of resource: shared memory, Required: 262144, Hardware limit: 131072. Reducing block sizes or `num_stages` may help.</code></pre>
+</div><p>报错直接给出了需要多少、上限多少，以及该调哪两个参数。A10（sm_86）每个 block 能用的 shared memory 上限是 99 KB 左右（Triton 用的是驱动报告的 <code>MAX_SHARED_MEMORY_PER_BLOCK_OPTIN</code>）。按上面那张表推算，128×128×32 的 tile 在 A10 上最多能开到 <code>num_stages = 7</code>（96 KiB），8 级就会报这个错。本书还没在 A10 上验证这个预测。</p>
+<h2>Intel：提前几轮发出预取</h2>
+<p>在 Max 1100 上，第 8 章的 descriptor GEMM 根本不用 shared memory：数据直接从显存读进寄存器。那 <code>num_stages</code> 还有什么用？扫一遍看看：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+
+from minillm import DEVICE
+from minillm.kernels.matmul import _matmul_grouped_kernel
+
+M = N = K = 4096
+a = torch.randn(M, K, device=DEVICE, dtype=torch.bfloat16)
+b = torch.randn(K, N, device=DEVICE, dtype=torch.bfloat16)
+c = torch.empty(M, N, device=DEVICE, dtype=torch.bfloat16)
+grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256),)
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，triton {triton.__version__}，bf16 {M}³，256×256×32，32 个 warp")
+for ns in (1, 2, 3, 4, 5, 6):
+    run = lambda: _matmul_grouped_kernel[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0),
+                                               BLOCK_M=256, BLOCK_N=256, BLOCK_K=32, GROUP_M=8,
+                                               num_warps=32, num_stages=ns)
+    k = run()
+    torch.testing.assert_close(c, a @ b, atol=0.5, rtol=0.05)
+    ms = triton.testing.do_bench(run)
+    ttgir = k.asm["ttgir"]
+    print(f"  num_stages={ns}  descriptor_prefetch {ttgir.count('descriptor_prefetch'):2} 条  "
+          f"async_copy {ttgir.count('async_copy_global_to_local'):2} 条  shared={k.metadata.shared:6}  "
+          f"{2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，bf16 4096³，256×256×32，32 个 warp
+  num_stages=1  descriptor_prefetch  0 条  async_copy  0 条  shared=     0   122.7 TFLOP/s
+  num_stages=2  descriptor_prefetch  4 条  async_copy  0 条  shared=     0   150.2 TFLOP/s
+  num_stages=3  descriptor_prefetch  6 条  async_copy  0 条  shared=     0   149.1 TFLOP/s
+  num_stages=4  descriptor_prefetch  8 条  async_copy  0 条  shared=     0   147.3 TFLOP/s
+  num_stages=5  descriptor_prefetch 10 条  async_copy  0 条  shared=     0   147.7 TFLOP/s
+  num_stages=6  descriptor_prefetch 12 条  async_copy  0 条  shared=     0   138.0 TFLOP/s</code></pre>
+</div><p>shared memory 一直是 0。随 <code>num_stages</code> 变化的是 TTGIR 里 <code>ttig.descriptor_prefetch</code> 的条数：<code>num_stages = 1</code> 时没有，之后每加一级多 2 条（A、B 各一条）。下面是 <code>num_stages = 3</code> 时 TTGIR 的节选（去掉了 <code>loc(...)</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">    ttig.descriptor_prefetch %a_desc_6[%acc, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;256x32xbf16&gt;
+    ttig.descriptor_prefetch %b_desc_7[%c0_i32, %acc_9] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;32x256xbf16&gt;
+    ttig.descriptor_prefetch %a_desc_6[%acc, %c32_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;256x32xbf16&gt;
+    ttig.descriptor_prefetch %b_desc_7[%c32_i32, %acc_9] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;32x256xbf16&gt;
+    %acc_10 = scf.for %acc_11 = %c0_i32 to %K step %c32_i32 iter_args(%acc_12 = %cst) -&gt; (tensor&lt;256x256xf32, #mma&gt;)  : i32 {
+      %acc_13 = arith.addi %acc_11, %c64_i32 : i32
+      ttig.descriptor_prefetch %a_desc_6[%acc, %acc_13] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;256x32xbf16&gt;
+      ttig.descriptor_prefetch %b_desc_7[%acc_13, %acc_9] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;32x256xbf16&gt;
+      %acc_14 = tt.descriptor_load %a_desc_6[%acc, %acc_11] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;256x32xbf16&gt; -&gt; tensor&lt;256x32xbf16, ...&gt;
+      %acc_15 = tt.descriptor_load %b_desc_7[%acc_11, %acc_9] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;32x256xbf16&gt; -&gt; tensor&lt;32x256xbf16, ...&gt;</code></pre>
+</div><p>时间线和图 13-1 下半部分一模一样，只是「放数据的地方」不同：进入循环之前，先预取第 0 段（k = 0）和第 1 段（k = 32）；循环里每一轮，先对 <strong>k + 64</strong>（两轮之后的那一段）发出预取，再读这一轮的第 k 段。<strong>预取总是提前 <code>num_stages − 1</code> 轮</strong>。预取指令只是告诉硬件「把这块数据先拉进缓存」，不占用寄存器，也不需要 shared memory；等到真正 <code>descriptor_load</code> 的时候，数据多半已经在缓存里了。</p>
+<p>性能上，<strong>2 级最快（150.2 TFLOP/s），这正是 Intel 后端的默认值</strong>（第 4 章：Intel 默认 <code>num_stages = 2</code>，NVIDIA 默认 3）。不预取时掉到 122.7；预取得更深反而越来越慢，6 级时 138.0。预取太早，数据进了缓存却要等好几轮才用，中间可能被别的数据挤出去，还白白占了访存带宽。和 NVIDIA 一样，<strong>stage 不是越多越好</strong>，只是在 Intel 上，限制它的不是 shared memory 预算，而是缓存的容量和带宽。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>在 A10 上扫 <code>num_stages</code>。</strong> 用本章的指针版 GEMM（128×128×32，8 个 warp），<code>num_stages</code> 从 1 扫到 8。哪一级最快？第 8 级是不是报了 <code>OutOfResources</code>？报错里的 <code>Hardware limit</code> 是多少？</li>
+<li><strong>在模型里找最优的 stage 数。</strong> 把浏览器里模型的 <code>load</code> 改成 16（更慢的显存），最优的 stage 数变成几？再把 <code>STAGE_KB</code> 改成 32（相当于 BLOCK_K = 64），最优值又怎么变？</li>
+<li><strong>看一看 Intel 的指针版 GEMM 怎么流水。</strong> 用 <code>kernel.asm[&quot;ttgir&quot;]</code> 看第 7 章的指针版 GEMM 在 Max 1100 上 <code>num_stages = 2</code> 和 <code>num_stages = 4</code> 时的 TTGIR：它用的是预取、<code>async_copy</code>，还是别的？shared memory 的用量随 stage 变化吗？</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>软件流水：开始算第 i 段时，就发出第 i + (S−1) 段的读取，让「搬」和「算」重叠。Triton 里只有一个参数：<code>num_stages</code>（S）。</li>
+<li>NVIDIA：<code>num_stages − 1</code> 份 shared memory 缓冲区，配合 Ampere 的异步拷贝 <code>cp.async</code>（TTGIR 里是 <code>ttg.async_copy_global_to_local</code> / <code>async_wait</code>），由 pipeliner pass 生成。128×128×32 的 fp16 GEMM 每多一级多 16 KiB。默认 <code>num_stages = 3</code>。</li>
+<li>stage 不是越多越好：shared memory 是 SM 上所有 program 共用的，一个 program 用得越多，能同时驻留的越少。浏览器模型里，4 级（合计 74%）比 5 级（49%）还快。超出上限时，加载 kernel 会抛 <code>OutOfResources: out of resource: shared memory, Required: …, Hardware limit: …</code>。</li>
+<li>Intel：<code>num_stages</code> 变成了「提前 <code>num_stages − 1</code> 轮发出 <code>ttig.descriptor_prefetch</code>」，shared memory 一个字节也不用。Max 1100 上 2 级最快（默认值），不预取慢 18%，预取太深也会变慢。</li>
+<li>同一个参数，在两个后端上是两套完全不同的机制。调参之前先看 IR，知道它到底变成了什么。</li>
+</ul>
+<p><strong>minillm 进度</strong>：本章没有修改 minillm 的代码：Intel 上 <code>matmul_grouped</code> 用的默认 <code>num_stages = 2</code> 已经是最快的。测试仍为 138 个。</p>
+<p>下一章把这些参数交给机器去搜：<code>@triton.autotune</code> 的配置空间、<code>key</code> 怎么选、<code>prune_configs_by</code> 怎么剪枝，以及调优本身要花多少时间。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch12.html">← 第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a>
+  <a class="nav-next" href="ch14.html">第 14 章 autotune →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

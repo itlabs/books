@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 22 章 关键 pass 与性能定位</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li class="active"><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 22 章 关键 pass 与性能定位</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 19 章说 <code>ttgir</code> 段是 Triton 的核心，第 20、21 章讲了它操作的对象 layout。这一章先把这一段里最重要的十来个 pass 排一排，每个都指回前面哪一章见过它的效果。然后用一整章的篇幅，做一次完整的性能定位：回到第 17 章那个没有解释的现象，<strong>因果 attention 在关掉 <code>ReduceVariableLiveness</code> 时快了 24%，非因果却没有</strong>。</p>
+<p>读完你会拿到三样东西。一是一张 pass 地图：从 <code>convert-triton-to-tritongpu</code> 到 pipeliner，NVIDIA 和 Intel 各自的版本。二是一套定位的步骤：复现、对比 IR、做控制变量的实验、往下一级看、读源码。三是这个案例的答案，它出乎意料：差别不在 Triton 里，而在 Triton 下面两级的 IGC（Intel 的 GPU 编译器）。触发条件是对角线上的那个 mask，不是循环次数；八种组合里，快的那两种恰好是 IGC 的寄存器分配器成功用上了「减少 bank 冲突」的策略，其余六种都退回了另一种策略，没有一个例外。</p>
+</div><h2><code>ttgir</code> 段的 pass 地图</h2>
+<p>第 19 章数过，<code>row_sum</code> 在 sm_86 上 <code>ttgir</code> 段有 44 个 pass，Max 1100 上 32 个。其中很多是 canonicalize、CSE 这种清理，真正决定性能的是下面这些（大致按执行顺序）：</p>
+<table>
+<thead>
+<tr>
+<th>pass</th>
+<th>后端</th>
+<th>做什么</th>
+<th>本书哪里见过它的效果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>convert-triton-to-tritongpu</code></td>
+<td>共用</td>
+<td>给每个张量一个初始的 <code>#blocked</code> layout，module 上加 <code>num-warps</code> 等属性</td>
+<td>第 18 章</td>
+</tr>
+<tr>
+<td><code>tritongpu-coalesce</code></td>
+<td>共用</td>
+<td>按「最内维连续、每个线程 16 字节」给访存选 layout</td>
+<td>第 20 章（fp32 选 4 个，fp16 选 8 个）</td>
+</tr>
+<tr>
+<td><code>tritongpu-remove-layout-conversions</code></td>
+<td>各有一份</td>
+<td>沿数据流传播 layout，删掉多余的 <code>convert_layout</code>，必要时重算</td>
+<td>第 21 章（FlashAttention 从 39 个降到 2 个）</td>
+</tr>
+<tr>
+<td><code>tritongpu-accelerate-matmul</code></td>
+<td>各有一份</td>
+<td>把 <code>tt.dot</code> 换到矩阵单元：结果用 <code>#mma</code> / <code>#ttig.dpas</code>，输入插入到 <code>#dot_op</code> 的转换</td>
+<td>第 15 章（<code>num_warps &lt; 4</code> 丢了 <code>wgmma</code>）、第 20 章</td>
+</tr>
+<tr>
+<td><code>tritongpu-optimize-dot-operands</code></td>
+<td>各有一份</td>
+<td>整理 <code>tl.dot</code> 输入前面的 layout 转换</td>
+<td></td>
+</tr>
+<tr>
+<td><code>TritonIntelGPUMaterializeBlockPointer</code></td>
+<td>Intel</td>
+<td>证明对齐以后，给 descriptor 读写标上 <code>ttig.block_io</code></td>
+<td>第 15 章（两个对齐的坑）</td>
+</tr>
+<tr>
+<td><code>tritongpu-assign-latencies</code> → <code>schedule-loops</code> → <code>pipeline</code></td>
+<td>NVIDIA</td>
+<td>软件流水：多缓冲、<code>cp.async</code> / TMA</td>
+<td>第 13 章</td>
+</tr>
+<tr>
+<td><code>TritonIntelGPUPipeline</code></td>
+<td>Intel</td>
+<td>软件流水：提前 <code>num_stages − 1</code> 轮发预取</td>
+<td>第 13 章</td>
+</tr>
+<tr>
+<td><code>TritonIntelGPUReduceVariableLiveness</code></td>
+<td>Intel</td>
+<td>寄存器压力大时，把大张量的 load 挪到用它的地方</td>
+<td>第 17 章</td>
+</tr>
+<tr>
+<td><code>nvgpu-warp-specialization</code></td>
+<td>NVIDIA</td>
+<td>按 <code>warp_specialize=True</code> 的提示拆分 warp</td>
+<td>第 15 章（只在 sm_100 上生效）</td>
+</tr>
+<tr>
+<td><code>tritongpu-prefetch</code></td>
+<td>NVIDIA</td>
+<td>把 <code>tl.dot</code> 的输入提前从 shared memory 读进寄存器</td>
+<td></td>
+</tr>
+<tr>
+<td><code>tritongpu-reduce-data-duplication</code>、<code>reorder-instructions</code></td>
+<td>共用</td>
+<td>减少重复的数据、调整指令顺序</td>
+<td></td>
+</tr>
+</tbody></table>
+<p>（pass 的名字是 <code>MLIR_ENABLE_DUMP</code> 打印出来的那种；C++ 源码在 <code>lib/Dialect/TritonGPU/Transforms/</code> 和各后端的 <code>third_party/&lt;后端&gt;/lib/</code> 下。）</p>
+<p>这张表里有两种 pass：一种是「每个 kernel 都一样」的，比如 coalesce 总是在找连续的那一维；另一种是<strong>启发式</strong>的，根据寄存器压力、形状、目标架构做取舍，<code>ReduceVariableLiveness</code> 就是。启发式的 pass 有时会做出对这个 kernel 不好的决定，这正是性能定位最常见的起点。</p>
+<h2>定位一个性能问题的步骤</h2>
+<p>不管问题出在哪，大致都是这几步：</p>
+<ol>
+<li><strong>复现，并把它缩小</strong>。确认差距稳定（第 11 章：多测几次，看分位数；第 17 章：注意降频），然后找到「刚好有问题」和「刚好没问题」的两个版本，差别越小越好。</li>
+<li><strong>对比 IR</strong>。用 <code>kernel.asm[&quot;ttgir&quot;]</code> 或 <code>TRITON_KERNEL_DUMP</code>（第 19 章）拿到两个版本的 TTGIR，看差在哪。</li>
+<li><strong>做控制变量的实验</strong>。IR 里的差别往往不止一处，一次只改一个，看哪个和性能对得上。</li>
+<li><strong>往下看一级</strong>。TTGIR 差不多、性能却差很多时，问题在后面：LLVM IR、PTX / SASS，Intel 上是 IGC 生成的汇编。</li>
+<li><strong>读源码</strong>。找到是哪个 pass（或者哪一级编译器）的哪个决定，弄明白它为什么这么做。</li>
+</ol>
+<p>下面把这五步完整地走一遍。</p>
+<h2>案例：因果 attention 的 24%</h2>
+<h3>第 1 步：复现，缩小</h3>
+<p>第 17 章的现象（Max 1100，D = 128，256 × 64，32 个 warp）：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th align="right"><code>ReduceVariableLiveness</code> 打开（默认）</th>
+<th align="right">关掉</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>非因果</td>
+<td align="right">93.8 TFLOP/s</td>
+<td align="right">92.1</td>
+</tr>
+<tr>
+<td>因果</td>
+<td align="right">78.0</td>
+<td align="right">96.4</td>
+</tr>
+</tbody></table>
+<p>非因果时这个 pass 无关紧要，因果时关掉它快 24%。两个版本的差别只是一个编译选项，已经足够小了。</p>
+<h3>第 2 步：对比 TTGIR</h3>
+<p>第 17 章已经做过：打开这个 pass 时，Q 的 <code>descriptor_load</code> 被挪进了循环，每一轮重读；关掉时 Q 在循环外读一次。TTGIR 里其余的部分几乎一样。可问题是，<strong>非因果的 kernel 也有完全相同的差别</strong>，却没有变慢。所以「Q 在不在循环里」只是一半原因，另一半要到「因果」和「非因果」的差别里去找。</p>
+<h3>第 3 步：控制变量</h3>
+<p>因果和非因果在 kernel 里有两处不同：</p>
+<ul>
+<li><strong>mask</strong>：对角线上要用 <code>tl.where(offs_m &gt;= offs_n, qk, -inf)</code> 屏蔽上三角；</li>
+<li><strong>循环次数</strong>：只循环到对角线（<code>hi = (pid_m + 1) · BLOCK_M</code>），每个 program 平均 34 轮，而不是 64 轮。</li>
+</ul>
+<p>把它们拆成两个独立的开关：<code>MASK</code> 只管加不加 mask，<code>SKIP</code> 只管跳不跳上三角。<code>MASK = True, SKIP = False</code> 是一个「每块都算、但都做 mask」的版本：结果和因果一样，只是白算了一半。四种组合，每种都开、关 <code>ReduceVariableLiveness</code> 各测一次。</p>
+<p>第 4 步要看 IGC 的汇编，所以这个实验顺便把它也导出来。Intel 后端有一个环境变量 <code>TRITON_INTEL_ENABLE_IGC_SHADER_DUMP=1</code>：设了以后，Triton 改用 <code>ocloc</code> 在 <code>compile()</code> 里生成机器码（第 19 章的 <code>zebin</code> 那一级），同时让 IGC 把中间结果和最终的汇编（<code>*.asm</code>）写进这个 kernel 的缓存目录。下面的脚本每种组合用一个空的缓存目录，测完速度，再从汇编里读三样东西：寄存器分配用了哪种策略、溢出了多少字节、主循环（有 <code>dpas</code> 的那个循环）里有多少条指令：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: xpu
+import glob
+import os
+import re
+import tempfile
+import time
+
+os.environ["TRITON_INTEL_ENABLE_IGC_SHADER_DUMP"] = "1"   # 让 IGC 把汇编导出到缓存目录（第 22 章）
+import torch                                              # noqa: E402
+import triton                                             # noqa: E402
+import triton.language as tl                              # noqa: E402
+
+from minillm import DEVICE                                # noqa: E402
+
+
+@triton.jit
+def attn_var(q_ptr, k_ptr, v_ptr, o_ptr, sm_scale, N_CTX, ROWS, HEAD_DIM: tl.constexpr, BLOCK_M: tl.constexpr,
+             BLOCK_N: tl.constexpr, MASK: tl.constexpr, SKIP: tl.constexpr):
+    """第 17 章的 _attn_fwd_kernel，把「因果」拆成两个开关：MASK（对角线 mask）和 SKIP（跳过上三角的块）。"""
+    pid_m = tl.program_id(0)
+    hz = tl.program_id(1)
+    q_desc = tl.make_tensor_descriptor(q_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_M, HEAD_DIM])
+    k_desc = tl.make_tensor_descriptor(k_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_N, HEAD_DIM])
+    v_desc = tl.make_tensor_descriptor(v_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_N, HEAD_DIM])
+    o_desc = tl.make_tensor_descriptor(o_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_M, HEAD_DIM])
+    base = hz * N_CTX
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    q = q_desc.load([base + pid_m * BLOCK_M, 0])
+    qk_scale = sm_scale * 1.4426950408889634
+    m_i = tl.full([BLOCK_M], -float("inf"), tl.float32)
+    l_i = tl.zeros([BLOCK_M], tl.float32)
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], tl.float32)
+    hi = tl.minimum((pid_m + 1) * BLOCK_M, N_CTX) if SKIP else N_CTX
+    for start_n in range(0, hi, BLOCK_N):
+        k = k_desc.load([base + start_n, 0])
+        qk = tl.dot(q, tl.trans(k)) * qk_scale
+        if MASK:
+            offs_n = start_n + tl.arange(0, BLOCK_N)
+            qk = tl.where(offs_m[:, None] &gt;= offs_n[None, :], qk, -float("inf"))
+        m_new = tl.maximum(m_i, tl.max(qk, 1))
+        p = tl.math.exp2(qk - m_new[:, None])
+        alpha = tl.math.exp2(m_i - m_new)
+        l_i = l_i * alpha + tl.sum(p, 1)
+        v = v_desc.load([base + start_n, 0])
+        acc = tl.dot(p.to(v.dtype), v, acc * alpha[:, None])
+        m_i = m_new
+    o_desc.store([base + pid_m * BLOCK_M, 0], (acc / l_i[:, None]).to(o_desc.dtype))
+
+
+def read_asm(cache_dir):
+    """IGC 导出的汇编：寄存器分配用了哪种策略、溢出了多少字节、主循环里有多少条指令。"""
+    path = sorted(glob.glob(f"{cache_dir}/*/*_1_simd16_entry_0001.asm"))[-1]   # 最终用的那一份
+    text = open(path).read()
+    lines = text.splitlines()
+    labels = {m.group(1): i for i, l in enumerate(lines) if (m := re.match(r"^([_A-Za-z0-9]+):\s*$", l))}
+    loops = [(labels[m.group(1)], i) for i, l in enumerate(lines)
+             if (m := re.search(r"jmpi\s+(\S+)", l)) and labels.get(m.group(1), i) &lt; i]
+    body = max((lines[a:b + 1] for a, b in loops), key=lambda b: sum("dpas" in x for x in b))   # 有 dpas 的那个循环
+    n_instr = sum(1 for x in body if re.match(r"^\s*(\([^)]*\)\s*)?[a-z]", x))
+    ra = re.search(r"//\.RA type\s+(\S+)", text).group(1).replace("GRAPH_COLORING_SPILL_", "")
+    return ra, int(re.search(r"//\.spill size (\d+)", text).group(1)), n_instr
+
+
+Z, H, N, D = 4, 32, 4096, 128
+q, k, v = (torch.randn(Z, H, N, D, device=DEVICE, dtype=torch.bfloat16) for _ in range(3))
+o = torch.empty_like(q)
+print(f"{torch.xpu.get_device_name()}，triton {triton.__version__}，attention 256×64，D=128，32 个 warp")
+print(" MASK  SKIP  ReduceVariableLiveness    TFLOP/s   IGC 的寄存器分配   溢出（字节）  主循环指令数")
+for mask, skip in ((False, False), (True, False), (False, True), (True, True)):
+    for rvl in (True, False):
+        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp()      # 每种组合一个空的缓存目录，汇编不会混在一起
+        run = lambda: attn_var[(N // 256, Z * H)](q, k, v, o, D ** -0.5, N, Z * H * N, HEAD_DIM=D, BLOCK_M=256,
+                                                  BLOCK_N=64, MASK=mask, SKIP=skip, num_warps=32,
+                                                  reduce_variable_liveness=rvl)
+        run(); time.sleep(3)
+        flops = 4 * Z * H * N * N * D * (0.5 if skip else 1)
+        tflops = flops / triton.testing.do_bench(run) / 1e9
+        ra, spill, n_instr = read_asm(os.environ["TRITON_CACHE_DIR"])
+        print(f" {mask!s:5} {skip!s:5} {'开' if rvl else '关':^22} {tflops:9.1f}   {ra:16} {spill:9}   {n_instr:9}")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，attention 256×64，D=128，32 个 warp
+ MASK  SKIP  ReduceVariableLiveness    TFLOP/s   IGC 的寄存器分配   溢出（字节）  主循环指令数
+ False False           开                 94.2   FF_RA                 3520         856
+ False False           关                 92.0   FF_RA                 5440         818
+ True  False           开                 90.4   FF_RA                 3712         922
+ True  False           关                110.0   RR_BC_RA              5632         882
+ False True            开                 83.1   FF_RA                 3712         865
+ False True            关                 80.9   FF_RA                 5696         830
+ True  True            开                 78.3   FF_RA                 3840         951
+ True  True            关                 96.1   RR_BC_RA              5824         873</code></pre>
+</div><p>（<code>SKIP = True</code> 的两组按「只算下三角」计算 FLOP，所以 TFLOP/s 可以和 <code>SKIP = False</code> 的直接比。）</p>
+<p>先只看 TFLOP/s 那一列：</p>
+<ul>
+<li>没有 mask 时（第 1、2 行，第 5、6 行），开不开这个 pass 只差 2%–3%，不管跳不跳上三角。</li>
+<li><strong>有 mask 时（第 3、4 行，第 7、8 行），关掉 pass 都快了 20% 以上</strong>：不跳上三角时从 90.4 到 110.0，跳的时候从 78.3 到 96.1。</li>
+</ul>
+<p>所以触发条件是 <strong>mask</strong>，和循环次数无关。第 4 行还有一个更奇怪的数：<strong>多做了 mask 的 kernel（110.0）比不做 mask 的（92.0）还快</strong>。mask 只会增加指令，不可能让计算本身变快，只能是它改变了编译的结果。</p>
+<h3>第 4 步：往下看一级</h3>
+<p>TTGIR 的层面已经解释不了了，往下看 IGC 的汇编。最直接的指标是溢出的字节数和主循环的指令数，但它们和速度对不上：最快的两种（110.0 和 96.1）溢出反而最多（5632、5824 字节），主循环的指令数也不是最少的。</p>
+<p>对得上的是倒数第三列，IGC 在汇编开头记录的<strong>寄存器分配策略</strong>（<code>//.RA type</code> 那一行）：八种组合里，<strong>快的那两种是 <code>RR_BC_RA</code>，其余六种全是 <code>FF_RA</code></strong>，一个例外也没有。</p>
+<h3>第 5 步：读源码</h3>
+<p>这两个名字在 IGC 的源码里（GitHub 上的 intel/intel-graphics-compiler，<code>visa/G4_Kernel.hpp</code> 列出所有的 RA 类型，<code>visa/GraphColor.cpp</code> 决定用哪一种）。记录类型的那段代码是：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiICBpZiAobGl2ZUFuYWx5c2lzLmxpdmVuZXNzQ2xhc3MoRzRfR1JGKSkge1xuICAgIGlmIChjb2xvckhldXJpc3RpY0dSRiA9PSBST1VORF9ST0JJTikge1xuICAgICAga2VybmVsLnNldFJBVHlwZShkb0JhbmtDb25mbGljdCA%2FIFJBX1R5cGU6OkdSQVBIX0NPTE9SSU5HX1JSX0JDX1JBXG4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDogUkFfVHlwZTo6R1JBUEhfQ09MT1JJTkdfUlJfUkEpO1xuICAgIH0gZWxzZSB7XG4gICAgICBrZXJuZWwuc2V0UkFUeXBlKGRvQmFua0NvbmZsaWN0ID8gUkFfVHlwZTo6R1JBUEhfQ09MT1JJTkdfRkZfQkNfUkFcbiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgOiBSQV9UeXBlOjpHUkFQSF9DT0xPUklOR19GRl9SQSk7XG4gICAgfVxuICB9IiwiY29tcGlsZXJzIjpbeyJpZCI6ImcxNDIiLCJvcHRpb25zIjoiLXN0ZD1jKysyMyAtTzIgLVdhbGwifV0sImV4ZWN1dG9ycyI6W3siY29tcGlsZXIiOnsiaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn0sIndyYXAiOnRydWV9XX1dfQ%3D%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">  if (liveAnalysis.livenessClass(G4_GRF)) {
+    if (colorHeuristicGRF == ROUND_ROBIN) {
+      kernel.setRAType(doBankConflict ? RA_Type::GRAPH_COLORING_RR_BC_RA
+                                      : RA_Type::GRAPH_COLORING_RR_RA);
+    } else {
+      kernel.setRAType(doBankConflict ? RA_Type::GRAPH_COLORING_FF_BC_RA
+                                      : RA_Type::GRAPH_COLORING_FF_RA);
+    }
+  }</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>RR 是 round robin（轮流分配寄存器），FF 是 first fit（用第一个空闲的），BC 是 bank conflict（减少寄存器文件的 bank 冲突）。选择的逻辑在同一个文件里，注释写得很清楚：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">C++</span>
+    <a class="ce-btn" href="https://godbolt.org/clientstate/eyJzZXNzaW9ucyI6W3siaWQiOjEsImxhbmd1YWdlIjoiYysrIiwic291cmNlIjoiICAvL1xuICAvLyBhc3NpZ24gcmVnaXN0ZXJzIGZvciBHUkZzLCBHUkZzIGFyZSBmaXJzdCBhdHRlbXB0ZWQgdG8gYmUgYXNzaWduZWQgdXNpbmdcbiAgLy8gcm91bmQtcm9iaW4gYW5kIGlmIGl0IGZhaWxzIHRoZW4gd2UgcmV0cnkgdXNpbmcgYSBmaXJzdC1maXQgaGV1cmlzdGljLlxuICAvLyIsImNvbXBpbGVycyI6W3siaWQiOiJnMTQyIiwib3B0aW9ucyI6Ii1zdGQ9YysrMjMgLU8yIC1XYWxsIn1dLCJleGVjdXRvcnMiOlt7ImNvbXBpbGVyIjp7ImlkIjoiZzE0MiIsIm9wdGlvbnMiOiItc3RkPWMrKzIzIC1PMiAtV2FsbCJ9LCJ3cmFwIjp0cnVlfV19XX0%3D" target="_blank" rel="noopener">🔗 在 Compiler Explorer 打开</a></div>
+  <pre class="line-numbers"><code class="language-cpp">  //
+  // assign registers for GRFs, GRFs are first attempted to be assigned using
+  // round-robin and if it fails then we retry using a first-fit heuristic.
+  //</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地编译运行：</span><code>g++ -std=c++23 -O2 -Wall main.cpp &amp;&amp; ./a.out</code></div>
+</div><p>后面的代码是：先用 round robin 加 bank 冲突优化（<code>assignColors(ROUND_ROBIN, doBankConflictReduction, ...)</code>）；失败了，再用 first fit 加 bank 冲突优化试一次；还不行，就退回<strong>不做 bank 冲突优化的 first fit</strong>。我们看到的 <code>FF_RA</code>（没有 <code>BC</code>）就是最后这一档。</p>
+<p>这就解释了整件事：</p>
+<ul>
+<li>寄存器文件分成几个 bank，一条指令的几个源操作数如果落在同一个 bank 上，就要多花周期去读。DPAS 一条指令要读一大块寄存器，对 bank 冲突格外敏感。</li>
+<li>六个慢的版本，寄存器分配的第一次尝试都失败了，一路退到了不考虑 bank 冲突的那一档；两个快的版本第一次就成功了，溢出虽多，指令却排得好。</li>
+<li>至于「为什么偏偏是 mask 加上 Q 留在寄存器里时，round robin 能成功」，那取决于每个变量的活跃区间怎样交错，是一个对输入非常敏感的结果。IR 稍微变一点（多一个 <code>where</code>、Q 的 load 挪个位置），着色的结果就可能翻转。我没有再往下追是哪个变量导致了失败。</li>
+</ul>
+<p>所以，第 17 章那 24% 的差别，<strong>不是 <code>ReduceVariableLiveness</code> 做了一件「坏事」</strong>。它确实减少了寄存器压力（溢出从 5824 字节降到 3840），只是 IGC 的寄存器分配器在它给出的 IR 上，恰好没能用上更好的策略。决定性能的那个分支，在 Triton 下面两级。</p>
+<h3>结论：作为 kernel 的作者能做什么</h3>
+<ul>
+<li><strong>把编译选项当成调参的一维。</strong> 你没法从 Triton 里直接指定 IGC 的寄存器分配策略，但能改变它的输入。<code>reduce_variable_liveness</code>、<code>grf_mode</code>（第 17 章）都是 <code>triton.Config</code> 里可以放的选项，交给 autotune 去测，比猜更可靠。minillm 的 <code>launch_config</code> 在因果、D = 128 时关掉这个 pass，就是测出来的结果。</li>
+<li><strong>性能和「溢出了多少」不一定单调。</strong> 第 17 章、本章都看到了溢出更多反而更快的例子。溢出数是一个线索，不是结论。</li>
+<li><strong>一个快的配置可能很脆弱。</strong> 这种「过不过一道阈值」的现象，换一个 Triton 版本、换一个驱动、改一行 kernel，都可能翻转。值得为关键 kernel 留一个性能回归测试。</li>
+<li>如果确认是编译器的问题，带着最小的复现（这一章的脚本就是）去报告给上游。</li>
+</ul>
+<h2>NVIDIA 上往下看什么</h2>
+<p>本章的工具在 NVIDIA 上对应的是：</p>
+<ul>
+<li><strong>PTX 和 SASS</strong>：<code>kernel.asm[&quot;ptx&quot;]</code> 是 PTX；<code>TRITON_KERNEL_DUMP=1</code> 时，<code>compile()</code> 会把 cubin 反汇编成 SASS，另存一份 <code>.sass</code>（第 19 章那段 <code>compile()</code> 的代码里，<code>if ext == &quot;cubin&quot;</code> 那两行）。</li>
+<li><strong>寄存器和溢出</strong>：<code>kernel.n_regs</code>、<code>kernel.n_spills</code>（第 12 章）来自 <code>ptxas</code>。</li>
+<li><strong>ptxas 的决定</strong>：和 IGC 一样，<code>ptxas</code> 的寄存器分配、指令调度也是 Triton 管不到的一层。SASS 里 <code>LDL</code> / <code>STL</code>（local memory 的读写）就是溢出。</li>
+</ul>
+<p>本书还没有在 A10 上做过类似的定位。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>在 A10 上做一遍第 3 步。</strong> 本章的脚本是 <code># arch: xpu</code>（<code>reduce_variable_liveness</code> 是 Intel 后端的选项）。在 A10 上去掉这个选项，只测 <code>MASK</code> × <code>SKIP</code> 四种组合。mask 在 NVIDIA 上贵不贵？用 <code>TRITON_KERNEL_DUMP=1</code> 导出 SASS，数一数主循环里的 <code>LDL</code> / <code>STL</code>。</li>
+<li><strong>把选项交给 autotune。</strong> 给第 17 章的 <code>_attn_fwd_kernel</code> 写一个 <code>@triton.autotune</code>，配置空间包括 <code>reduce_variable_liveness</code> 开和关、<code>BLOCK_N</code> 为 64 和 128。它选出来的，和 minillm 的 <code>launch_config</code> 一样吗？</li>
+<li><strong>找一个你自己的「阈值」现象。</strong> 在第 12 章的 GEMM 上，把 <code>BLOCK_K</code> 从 32 换成 64，或者 <code>num_warps</code> 从 32 换成 16，导出 IGC 的汇编，看寄存器分配策略和溢出量有没有跳变，和速度的变化对不对得上。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>ttgir</code> 段里决定性能的 pass：convert-triton-to-tritongpu（初始 layout）、coalesce（访存 layout）、remove-layout-conversions（删转换）、accelerate-matmul（选矩阵指令）、pipeline（流水）、Intel 的 MaterializeBlockPointer（block IO）和 ReduceVariableLiveness（寄存器压力）、NVIDIA 的 warp specialization。其中有不少是启发式的，可能对某个 kernel 做出不好的取舍。</li>
+<li>定位五步：复现并缩小、对比 IR、控制变量、往下看一级、读源码。</li>
+<li>第 17 章的案例：触发条件是对角线的 mask，不是循环次数；TTGIR 只差在 Q 的 load 在循环里还是循环外。往下看 IGC 的汇编（<code>TRITON_INTEL_ENABLE_IGC_SHADER_DUMP=1</code>），八种组合里快的两种恰好是寄存器分配成功用上了 round robin 加 bank 冲突优化（<code>RR_BC_RA</code>），其余全部退回了不做 bank 冲突优化的 first fit（<code>FF_RA</code>），和溢出量无关。</li>
+<li>决定性能的分支可能在 Triton 之下（IGC、ptxas），你改变不了它的策略，但能改变它的输入：把 <code>reduce_variable_liveness</code>、<code>grf_mode</code> 这类选项当成 autotune 的一维，为关键 kernel 留性能回归测试。</li>
+</ul>
+<p>下一章：三个后端。NVIDIA、AMD 两个树内后端加 Intel 的树外后端，各自在 TTGIR 之后做了什么，同一个 kernel 换后端会遇到哪些可移植性问题。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch21.html">← 第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a>
+  <a class="nav-next" href="ch23.html">第 23 章 三个后端 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

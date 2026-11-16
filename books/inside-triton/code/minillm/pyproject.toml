@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minillm"
+version = "0.0.1"
+description = "《深入 Triton》贯穿项目：用 Triton 写的简化 decoder-only Transformer 层"
+requires-python = ">=3.10"
+# torch / triton 故意不写进依赖：不同 GPU 要装不同的 wheel（CUDA 版 torch + triton，
+# XPU 版 torch 自带 triton-xpu），由读者按附录 A 先装好。这里写了，pip 反而可能装错版本。
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["minillm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

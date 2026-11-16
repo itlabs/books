@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 章 tl.dot 与第一个 GEMM</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li class="active"><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 7 章 tl.dot 与第一个 GEMM</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前几章的 kernel 都是访存受限的：算得再快也没用，关键是少搬数据。矩阵乘（GEMM）正好相反，它是 Transformer 里最重的计算，也是最典型的<strong>计算受限</strong>算子（第 2 章：4096³ 的 fp16 GEMM 算术强度约 1365 FLOP/字节，远在拐点右边）。要让它快，就得喂饱矩阵单元，而在 Triton 里通往矩阵单元的入口只有一个：<code>tl.dot</code>。</p>
+<p>这一章写 minillm 的第一个 <code>matmul</code>，并且把<strong>精度</strong>讲清楚：累加器为什么必须用 fp32；为什么你的 GEMM 和 PyTorch 差了 1e-3，而这不是 bug；fp32 输入的 <code>tl.dot</code> 默认走的是 TF32，误差比你以为的大；以及一个在 Max 1100 上实测出来的坑：几种「用矩阵单元模拟高精度」的选项在 Intel 后端上悄悄退回了普通乘加，慢了二十多倍。最后先看一眼性能：这个朴素版本在 Max 1100 上只有 <code>torch.matmul</code> 的十二分之一，差在哪里，是第 8 章和第三部分的事。</p>
+</div><h2>tile 分解</h2>
+<p><code>C = A @ B</code>，A 是 M×K，B 是 K×N。分给 program 的方式是：<strong>每个 program 负责 C 的一个 BLOCK_M × BLOCK_N 的 tile</strong>。这个 tile 需要 A 的一整条 BLOCK_M 行和 B 的一整条 BLOCK_N 列，它们太长，一次放不进寄存器，于是沿 K 方向切成一段一段，每段 BLOCK_K 长，循环累加：</p>
+<div class="concept">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <g font-size="13" font-weight="bold" fill="#374151"><text x="70" y="24">A（M × K）</text><text x="330" y="24">B（K × N）</text><text x="560" y="24">C（M × N）</text></g>
+  <rect x="20" y="36" width="200" height="200" fill="#f9fafb" stroke="#6b7280"/>
+  <rect x="20" y="96" width="200" height="40" fill="#ebf4ff" stroke="#2b6cb0"/>
+  <rect x="20" y="96" width="40" height="40" fill="#2b6cb0" fill-opacity="0.45" stroke="#2b6cb0"/>
+  <rect x="60" y="96" width="40" height="40" fill="none" stroke="#2b6cb0" stroke-dasharray="3 2"/>
+  <rect x="100" y="96" width="40" height="40" fill="none" stroke="#2b6cb0" stroke-dasharray="3 2"/>
+  <text x="120" y="156" font-size="11.5" text-anchor="middle" fill="#2b6cb0">第 pid_m 条：BLOCK_M 行</text>
+  <rect x="280" y="36" width="200" height="200" fill="#f9fafb" stroke="#6b7280"/>
+  <rect x="400" y="36" width="40" height="200" fill="#e9f6ee" stroke="#3f9b5c"/>
+  <rect x="400" y="36" width="40" height="40" fill="#3f9b5c" fill-opacity="0.45" stroke="#3f9b5c"/>
+  <rect x="400" y="76" width="40" height="40" fill="none" stroke="#3f9b5c" stroke-dasharray="3 2"/>
+  <rect x="400" y="116" width="40" height="40" fill="none" stroke="#3f9b5c" stroke-dasharray="3 2"/>
+  <text x="420" y="252" font-size="11.5" text-anchor="middle" fill="#3f9b5c">第 pid_n 条：BLOCK_N 列</text>
+  <rect x="510" y="36" width="200" height="200" fill="#f9fafb" stroke="#6b7280"/>
+  <rect x="630" y="96" width="40" height="40" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+  <text x="650" y="156" font-size="11.5" text-anchor="middle" fill="#e06a3b">program (pid_m, pid_n)</text>
+  <text x="650" y="172" font-size="11.5" text-anchor="middle" fill="#e06a3b">负责的 tile</text>
+  <g font-size="12" fill="#374151">
+    <text x="20" y="276">每次循环：读 A 的一段（BLOCK_M × BLOCK_K，深蓝）和 B 的一段（BLOCK_K × BLOCK_N，深绿），</text>
+    <text x="20" y="294">acc += tl.dot(a, b)。acc 是 BLOCK_M × BLOCK_N 的 fp32 累加器，整个循环都待在寄存器里，最后写一次 C。</text>
+  </g>
+</svg>
+<div class="caption">图 7-1　GEMM 的 tile 分解。program (pid_m, pid_n) 沿 K 方向走过 A 的一条行和 B 的一条列，虚线框是后面的几段。C 的每个 tile 只写一次</div>
+</div><p>写成 Triton，就是 minillm 的 <code>minillm/kernels/matmul.py</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def _matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K,
+                   stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+                   ACC_DTYPE: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    # 指向 A 的第一条（BLOCK_M × BLOCK_K）和 B 的第一条（BLOCK_K × BLOCK_N）
+    a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+    b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_DTYPE)
+    for k in range(0, K, BLOCK_K):
+        # 三个方向都可能不是 BLOCK 的整数倍：越界的位置填 0，乘出来也是 0，不影响累加
+        a = tl.load(a_ptrs, mask=(offs_m[:, None] &lt; M) &amp; (offs_k[None, :] &lt; K - k), other=0.0)
+        b = tl.load(b_ptrs, mask=(offs_k[:, None] &lt; K - k) &amp; (offs_n[None, :] &lt; N), other=0.0)
+        acc = tl.dot(a, b, acc, out_dtype=ACC_DTYPE)
+        a_ptrs += BLOCK_K * stride_ak             # 沿 K 往前走一条
+        b_ptrs += BLOCK_K * stride_bk
+    c = acc.to(c_ptr.dtype.element_ty)
+    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+    tl.store(c_ptrs, c, mask=(offs_m[:, None] &lt; M) &amp; (offs_n[None, :] &lt; N))</code></pre>
+</div><p>用到的都是第 5 章的东西：二维的指针张量、二维 mask、stride。只有三处是新的：</p>
+<ul>
+<li><strong><code>tl.dot(a, b, acc)</code></strong>：两个二维块相乘，再加到 <code>acc</code> 上，相当于 <code>acc + a @ b</code>。<code>a</code> 是 BLOCK_M × BLOCK_K，<code>b</code> 是 BLOCK_K × BLOCK_N。形状的下限由后端决定（各后端 <code>compiler.py</code> 里的 <code>min_dot_size</code>）：NVIDIA 后端对 M、N 没有下限（小于矩阵指令的宽度时补齐再用矩阵单元），K 对 fp16 / bf16 至少是 16，对 fp32 至少是 8；Intel 后端除 int8 以外没有下限，尺寸不适合 DPAS 时直接退回普通乘加，不报错（第 9 章）。把 <code>acc</code> 传进去而不是写成 <code>acc += tl.dot(a, b)</code>，是为了让编译器能直接用矩阵单元的「乘加」指令，省掉一次单独的加法。</li>
+<li><strong>mask 里的 <code>other=0.0</code></strong>：K 方向越界的部分填 0，乘出来是 0，不影响累加。第 5 章说过，<code>other</code> 要填运算的单位元；矩阵乘里，「加 0」就是单位元。</li>
+<li><strong><code>a_ptrs += BLOCK_K * stride_ak</code></strong>：整个指针张量一起往后挪一段。这里用的是 <code>+=</code>，在 Triton 里它创建的是一个新值，并不会就地修改什么。</li>
+</ul>
+<h2>tl.dot 编译成了什么</h2>
+<p>把这个 kernel（fp16，128×128×32，8 个 warp）用 3.9.0 编到 sm_86，TTGIR 里和 <code>tl.dot</code> 有关的 layout 是这几个（节选，去掉了 <code>loc(...)</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">#mma = #ttg.nvidia_mma&lt;{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [16, 8]}&gt;
+#shared = #ttg.swizzled_shared&lt;{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0]}&gt;
+...
+      %acc_117 = tt.dot %a_105, %b_106, %acc_93, inputPrecision = tf32 : tensor&lt;128x16xf16, #ttg.dot_op&lt;{opIdx = 0, parent = #mma, kWidth = 2}&gt;&gt; * tensor&lt;16x128xf16, #ttg.dot_op&lt;{opIdx = 1, parent = #mma, kWidth = 2}&gt;&gt; -&gt; tensor&lt;128x128xf32, #mma&gt;
+...
+    %5 = ttg.convert_layout %c : tensor&lt;128x128xf16, #mma&gt; -&gt; tensor&lt;128x128xf16, #blocked&gt;</code></pre>
+</div><ul>
+<li><strong><code>#mma</code></strong> 是累加器的 layout：128×128 的 fp32 怎么分给 8 个 warp（<code>warpsPerCTA = [2, 4]</code>），每个 warp 用 Ampere 的 mma 指令（<code>versionMajor = 2</code>，每条指令算 16×8 的一块）去算。第 2 章说过，<code>tl.dot</code> 是 Triton 里通往矩阵单元的唯一入口；<code>#mma</code> 就是「这块数据要喂给矩阵单元」的证据。在 Max 1100 上，对应的 layout 是 <code>#ttig.dpas</code>，而且那里的 <code>threadsPerWarp</code> 是 16（第 2 章）。</li>
+<li><strong><code>#ttg.dot_op&lt;{opIdx = 0, parent = #mma}&gt;</code></strong> 是 A 和 B 的 layout：矩阵单元对两个输入在线程之间怎么分布有严格的要求，<code>dot_op</code> 描述的就是这个要求，它的 <code>parent</code> 指向累加器的 layout。</li>
+<li><strong>一个 BLOCK_K = 32 的 <code>tl.dot</code>，被拆成了两个 K = 16 的 <code>tt.dot</code></strong>（注意类型是 <code>128x16</code>）：Ampere 的 fp16 mma 指令每次在 K 方向上只吃 16。</li>
+<li><strong>最后有一个 <code>ttg.convert_layout</code></strong>，把结果从 <code>#mma</code> 换成 <code>#blocked</code> 再写回。累加器按矩阵单元的方式分布，不利于合并写回，于是编译器像第 5 章那样插了一次 layout 转换。</li>
+</ul>
+<p>完整的 TTGIR 里还有一堆你在源码里没写的东西：<code>ttg.local_alloc</code>（在 shared memory 里分配了 2 份缓冲区）、<code>ttg.async_copy_global_to_local</code>、<code>ttg.async_wait</code>。这是编译器在做<strong>软件流水</strong>：一边用 mma 算当前这一段，一边异步地把下一段从显存搬进 shared memory。它由 <code>num_stages</code>（NVIDIA 默认 3）触发，元数据里这个 kernel 用了 32 KiB 的 shared memory。这是第 13 章的主题。</p>
+<h2>累加器为什么用 fp32</h2>
+<p>矩阵乘的输入常常是 fp16 或 bf16，但累加器几乎总是 fp32。看一下不这么做会怎样。下面的实验分别用 fp32 和 fp16 的累加器，算 256×256×K 的 GEMM，把相对误差（相对于 |C| 的最大值，以 fp64 的结果为准）打出来。它直接用 minillm 的 <code>matmul</code>（先按附录 A 第 9 节装好 minillm）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+import triton.language as tl
+
+from minillm import DEVICE
+from minillm.kernels.matmul import matmul
+
+
+def rel_err(c, ref):                       # 相对于 |C| 最大值的误差
+    return ((c.double() - ref).abs().max() / ref.abs().max()).item()
+
+
+torch.manual_seed(0)
+print("累加器的精度（fp16 输入，256×256×K）：")
+for K in (256, 4096, 16384):
+    a = torch.randn(256, K, device=DEVICE, dtype=torch.float16)
+    b = torch.randn(K, 256, device=DEVICE, dtype=torch.float16)
+    ref = a.double() @ b.double()
+    e32 = rel_err(matmul(a, b, 64, 64, 32, 4, tl.float32), ref)
+    e16 = rel_err(matmul(a, b, 64, 64, 32, 4, tl.float16), ref)
+    print(f"  K={K:5}  fp32 累加器 {e32:.2e}   fp16 累加器 {e16:.2e}")
+
+print("和 PyTorch 比（fp16，4096³）：")
+a = torch.randn(4096, 4096, device=DEVICE, dtype=torch.float16)
+b = torch.randn(4096, 4096, device=DEVICE, dtype=torch.float16)
+ref = a.double() @ b.double()
+c_tri, c_pt = matmul(a, b), a @ b
+print(f"  Triton  vs fp64：{rel_err(c_tri, ref):.2e}")
+print(f"  PyTorch vs fp64：{rel_err(c_pt, ref):.2e}")
+print(f"  Triton  vs PyTorch：{rel_err(c_tri, c_pt.double()):.2e}，最大绝对差 {(c_tri - c_pt).abs().max().item()}，"
+      f"|C| 最大 {ref.abs().max().item():.1f}")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">累加器的精度（fp16 输入，256×256×K）：
+  K=  256  fp32 累加器 4.19e-04   fp16 累加器 1.07e-03
+  K= 4096  fp32 累加器 3.82e-04   fp16 累加器 5.02e-03
+  K=16384  fp32 累加器 3.74e-04   fp16 累加器 8.79e-03
+和 PyTorch 比（fp16，4096³）：
+  Triton  vs fp64：3.59e-04
+  PyTorch vs fp64：3.59e-04
+  Triton  vs PyTorch：3.59e-04，最大绝对差 0.125，|C| 最大 348.5</code></pre>
+</div><p>前三行是累加器的实验：<strong>fp32 累加器的误差不随 K 变化</strong>，一直在 4e-4 左右；<strong>fp16 累加器的误差随 K 增长</strong>，K 从 256 到 16384，误差涨了 8 倍。原因很直接：K 越大，累加的项越多，fp16 每加一次就舍入一次，而且累加到后面，<code>acc</code> 的值越来越大，新加的一项相对它越来越小，舍入丢掉的有效位越来越多。fp32 有 24 位有效数字，fp16 只有 11 位。</p>
+<p>所以 minillm 的 <code>matmul</code> 默认用 fp32 累加器，只在最后存出去的时候才转回 fp16 或 bf16。矩阵单元本身就支持「fp16 输入、fp32 累加」，这不会让 <code>tl.dot</code> 变慢。</p>
+<h2>为什么和 PyTorch 差了 1e-3</h2>
+<p>上面输出的后三行回答了一个几乎每个写 GEMM 的人都会问的问题。同样的 fp16 输入，Triton 和 PyTorch 的结果不一样，<code>torch.testing.assert_close</code> 用默认容差还可能不通过。是不是 kernel 写错了？</p>
+<p>关键是<strong>拿谁当标准答案</strong>。以 fp64 的结果为准：Triton 的误差是 3.59e-04，PyTorch 的误差也是 3.59e-04，两者一样好。两者之间的差，和它们各自的误差在同一个量级。差异来自两处：</p>
+<ul>
+<li><strong>输出的舍入。</strong> 结果存成 fp16，最后一次舍入的相对误差最多是 2⁻¹¹ ≈ 4.9e-4。这正是上面那个 3.6e-4 的来源：|C| 最大 348，最大绝对差 0.125，恰好是 fp16 在 128 到 256 之间的一个刻度。</li>
+<li><strong>累加顺序。</strong> Triton 的 kernel 沿 K 每次加 32 个、每次 16 个地喂给矩阵单元；PyTorch 背后的库（cuBLAS、oneDNN）用的是另一套 tile 和顺序。浮点加法不满足结合律，顺序不同，结果就不同。</li>
+</ul>
+<p>所以判断 GEMM 写得对不对，<strong>不要拿 PyTorch 当标准答案，用 fp64</strong>；容差按输出的 dtype 定。minillm 的 <code>tests/test_matmul.py</code> 就是这么做的：fp16 输出要求相对误差小于 2e-3，bf16（只有 8 位有效数字）小于 1.6e-2。第 9 章会专门讲容差该怎么定。</p>
+<h2>fp32 输入：TF32 和它的几种替代</h2>
+<p>如果输入是 fp32，<code>tl.dot</code> 默认<strong>不是</strong>按 fp32 精度算的。NVIDIA 和 Intel 后端的 <code>default_dot_input_precision</code> 都是 <code>&quot;tf32&quot;</code>（<code>third_party/nvidia/backend/compiler.py</code> 里的 <code>CUDAOptions</code>，Intel 后端同名的选项）：<strong>TF32</strong> 只保留 fp32 的 10 位尾数（和 fp16 一样多），但指数范围和 fp32 一样，矩阵单元能以接近 fp16 的速度算它。代价是精度。<code>tl.dot</code> 的 <code>input_precision</code> 参数可以改，可选的有 <code>&quot;tf32&quot;</code>、<code>&quot;tf32x3&quot;</code>、<code>&quot;ieee&quot;</code>、<code>&quot;bf16x3&quot;</code>、<code>&quot;bf16x6&quot;</code>；也可以用环境变量 <code>TRITON_F32_DEFAULT</code> 改全局默认值。</p>
+<p><code>&quot;ieee&quot;</code> 是老老实实地按 fp32 算，不用矩阵单元。<code>&quot;tf32x3&quot;</code> 和 <code>&quot;bf16x3&quot;</code> 是折中：把每个 fp32 拆成「高位 + 低位」两部分，用三次 TF32（或 bf16）矩阵乘拼出接近 fp32 的精度，仍然走矩阵单元。下面在 Max 1100 上把五种都跑一遍：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import re
+
+import torch
+import triton
+import triton.language as tl
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+@triton.jit
+def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, sam, sak, sbk, sbn, scm, scn,
+                  BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, PREC: tl.constexpr):
+    pid_m = tl.program_id(0); pid_n = tl.program_id(1)
+    rm = pid_m * BM + tl.arange(0, BM); rn = pid_n * BN + tl.arange(0, BN); rk = tl.arange(0, BK)
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for k in range(0, K, BK):
+        a = tl.load(a_ptr + rm[:, None] * sam + (k + rk)[None, :] * sak)
+        b = tl.load(b_ptr + (k + rk)[:, None] * sbk + rn[None, :] * sbn)
+        acc = tl.dot(a, b, acc, input_precision=PREC)
+    tl.store(c_ptr + rm[:, None] * scm + rn[None, :] * scn, acc)
+
+M = N = K = 4096
+a = torch.randn(M, K, device=DEVICE); b = torch.randn(K, N, device=DEVICE)
+ref = a.double() @ b.double()                        # fp64 的结果当作「标准答案」
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，triton {triton.__version__}，fp32 输入，4096³")
+for prec in ("tf32", "tf32x3", "ieee", "bf16x3", "bf16x6"):
+    c = torch.empty(M, N, device=DEVICE)
+    k = matmul_kernel[(M // 128, N // 128)](a, b, c, M, N, K, *a.stride(), *b.stride(), *c.stride(), BM=128, BN=128, BK=32, PREC=prec)
+    err = ((c.double() - ref).abs().max() / ref.abs().max()).item()
+    ms = triton.testing.do_bench(lambda: matmul_kernel[(M // 128, N // 128)](a, b, c, M, N, K, *a.stride(), *b.stride(), *c.stride(), BM=128, BN=128, BK=32, PREC=prec))
+    mma = re.findall(r"#ttg\.nvidia_mma|#ttig\.dpas", k.asm["ttgir"])          # 用上矩阵单元了吗
+    print(f"  {prec:7} 相对误差 {err:.2e}  {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s  "
+          f"{'矩阵单元（' + mma[0] + '）' if mma else '没用矩阵单元'}")
+c = a @ b
+print(f"  {'torch':7} 相对误差 {((c.double() - ref).abs().max() / ref.abs().max()).item():.2e}  "
+      f"{2 * M * N * K / triton.testing.do_bench(lambda: a @ b) / 1e9:6.1f} TFLOP/s")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，fp32 输入，4096³
+  tf32    相对误差 3.07e-04     7.1 TFLOP/s  矩阵单元（#ttig.dpas）
+  tf32x3  相对误差 2.87e-06     0.9 TFLOP/s  没用矩阵单元
+  ieee    相对误差 2.87e-06     0.9 TFLOP/s  没用矩阵单元
+  bf16x3  相对误差 2.87e-06     0.9 TFLOP/s  没用矩阵单元
+  bf16x6  相对误差 2.87e-06     0.9 TFLOP/s  没用矩阵单元
+  torch   相对误差 2.87e-06    22.0 TFLOP/s</code></pre>
+</div><p>两件事：</p>
+<ul>
+<li><strong>TF32 的误差是 fp32 的一百多倍</strong>（3e-4 对 3e-6），和 fp16 输入差不多。如果你的模型对精度敏感（比如累加很长的 logits），fp32 输入的 <code>tl.dot</code> 要显式写 <code>input_precision=&quot;ieee&quot;</code>，或者用下一条里的折中方案。</li>
+<li><strong>在 Max 1100 上，<code>tf32x3</code>、<code>bf16x3</code>、<code>bf16x6</code> 全部没有用上矩阵单元</strong>，退回了和 <code>ieee</code> 一样的普通乘加，精度是对的，速度只有 0.9 TFLOP/s，比 TF32 慢 8 倍，比 PyTorch 的 fp32 矩阵乘慢二十多倍。原因在编译流程里：把一个 fp32 的 dot 拆成三个低精度 dot 的是 <code>lib/Dialect/TritonGPU/Transforms/F32DotTC.cpp</code> 这个 pass，NVIDIA 和 AMD 后端的编译流程都调用了它（<code>passes.ttgpuir.add_f32_dot_tc</code>），Intel 后端（3.9.0）没有。我把同一个 kernel 用 3.9.0 编到 sm_86 对比过：<code>tf32x3</code> 和 <code>bf16x3</code> 都被拆成了 3 个 <code>tt.dot</code>，PTX 里是 192 和 96 条 <code>mma.sync</code>；<code>ieee</code> 才是 2048 条 <code>fma.rn.f32</code>。</li>
+</ul>
+<p>这是第 23 章「同一个 kernel 换后端」要讲的典型问题：<strong>同一个参数，在不同后端上可能是完全不同的代码路径</strong>，而且不会报错。在 Intel GPU 上，要么接受 TF32 的精度，要么用 <code>ieee</code> 并接受它的速度，要么干脆把输入转成 bf16 / fp16。</p>
+<h2>先看一眼性能</h2>
+<p>最后测一下这个朴素版本有多快：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm &amp;&amp; python bench/bench_matmul.py</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0，4096×4096×4096
+  float16
+    minillm（128×128×32）    10.131 ms    13.6 TFLOP/s
+    torch.matmul            0.843 ms   163.1 TFLOP/s
+  bfloat16
+    minillm（128×128×32）    10.645 ms    12.9 TFLOP/s
+    torch.matmul            0.805 ms   170.8 TFLOP/s</code></pre>
+</div><p><strong>只有 <code>torch.matmul</code> 的十二分之一。</strong> 这一章不打算掩饰这一点。差距从哪里来，有两个方向。</p>
+<p>第一个方向是<strong>数据从哪里来</strong>。下面的模型假设每个 program 读的数据都要从显存来，算一算 tile 大小和「搬数据的时间」的关系。只用标准库，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20GEMM%20%E7%9A%84%20tile%20%E8%B6%8A%E5%A4%A7%EF%BC%8C%E6%AF%8F%E6%90%AC%E4%B8%80%E4%B8%AA%E5%AD%97%E8%8A%82%E8%83%BD%E5%81%9A%E7%9A%84%E8%BF%90%E7%AE%97%E8%B6%8A%E5%A4%9A%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0A%23%0A%23%20C%20(M%C3%97N)%20%3D%20A%20(M%C3%97K)%20%40%20B%20(K%C3%97N)%E3%80%82%E6%AF%8F%E4%B8%AA%20program%20%E7%AE%97%20C%20%E7%9A%84%E4%B8%80%E4%B8%AA%20BM%C3%97BN%20%E7%9A%84%20tile%EF%BC%8C%E6%B2%BF%20K%20%E5%BE%AA%E7%8E%AF%EF%BC%9A%0A%23%20%20%20%E8%AF%BB%20A%20%E7%9A%84%20BM%C3%97K%E3%80%81B%20%E7%9A%84%20K%C3%97BN%EF%BC%8C%E5%81%9A%202%C2%B7BM%C2%B7BN%C2%B7K%20%E6%AC%A1%E8%BF%90%E7%AE%97%E3%80%82%0A%23%20%E5%81%87%E8%AE%BE%E6%AF%8F%E4%B8%AA%20program%20%E8%AF%BB%E7%9A%84%E6%95%B0%E6%8D%AE%E9%83%BD%E8%A6%81%E4%BB%8E%E6%98%BE%E5%AD%98%E6%9D%A5%EF%BC%88%E4%B8%8D%E7%AE%97%20L2%20%E7%9A%84%E5%A4%8D%E7%94%A8%EF%BC%89%EF%BC%8C%E7%9C%8B%E7%9C%8B%E6%90%AC%E6%95%B0%E6%8D%AE%E8%A6%81%E5%A4%9A%E4%B9%85%E3%80%81%E7%AE%97%E8%A6%81%E5%A4%9A%E4%B9%85%E3%80%82%0A%0AM%20%3D%20N%20%3D%20K%20%3D%204096%0ABYTES%20%3D%202%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20fp16%20%2F%20bf16%0A%0A%0Adef%20tile_report(gpu%2C%20bw_gbs%2C%20peak_tflops)%3A%0A%20%20%20%20print(f%22%7Bgpu%7D%EF%BC%9A%E6%98%BE%E5%AD%98%20%7Bbw_gbs%7D%20GB%2Fs%EF%BC%8C%E7%9F%A9%E9%98%B5%E5%8D%95%E5%85%83%20%7Bpeak_tflops%7D%20TFLOP%2Fs%EF%BC%8C%E6%8B%90%E7%82%B9%20%7Bpeak_tflops%20*%201e3%20%2F%20bw_gbs%3A.0f%7D%20FLOP%2F%E5%AD%97%E8%8A%82%22)%0A%20%20%20%20print(f%22%20%20%7B'tile'%3A%3E9%7D%20%7B'%E5%BC%BA%E5%BA%A6'%3A%3E9%7D%20%7B'%E8%A6%81%E6%90%AC%E7%9A%84%E5%AD%97%E8%8A%82'%3A%3E11%7D%20%7B'%E6%90%AC%E7%9A%84%E6%97%B6%E9%97%B4'%3A%3E9%7D%20%7B'%E7%AE%97%E7%9A%84%E6%97%B6%E9%97%B4'%3A%3E9%7D%20%20%E8%B0%81%E6%9B%B4%E6%85%A2%22)%0A%20%20%20%20flops%20%3D%202%20*%20M%20*%20N%20*%20K%0A%20%20%20%20t_compute%20%3D%20flops%20%2F%20(peak_tflops%20*%201e12)%20*%201e3%0A%20%20%20%20for%20bm%2C%20bn%20in%20((32%2C%2032)%2C%20(64%2C%2064)%2C%20(128%2C%20128)%2C%20(256%2C%20256))%3A%0A%20%20%20%20%20%20%20%20loads%20%3D%20(M%20%2F%2F%20bm)%20*%20(N%20%2F%2F%20bn)%20*%20(bm%20%2B%20bn)%20*%20K%20*%20BYTES%20%20%20%20%20%23%20%E6%89%80%E6%9C%89%20program%20%E4%B8%80%E5%85%B1%E8%AF%BB%E4%BA%86%E5%A4%9A%E5%B0%91%0A%20%20%20%20%20%20%20%20intensity%20%3D%20flops%20%2F%20loads%0A%20%20%20%20%20%20%20%20t_mem%20%3D%20loads%20%2F%20(bw_gbs%20*%201e9)%20*%201e3%0A%20%20%20%20%20%20%20%20slower%20%3D%20%22%E6%90%AC%E6%95%B0%E6%8D%AE%22%20if%20t_mem%20%3E%20t_compute%20else%20%22%E8%AE%A1%E7%AE%97%22%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7Bbm%3A%3E4%7D%C3%97%7Bbn%3A%3C4%7D%20%7Bintensity%3A6.0f%7D%20%20%20%20%20%7Bloads%20%2F%202**30%3A7.2f%7D%20GiB%20%7Bt_mem%3A7.2f%7D%20ms%20%7Bt_compute%3A7.2f%7D%20ms%20%20%7Bslower%7D%22)%0A%20%20%20%20once%20%3D%20(M%20*%20K%20%2B%20K%20*%20N%20%2B%20M%20*%20N)%20*%20BYTES%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%90%86%E6%83%B3%E6%83%85%E5%86%B5%EF%BC%9A%E6%AF%8F%E4%B8%AA%E7%9F%A9%E9%98%B5%E5%8F%AA%E8%AF%BB%E5%86%99%E4%B8%80%E6%AC%A1%0A%20%20%20%20print(f%22%20%20%E7%90%86%E6%83%B3%E6%83%85%E5%86%B5%EF%BC%88%E6%AF%8F%E4%B8%AA%E7%9F%A9%E9%98%B5%E5%8F%AA%E6%90%AC%E4%B8%80%E6%AC%A1%EF%BC%89%EF%BC%9A%E5%BC%BA%E5%BA%A6%20%7Bflops%20%2F%20once%3A.0f%7D%EF%BC%8C%E6%90%AC%20%7Bonce%20%2F%202**20%3A.0f%7D%20MiB%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20f%22%7Bonce%20%2F%20(bw_gbs%20*%201e9)%20*%201e3%3A.2f%7D%20ms%22)%0A%20%20%20%20print()%0A%0A%0Atile_report(%22Max%201100%22%2C%20774%2C%20172)%20%20%20%20%20%23%20%E6%98%BE%E5%AD%98%EF%BC%9A%E7%AC%AC%202%20%E7%AB%A0%E5%AE%9E%E6%B5%8B%EF%BC%9B%E7%9F%A9%E9%98%B5%E5%8D%95%E5%85%83%EF%BC%9A%E7%AC%AC%202%20%E7%AB%A0%20torch.matmul%20%E5%AE%9E%E6%B5%8B%0Atile_report(%22A10%22%2C%20600%2C%20125)%20%20%20%20%20%20%20%20%20%20%23%20%E9%83%BD%E6%98%AF%20NVIDIA%20%E6%95%B0%E6%8D%AE%E6%89%8B%E5%86%8C%E7%9A%84%E6%A0%87%E7%A7%B0%E5%80%BC"># GEMM 的 tile 越大，每搬一个字节能做的运算越多。只用标准库。
+#
+# C (M×N) = A (M×K) @ B (K×N)。每个 program 算 C 的一个 BM×BN 的 tile，沿 K 循环：
+#   读 A 的 BM×K、B 的 K×BN，做 2·BM·BN·K 次运算。
+# 假设每个 program 读的数据都要从显存来（不算 L2 的复用），看看搬数据要多久、算要多久。
+
+M = N = K = 4096
+BYTES = 2                       # fp16 / bf16
+
+
+def tile_report(gpu, bw_gbs, peak_tflops):
+    print(f"{gpu}：显存 {bw_gbs} GB/s，矩阵单元 {peak_tflops} TFLOP/s，拐点 {peak_tflops * 1e3 / bw_gbs:.0f} FLOP/字节")
+    print(f"  {'tile':&gt;9} {'强度':&gt;9} {'要搬的字节':&gt;11} {'搬的时间':&gt;9} {'算的时间':&gt;9}  谁更慢")
+    flops = 2 * M * N * K
+    t_compute = flops / (peak_tflops * 1e12) * 1e3
+    for bm, bn in ((32, 32), (64, 64), (128, 128), (256, 256)):
+        loads = (M // bm) * (N // bn) * (bm + bn) * K * BYTES     # 所有 program 一共读了多少
+        intensity = flops / loads
+        t_mem = loads / (bw_gbs * 1e9) * 1e3
+        slower = "搬数据" if t_mem &gt; t_compute else "计算"
+        print(f"  {bm:&gt;4}×{bn:&lt;4} {intensity:6.0f}     {loads / 2**30:7.2f} GiB {t_mem:7.2f} ms {t_compute:7.2f} ms  {slower}")
+    once = (M * K + K * N + M * N) * BYTES                        # 理想情况：每个矩阵只读写一次
+    print(f"  理想情况（每个矩阵只搬一次）：强度 {flops / once:.0f}，搬 {once / 2**20:.0f} MiB，"
+          f"{once / (bw_gbs * 1e9) * 1e3:.2f} ms")
+    print()
+
+
+tile_report("Max 1100", 774, 172)     # 显存：第 2 章实测；矩阵单元：第 2 章 torch.matmul 实测
+tile_report("A10", 600, 125)          # 都是 NVIDIA 数据手册的标称值</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Max 1100：显存 774 GB/s，矩阵单元 172 TFLOP/s，拐点 222 FLOP/字节
+       tile        强度       要搬的字节      搬的时间      算的时间  谁更慢
+    32×32       16        8.00 GiB   11.10 ms    0.80 ms  搬数据
+    64×64       32        4.00 GiB    5.55 ms    0.80 ms  搬数据
+   128×128      64        2.00 GiB    2.77 ms    0.80 ms  搬数据
+   256×256     128        1.00 GiB    1.39 ms    0.80 ms  搬数据
+  理想情况（每个矩阵只搬一次）：强度 1365，搬 96 MiB，0.13 ms
+
+A10：显存 600 GB/s，矩阵单元 125 TFLOP/s，拐点 208 FLOP/字节
+       tile        强度       要搬的字节      搬的时间      算的时间  谁更慢
+    32×32       16        8.00 GiB   14.32 ms    1.10 ms  搬数据
+    64×64       32        4.00 GiB    7.16 ms    1.10 ms  搬数据
+   128×128      64        2.00 GiB    3.58 ms    1.10 ms  搬数据
+   256×256     128        1.00 GiB    1.79 ms    1.10 ms  搬数据
+  理想情况（每个矩阵只搬一次）：强度 1365，搬 96 MiB，0.17 ms</code></pre>
+</div><p>tile 越大，算术强度越高，因为同样读一条 A 和一条 B，能算出更大的一块 C。但即使是 256×256 的 tile，如果每个 program 都从显存读，光搬数据就要 1.39 ms，可 <code>torch.matmul</code> 总共只用了 0.8 ms 左右。这说明快的 GEMM 一定在<strong>大量复用 L2 里的数据</strong>：同一时刻在跑的那些 program，有很多读的是同一条 A 或同一条 B。怎么安排 program 的执行顺序，让它们尽量共享，是第 12 章的 L2 swizzle。</p>
+<p>第二个方向是<strong>访存的写法</strong>。在 Max 1100 上，这个方向的差距大得惊人。我把同一个 GEMM（fp16，4096³，128×128×32 和 256×256×32 两种 tile）换成第 8 章要讲的 <strong>tensor descriptor</strong> 写法，同样的 tile、同样的 <code>num_warps</code>，就跑出了 122–138 TFLOP/s，而指针写法只有 13–18。Intel 后端只有在用 tensor descriptor 时，才能把 A、B 的读取编译成二维的块读取指令。这是下一章的主题。</p>
+<p>在 NVIDIA GPU 上，这个差距应当小得多：Triton 官方教程里的 GEMM 用的就是本章的指针写法，配合第 12–14 章的优化，能跑到接近 cuBLAS 的水平。</p>
+<h2>minillm 进度</h2>
+<p>新增 <code>minillm/kernels/matmul.py</code>（<code>matmul</code>，任意形状、任意 stride，fp32 累加器）和 <code>tests/test_matmul.py</code>：三种 dtype × 六种形状（包括不是 tile 整数倍的 333×77×1029、退化成向量的 1×4096），两个输入都是转置视图的情况，以及「fp16 累加器误差更大」的回归测试。容差以 fp64 为准、按 dtype 定。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-minillm.sh -q</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">........................................................................ [ 75%]
+.......................                                                  [100%]
+95 passed in 3.85s</code></pre>
+</div><h2>动手</h2>
+<ol>
+<li><strong>在你的 GPU 上跑精度实验。</strong> NVIDIA 上，<code>tf32x3</code> 和 <code>bf16x3</code> 应当用上矩阵单元，速度在 TF32 和 <code>ieee</code> 之间。实际差多少？误差是不是接近 <code>ieee</code>？</li>
+<li><strong>看一眼 Intel 和 NVIDIA 的 dot layout。</strong> 用附录 A 第 8 节的 <code>triton_ir_local.py</code> 把本章的 kernel 编到 sm_86，再在 Max 1100（或者任何 Intel GPU）上从 <code>kernel.asm[&quot;ttgir&quot;]</code> 里取出 TTGIR，对比 <code>#mma</code> 和 <code>#ttig.dpas</code> 两行。<code>warpsPerCTA</code>、<code>threadsPerWarp</code> 各是多少？</li>
+<li><strong>在浏览器的模型里</strong>，把 <code>M = N = K</code> 改成 8192，tile 的强度会变吗？「搬的时间」和「算的时间」各变成几倍？为什么大矩阵更容易接近峰值？</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>GEMM 的 tile 分解：每个 program 算 C 的一个 BLOCK_M × BLOCK_N 的 tile，沿 K 循环，<code>acc = tl.dot(a, b, acc)</code>，<code>acc</code> 一直待在寄存器里。三个方向的边界都用 mask，<code>other=0</code>。</li>
+<li><code>tl.dot</code> 是通往矩阵单元的唯一入口。TTGIR 里，累加器带 <code>#ttg.nvidia_mma</code>（Intel 上是 <code>#ttig.dpas</code>），两个输入带 <code>#ttg.dot_op</code>；编译器会把 BLOCK_K 拆成矩阵指令的宽度，结尾插一个 <code>convert_layout</code> 再写回，并自动加上软件流水（第 13 章）。</li>
+<li><strong>累加器用 fp32</strong>：fp32 累加器的误差不随 K 增长，fp16 累加器的误差在 K=16384 时大了 20 多倍。</li>
+<li><strong>和 PyTorch 差 1e-3 不是 bug</strong>：以 fp64 为准，两者的误差一样大，都来自输出的舍入和累加顺序。测试要以 fp64 为准，容差按输出 dtype 定。</li>
+<li>fp32 输入的 <code>tl.dot</code> 默认是 <strong>TF32</strong>，误差是 fp32 的一百多倍。<code>input_precision</code> 可以改成 <code>ieee</code>、<code>tf32x3</code>、<code>bf16x3</code> 等。<strong>在 Max 1100 上，<code>tf32x3</code> / <code>bf16x3</code> 没有走矩阵单元</strong>，因为 Intel 后端没有调用 <code>F32DotTC</code> 这个 pass。</li>
+<li>朴素的指针版 GEMM 在 Max 1100 上只有 <code>torch.matmul</code> 的十二分之一。两个方向：L2 里的数据复用（第 12 章）和访存写法（第 8 章：tensor descriptor 版本快八倍）。</li>
+</ul>
+<p><strong>minillm 进度</strong>：新增 <code>kernels/matmul.py</code>（朴素 tile 版）、<code>tests/test_matmul.py</code>、<code>bench/bench_matmul.py</code>。测试共 95 个。</p>
+<p>下一章，我们把 <code>matmul</code> 的访存换成 tensor descriptor，看看三种访存写法（裸指针、已经被移除的 block pointer、tensor descriptor）在源码和 IR 里有什么不同，以及为什么在 Intel GPU 上，这一个改动就能让 GEMM 快八倍。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch06.html">← 第 6 章 归约与逐行算子</a>
+  <a class="nav-next" href="ch08.html">第 8 章 访存的三种写法 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

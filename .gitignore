@@ -12,3 +12,8 @@ Thumbs.db
 
 # 章节代码校验脚本（开发用，不入库）
 books/*/.verify.sh
+
+# Python 构建产物与缓存（随书 Python 包 pip install -e、pytest 会生成）
+__pycache__/
+*.egg-info/
+.pytest_cache/

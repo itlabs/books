@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 B 概念对照表</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li class="active"><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>附录 B 概念对照表</h1>
+<h2>这份附录怎么用</h2>
+<div class="goal-box">
+<p>同一个概念，在 CUDA、Triton、Gluon、Helion、CuTe DSL 里叫法不同，由谁负责也不同。这份附录把它们排在同一张表里，方便你在读别人的代码、或者在几层之间换着写的时候快速对照。</p>
+<p>读表时最该看的，不是名字怎么对应，而是<strong>每一格是「你写」还是「编译器替你做」</strong>：从左往右，CUDA 和 CuTe DSL 让你写得最多，Gluon 次之，Triton 再次，Helion 最少。第 1 章图 1-2 的那几层高度，在这里落到了一个个具体的 API 上。表里的 API 名都在本书基线的源码里核对过：Triton 3.9.0（含 Gluon）、Helion 1.5.2；CuTe DSL 一列来自 NVIDIA/cutlass 仓库 <code>examples/python/CuTeDSL/</code> 下的官方示例，只列了在那里能找到的写法，查不到的写「—」。</p>
+</div><p>记号：</p>
+<ul>
+<li><strong>编译器</strong>：这件事由编译器决定，你在源码里写不了也不用写；</li>
+<li><strong>—</strong>：这一层没有对应的东西，或者本书没有核实过；</li>
+<li>Gluon 的 <code>gl</code> 指 <code>triton.experimental.gluon.language</code>，Helion 的 <code>hl</code> 指 <code>helion.language</code>。</li>
+</ul>
+<h2>1. 执行模型</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>CUDA</th>
+<th>Triton</th>
+<th>Gluon</th>
+<th>Helion</th>
+<th>CuTe DSL</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>定义 kernel</td>
+<td><code>__global__</code> 函数</td>
+<td><code>@triton.jit</code></td>
+<td><code>@gluon.jit</code></td>
+<td><code>@helion.kernel</code></td>
+<td><code>@cute.kernel</code>（设备端），外面套一个 <code>@cute.jit</code> 的 host 函数</td>
+</tr>
+<tr>
+<td>执行单位</td>
+<td>thread block（CTA）</td>
+<td>program（编译成一个 CTA）</td>
+<td>program（同 Triton）</td>
+<td>编译器：每个顶层 <code>hl.tile</code> 循环的一次迭代对应一个 program</td>
+<td>thread block</td>
+</tr>
+<tr>
+<td>执行单位的编号</td>
+<td><code>blockIdx.x/y/z</code></td>
+<td><code>tl.program_id(axis)</code></td>
+<td><code>gl.program_id(axis)</code></td>
+<td>编译器（tile 对象自带 <code>begin</code>、<code>end</code>、<code>block_size</code>）</td>
+<td><code>cute.arch.block_idx()</code></td>
+</tr>
+<tr>
+<td>执行单位的个数</td>
+<td><code>gridDim</code></td>
+<td><code>tl.num_programs(axis)</code></td>
+<td><code>gl.num_programs(axis)</code></td>
+<td>编译器</td>
+<td><code>cute.arch.grid_dim()</code></td>
+</tr>
+<tr>
+<td>线程编号</td>
+<td><code>threadIdx</code></td>
+<td>没有</td>
+<td>没有</td>
+<td>没有</td>
+<td><code>cute.arch.thread_idx()</code></td>
+</tr>
+<tr>
+<td>每个执行单位的线程数</td>
+<td><code>&lt;&lt;&lt;grid, threads&gt;&gt;&gt;</code> 的 <code>threads</code></td>
+<td>启动参数 <code>num_warps</code>（× 32）</td>
+<td>启动参数 <code>num_warps</code></td>
+<td><code>helion.Config(num_warps=…)</code> 或交给 autotune</td>
+<td><code>.launch(grid=…, block=…)</code> 的 <code>block</code></td>
+</tr>
+<tr>
+<td>启动</td>
+<td><code>kernel&lt;&lt;&lt;grid, block&gt;&gt;&gt;(…)</code></td>
+<td><code>kernel[grid](…)</code></td>
+<td><code>kernel[grid](…)</code></td>
+<td>像普通函数一样调用 <code>kernel(x, y)</code>，grid 由 Helion 算</td>
+<td>在 <code>@cute.jit</code> 函数里 <code>kernel(…).launch(grid=…, block=…)</code></td>
+</tr>
+<tr>
+<td>编译时常量</td>
+<td>模板参数</td>
+<td><code>tl.constexpr</code></td>
+<td><code>gl.constexpr</code></td>
+<td><code>hl.constexpr</code>；tile 大小用 <code>hl.register_block_size</code></td>
+<td><code>cutlass.Constexpr</code></td>
+</tr>
+</tbody></table>
+<h2>2. 数据与内存</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>CUDA</th>
+<th>Triton</th>
+<th>Gluon</th>
+<th>Helion</th>
+<th>CuTe DSL</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>一块数据</td>
+<td>没有；每个线程自己算下标</td>
+<td><code>tl.arange(0, BLOCK)</code> 构造的块，<code>BLOCK</code> 必须是 2 的幂</td>
+<td><code>gl.arange(0, BLOCK, layout=…)</code>，<strong>必须给 layout</strong></td>
+<td><code>for tile in hl.tile(n): … x[tile] …</code></td>
+<td><code>cute.zipped_divide</code>、<code>cute.local_tile</code> 把张量切成 tile</td>
+</tr>
+<tr>
+<td>元素怎么分给线程（layout）</td>
+<td>你写的下标公式本身</td>
+<td>编译器（TTGIR 里的 <code>#ttg.blocked</code> 等，第 3、20 章）</td>
+<td>你写：<code>gl.BlockedLayout(size_per_thread, threads_per_warp, warps_per_cta, order)</code> 等</td>
+<td>编译器（生成 Triton 以后再由 Triton 推导）</td>
+<td>你写：<code>cute.make_layout</code>、<code>cute.make_layout_tv</code></td>
+</tr>
+<tr>
+<td>读写全局内存</td>
+<td>指针加下标</td>
+<td><code>tl.load</code> / <code>tl.store</code>，用 <code>mask</code>、<code>other</code> 处理边界</td>
+<td><code>gl.load</code> / <code>gl.store</code></td>
+<td>张量下标 <code>x[tile]</code>，边界的 mask 由 Helion 生成</td>
+<td><code>cute.copy</code></td>
+</tr>
+<tr>
+<td>结构化的访存描述</td>
+<td>—</td>
+<td><code>tl.make_tensor_descriptor</code>（第 8 章；旧的 <code>tl.make_block_ptr</code> 在 3.9.0 里已经移除）</td>
+<td>—</td>
+<td>编译器（<code>Config(indexing=…)</code> 可以选）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>shared memory</td>
+<td><code>__shared__</code></td>
+<td>编译器</td>
+<td><code>gl.allocate_shared_memory(element_ty, shape, layout)</code></td>
+<td>编译器</td>
+<td><code>cutlass.utils.SmemAllocator</code>，再 <code>allocate_tensor</code></td>
+</tr>
+<tr>
+<td>换 layout</td>
+<td>你自己经过 shared memory 搬</td>
+<td>编译器插入 <code>ttg.convert_layout</code>（第 21 章）</td>
+<td><code>gl.convert_layout(value, layout)</code></td>
+<td>编译器</td>
+<td>—</td>
+</tr>
+<tr>
+<td>异步拷贝（全局 → shared）</td>
+<td><code>cp.async</code>、<code>cuda::memcpy_async</code></td>
+<td>编译器（由 <code>num_stages</code> 触发，第 13 章）</td>
+<td><code>gluon.language.nvidia.ampere.async_copy</code> 的 <code>async_copy_global_to_shared</code>、<code>commit_group</code>、<code>wait_group</code></td>
+<td>编译器（<code>Config(range_num_stages=…)</code>）</td>
+<td><code>cute.nvgpu.cpasync.CopyG2SOp</code>，配合 <code>cute.arch.cp_async_commit_group</code>、<code>cp_async_wait_group</code></td>
+</tr>
+</tbody></table>
+<h2>3. 计算与同步</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>CUDA</th>
+<th>Triton</th>
+<th>Gluon</th>
+<th>Helion</th>
+<th>CuTe DSL</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>矩阵乘（用上矩阵单元）</td>
+<td><code>mma</code> PTX 指令、WMMA，或者 CUTLASS</td>
+<td><code>tl.dot</code>（第 7 章）</td>
+<td>架构相关：Ampere 是 <code>gluon.language.nvidia.ampere.mma_v2</code>；另有不走矩阵单元的 <code>gl.dot_fma</code></td>
+<td><code>hl.dot</code>，或者在 tile 上直接写 <code>torch.matmul</code> / <code>@</code></td>
+<td><code>cute.make_tiled_mma</code> + <code>cute.gemm</code></td>
+</tr>
+<tr>
+<td>归约</td>
+<td>warp shuffle + shared memory，自己写</td>
+<td><code>tl.sum</code>、<code>tl.max</code>、<code>tl.reduce</code>（编译器生成 shuffle 和 shared memory，第 3 章）</td>
+<td><code>gl.sum</code>、<code>gl.max</code>、<code>gl.reduce</code></td>
+<td>在 tile 上写 PyTorch 运算，如 <code>torch.sum(x[tile, :], dim=-1)</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>扫描</td>
+<td>自己写</td>
+<td><code>tl.cumsum</code>、<code>tl.associative_scan</code></td>
+<td><code>gl.cumsum</code>、<code>gl.associative_scan</code></td>
+<td><code>hl.associative_scan</code>、<code>hl.cumsum</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>原子操作</td>
+<td><code>atomicAdd</code> 等</td>
+<td><code>tl.atomic_add</code> 等</td>
+<td><code>gl.atomic_add</code> 等</td>
+<td><code>hl.atomic_add</code> 等</td>
+<td>—</td>
+</tr>
+<tr>
+<td>执行单位内的同步</td>
+<td><code>__syncthreads()</code></td>
+<td>编译器；调试用 <code>tl.debug_barrier()</code></td>
+<td><code>gl.barrier()</code></td>
+<td>编译器</td>
+<td><code>cutlass.pipeline.NamedBarrier</code> 等</td>
+</tr>
+<tr>
+<td>全局同步</td>
+<td>协作组（cooperative groups）的 grid 同步</td>
+<td>没有（只有原子操作）</td>
+<td>没有</td>
+<td><code>hl.barrier()</code>：<strong>全 grid 范围</strong>，只能写在两个顶层 <code>hl.tile</code> 循环之间，和 <code>__syncthreads</code> 不是一回事</td>
+<td>—</td>
+</tr>
+<tr>
+<td>warp 分工（warp specialization）</td>
+<td>自己写</td>
+<td>编译器（Hopper 及以上，第 15 章）</td>
+<td><code>gl.warp_specialize</code></td>
+<td><code>Config(range_warp_specializes=…)</code></td>
+<td>—</td>
+</tr>
+</tbody></table>
+<h2>4. 调参、调试与看 IR</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>CUDA</th>
+<th>Triton</th>
+<th>Gluon</th>
+<th>Helion</th>
+<th>CuTe DSL</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>自动调优</td>
+<td>没有内置</td>
+<td><code>@triton.autotune(configs, key)</code>（第 14 章）</td>
+<td>—</td>
+<td><strong>默认就做</strong>：第一次调用时搜索 <code>Config</code>；也可以固定：<code>@helion.kernel(config=helion.Config(…))</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>调优空间里有什么</td>
+<td>—</td>
+<td>你列出的 <code>triton.Config</code>（块大小、<code>num_warps</code>、<code>num_stages</code>）</td>
+<td>—</td>
+<td>由 Helion 生成：<code>block_sizes</code>、<code>loop_orders</code>、<code>l2_groupings</code>、<code>num_warps</code>、<code>num_stages</code>、<code>pid_type</code>、<code>indexing</code> 等</td>
+<td>—</td>
+</tr>
+<tr>
+<td>kernel 里打印</td>
+<td><code>printf</code></td>
+<td><code>tl.device_print</code>、<code>tl.static_print</code></td>
+<td><code>gl.device_print</code>、<code>gl.static_print</code></td>
+<td><code>hl.device_print</code></td>
+<td><code>cute.printf</code></td>
+</tr>
+<tr>
+<td>kernel 里断言</td>
+<td><code>assert</code></td>
+<td><code>tl.device_assert</code>、<code>tl.static_assert</code></td>
+<td><code>gl.device_assert</code>、<code>gl.static_assert</code></td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>不用 GPU 跑</td>
+<td>—</td>
+<td><code>TRITON_INTERPRET=1</code>（第 9 章）</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>看生成的代码</td>
+<td><code>nvcc -ptx</code>、<code>cuobjdump -sass</code></td>
+<td>编译产物的 <code>asm</code> 字典，或者缓存目录（第 4、19 章）</td>
+<td>同 Triton</td>
+<td>打印它生成的 Triton 代码（第 26 章）</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<h2>5. 硬件术语</h2>
+<p>GPU 厂商各有各的叫法。本书正文统一用 NVIDIA 的说法，第一次出现时给出 Intel 的对应词（第 2 章）。</p>
+<table>
+<thead>
+<tr>
+<th>本书的说法</th>
+<th>NVIDIA</th>
+<th>Intel（Xe-HPC）</th>
+<th>AMD（CDNA）</th>
+<th>Triton 里对应的东西</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>计算单元</td>
+<td>SM（streaming multiprocessor）</td>
+<td>Xe-core</td>
+<td>CU（compute unit）</td>
+<td>一个 program 跑在一个计算单元上</td>
+</tr>
+<tr>
+<td>warp</td>
+<td>warp（32 个线程）</td>
+<td>sub-group（16 或 32 个 work-item）</td>
+<td>wavefront（64 个线程）</td>
+<td><code>num_warps</code>；TTGIR 里的 <code>&quot;ttg.threads-per-warp&quot;</code></td>
+</tr>
+<tr>
+<td>线程</td>
+<td>thread</td>
+<td>work-item</td>
+<td>thread（lane）</td>
+<td>看不见</td>
+</tr>
+<tr>
+<td>线程块</td>
+<td>thread block / CTA</td>
+<td>work-group</td>
+<td>workgroup</td>
+<td>program</td>
+</tr>
+<tr>
+<td>shared memory</td>
+<td>shared memory</td>
+<td>SLM（shared local memory）</td>
+<td>LDS（local data share）</td>
+<td>编译器分配；TTGIR 里的 <code>#ttg.shared</code> 一类 layout</td>
+</tr>
+<tr>
+<td>矩阵单元</td>
+<td>Tensor Core</td>
+<td>XMX</td>
+<td>Matrix Core</td>
+<td><code>tl.dot</code>；TTGIR 里的 <code>#ttg.nvidia_mma</code>、<code>#ttig.dpas</code>、<code>#ttg.amd_mfma</code></td>
+</tr>
+<tr>
+<td>显存</td>
+<td>HBM / GDDR</td>
+<td>HBM</td>
+<td>HBM</td>
+<td>指针指向的地方</td>
+</tr>
+</tbody></table>
+<h2>6. 缩写</h2>
+<table>
+<thead>
+<tr>
+<th>缩写</th>
+<th>全称</th>
+<th>第一次出现</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CTA</td>
+<td>cooperative thread array，即 thread block</td>
+<td>第 2 章</td>
+</tr>
+<tr>
+<td>SIMT</td>
+<td>single instruction, multiple threads</td>
+<td>第 2 章</td>
+</tr>
+<tr>
+<td>SM</td>
+<td>streaming multiprocessor</td>
+<td>第 2 章</td>
+</tr>
+<tr>
+<td>SLM</td>
+<td>shared local memory（Intel）</td>
+<td>第 2 章</td>
+</tr>
+<tr>
+<td>HBM</td>
+<td>high bandwidth memory</td>
+<td>第 1 章</td>
+</tr>
+<tr>
+<td>TTIR</td>
+<td>Triton IR：<code>tt</code> 方言，硬件无关</td>
+<td>第 1 章</td>
+</tr>
+<tr>
+<td>TTGIR</td>
+<td>TritonGPU IR：<code>ttg</code> 方言，带 layout</td>
+<td>第 1 章</td>
+</tr>
+<tr>
+<td>PTX</td>
+<td>NVIDIA 的虚拟指令集</td>
+<td>第 3 章</td>
+</tr>
+<tr>
+<td>SPIR-V</td>
+<td>Khronos 的中间表示，Intel 后端的输出</td>
+<td>第 4 章</td>
+</tr>
+<tr>
+<td>MMA</td>
+<td>matrix multiply-accumulate，矩阵乘加</td>
+<td>第 7 章</td>
+</tr>
+<tr>
+<td>DPAS</td>
+<td>dot product accumulate systolic，Intel 的矩阵指令</td>
+<td>第 7 章</td>
+</tr>
+<tr>
+<td>XMX</td>
+<td>Xe matrix extensions，Intel 的矩阵单元</td>
+<td>第 2 章</td>
+</tr>
+<tr>
+<td>TMA</td>
+<td>tensor memory accelerator，Hopper 起的异步拷贝单元</td>
+<td>第 15 章</td>
+</tr>
+<tr>
+<td>CE</td>
+<td>Compiler Explorer（godbolt.org）</td>
+<td>第 1 章</td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>这份附录的要点</strong></p>
+<ul>
+<li>从左往右，CUDA → CuTe DSL → Gluon → Triton → Helion，<strong>你要写的越来越少，编译器替你做的越来越多</strong>。线程编号、layout、shared memory、warp 分工这几行最能看出这个梯度。</li>
+<li>Triton 和 Gluon 共用同一套编译器后端：Gluon 的每一个「你写」，在 Triton 里都是「编译器」，并且能在 Triton 的 TTGIR 里看到编译器做了什么决定（第 20–22 章）。</li>
+<li>Helion 最后生成的是 Triton 代码。它的调优空间（<code>Config</code> 的那些字段）比 <code>@triton.autotune</code> 大得多（第 26 章）。</li>
+<li>硬件术语的对照：SM ↔ Xe-core ↔ CU，warp ↔ sub-group ↔ wavefront，shared memory ↔ SLM ↔ LDS，Tensor Core ↔ XMX ↔ Matrix Core。</li>
+</ul>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="appendix-a.html">← 附录 A 环境搭建</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

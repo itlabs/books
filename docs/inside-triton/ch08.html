@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 章 访存的三种写法</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li class="active"><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 8 章 访存的三种写法</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>到目前为止，所有 kernel 都用同一种方式访存：自己算出一个指针张量，每个元素一个地址，交给 <code>tl.load</code>。这是 Triton 最早、也最灵活的写法。但它有一个根本的缺点：编译器看到的只是「一堆地址」，要从这堆地址里<strong>反推</strong>出「这其实是一个二维矩阵里的一个矩形块」，才能用上硬件的块搬运单元。反推不出来，就只能一个元素一个元素地读。</p>
+<p>这一章讲另外两种写法：曾经的 <strong>block pointer</strong>（Triton 3.9.0 已经移除，只讲怎么迁移），和现在推荐的 <strong>tensor descriptor</strong>：直接告诉编译器「这是一个 M×K 的矩阵，我要读第几行第几列开始的一个块」。你会看到在 Max 1100 上，同一个 GEMM 只是换了访存写法，就从 13 TFLOP/s 变成了 139 TFLOP/s；打开 IR，看清这 9 倍是从哪里来的；再看同一份 descriptor 代码在 Ampere、Hopper、Intel 三种硬件上分别编成了什么。最后，minillm 的矩阵乘学会根据平台和对齐情况，自动选择写法。</p>
+</div><h2>同一个 GEMM，两种访存写法</h2>
+<p>左边是第 7 章的写法：每个元素一个地址，越界靠 mask。右边是 tensor descriptor：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">指针：每个元素一个地址</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">a_ptrs = (a_ptr
+    + offs_m[:, None] * stride_am
+    + offs_k[None, :] * stride_ak)
+...
+for k in range(0, K, BK):
+    mask = ((offs_m[:, None] &lt; M)
+            &amp; (offs_k[None, :] &lt; K - k))
+    a = tl.load(a_ptrs, mask=mask,
+                other=0.0)
+    ...
+    a_ptrs += BK * stride_ak</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">tensor descriptor：描述整个矩阵</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">a_desc = tl.make_tensor_descriptor(
+    a_ptr,                 # 基地址
+    [M, K],                # 形状
+    [stride_am, 1],        # stride
+    [BM, BK])              # 每次读的块大小
+...
+for k in range(0, K, BK):
+    # 只给块的左上角；越界自动填 0
+    a = a_desc.load([pid_m * BM, k])
+    ...</code></pre>
+</div></div>
+</div><p>descriptor 版本少了三样东西：没有逐元素的地址计算，没有 mask（越界的部分自动填 0，写的时候自动不写），也没有「指针往前挪一段」。下面把两种写法的完整 GEMM 放在一起，用同样的 tile 和 <code>num_warps</code> 跑：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+import triton.language as tl
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+@triton.jit
+def mm_ptr(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+           BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+    offs_m = tl.program_id(0) * BM + tl.arange(0, BM)
+    offs_n = tl.program_id(1) * BN + tl.arange(0, BN)
+    offs_k = tl.arange(0, BK)
+    a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak     # 每个元素一个地址
+    b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for k in range(0, K, BK):
+        a = tl.load(a_ptrs, mask=(offs_m[:, None] &lt; M) &amp; (offs_k[None, :] &lt; K - k), other=0.0)
+        b = tl.load(b_ptrs, mask=(offs_k[:, None] &lt; K - k) &amp; (offs_n[None, :] &lt; N), other=0.0)
+        acc = tl.dot(a, b, acc)
+        a_ptrs += BK * stride_ak
+        b_ptrs += BK * stride_bk
+    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+    tl.store(c_ptrs, acc.to(tl.float16), mask=(offs_m[:, None] &lt; M) &amp; (offs_n[None, :] &lt; N))
+
+
+@triton.jit
+def mm_desc(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_bk, stride_cm,
+            BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+    # 描述三个矩阵：基地址、形状、stride、每次读写的块大小。最后一维必须连续（stride 为 1）
+    a_desc = tl.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BM, BK])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [K, N], [stride_bk, 1], [BK, BN])
+    c_desc = tl.make_tensor_descriptor(c_ptr, [M, N], [stride_cm, 1], [BM, BN])
+    pid_m, pid_n = tl.program_id(0), tl.program_id(1)
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for k in range(0, K, BK):
+        a = a_desc.load([pid_m * BM, k])             # 只给块的左上角坐标；越界的部分自动填 0
+        b = b_desc.load([k, pid_n * BN])
+        acc = tl.dot(a, b, acc)
+    c_desc.store([pid_m * BM, pid_n * BN], acc.to(tl.float16))     # 越界的部分自动不写
+
+
+M = N = K = 4096
+a = torch.randn(M, K, device=DEVICE, dtype=torch.float16)
+b = torch.randn(K, N, device=DEVICE, dtype=torch.float16)
+ref = a @ b
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，triton {triton.__version__}，fp16，{M}×{N}×{K}")
+for BM, BN, BK, nw in ((128, 128, 32, 8), (256, 256, 32, 32)):
+    grid = (triton.cdiv(M, BM), triton.cdiv(N, BN))
+    c = torch.empty_like(ref)
+    runs = {
+        "指针": lambda: mm_ptr[grid](a, b, c, M, N, K, *a.stride(), *b.stride(), *c.stride(),
+                                   BM=BM, BN=BN, BK=BK, num_warps=nw),
+        "descriptor": lambda: mm_desc[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0),
+                                          BM=BM, BN=BN, BK=BK, num_warps=nw),
+    }
+    for name, fn in runs.items():
+        fn()
+        torch.testing.assert_close(c, ref, atol=0.25, rtol=1e-2)
+        ms = triton.testing.do_bench(fn)
+        print(f"  {BM}×{BN}×{BK}，num_warps={nw:2}  {name:10} {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")
+ms = triton.testing.do_bench(lambda: a @ b)
+print(f"  torch.matmul                          {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，fp16，4096×4096×4096
+  128×128×32，num_warps= 8  指针           13.4 TFLOP/s
+  128×128×32，num_warps= 8  descriptor  121.3 TFLOP/s
+  256×256×32，num_warps=32  指针           15.6 TFLOP/s
+  256×256×32，num_warps=32  descriptor  139.3 TFLOP/s
+  torch.matmul                           167.3 TFLOP/s</code></pre>
+</div><p><strong>同样的 tile、同样的 <code>num_warps</code>、同样的 <code>tl.dot</code>，只是换了访存写法，快了 9 倍</strong>，接近 <code>torch.matmul</code>。第 7 章那个「只有十二分之一」的朴素 GEMM，在 Intel GPU 上主要就输在这里。</p>
+<h2>编译器看到了什么</h2>
+<div class="concept">
+<svg viewBox="0 0 720 270" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs><marker id="c81a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker></defs>
+  <text x="20" y="24" font-size="13" font-weight="bold" fill="#374151">指针写法：编译器拿到的是 128 × 32 个地址</text>
+  <g fill="#ebf4ff" stroke="#2b6cb0">
+    <rect x="20" y="36" width="22" height="16"/><rect x="44" y="36" width="22" height="16"/><rect x="68" y="36" width="22" height="16"/><rect x="92" y="36" width="22" height="16"/>
+    <rect x="20" y="54" width="22" height="16"/><rect x="44" y="54" width="22" height="16"/><rect x="68" y="54" width="22" height="16"/><rect x="92" y="54" width="22" height="16"/>
+  </g>
+  <text x="122" y="58" font-size="12" fill="#374151">……每个格子是一个地址：p₀, p₁, p₂, …</text>
+  <text x="20" y="92" font-size="12" fill="#6b7280">编译器要自己证明「这些地址恰好构成一个行主序的矩形块」，证明不出来就逐个读</text>
+  <text x="20" y="136" font-size="13" font-weight="bold" fill="#374151">descriptor 写法：编译器拿到的是这个块的「结构」</text>
+  <rect x="20" y="146" width="300" height="56" rx="6" fill="#e9f6ee" stroke="#3f9b5c"/>
+  <text x="32" y="168" font-size="12" font-family="monospace" fill="#374151">base, shape=[M, K], strides=[K, 1]</text>
+  <text x="32" y="188" font-size="12" font-family="monospace" fill="#374151">block=[128, 32], 坐标=[pid_m·128, k]</text>
+  <line x1="320" y1="174" x2="380" y2="174" stroke="#6b7280" stroke-width="2" marker-end="url(#c81a)"/>
+  <g font-size="12">
+    <rect x="388" y="126" width="312" height="30" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="398" y="146" fill="#374151">Intel：二维块读写 LSC2DBlockRead / Write + 预取</text>
+    <rect x="388" y="160" width="312" height="30" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="398" y="180" fill="#374151">Hopper（sm_90）：TMA，cp.async.bulk.tensor</text>
+    <rect x="388" y="194" width="312" height="30" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="398" y="214" fill="#374151">Ampere（sm_86）：普通拷贝（没有块搬运单元）</text>
+  </g>
+  <text x="20" y="252" font-size="12" fill="#6b7280">同样一份 descriptor 代码，能编成什么取决于硬件有没有块搬运单元（灰色是硬件）</text>
+</svg>
+<div class="caption">图 8-1　两种写法交给编译器的信息不同。指针写法交出的是一堆地址，结构要编译器自己反推；descriptor 直接交出结构，编译器可以直接选用硬件的块搬运指令</div>
+</div><p>两个 kernel 都用上了矩阵单元：TTGIR 里都有 <code>#ttig.dpas</code>，LLVM IR 里都有 33 条 <code>dpas</code> 指令（1024³、128×128×32 的那份）。区别全在访存上。下面是 descriptor 版本在 Max 1100 上的 TTGIR，循环体附近（节选，去掉了 <code>loc(...)</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">#mma = #ttig.dpas&lt;{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}&gt;
+...
+    %ad_0 = tt.make_tensor_descriptor %a_ptr, [%M, %K], [%ad, %c1_i64] : &lt;f16&gt;, &lt;128x32xf16&gt;
+...
+    %acc_4 = scf.for %acc_5 = %c0_i32 to %K step %c32_i32 iter_args(%acc_6 = %cst) -&gt; (tensor&lt;128x128xf32, #mma&gt;)  : i32 {
+      ...
+      ttig.descriptor_prefetch %ad_0[%acc, %acc_7] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;128x32xf16&gt;
+      ttig.descriptor_prefetch %bd_1[%acc_7, %acc_3] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;32x128xf16&gt;
+      %acc_8 = tt.descriptor_load %ad_0[%acc, %acc_5] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;128x32xf16&gt; -&gt; tensor&lt;128x32xf16, #ttg.dot_op&lt;{opIdx = 0, parent = #mma, kWidth = 1}&gt;&gt;
+      %acc_9 = tt.descriptor_load %bd_1[%acc_5, %acc_3] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;32x128xf16&gt; -&gt; tensor&lt;32x128xf16, #ttg.dot_op&lt;{opIdx = 1, parent = #mma, kWidth = 2}&gt;&gt;
+      %acc_10 = tt.dot %acc_8, %acc_9, %acc_6, inputPrecision = tf32 : ... -&gt; tensor&lt;128x128xf32, #mma&gt;
+      ...
+    tt.descriptor_store %cd_2[%acc, %acc_3], %0 {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc&lt;128x128xf16&gt;, tensor&lt;128x128xf16, #mma&gt;</code></pre>
+</div><p>三件事：</p>
+<ul>
+<li><strong><code>tt.descriptor_load</code> 直接读成了 <code>#ttg.dot_op</code></strong>，也就是矩阵单元要的那种 layout。数据从显存直接进寄存器，中间不经过 shared memory。</li>
+<li><strong>每一条读写都带着 <code>ttig.block_io = &quot;row_major&quot;</code></strong>：Intel 后端确认了这是一个二维的行主序块，可以用二维块读写指令。另外，循环里还多了 <code>ttig.descriptor_prefetch</code>：在用这一段之前，先把下一段预取到缓存里。这是 Intel 后端的流水方式。</li>
+<li><strong>结果直接从 <code>#mma</code> 写回</strong>，连第 7 章那个结尾的 <code>convert_layout</code> 都省了。</li>
+</ul>
+<p>指针版本的 TTGIR 走的是另一条路：先用普通的 <code>tt.load</code> 按 <code>#blocked</code> layout 读进来，再 <code>ttg.local_alloc</code> 写进 shared memory（Intel 叫 SLM），再 <code>ttg.local_load</code> 读成 <code>#ttg.dot_op</code>。每一次循环，A 和 B 都要在 SLM 里绕一圈。再往下到 LLVM IR，差别一目了然（同一个 kernel，1024³、128×128×32，Max 1100）：</p>
+<table>
+<thead>
+<tr>
+<th>LLVM IR 里的指令</th>
+<th align="right">指针版</th>
+<th align="right">descriptor 版</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>dpas</code>（矩阵乘）</td>
+<td align="right">33</td>
+<td align="right">33</td>
+</tr>
+<tr>
+<td><code>LSC2DBlockRead</code>（二维块读）</td>
+<td align="right">0</td>
+<td align="right">5</td>
+</tr>
+<tr>
+<td><code>LSC2DBlockPrefetch</code>（二维块预取）</td>
+<td align="right">0</td>
+<td align="right">5</td>
+</tr>
+<tr>
+<td><code>LSC2DBlockWrite</code>（二维块写）</td>
+<td align="right">0</td>
+<td align="right">17</td>
+</tr>
+<tr>
+<td>普通的全局读取</td>
+<td align="right">224</td>
+<td align="right">0</td>
+</tr>
+</tbody></table>
+<p>决定这些的是 Intel 后端的两个 pass，都在公开仓库 <code>intel/intel-xpu-backend-for-triton</code> 里（v3.9.0）：<code>third_party/intel/lib/TritonIntelGPUTransforms/MaterializeBlockPointer.cpp</code> 检查 descriptor 的对齐和 stride，给访存打上 <code>ttig.block_io</code> 标记；<code>LowerTo2DBlockLoad.cpp</code> 把带标记的访存改写成二维块读取。<code>LowerTo2DBlockLoad</code> 其实也会处理普通的 <code>tt.load</code>：只要它能从指针表达式里证明出二维的结构，指针写法同样能用上二维块读取。上面这个 kernel，它没能证明出来。<strong>descriptor 的意义就在这里：你直接把结构告诉编译器，它不必去猜。</strong></p>
+<h2>同一份 descriptor，在三种硬件上编成了什么</h2>
+<p>tensor descriptor 本身不是什么「加速指令」，它只是一种<strong>更结构化的描述</strong>，让编译器有机会用上硬件的块搬运单元。有没有这样的单元、用不用得上，取决于硬件。我用 3.9.0 把同一个 descriptor GEMM 编到三种目标上（NVIDIA 的两种用附录 A 第 8 节的离线编译，不需要 GPU）：</p>
+<table>
+<thead>
+<tr>
+<th>目标</th>
+<th>descriptor 的读取编成了什么</th>
+<th>矩阵乘</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Intel Max 1100</td>
+<td>二维块读写 <code>LSC2DBlockRead</code> / <code>Write</code>，外加预取</td>
+<td><code>dpas</code></td>
+</tr>
+<tr>
+<td>NVIDIA Hopper（sm_90）</td>
+<td><strong>TMA</strong>：<code>cp.async.bulk.tensor</code>（7 条），kernel 里还要现场创建 tensormap</td>
+<td><code>wgmma</code></td>
+</tr>
+<tr>
+<td>NVIDIA Ampere（sm_86，A10）</td>
+<td>kernel 里创建的 descriptor：普通的异步拷贝 <code>cp.async</code>（12 条）；host 端创建的：普通的 <code>ld.global</code>，再一条条写进 shared memory</td>
+<td><code>mma.sync</code></td>
+</tr>
+</tbody></table>
+<p><strong>TMA（tensor memory accelerator）<strong>是 Hopper 起才有的硬件单元：给它一个描述符和坐标，它自己把一个多维的块从显存搬进 shared memory，不占用线程。Intel 的二维块读写也是类似的思路。Ampere 没有这样的单元，descriptor 只能编成和指针写法差不多的指令，所以在 A10 上，换写法</strong>不一定</strong>会变快，host 端创建的那种甚至可能更慢（它没用上异步拷贝）。本书还没有在 A10 上实测这两种写法的差距，这是第 13 章和附录里待补的数据。</p>
+<h2>两种创建方式</h2>
+<p>上面的 kernel 是在 <strong>kernel 里</strong>用 <code>tl.make_tensor_descriptor</code> 创建 descriptor 的。另一种方式是在 <strong>host 端</strong>创建好，作为参数传进去：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">from triton.tools.tensor_descriptor import TensorDescriptor
+
+a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K])     # 形状、stride 从张量里取
+...
+_matmul_desc_kernel[grid](a_desc, b_desc, c_desc, K, BLOCK_M=..., BLOCK_N=..., BLOCK_K=...)</code></pre>
+</div><p>kernel 里就直接用传进来的 descriptor：<code>a_desc.load([...])</code>。minillm 用的是这种写法（下文）。两种方式的区别：</p>
+<ul>
+<li><strong>host 端创建</strong>：kernel 的参数更少，代码更干净。在 Hopper 上，描述符在 host 端就准备好了。</li>
+<li><strong>kernel 里创建</strong>：形状、stride 可以在 kernel 里算出来（比如按 batch 偏移以后再描述）。代价是在 Hopper 上要现场创建 tensormap，需要一块全局的临时内存。从编译元数据看，上面那个 kernel 编到 sm_90 时 <code>global_scratch_size = 384</code>（3 个 descriptor，每个 128 字节），编到 sm_86 时是 0。这块内存由你提供：调用之前要用 <code>triton.set_allocator(...)</code> 注册一个分配函数，否则启动时会报 <code>Kernel requires a runtime memory allocation, but no allocator was set</code>（<code>python/triton/runtime/_allocation.py</code>）。</li>
+</ul>
+<p>不管哪种方式，descriptor 都有硬性的对齐要求。host 端的检查写在 <code>python/triton/tools/tensor_descriptor.py</code> 的 <code>TensorDescriptor.__post_init__</code> 里：</p>
+<ul>
+<li>基地址必须是 16 字节的倍数（<code>base must be 16-byte aligned</code>）；</li>
+<li><strong>除最后一维外的 stride，必须是 16 字节的倍数</strong>（<code>strides must be 16-byte aligned</code>）；</li>
+<li><strong>最后一维必须连续</strong>（<code>Last dimension must be contiguous</code>）；</li>
+<li>越界部分的填充值只能是 0（默认）或 NaN。</li>
+</ul>
+<p>第二条最容易踩到。一个 1000×777 的 fp16 矩阵，行 stride 是 777 × 2 = 1554 字节，不是 16 的倍数，就不能用 descriptor。我在 Max 1100 上试过，<code>TensorDescriptor.from_tensor</code> 直接抛出 <code>AssertionError: strides must be 16-byte aligned</code>。转置视图（最后一维的 stride 不是 1）也不行。遇到这些情况，只能退回指针写法。</p>
+<h2>block pointer：曾经的第二种写法</h2>
+<p>如果你读过 Triton 官方教程的旧版本，或者别人两年前写的 kernel，会看到第三种写法：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">a_bptr = tl.make_block_ptr(a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                           offsets=(pid_m * BM, 0), block_shape=(BM, BK), order=(1, 0))
+for k in range(0, K, BK):
+    a = tl.load(a_bptr, boundary_check=(0, 1))
+    ...
+    a_bptr = tl.advance(a_bptr, (0, BK))</code></pre>
+</div><p>这就是 <strong>block pointer</strong>，它是 tensor descriptor 的前身，思路一样：描述形状和 stride，让编译器知道这是一个块。<strong>它在 Triton 3.9.0 里已经被移除了</strong>。<code>python/triton/language/core.py</code> 里的 <code>make_block_ptr</code> 和 <code>advance</code> 只剩下一句 <code>raise NotImplementedError</code>。在 3.9.0 上跑上面的代码（包在一个完整的 kernel 里）：</p>
+<p>运行结果（Max 1100，节选）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    a_bptr = tl.make_block_ptr(a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+             ^
+Block pointers have been removed in favor of the tensor descriptor API</code></pre>
+</div><p>迁移到 tensor descriptor 是一一对应的：</p>
+<table>
+<thead>
+<tr>
+<th>block pointer</th>
+<th>tensor descriptor</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>tl.make_block_ptr(base, shape, strides, offsets, block_shape, order)</code></td>
+<td><code>tl.make_tensor_descriptor(base, shape, strides, block_shape)</code>，offsets 挪到每次 <code>load</code> 的坐标里</td>
+</tr>
+<tr>
+<td><code>tl.load(bptr, boundary_check=(0, 1))</code></td>
+<td><code>desc.load([row, col])</code>，边界自动处理</td>
+</tr>
+<tr>
+<td><code>tl.advance(bptr, (0, BK))</code></td>
+<td>不需要；下一次 <code>load</code> 直接给新坐标</td>
+</tr>
+<tr>
+<td><code>order=(1, 0)</code></td>
+<td>不需要；descriptor 要求最后一维连续</td>
+</tr>
+</tbody></table>
+<p>block pointer 的 <code>order</code> 参数允许描述「列主序」的块，descriptor 不行，它要求最后一维连续。原来用 <code>order=(0, 1)</code> 读转置矩阵的代码，迁移时要么先把数据转成连续的，要么改写成 descriptor 读出来以后用 <code>tl.trans</code> 在寄存器里转置。</p>
+<h2>该用哪种写法</h2>
+<table>
+<thead>
+<tr>
+<th>情况</th>
+<th>推荐写法</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Intel GPU 上的矩阵乘、批量的块读写</td>
+<td>tensor descriptor</td>
+<td>能编成二维块读写，Max 1100 上快 9 倍</td>
+</tr>
+<tr>
+<td>Hopper（sm_90）及以上</td>
+<td>tensor descriptor</td>
+<td>能编成 TMA，这也是第 15 章 warp specialization 的前提</td>
+</tr>
+<tr>
+<td>Ampere（如 A10）</td>
+<td>指针，或者 kernel 里创建的 descriptor</td>
+<td>没有块搬运单元；host 端 descriptor 编不出异步拷贝。本书尚未实测，以你自己的测量为准</td>
+</tr>
+<tr>
+<td>stride 不对齐、最后一维不连续</td>
+<td>指针</td>
+<td>descriptor 用不了</td>
+</tr>
+<tr>
+<td>不规则的访存：gather、按索引读、每个元素不同的 mask</td>
+<td>指针</td>
+<td>descriptor 只能描述规则的矩形块</td>
+</tr>
+</tbody></table>
+<p>逐点和按行归约的 kernel（第 4–6 章）都是一维的连续访存，coalesce pass 已经能处理得很好（第 3 章），用指针写法就够了。</p>
+<h2>minillm：让矩阵乘自己选写法</h2>
+<p>这一章往 <code>minillm/kernels/matmul.py</code> 里加了三样东西：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def descriptor_ok(*tensors) -&gt; bool:
+    """TensorDescriptor 的要求（python/triton/tools/tensor_descriptor.py）：
+    基地址 16 字节对齐、除最后一维外的 stride 是 16 字节的倍数、最后一维连续。"""
+    return all(t.data_ptr() % 16 == 0 and t.stride(-1) == 1 and
+               all(s * t.element_size() % 16 == 0 for s in t.stride()[:-1]) for t in tensors)
+
+
+def mm(a: torch.Tensor, b: torch.Tensor) -&gt; torch.Tensor:
+    """minillm 默认使用的矩阵乘：能用 descriptor 就用，否则退回指针版。"""
+    n = b.shape[1]
+    out_ok = n * a.element_size() % 16 == 0       # 输出是新分配的连续张量，它的行 stride 就是 N
+    if prefer_descriptor() and a.shape[0] and n and out_ok and descriptor_ok(a, b):
+        return matmul_desc(a, b)
+    return matmul(a, b)</code></pre>
+</div><ul>
+<li><code>matmul_desc</code>：host 端创建 descriptor 的版本，默认 256×256×32、32 个 warp（上面实测最快的配置）；</li>
+<li><code>descriptor_ok</code>：照着 <code>TensorDescriptor</code> 的检查写的对齐判断；</li>
+<li><code>mm</code>：minillm 后面的章节默认使用的矩阵乘。<code>prefer_descriptor()</code> 在 Intel GPU 和 Hopper 及以上返回真，其它平台（包括 A10）返回假，理由就是上一节的表。第 7 章的 <code>matmul</code>（指针版）保持不变，作为退路。</li>
+</ul>
+<p>新增的测试在 <code>tests/test_matmul.py</code> 的后半段：1000×776×1032 这种不是 tile 整数倍、但行 stride 对齐的形状（检验 descriptor 自己处理边界）；777 列和转置视图会被 <code>descriptor_ok</code> 拒绝；<code>mm</code> 在两种情况下都算对。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-minillm.sh -q</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">........................................................................ [ 67%]
+...................................                                      [100%]
+107 passed in 3.99s</code></pre>
+</div><p><code>bench/bench_matmul.py</code> 现在会把两种写法都测一遍：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm &amp;&amp; python bench/bench_matmul.py</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0，4096×4096×4096
+  float16
+    指针版 128×128×32           10.167 ms    13.5 TFLOP/s
+    指针版 256×256×32            8.789 ms    15.6 TFLOP/s
+    descriptor 256×256×32     0.982 ms   140.0 TFLOP/s
+    torch.matmul              0.820 ms   167.6 TFLOP/s
+  bfloat16
+    指针版 128×128×32           10.477 ms    13.1 TFLOP/s
+    指针版 256×256×32            8.901 ms    15.4 TFLOP/s
+    descriptor 256×256×32     0.919 ms   149.5 TFLOP/s
+    torch.matmul              0.789 ms   174.1 TFLOP/s</code></pre>
+</div><p>minillm 的 descriptor 版本跑到了 <code>torch.matmul</code> 的 84% 左右。剩下的差距，是第三部分的事：tile 的大小和形状、program 的执行顺序、流水的级数、autotune。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>在 A10 上把这一章的对比跑一遍。</strong> 把本章第一个 <code>triton</code> 块存下来运行。指针版和 descriptor 版差多少？再试一试 host 端创建的 descriptor（照着 minillm 的 <code>matmul_desc</code> 改）。哪种最快？和上面那张「三种硬件」的表对得上吗？</li>
+<li><strong>踩一次对齐的坑。</strong> 用 <code>torch.randn(1000, 777, dtype=torch.float16)</code> 构造一个矩阵，调用 <code>TensorDescriptor.from_tensor(x, [64, 64])</code>，看报什么错。再用 <code>x = torch.randn(1000, 784, dtype=torch.float16)[:, :777]</code>（一个行 stride 是 784 的视图）试一次：这一次能不能用 descriptor？<code>descriptor_ok</code> 说什么？</li>
+<li><strong>迁移一段 block pointer 代码。</strong> 在网上找一个用 <code>tl.make_block_ptr</code> 写的 kernel（比如旧版 Triton 教程里的 GEMM），照着本章那张对照表改写成 tensor descriptor，在 3.9.0 上跑通。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>Triton 有三种访存写法：<strong>指针</strong>（每个元素一个地址，最灵活）、<strong>block pointer</strong>（3.9.0 已移除，<code>make_block_ptr</code> / <code>advance</code> 只会抛 <code>NotImplementedError</code>）、<strong>tensor descriptor</strong>（描述基地址、形状、stride、块大小，按坐标读写，边界自动处理）。</li>
+<li>在 Max 1100 上，同一个 GEMM 只换访存写法就快了 9 倍（13 → 139 TFLOP/s）。descriptor 版本的读取直接编成 <code>ttig.block_io</code> 标记的二维块读写，并且直接读成 <code>#ttg.dot_op</code>，不经过 SLM。指针版本要先读、写进 SLM、再读出来，没有二维块读取。决定这一点的是 Intel 后端的 <code>MaterializeBlockPointer</code> 和 <code>LowerTo2DBlockLoad</code>。</li>
+<li>descriptor 是一种结构化的描述，不是加速指令：Intel 上编成二维块读写，Hopper 上编成 TMA，Ampere 上只能编成普通的拷贝。用不用它，要看硬件。</li>
+<li>硬性要求：基地址和除最后一维外的 stride 都是 16 字节的倍数，最后一维连续。不满足就只能用指针。在 Hopper 上，kernel 里创建 descriptor 需要先 <code>triton.set_allocator</code>。</li>
+<li>minillm 的 <code>mm</code> 在 Intel 和 Hopper+ 上默认用 descriptor，对齐不满足或其它平台时退回指针版。</li>
+</ul>
+<p><strong>minillm 进度</strong>：<code>kernels/matmul.py</code> 新增 <code>matmul_desc</code>、<code>descriptor_ok</code>、<code>mm</code>；测试共 107 个；<code>bench_matmul.py</code> 对比指针和 descriptor 两种写法。</p>
+<p>下一章，我们停下来写测试和调试：<code>TRITON_INTERPRET=1</code> 让 kernel 在 CPU 上逐步执行，<code>tl.device_print</code> 和 <code>tl.device_assert</code> 怎么用，数值对比的容差该怎么定，以及几类典型错误（越界、漏写 mask、<code>constexpr</code> 用错）分别长什么样。第 7 章那个「<code>tl.dot</code> 结果正确，但没用上 DPAS」的例子，也会在那里回来。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch07.html">← 第 7 章 tl.dot 与第一个 GEMM</a>
+  <a class="nav-next" href="ch09.html">第 9 章 调试与测试 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

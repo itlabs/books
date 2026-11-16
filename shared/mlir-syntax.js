@@ -55,4 +55,35 @@
 
   // `!pix.image<...>`、`#map`、`@my_func`、`%arg0` 交给 llvm 原有的 variable 规则即可，
   // 它已经覆盖了 % @ ! # 四个前缀。
+
+  // ---- ttgir：《深入 Triton》读 TTIR / TTGIR 用（```ttir-norun / ```ttgir-norun）----
+  // 在 mlir 之上再派生一层，**不动** mlir 本身（MLIR 书、SYCL 书的高亮保持原样）。
+  // 那本书第四部分的主角是 layout 和 op，而 mlir 规则里两者都不显眼：
+  //   · `#blocked1`、`#ttg.nvidia_mma<…>`、`#ttig.dpas<…>` 与 `%x` 同走 variable 规则，同色，
+  //     读者一眼找不到「这个张量是什么 layout」；
+  //   · `tt.load`、`ttg.convert_layout` 这些 op 名不着色，混在 SSA 名和类型中间。
+  Prism.languages.ttgir = Prism.languages.extend("mlir", {});
+  Prism.languages.insertBefore("ttgir", "variable", {
+    // layout 别名与 encoding 属性：#blocked、#blocked1、#mma、#shared、#ttg.blocked、#ttig.dpas ……
+    // 只认 # 开头，% 的 SSA 值、! 的类型、@ 的符号仍走 variable。
+    layout: {
+      pattern: /#[A-Za-z_][\w$.]*/,
+      alias: "important",
+    },
+    // 方言 op：`tt.load`、`ttg.convert_layout`、`arith.addf`、`scf.for`。
+    // 要求 `方言.名字` 后面跟空格或 `(`，并且前面不是 # ! % @ 或字母数字，
+    // 免得吃掉 `#ttg.blocked`、`!tt.ptr` 里的方言前缀，或属性名 `tt.divisibility =` 里的那段。
+    op: {
+      pattern: /(^|[^\w#!%@.$])[a-z_][a-z0-9_]*\.[a-z_][\w.]*(?=[ (])(?! =)/m,
+      lookbehind: true,
+      alias: "function",
+    },
+    // layout 参数：sizePerThread = [4]、warpsPerCTA = [2, 2]、versionMajor = 2 ……
+    // 只匹配 `{ ` 或 `, ` 之后、` = ` 之前的驼峰名，外加几个全小写的 layout 参数（order、parent、
+    // version、vec）；不碰 op 的普通属性（它们多半是小写加点，如 tt.divisibility）。
+    "layout-param": {
+      pattern: /(?<=[{,]\s*)(?:[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|order|parent|version|vec)(?=\s*=)/,
+      alias: "property",
+    },
+  });
 })(typeof Prism !== "undefined" ? Prism : null);

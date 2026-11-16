@@ -87,6 +87,111 @@ function mlirRunArgs(code, tool) {
   return { tool: actualTool, args };
 }
 
+// ===== Triton 书（inside-triton）专用代码块 =====
+// 约定：
+//   ```triton      -> 完整、能在真机上跑的 Triton 程序。只高亮 + 本地命令（需要 GPU）
+//   ```triton-ir   -> 完整的 Triton / Gluon 程序，点开在 Compiler Explorer 里看各级 IR（不需要 GPU）
+//   ```gluon       -> Gluon kernel（triton.experimental.gluon），只高亮 + 本地命令
+//   ```helion      -> Helion kernel，只高亮 + 本地命令
+//   以上每种都有 -norun 变体（片段、伪代码、本书没在真机上验证过的写法），只高亮。
+//
+// 块首可以写这几行注释（都是普通的 Python 注释，留在代码里不影响运行，读者能照抄）：
+//   # arch: sm80 xpu        这个块需要的平台，空格分隔，满足其中之一即可。取值：
+//                           sm80 / sm86 / sm90 / sm100（NVIDIA，含更新的架构）、cdna3（AMD）、xpu（Intel）、
+//                           any（任意 GPU）。verify/verify-triton.sh 读同一行，决定在哪台机器上跑、在哪台跳过。
+//   # CE: triton_amd_370    只对 triton-ir：换 CE 编译器（默认 triton_nvidia_370），后面可以跟 wrapper 参数，
+//                           例如 `# CE: triton_nvidia_370 --arch 90`。不写参数时 NVIDIA 默认 --arch 86（A10，
+//                           本书主力平台），AMD 用 CE 的默认值 gfx942。
+//   # IR: ttir              只对 triton-ir：Device 面板一打开就停在哪一级。取值 source / ttir / ttgir / llir /
+//                           ptx / sass（NVIDIA）/ amdgcn（AMD），默认 ttgir。
+//
+// CE 的 Triton 编译器（etc/scripts/triton_wrapper.py）是这样工作的，triton-ir 块必须照它的要求写：
+//   - 它把整个脚本 import 一遍，只有**真的启动了**的 kernel 才会被编译、出 IR。只定义不启动，CE 什么也不输出。
+//   - 张量是 FakeTensor，driver 是 MagicMock：kernel 只编译、不运行。所以 triton-ir 块写 device="cuda"
+//     （AMD 的 ROCm 版 torch 也叫 "cuda"）；`triton.runtime.driver.active.get_active_torch_device()`
+//     在 CE 上返回的是 MagicMock，torch.randn(device=...) 会直接报错。
+//   - 各级 IR 不在主面板（主面板只显示 PTX / AMDGCN），而在 Device 面板里，名字是
+//     `<kernel> [stage N].<ir>`。clientstate 链接打不开 Device 面板，所以这里用完整的 GoldenLayout
+//     布局（`#` 后面跟 JSON，CE 的 url.ts 会当成旧式 JSON 链接解析）。
+//   - stage 编号随后端和前端变：Gluon 没有 ttir 这一级，AMD 没有 sass 这一级，所以要现算。
+let currentBook = null; // 当前正在构建哪本书（buildBook 里设置）；只有 Triton 书的 triton 块换页脚
+
+const TRITON_ARCH_LABEL = {
+  any: "GPU（不限厂商）", sm80: "NVIDIA sm_80+", sm86: "NVIDIA sm_86+", sm90: "NVIDIA Hopper（sm_90）+",
+  sm100: "NVIDIA Blackwell（sm_100）+", cdna3: "AMD CDNA3", xpu: "Intel GPU（XPU）",
+};
+
+// 块首的 `# key: value` 注释行（只看开头连续的注释行，不往正文里找）。
+function tritonHeader(code) {
+  const h = {};
+  for (const line of code.split("\n")) {
+    const m = /^\s*#\s*(arch|CE|IR)\s*:\s*(.*?)\s*$/.exec(line);
+    if (m) h[m[1]] = m[2];
+    else if (line.trim() && !/^\s*#/.test(line)) break;
+  }
+  return h;
+}
+
+function tritonIrUrl(code, header) {
+  const [compiler = "triton_nvidia_370", ...args] = (header.CE || "").split(/\s+/).filter(Boolean);
+  const amd = /amd/.test(compiler);
+  const options = args.length ? args.join(" ") : amd ? "" : "--arch 86";
+  const gluon = /^\s*@gluon\.jit/m.test(code);
+  // kernel 名：取第一个 @triton.jit / @gluon.jit 下面的 def（中间允许再叠别的装饰器，例如 @triton.autotune）
+  const kernel = (/^\s*@(?:triton|gluon)\.jit[^\n]*\n(?:\s*@[^\n]*\n)*\s*def\s+(\w+)/m.exec(code) || [])[1];
+  const stages = ["source", ...(gluon ? [] : ["ttir"]), "ttgir", "llir", ...(amd ? ["amdgcn"] : ["ptx", "sass"])];
+  const want = header.IR || "ttgir";
+  const idx = stages.indexOf(want);
+  if (idx < 0) throw new Error(`triton-ir 块的 # IR: ${want} 在 ${compiler}${gluon ? "（Gluon）" : ""} 上没有这一级；可选 ${stages.join(" / ")}`);
+  if (!kernel) throw new Error("triton-ir 块里没找到 @triton.jit / @gluon.jit 的 kernel 定义");
+  const cfg = {
+    version: 4,
+    content: [{ type: "row", content: [
+      { type: "component", componentName: "codeEditor", componentState: { id: 1, source: code, lang: "triton" } },
+      { type: "component", componentName: "compiler", componentState: { id: 1, source: 1, lang: "triton", compiler, options } },
+      { type: "component", componentName: "device", componentState: {
+        id: 1, editorid: 1, treeid: 0, compilerName: compiler, device: `${kernel} [stage ${idx + 1}].${want}` } },
+    ] }],
+  };
+  return { url: "https://godbolt.org/#" + encodeURIComponent(JSON.stringify(cfg)), want, compiler, options, gluon, stages };
+}
+
+function tritonBookBlock(code, lang) {
+  const escape = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const h = tritonHeader(code);
+  const arch = (h.arch || "").split(/[\s,]+/).filter(Boolean);
+  for (const a of arch)
+    if (!TRITON_ARCH_LABEL[a]) throw new Error(`未知的 # arch: ${a}；可选 ${Object.keys(TRITON_ARCH_LABEL).join(" / ")}`);
+  // 能在真机上跑的块必须标平台（BRIEF §7.3）：verify 脚本靠它决定在哪台机器上跑；不标就没法判断「跳过」还是「通过」。
+  if (lang !== "triton-ir" && !arch.length)
+    throw new Error(`\`\`\`${lang} 块缺少块首的 # arch: 行（例如 # arch: sm80 xpu）：\n${code.split("\n").slice(0, 3).join("\n")}`);
+  const need = arch.length ? "需要 " + arch.map((a) => TRITON_ARCH_LABEL[a]).join(" 或 ") : "需要 GPU";
+  let tag, btn = "", cmdLabel = "本地运行：", cmd;
+  if (lang === "triton-ir") {
+    const r = tritonIrUrl(code, h);
+    tag = `${r.gluon ? "Gluon" : "Triton"} → ${r.want.toUpperCase()}`;
+    btn = `<a class="ce-btn" href="${r.url}" target="_blank" rel="noopener">🔬 在 Compiler Explorer 看 IR</a>`;
+    cmdLabel = "不需要 GPU：";
+    const IR_NAME = { source: "source", ttir: "TTIR", ttgir: "TTGIR", llir: "LLVM IR", ptx: "PTX", sass: "SASS", amdgcn: "AMDGCN" };
+    cmd = `CE 只编译不运行（${r.compiler}${r.options ? " " + r.options : ""}）；Device 面板里可切换 ${r.stages.map((x) => IR_NAME[x]).join(" / ")}`;
+  } else if (lang === "gluon") {
+    tag = "Gluon (Python)";
+    cmd = `python main.py   # ${need}；Gluon 在 triton.experimental 下，API 随版本变`;
+  } else if (lang === "helion") {
+    tag = "Helion (Python)";
+    cmd = `pip install helion torch && python main.py   # ${need}`;
+  } else {
+    tag = "Triton (Python)";
+    cmd = `python main.py   # ${need}；环境见附录 A`;
+  }
+  return `<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">${tag}</span>
+    ${btn}</div>
+  <pre class="line-numbers"><code class="language-python">${escape(code)}</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">${cmdLabel}</span><code>${escape(cmd)}</code></div>
+</div>`;
+}
+
 renderer.code = function (token) {
   // marked v12+ 传入的是 token 对象 {text, lang, escaped}
   const code = typeof token === "string" ? token : token.text;
@@ -135,6 +240,9 @@ renderer.code = function (token) {
     triton:    { tag: "Triton (Python)", prism: "language-python", gb: null, label: "", cmd: "pip install triton torch   # 需要 NVIDIA GPU；然后：python main.py" },
     cutedsl:   { tag: "CuTe DSL (Python)", prism: "language-python", gb: null, label: "", cmd: "pip install nvidia-cutlass-dsl torch   # 需要 NVIDIA GPU；然后：python main.py" },
   };
+  // 《深入 Triton》的 triton 块要在 NVIDIA 和 Intel 两台验证机上都能跑，页脚不能写死 NVIDIA；
+  // GPU 书的 triton 块保持原样。
+  if (lang === "triton" && currentBook === "inside-triton") return tritonBookBlock(code, "triton");
   if (gpuSpec[lang]) {
     const s = gpuSpec[lang];
     const btn = s.gb
@@ -147,6 +255,8 @@ renderer.code = function (token) {
   <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>${escape(s.cmd)}</code></div>
 </div>`;
   }
+
+  if (["triton-ir", "gluon", "helion"].includes(lang)) return tritonBookBlock(code, lang);
 
   // ===== MLIR 书（inside-mlir）专用代码块 =====
   // 约定：
@@ -208,6 +318,8 @@ renderer.code = function (token) {
     "cuda-norun":   { prism: "language-cpp", tag: "CUDA C++" },
     "sycl-norun":   { prism: "language-cpp", tag: "SYCL / DPC++" },
     "triton-norun": { prism: "language-python", tag: "Triton (Python)" },
+    "gluon-norun":  { prism: "language-python", tag: "Gluon (Python)" },
+    "helion-norun": { prism: "language-python", tag: "Helion (Python)" },
     "cutedsl-norun":{ prism: "language-python", tag: "CuTe DSL (Python)" },
     // inside-llvm-sycl 书用：LLVM IR / SPIR-V 文本片段，只高亮、不给按钮
     "llvm":         { prism: "language-llvm", tag: "LLVM IR" },
@@ -223,6 +335,10 @@ renderer.code = function (token) {
     "lit-norun":    { prism: "language-cpp", tag: "lit 测试 RUN 行（不可直接执行）" },
     "cir-norun":    { prism: "language-mlir", tag: "ClangIR（cir 方言）" },
     "mlir-norun":   { prism: "language-mlir", tag: "MLIR" },
+    // inside-triton 书：真 dump 出来的 TTIR / TTGIR（节选也要标明）。ttgir 高亮在 mlir 之上
+    // 突出 layout（#blocked、#ttg.nvidia_mma）和方言 op（tt.load、ttg.convert_layout），见 mlir-syntax.js。
+    "ttir-norun":   { prism: "language-ttgir", tag: "TTIR" },
+    "ttgir-norun":  { prism: "language-ttgir", tag: "TTGIR" },
   };
   const langClass = norun[lang]
     ? norun[lang].prism
@@ -254,7 +370,7 @@ marked.setOptions({ renderer, breaks: false, gfm: true });
 // ---- HTML 页面模板（书内页面：assets/vendor 都在本书目录下）----
 function page(title, bodyHtml, prevLink, nextLink, tocHtml) {
   // IR 高亮只在真的用到 LLVM IR / MLIR 代码块的页面上加载，别给 Python 书塞没用的脚本。
-  const needsIr = /class="language-(?:llvm|mlir)"/.test(bodyHtml);
+  const needsIr = /class="language-(?:llvm|mlir|ttgir)"/.test(bodyHtml);
   if (needsIr) bookUsesIr = true;   // 供 buildBook 决定要不要留下 IR 高亮文件
   const irScripts = needsIr
     ? `<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
@@ -355,6 +471,7 @@ function buildBook(book) {
       .filter((slug) => fs.existsSync(path.join(chDir, slug + ".md"))),
   );
   bookUsesIr = false;
+  currentBook = book.slug;
   let built = 0;
   book.chapters.forEach(([slug, title], i) => {
     const mdPath = path.join(chDir, slug + ".md");

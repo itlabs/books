@@ -45,6 +45,12 @@
   <p class="shelf-sub">写给编译器工程师的多层 IR 之旅：方言、变换与下降</p>
   <p class="shelf-desc">从「为什么 LLVM IR 不够用」讲起，把 MLIR 的核心抽象（Operation/Region/Type/Attribute/Trait/Interface）拆开；然后用 TableGen/ODS 从零造一个自己的 pix 方言，给它写 verifier、folder、Pass、Pattern 与 Dialect Conversion；再沿 linalg → vector → memref → LLVM / GPU 把它一路下降到真机跑起来；最后看 Triton、IREE、flang、ClangIR 这些真实项目各自怎么用 MLIR。每个机制都锚到 llvm-project/mlir 里的真实路径与类名，代码块可在 Compiler Explorer 里跑 mlir-opt，全书代码随书带校验脚本。</p>
 </a>
+<a class="shelf-card" href="inside-triton/index.html">
+  <h2>深入 Triton</h2>
+  <p class="shelf-en">Inside Triton</p>
+  <p class="shelf-sub">写给 kernel 作者的 Triton：从写对、写快到看懂编译器</p>
+  <p class="shelf-desc">从「PyTorch eager 和手写 kernel 之间差了什么」讲起，先建立够用的 GPU 硬件模型和块级编程的心智模型；再用一个贯穿全书的 decoder-only Transformer 层（minillm）把逐点、归约、GEMM、attention、MoE 一类类写对、写快，每一步都按「预测 → 测量 → 解释」来调；然后打开编译器，对照 Python 源码读 TTIR / TTGIR，讲透 layout 与 convert_layout；最后看 Triton 的下一层 Gluon、上一层 Helion，以及什么时候该离开 Triton。每个机制都锚到 Triton 3.9.0 源码里的真实路径，IR 是真 dump 出来的，代码在 NVIDIA 和 Intel GPU 上实测，triton-ir 代码块可以在 Compiler Explorer 里不用 GPU 直接看各级 IR。</p>
+</a>
 <a class="shelf-card" href="modern-cpp/index.html">
   <h2>现代 C++ 之路</h2>
   

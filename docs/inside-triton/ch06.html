@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 章 归约与逐行算子</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li class="active"><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 6 章 归约与逐行算子</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>Transformer 里除了矩阵乘，最常见的就是<strong>按行归约</strong>的算子：softmax 要求每一行的最大值和指数和，RMSNorm 要求每一行的平方和。它们都是访存受限的（第 2 章），写法的好坏直接体现为「这一行要从显存读几遍」。这一章把 minillm 的 <code>softmax</code> 和 <code>rmsnorm</code> 写出来，并回答一个第 1 章就埋下的问题：<strong>一行太长，一个 program 放不下的时候怎么办</strong>。</p>
+<p>读完你会拿到三样东西。一是「放不下」的确切含义：不是 shared memory 不够，而是<strong>寄存器</strong>不够。你会看到编译器报告的寄存器溢出量，以及 Intel 后端发现溢出后自动换成大寄存器模式重编的过程。二是 <strong>online softmax</strong>：只扫一遍就同时求出最大值和指数和的小技巧，它是第 17 章 FlashAttention 的地基。你会在浏览器里一步步看它怎么更新，并在真机上验证「读 3 遍 → 读 2 遍」恰好快了 4/3 倍。三是 minillm 的两个新 kernel，带测试和性能对比。</p>
+</div><h2>一行放得进一个 program</h2>
+<p>先写最直接的版本：一个 program 处理一整行，<code>BLOCK</code> 取不小于行长的 2 的幂，一次读进来，归约，写出去。这就是第 1 章那个 softmax，minillm 里稍作加固：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def _softmax_fused_kernel(x_ptr, y_ptr, n_cols, stride_x, stride_y, BLOCK: tl.constexpr):
+    row = tl.program_id(0).to(tl.int64)          # 行号转成 int64：行数 × stride 可能超过 2^31（第 5 章）
+    cols = tl.arange(0, BLOCK)
+    mask = cols &lt; n_cols
+    x = tl.load(x_ptr + row * stride_x + cols, mask=mask, other=-float("inf")).to(tl.float32)
+    x = x - tl.max(x, axis=0)                    # 减去最大值：exp 不会溢出
+    e = tl.exp(x)
+    y = e / tl.sum(e, axis=0)
+    tl.store(y_ptr + row * stride_y + cols, y, mask=mask)   # store 会转回 y 的 dtype</code></pre>
+</div><p>和第 1 章相比多了三处，每一处都对应前一章的一条规则：</p>
+<ul>
+<li><strong>行号转成 int64。</strong> <code>row * stride_x</code> 在一个几十亿元素的 logits 张量上会溢出 int32。</li>
+<li><strong><code>stride_x</code> 作为参数传进来</strong>，而不是假设行与行紧挨着。从一个更大的张量里切出来的视图（<code>big[:, :2000]</code>）也能处理，只要最后一维是连续的。</li>
+<li><strong>在 fp32 里算</strong>，最后由 <code>tl.store</code> 转回输入的 dtype。</li>
+</ul>
+<p>为什么要先减去最大值？softmax 的值只和各元素之间的<strong>差</strong>有关：<code>exp(x_i) / Σ exp(x_j)</code> 的分子分母同乘 <code>exp(-m)</code>，结果不变。但 <code>exp</code> 本身很容易溢出：fp32 的 <code>exp(89)</code> 就已经是 <code>inf</code>，而 logits 上百是常有的事。减去最大值以后，指数的参数都 ≤ 0，<code>exp</code> 落在 (0, 1] 之间，永远不会溢出。这一节后面的模拟器会演示这一点。</p>
+<p>RMSNorm 的结构一样：一个 program 一行，求平方和，乘上 <code>rsqrt</code>，再乘权重：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def _rmsnorm_kernel(x_ptr, w_ptr, y_ptr, n_cols, stride_x, stride_y, eps, BLOCK: tl.constexpr):
+    row = tl.program_id(0).to(tl.int64)
+    cols = tl.arange(0, BLOCK)
+    mask = cols &lt; n_cols
+    # 在 fp32 里求平方和：bf16 的平方和很容易丢精度
+    x = tl.load(x_ptr + row * stride_x + cols, mask=mask, other=0.0).to(tl.float32)
+    mean_sq = tl.sum(x * x, axis=0) / n_cols     # other=0：被 mask 掉的位置不影响平方和
+    rstd = tl.rsqrt(mean_sq + eps)
+    w = tl.load(w_ptr + cols, mask=mask, other=0.0).to(tl.float32)
+    tl.store(y_ptr + row * stride_y + cols, x * rstd * w, mask=mask)</code></pre>
+</div><p>注意两个 kernel 的 <code>other</code> 不一样：softmax 要求最大值，填 <code>-inf</code>；RMSNorm 求平方和，填 0（第 5 章：<code>other</code> 要填归约运算的单位元）。</p>
+<h2>多长才算「放不下」：寄存器</h2>
+<p>一个 program 一次装下一整行，这一行的数据放在哪里？放在执行这个 program 的那些线程的<strong>寄存器</strong>里。一行 <code>BLOCK</code> 个元素、<code>num_warps</code> 个 warp，平均每个线程要放 <code>BLOCK / (32 × num_warps)</code> 个元素。寄存器是有限的：寄存器不够，编译器只好把一部分值暂存到慢得多的内存里，用的时候再读回来，这叫<strong>寄存器溢出（register spill）</strong>。</p>
+<p>Triton 加载 kernel 时会从驱动拿到这个 kernel 用了多少寄存器、溢出了多少，记在 <code>CompiledKernel</code> 的 <code>n_regs</code> 和 <code>n_spills</code> 上（<code>python/triton/compiler/compiler.py</code>）。下面的实验把行长从 1024 加到 32768，<code>num_warps</code> 取 4、8、16，把这两个数和带宽一起打出来：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+import triton.language as tl
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+@triton.jit
+def softmax_kernel(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    mask = cols &lt; n_cols
+    x = tl.load(x_ptr + row * n_cols + cols, mask=mask, other=-float("inf"))
+    x = x - tl.max(x, axis=0)
+    e = tl.exp(x)
+    tl.store(y_ptr + row * n_cols + cols, e / tl.sum(e, axis=0), mask=mask)
+
+
+for n in (1024, 4096, 8192, 16384, 32768):
+    x = torch.randn(4096, n, device=DEVICE); y = torch.empty_like(x)
+    for nw in (4, 8, 16):
+        k = softmax_kernel[(4096,)](x, y, n, BLOCK=n, num_warps=nw)     # 返回编译好的 kernel
+        ms = triton.testing.do_bench(lambda: softmax_kernel[(4096,)](x, y, n, BLOCK=n, num_warps=nw))
+        flags = getattr(k.metadata, "build_flags", "")                    # Intel 后端才有这个字段
+        print(f"n={n:6} num_warps={nw:2}  每线程 {n // (32 * nw):4} 个元素  n_regs={k.n_regs} n_spills={k.n_spills}"
+              f"  {2 * x.numel() * 4 / ms / 1e6:5.0f} GB/s  {flags.strip()}")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">n=  1024 num_warps= 4  每线程    8 个元素  n_regs=128 n_spills=0    451 GB/s
+n=  1024 num_warps= 8  每线程    4 个元素  n_regs=128 n_spills=0    454 GB/s
+n=  1024 num_warps=16  每线程    2 个元素  n_regs=128 n_spills=0    421 GB/s
+n=  4096 num_warps= 4  每线程   32 个元素  n_regs=128 n_spills=5    505 GB/s
+n=  4096 num_warps= 8  每线程   16 个元素  n_regs=128 n_spills=0    520 GB/s
+n=  4096 num_warps=16  每线程    8 个元素  n_regs=128 n_spills=0    528 GB/s
+n=  8192 num_warps= 4  每线程   64 个元素  n_regs=256 n_spills=0    601 GB/s  -cl-intel-256-GRF-per-thread
+n=  8192 num_warps= 8  每线程   32 个元素  n_regs=128 n_spills=5    603 GB/s
+n=  8192 num_warps=16  每线程   16 个元素  n_regs=128 n_spills=0    619 GB/s
+n= 16384 num_warps= 4  每线程  128 个元素  n_regs=256 n_spills=61    626 GB/s  -cl-intel-256-GRF-per-thread
+n= 16384 num_warps= 8  每线程   64 个元素  n_regs=256 n_spills=0    672 GB/s  -cl-intel-256-GRF-per-thread
+n= 16384 num_warps=16  每线程   32 个元素  n_regs=128 n_spills=5    676 GB/s
+n= 32768 num_warps= 4  每线程  256 个元素  n_regs=256 n_spills=210    376 GB/s  -cl-intel-256-GRF-per-thread
+n= 32768 num_warps= 8  每线程  128 个元素  n_regs=256 n_spills=61    680 GB/s  -cl-intel-256-GRF-per-thread
+n= 32768 num_warps=16  每线程   64 个元素  n_regs=256 n_spills=0    717 GB/s  -cl-intel-256-GRF-per-thread</code></pre>
+</div><p>规律一目了然：</p>
+<ul>
+<li><strong>每个线程分到的元素越多，越容易溢出，溢出越多，带宽越低。</strong> 最糟的一行是 32768 列、4 个 warp：每个线程 256 个元素，溢出 210，带宽只剩 376 GB/s。同样的行长换成 16 个 warp，每个线程 64 个元素，不溢出，带宽 717 GB/s，是这张表里最快的。第 1 章那个手写 softmax 在 32768 列时掉到 382 GB/s，原因就在这里：它用的是默认的 4 个 warp。</li>
+<li><strong>Intel 后端会自己想办法。</strong> <code>n_regs</code> 在 Intel 上是每个硬件线程的通用寄存器（GRF）个数，默认 128。编译后一旦发现溢出，后端会加上 <code>-cl-intel-256-GRF-per-thread</code> 重新编译一次，让每个线程拿到 256 个寄存器，代价是同时驻留的线程变少（第 2 章的占用率）。上表里所有 <code>n_regs=256</code> 的行都是这么来的。判断要不要重编的逻辑在 Intel 后端的 <code>third_party/intel/backend/compiler.py</code>，函数是 <code>extract_spill_size_from_zebin</code> 和 <code>accepts_default_grf</code>。NVIDIA 后端没有这一步，寄存器的分配完全交给 <code>ptxas</code>。</li>
+<li><strong>加 warp 是最直接的办法</strong>，但有上限：一个 program 最多 32 个 warp（1024 个线程）。所以一次装下的行长也有上限。</li>
+</ul>
+<p>minillm 据此定了一条简单的规则：<code>num_warps = max(4, min(32, BLOCK // 512))</code>，让每个线程大约拿 8–32 个元素；<code>BLOCK</code> 超过 16384 就不再一次装下，改走下一节的循环版本。这条规则不是最优的，第 14 章讲 autotune 时再回来调它。</p>
+<h2>放不下的时候：沿着行循环</h2>
+<p>行再长，比如词表维度上的 softmax，一行有十几万个元素，就只能分段处理：每次读 <code>BLOCK</code> 个，循环到行尾。问题是 softmax 要用到<strong>整行</strong>的最大值和指数和，读完第一段时还不知道后面有没有更大的值。</p>
+<p>最直接的办法是<strong>扫三遍</strong>：第一遍求最大值，第二遍用这个最大值求指数和，第三遍算结果、写出去。第 1 章里 Inductor 生成的 kernel 就是这么做的。每一遍都要把这一行从头读一次，加上写，一共 4 趟。</p>
+<p>能不能少读一遍？关键在于：指数和 <code>l = Σ exp(x_j - m)</code> 依赖最大值 <code>m</code>，但<strong>换一个基准是很便宜的</strong>。假设已经读完前几段，手上有「到目前为止的最大值 <code>m</code>」和「以 <code>m</code> 为基准的指数和 <code>l</code>」。新读进一段，它的最大值让 <code>m</code> 变成了 <code>m_new</code>。之前累加的每一项 <code>exp(x - m)</code> 换到新基准下都是 <code>exp(x - m_new) = exp(x - m) · exp(m - m_new)</code>，所以整个 <code>l</code> 乘上同一个因子 <code>exp(m - m_new)</code> 就行了：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">m_new = max(m, max(这一段))
+l     = l · exp(m − m_new) + Σ exp(这一段 − m_new)</code></pre>
+</div><p>扫完一遍，<code>m</code> 就是整行的最大值，<code>l</code> 就是整行的指数和。再扫第二遍写出结果，一共读 2 遍、写 1 遍，3 趟。这就是 <strong>online softmax</strong>（Milakov 和 Gimelshein 在 2018 年的论文里提出）。</p>
+<p>下面的模拟器把一行 12 个数分成 3 段，一段一段地更新 <code>m</code> 和 <code>l</code>，最后和普通的两遍算法比较。只用标准库，直接点运行；可以改 <code>row</code> 和 <code>CHUNK</code>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20online%20softmax%EF%BC%9A%E4%B8%80%E8%BE%B9%E6%89%AB%E4%B8%80%E8%BE%B9%E7%BB%B4%E6%8A%A4%E6%9C%80%E5%A4%A7%E5%80%BC%20m%20%E5%92%8C%E6%8C%87%E6%95%B0%E5%92%8C%20l%EF%BC%8C%E6%89%AB%E5%AE%8C%E4%B8%80%E9%81%8D%E5%B0%B1%E5%BE%97%E5%88%B0%E6%95%B4%E8%A1%8C%E7%9A%84%20m%20%E5%92%8C%20l%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0Aimport%20math%0A%0Arow%20%3D%20%5B3.0%2C%201.0%2C%204.0%2C%201.0%2C%205.0%2C%209.0%2C%202.0%2C%206.0%2C%205.0%2C%203.0%2C%205.0%2C%208.0%5D%0ACHUNK%20%3D%204%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E4%B8%80%E6%AC%A1%E5%8F%AA%E8%83%BD%E3%80%8C%E8%A3%85%E4%B8%8B%E3%80%8D4%20%E4%B8%AA%E5%85%83%E7%B4%A0%EF%BC%9A%E7%9B%B8%E5%BD%93%E4%BA%8E%20kernel%20%E9%87%8C%E7%9A%84%20BLOCK%0A%0A%0Adef%20softmax_two_pass(xs)%3A%0A%20%20%20%20m%20%3D%20max(xs)%0A%20%20%20%20l%20%3D%20sum(math.exp(x%20-%20m)%20for%20x%20in%20xs)%0A%20%20%20%20return%20m%2C%20l%0A%0A%0Adef%20softmax_online(xs%2C%20chunk)%3A%0A%20%20%20%20m%2C%20l%20%3D%20-math.inf%2C%200.0%0A%20%20%20%20for%20start%20in%20range(0%2C%20len(xs)%2C%20chunk)%3A%0A%20%20%20%20%20%20%20%20block%20%3D%20xs%5Bstart%3Astart%20%2B%20chunk%5D%0A%20%20%20%20%20%20%20%20m_new%20%3D%20max(m%2C%20max(block))%0A%20%20%20%20%20%20%20%20%23%20%E5%9F%BA%E5%87%86%E4%BB%8E%20m%20%E6%8D%A2%E6%88%90%20m_new%EF%BC%9A%E4%B9%8B%E5%89%8D%E7%B4%AF%E5%8A%A0%E7%9A%84%E6%AF%8F%E4%B8%80%E9%A1%B9%20exp(x%20-%20m)%20%E9%83%BD%E8%A6%81%E4%B9%98%E4%B8%8A%20exp(m%20-%20m_new)%0A%20%20%20%20%20%20%20%20l%20%3D%20l%20*%20math.exp(m%20-%20m_new)%20%2B%20sum(math.exp(x%20-%20m_new)%20for%20x%20in%20block)%0A%20%20%20%20%20%20%20%20print(f%22%20%20%E8%AF%BB%E5%88%B0%E7%AC%AC%20%7Bstart%3A2%7D%E2%80%93%7Bstart%20%2B%20len(block)%20-%201%3A2%7D%20%E4%B8%AA%EF%BC%9Ablock%20%E6%9C%80%E5%A4%A7%20%7Bmax(block)%3A3%7D%EF%BC%8C%22%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20f%22m%20%7Bm%3A4%7D%20-%3E%20%7Bm_new%3A3%7D%EF%BC%8Cl%20%3D%20%7Bl%3A.6f%7D%22)%0A%20%20%20%20%20%20%20%20m%20%3D%20m_new%0A%20%20%20%20return%20m%2C%20l%0A%0A%0Aprint(%22online%EF%BC%8C%E9%80%90%E6%AE%B5%E6%9B%B4%E6%96%B0%EF%BC%9A%22)%0Am1%2C%20l1%20%3D%20softmax_online(row%2C%20CHUNK)%0Am2%2C%20l2%20%3D%20softmax_two_pass(row)%0Aprint(f%22online%EF%BC%9Am%20%3D%20%7Bm1%7D%EF%BC%8Cl%20%3D%20%7Bl1%3A.12f%7D%22)%0Aprint(f%22%E4%B8%A4%E9%81%8D%EF%BC%9A%20%20m%20%3D%20%7Bm2%7D%EF%BC%8Cl%20%3D%20%7Bl2%3A.12f%7D%22)%0Aprint(%22%E4%B8%A4%E8%80%85%E7%9A%84%20softmax%20%E6%9C%80%E5%A4%A7%E5%B7%AE%EF%BC%9A%22%2C%20max(abs(math.exp(x%20-%20m1)%20%2F%20l1%20-%20math.exp(x%20-%20m2)%20%2F%20l2)%20for%20x%20in%20row))%0A%0A%23%20%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%80%E5%AE%9A%E8%A6%81%E5%87%8F%E6%9C%80%E5%A4%A7%E5%80%BC%EF%BC%9Alogit%20%E5%A4%A7%E4%B8%80%E7%82%B9%EF%BC%8Cexp%20%E5%B0%B1%E8%B6%85%E5%87%BA%E6%B5%AE%E7%82%B9%E6%95%B0%E7%9A%84%E8%8C%83%E5%9B%B4%0Abig%20%3D%20%5Bx%20%2B%201000%20for%20x%20in%20row%5D%0Atry%3A%0A%20%20%20%20print(sum(math.exp(x)%20for%20x%20in%20big))%0Aexcept%20OverflowError%20as%20e%3A%0A%20%20%20%20print(%22%E4%B8%8D%E5%87%8F%E6%9C%80%E5%A4%A7%E5%80%BC%EF%BC%9Aexp(1003)%20-%3E%22%2C%20e)%0Am%2C%20l%20%3D%20softmax_two_pass(big)%0Aprint(f%22%E5%87%8F%E4%BA%86%E6%9C%80%E5%A4%A7%E5%80%BC%EF%BC%9Am%20%3D%20%7Bm%7D%EF%BC%8Cl%20%3D%20%7Bl%3A.12f%7D%EF%BC%88%E5%92%8C%E4%B8%8A%E9%9D%A2%E7%9A%84%20l%20%E4%B8%80%E6%A0%B7%EF%BC%9Asoftmax%20%E5%8F%AA%E5%92%8C%E5%B7%AE%E5%80%BC%E6%9C%89%E5%85%B3%EF%BC%89%22)"># online softmax：一边扫一边维护最大值 m 和指数和 l，扫完一遍就得到整行的 m 和 l。只用标准库。
+import math
+
+row = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0, 5.0, 3.0, 5.0, 8.0]
+CHUNK = 4                      # 一次只能「装下」4 个元素：相当于 kernel 里的 BLOCK
+
+
+def softmax_two_pass(xs):
+    m = max(xs)
+    l = sum(math.exp(x - m) for x in xs)
+    return m, l
+
+
+def softmax_online(xs, chunk):
+    m, l = -math.inf, 0.0
+    for start in range(0, len(xs), chunk):
+        block = xs[start:start + chunk]
+        m_new = max(m, max(block))
+        # 基准从 m 换成 m_new：之前累加的每一项 exp(x - m) 都要乘上 exp(m - m_new)
+        l = l * math.exp(m - m_new) + sum(math.exp(x - m_new) for x in block)
+        print(f"  读到第 {start:2}–{start + len(block) - 1:2} 个：block 最大 {max(block):3}，"
+              f"m {m:4} -&gt; {m_new:3}，l = {l:.6f}")
+        m = m_new
+    return m, l
+
+
+print("online，逐段更新：")
+m1, l1 = softmax_online(row, CHUNK)
+m2, l2 = softmax_two_pass(row)
+print(f"online：m = {m1}，l = {l1:.12f}")
+print(f"两遍：  m = {m2}，l = {l2:.12f}")
+print("两者的 softmax 最大差：", max(abs(math.exp(x - m1) / l1 - math.exp(x - m2) / l2) for x in row))
+
+# 为什么一定要减最大值：logit 大一点，exp 就超出浮点数的范围
+big = [x + 1000 for x in row]
+try:
+    print(sum(math.exp(x) for x in big))
+except OverflowError as e:
+    print("不减最大值：exp(1003) -&gt;", e)
+m, l = softmax_two_pass(big)
+print(f"减了最大值：m = {m}，l = {l:.12f}（和上面的 l 一样：softmax 只和差值有关）")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">online，逐段更新：
+  读到第  0– 3 个：block 最大 4.0，m -inf -&gt; 4.0，l = 1.467454
+  读到第  4– 7 个：block 最大 9.0，m  4.0 -&gt; 9.0，l = 1.078902
+  读到第  8–11 个：block 最大 8.0，m  9.0 -&gt; 9.0，l = 1.485892
+online：m = 9.0，l = 1.485891684779
+两遍：  m = 9.0，l = 1.485891684779
+两者的 softmax 最大差： 0.0
+不减最大值：exp(1003) -&gt; math range error
+减了最大值：m = 1009.0，l = 1.485891684779（和上面的 l 一样：softmax 只和差值有关）</code></pre>
+</div><p>第二段读进来时，最大值从 4 变成了 9，之前的 <code>l</code> 被乘上 <code>exp(4 − 9)</code>，一下子从 1.467 缩到了零点几，再加上新的一段，变成 1.079。最后的 <code>l</code> 和两遍算法完全一样。最后几行演示了为什么一定要减最大值：给每个数都加上 1000，直接求 <code>exp</code> 就溢出了；减去最大值以后，<code>l</code> 和原来一模一样。</p>
+<p>写成 Triton，就是 minillm 里的 <code>_softmax_online_kernel</code>。第一遍的循环里，<code>m</code> 和 <code>l</code> 是跨循环迭代的标量：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">    m = -float("inf")
+    l = 0.0
+    for start in range(0, n_cols, BLOCK):
+        cols = start + tl.arange(0, BLOCK)
+        x = tl.load(x_row + cols, mask=cols &lt; n_cols, other=-float("inf")).to(tl.float32)
+        m_new = tl.maximum(m, tl.max(x, axis=0))
+        # 最大值变大了：之前累加的和要按新的基准缩小 exp(m - m_new) 倍
+        l = l * tl.exp(m - m_new) + tl.sum(tl.exp(x - m_new), axis=0)
+        m = m_new
+    # 第二遍：有了整行的 m 和 l，再读一遍，写出结果
+    for start in range(0, n_cols, BLOCK):
+        cols = start + tl.arange(0, BLOCK)
+        mask = cols &lt; n_cols
+        x = tl.load(x_row + cols, mask=mask, other=-float("inf")).to(tl.float32)
+        tl.store(y_row + cols, tl.exp(x - m) / l, mask=mask)</code></pre>
+</div><p><code>for start in range(0, n_cols, BLOCK)</code> 是 Triton 里的普通循环，<code>n_cols</code> 是运行时的值，循环次数在运行时才知道（编译成 IR 里的 <code>scf.for</code>，第 18、19 章）。</p>
+<p>online softmax 的价值远不止「少读一遍」。第 1 章说过，FlashAttention 要把 <code>QKᵀ</code>、softmax、乘 <code>V</code> 融进一个 kernel，难点就在于 softmax 需要整行的统计量。online softmax 让「一段一段地处理、随时修正之前的结果」成为可能：第 17 章，那个 <code>l · exp(m − m_new)</code> 的修正因子，会同时乘到已经累加的输出上。</p>
+<h2>实测：三种写法</h2>
+<p>把三种写法放在一起比：一次装下（不管多长，<code>num_warps</code> 按上面的规则取，最多 32）、online（读 2 遍）、三遍（读 3 遍），以及 PyTorch 的 <code>torch.softmax</code>。每一档都是 512 MiB 的 fp32 输入，只是行长不同。三种写法对同一行的读写方式如下：</p>
+<div class="concept">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <g font-size="13" font-weight="bold" fill="#374151">
+    <text x="20" y="40">一次装下</text><text x="20" y="110">online</text><text x="20" y="180">三遍</text>
+  </g>
+  <g font-size="11.5" fill="#6b7280">
+    <text x="20" y="58">读 1 写 1 = 2 趟</text><text x="20" y="128">读 2 写 1 = 3 趟</text><text x="20" y="198">读 3 写 1 = 4 趟</text>
+  </g>
+  <g font-size="12" text-anchor="middle">
+    <rect x="140" y="24" width="140" height="34" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="210" y="45" fill="#374151">读整行（寄存器）</text>
+    <rect x="290" y="24" width="140" height="34" rx="4" fill="#ebf4ff" stroke="#2b6cb0"/><text x="360" y="45" fill="#2b6cb0">求 m、l，算 y</text>
+    <rect x="440" y="24" width="140" height="34" rx="4" fill="#fdf1ec" stroke="#e06a3b"/><text x="510" y="45" fill="#e06a3b">写整行</text>
+    <rect x="140" y="94" width="210" height="34" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="245" y="115" fill="#374151">第 1 遍：逐段读，同时更新 m 和 l</text>
+    <rect x="360" y="94" width="220" height="34" rx="4" fill="#fdf1ec" stroke="#e06a3b"/><text x="470" y="115" fill="#e06a3b">第 2 遍：逐段读，算 y、写出</text>
+    <rect x="140" y="164" width="140" height="34" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="210" y="185" fill="#374151">第 1 遍：读，求 m</text>
+    <rect x="290" y="164" width="140" height="34" rx="4" fill="#f3f4f6" stroke="#6b7280"/><text x="360" y="185" fill="#374151">第 2 遍：读，求 l</text>
+    <rect x="440" y="164" width="140" height="34" rx="4" fill="#fdf1ec" stroke="#e06a3b"/><text x="510" y="185" fill="#e06a3b">第 3 遍：读，写出</text>
+  </g>
+  <g font-size="11.5" fill="#6b7280">
+    <text x="596" y="40">行太长会</text><text x="596" y="55">寄存器溢出</text>
+    <text x="596" y="110">任意长度</text><text x="596" y="180">任意长度</text>
+  </g>
+  <text x="20" y="236" font-size="12.5" fill="#374151">灰色是只读，橙色是读完再写。如果每一遍都要走显存，耗时的比例就是 2 : 3 : 4。</text>
+</svg>
+<div class="caption">图 6-1　按行 softmax 的三种写法。一次装下最省流量，但受寄存器限制；online softmax 把求最大值和求指数和合并成一遍，任意长度都能用</div>
+</div><p>先预测：如果每一遍都要走显存，耗时正比于趟数，一次装下、online、三遍是 2 : 3 : 4。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm &amp;&amp; python bench/bench_softmax.py</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0
+  4096 行 × 32768 列
+    一次装下                 1.490 ms   有效带宽   720 GB/s
+    online（读 2 遍）        1.646 ms   有效带宽   653 GB/s
+    三遍（读 3 遍）            1.703 ms   有效带宽   631 GB/s
+    torch.softmax        1.488 ms   有效带宽   722 GB/s
+  1024 行 × 131072 列
+    一次装下                 1.586 ms   有效带宽   677 GB/s
+    online（读 2 遍）        2.408 ms   有效带宽   446 GB/s
+    三遍（读 3 遍）            3.181 ms   有效带宽   338 GB/s
+    torch.softmax        1.759 ms   有效带宽   610 GB/s
+  512 行 × 262144 列
+    一次装下                 3.015 ms   有效带宽   356 GB/s
+    online（读 2 遍）        2.510 ms   有效带宽   428 GB/s
+    三遍（读 3 遍）            3.357 ms   有效带宽   320 GB/s
+    torch.softmax        2.485 ms   有效带宽   432 GB/s</code></pre>
+</div><p>分三档看：</p>
+<ul>
+<li><strong>32768 列</strong>：三种写法差得不多。一行只有 128 KiB，第二遍、第三遍读的时候，数据大多还在缓存里，多读的那几遍几乎不走显存。这一档三种写法里一次装下最快，和 <code>torch.softmax</code> 打平。</li>
+<li><strong>131072 列</strong>：一行 512 KiB，几百个 program 同时在跑，缓存装不下了，预测开始应验。online 比三遍快 1.32 倍（预测 4/3 ≈ 1.33），一次装下比 online 快 1.52 倍（预测 3/2 = 1.5）。</li>
+<li><strong>262144 列</strong>：一次装下的版本崩了（每个线程 256 个元素，溢出），只剩 356 GB/s。online 和 <code>torch.softmax</code> 打平，三遍仍然慢 1/3。</li>
+</ul>
+<p>结论是 minillm 的那条规则：<strong>放得下就一次装下，放不下就用 online，不要用三遍</strong>。<code>softmax</code> 函数会根据行长自动选择。</p>
+<h2>RMSNorm：融合省下的是 fp32 的中间结果</h2>
+<p>RMSNorm 的 hidden 维通常在 2048 到 16384 之间，一次装下就够了。和它比的是三种现成的写法：照着公式写的 eager 版、交给 <code>torch.compile</code> 的同一段代码，以及 PyTorch 自带的 <code>F.rms_norm</code>。</p>
+<p>先预测 eager 版有多慢。它的写法是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def rmsnorm_eager(x, w, eps=1e-6):
+    xf = x.float()
+    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps) * w.float()).to(x.dtype)</code></pre>
+</div><p>数一数每个元素要搬多少字节（每行一个数的那些、以及 <code>w</code> 很小，忽略）：<code>x.float()</code> 读 bf16 写 fp32，6 字节；<code>pow(2)</code> 读写 fp32，8 字节；<code>mean</code> 读 4 字节；乘 <code>rsqrt</code> 读写 8 字节；乘 <code>w</code> 读写 8 字节；<code>.to(x.dtype)</code> 读 fp32 写 bf16，6 字节。一共 40 字节。融合版只读 bf16、写 bf16，4 字节。<strong>预测慢 10 倍。</strong> 注意 eager 版的中间结果都是 fp32，比输入大一倍，这让它的流量又翻了一番。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm &amp;&amp; python bench/bench_rmsnorm.py</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0
+  8192 个 token × hidden 4096，bf16
+    eager           2100.7 us   有效带宽    64 GB/s
+    torch.compile    248.8 us   有效带宽   539 GB/s
+    F.rms_norm       263.5 us   有效带宽   509 GB/s
+    minillm          253.9 us   有效带宽   529 GB/s
+  8192 个 token × hidden 8192，bf16
+    eager           4126.2 us   有效带宽    65 GB/s
+    torch.compile    797.8 us   有效带宽   336 GB/s
+    F.rms_norm       513.5 us   有效带宽   523 GB/s
+    minillm          426.7 us   有效带宽   629 GB/s</code></pre>
+</div><p>hidden 4096 时，eager 比 minillm 慢 8.3 倍，和预测的 10 倍是一个量级（eager 每个 kernel 单独跑，带宽利用得比融合版还好一点）。三个融合版本差不多快。hidden 8192 时，<code>torch.compile</code> 生成的 kernel 掉到了 336 GB/s，<code>F.rms_norm</code> 和 minillm 都更快。为什么 Inductor 在这一档选了一个慢的写法？你可以用第 1 章的 <code>TORCH_LOGS=output_code</code> 看它生成的代码，读完第 14 章再回来解释。</p>
+<h2>minillm 进度：softmax 与 rmsnorm</h2>
+<p>这一章往 minillm 里加了两个文件：</p>
+<ul>
+<li><code>minillm/kernels/softmax.py</code>：<code>softmax</code>（自动选择一次装下或 online），另外留着 <code>softmax_online</code>、<code>softmax_3pass</code> 用于对比；</li>
+<li><code>minillm/kernels/norm.py</code>：<code>rmsnorm</code>，支持任意前导维度（<code>(batch, seq, hidden)</code> 先压成二维）。</li>
+</ul>
+<p>测试在 <code>tests/test_norm_softmax.py</code>，有几类刻意挑选的输入：1 个元素的行；16384（一次装下的上限）和 16385（第一个走 online 的长度）；10 万列的长行；每个元素都加上 1000 的大 logits（不减最大值就会溢出）；行之间不连续的视图。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-minillm.sh -q</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">........................................................................ [ 96%]
+...                                                                      [100%]
+75 passed in 8.01s</code></pre>
+</div><h2>动手</h2>
+<ol>
+<li><strong>找出你的 GPU 上的溢出边界。</strong> 在你的 GPU 上跑本章的溢出实验。NVIDIA 后端没有自动换大寄存器模式这一步：同样是 32768 列、4 个 warp，<code>n_spills</code> 会是多少？带宽掉得比 Max 1100 多还是少？</li>
+<li><strong>调一调 <code>num_warps</code> 的规则。</strong> 把 minillm 的 <code>num_warps_for</code> 改成 <code>max(4, min(32, block // 1024))</code>（每个线程的元素多一倍），重跑 <code>bench_softmax.py</code> 的第一档和 <code>bench_rmsnorm.py</code>。哪些行变快了、哪些变慢了？用溢出实验的那张表解释。</li>
+<li><strong>在浏览器的模拟器里</strong>，把 <code>row</code> 换成一个单调递增的序列（比如 <code>[float(i) for i in range(12)]</code>）。每一段读进来，最大值都会变，<code>l</code> 要被缩小几次？再换成单调递减的，又是几次？想一想：这对 kernel 的速度有没有影响？</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>按行归约的算子（softmax、RMSNorm）是访存受限的，好坏看<strong>一行读几遍</strong>。<code>other</code> 填归约的单位元：softmax 求最大值填 <code>-inf</code>，RMSNorm 求平方和填 0。</li>
+<li>一个 program 装下一整行，数据放在寄存器里，每个线程 <code>BLOCK / (32 × num_warps)</code> 个元素。<strong>放不下的意思是寄存器溢出</strong>：<code>CompiledKernel.n_spills</code> 会告诉你。Max 1100 上，32768 列、4 个 warp 溢出 210，带宽 376 GB/s；换成 16 个 warp 不溢出，717 GB/s。Intel 后端发现溢出会自动换成 256 个 GRF 的模式重编。</li>
+<li>行太长就循环。三遍算法读 3 遍；<strong>online softmax</strong> 边扫边维护最大值 <code>m</code> 和指数和 <code>l</code>，最大值变大时把 <code>l</code> 乘上 <code>exp(m − m_new)</code>，只读 2 遍。实测在 131072 列时，online 比三遍快 1.32 倍，几乎正好是 4/3。</li>
+<li>一定要先减去最大值再求 <code>exp</code>：结果不变，而且永远不会溢出。</li>
+<li>RMSNorm 的 eager 写法每个元素要搬 40 字节（中间结果都是 fp32），融合后 4 字节。Max 1100 上实测慢 8.3 倍。</li>
+</ul>
+<p><strong>minillm 进度</strong>：新增 <code>kernels/softmax.py</code>（<code>softmax</code>，自动在一次装下和 online 之间选择）、<code>kernels/norm.py</code>（<code>rmsnorm</code>）；测试共 75 个；<code>bench/bench_softmax.py</code>、<code>bench/bench_rmsnorm.py</code>。</p>
+<p>下一章，我们离开访存受限的世界，写第一个计算受限的 kernel：用 <code>tl.dot</code> 做矩阵乘。你会看到 tile 怎么分解、累加器为什么要用 fp32，以及为什么你的 GEMM 结果和 PyTorch 差了 1e-3，而这不一定是 bug。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch05.html">← 第 5 章 tl 语言核心</a>
+  <a class="nav-next" href="ch07.html">第 7 章 tl.dot 与第一个 GEMM →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
