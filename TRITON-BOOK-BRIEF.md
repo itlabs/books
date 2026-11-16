@@ -335,9 +335,9 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - ch15 修的 minillm 性能 bug：`_matmul_grouped_kernel` 在 N 不是 16 的倍数（如 3000）时，Intel 后端证明不了 pitch 对齐，B、C 丢掉 2D block IO，16 TFLOP/s；加 `HINT_ALIGN`（`N // 8 * 8` 的写法）后约 107。`tl.multiple_of`、`tl.assume` 对标量无效。
   - ch17 的发现：Intel 后端的 `ReduceVariableLiveness` pass 会把 Q 的 load 挪进循环；非因果时它让 kernel 快 22%，因果时让 kernel 慢 19%（`reduce_variable_liveness=False` 可以关掉）。把缩放提前乘到 Q 上多一次 bf16 舍入，注意力集中时最大误差变成 6–8 倍。ch22 要回到「因果时为什么慢」。
   - 新发现、写进正文的坑：Max 1100 上，寄存器严重溢出的配置会让 IGC 内部崩溃；第一次能用 large GRF 重试救回来，同一进程第二次崩溃就段错误退出。autotune 必须用寄存器模型剪枝（ch14）。
-- **批次 4**：进行中。ch18、ch19 已写完。
+- **批次 4**：进行中。ch18–20 已写完。
   - ch19 的发现：Intel 上 SPIR-V → 机器码在加载时由驱动的 IGC 完成，驱动有自己的磁盘缓存（`NEO_CACHE_PERSISTENT=0` 关掉以后，第一次调用多 0.3–0.5 秒）。
-- **下一步**：ch20–23。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
+- **下一步**：ch21–23。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
 - **写作流程**（每章都照这个来）：
   1. 先在 Max 1100 上把要用的数字测出来，或者用 `triton_ir_local.py` 取 3.9.0 的 IR；
   2. 写正文，运行结果先留占位符；
