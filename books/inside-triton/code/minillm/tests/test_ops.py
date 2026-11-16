@@ -28,6 +28,9 @@ CASES = {
     "softmax": (lambda d: (rand(16, 1000, device=d),), lambda x: torch.softmax(x, -1), ops.softmax, {}),
     "mm": (lambda d: (rand(128, 256, device=d), rand(256, 192, device=d)), lambda a, b: a @ b, ops.mm,
            {"atol": 2e-2, "rtol": 2e-2}),                 # fp32 输入的 tl.dot 默认是 TF32（第 7 章）
+    "attention": (lambda d: (*(rand(2, 3, 200, 64, device=d, dtype=torch.bfloat16) for _ in range(3)), True),
+                  lambda q, k, v, c: F.scaled_dot_product_attention(q, k, v, is_causal=c), ops.attention,
+                  {"atol": 2e-2, "rtol": 2e-2}),
 }
 
 
@@ -74,3 +77,13 @@ def test_compile_mlp_block(device):
     out_c.sum().backward()
     for p, pc in zip(params, params_c):
         torch.testing.assert_close(pc.grad, p.grad, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.parametrize("causal", [False, True])
+def test_compile_attention(device, causal):
+    # 第 10 章的教训：接进 torch.compile 的算子，要测编译以后的结果
+    q, k, v = (torch.randn(2, 4, 300, 64, device=device, dtype=torch.bfloat16) for _ in range(3))
+    f = torch.compile(lambda q, k, v: ops.attention(q, k, v, causal) * 2, fullgraph=True)
+    # 和参考实现比，而不是和 eager 逐位比：Inductor 编译出来的那份 kernel，舍入可能和 eager 那份差一点
+    ref = F.scaled_dot_product_attention(q.float(), k.float(), v.float(), is_causal=causal) * 2
+    torch.testing.assert_close(f(q, k, v).float(), ref, atol=2e-2, rtol=2e-2)

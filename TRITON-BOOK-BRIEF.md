@@ -331,7 +331,8 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **批次 2**：完成（2026-11-15）。ch05–10 都已写完；minillm 有 `pointwise`、`softmax`、`norm`、`matmul`（指针版 / descriptor 版 / `mm`）、`ops.py`（`triton_op` 加反向），共 126 个测试；`verify-triton.sh` 全书通过。
   - 写作中订正过的事实：block pointer 在 3.9.0 已移除；`tl.dot` 的形状下限由各后端的 `min_dot_size` 决定（NVIDIA 只限 K，Intel 退回 FMA）。
   - 写作中新发现、写进正文的坑：Intel 后端的 `tf32x3` / `bf16x3` 不走矩阵单元；解释器不查越界；`triton_op` 加 host 端 `TensorDescriptor` 在 `torch.compile` 后会被删掉。
-- **批次 3**：进行中。ch11–14 已写完；minillm 加了 `matmul_grouped`、`matmul_tuned`（按 M 分档的 autotune），共 139 个测试。
+- **批次 3**：进行中。ch11–14、ch17 已写完；minillm 加了 `matmul_grouped`、`matmul_tuned`（按 M 分档的 autotune）、`kernels/attention.py` 和 `ops.attention`（FlashAttention 前向），共 186 个测试。ch15、ch16 待定（§14 第 1 项）。
+  - ch17 的发现：Intel 后端的 `ReduceVariableLiveness` pass 会把 Q 的 load 挪进循环；非因果时它让 kernel 快 22%，因果时让 kernel 慢 19%（`reduce_variable_liveness=False` 可以关掉）。把缩放提前乘到 Q 上多一次 bf16 舍入，注意力集中时最大误差变成 6–8 倍。ch22 要回到「因果时为什么慢」。
   - 新发现、写进正文的坑：Max 1100 上，寄存器严重溢出的配置会让 IGC 内部崩溃；第一次能用 large GRF 重试救回来，同一进程第二次崩溃就段错误退出。autotune 必须用寄存器模型剪枝（ch14）。
 - **下一步**：ch15（Hopper 特性）。ch15、ch16 的 Hopper 部分仍按 §14 第 1 项待定。
 - **写作流程**（每章都照这个来）：
@@ -405,6 +406,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - **预测**：每多一级多 16 KiB；第 8 级需要 112 KiB，超过 sm_86 每个 block 约 99 KB 的上限，会抛 `OutOfResources`。请把报错里的 `Hardware limit` 贴回来。
 - **ch14**：
   - 跑本章的调优实验。**预测**：A10 的 `tpw` 是 32，按每线程 ≤128 个累加器算，9 个配置一个都不剪（最大的 128×128 配 4 个 warp、256×256 配 16 个 warp 正好 128），第一次调优会比 Max 1100 慢（测 9 个）。256×256 的几个在 A10 上可能寄存器不够、很慢，但不会失败。看选中的配置是什么、NVIDIA 上有没有 IGC 那种进程崩溃（预测没有）。
+- **ch17**：
+  - 跑「和 PyTorch 比」。**预测**：A10 只有 24 GB，naive 在 N = 4096 时要约 8 GiB，放得下；N = 16384 会被脚本跳过。看 SDPA 背后是哪个 kernel（`torch.profiler`）。
+  - minillm 在 NVIDIA 上用的 128 × 64、8 个 warp、3 级流水是随手挑的，没测过；请扫一遍 `BLOCK_M` ∈ {64, 128}、`BLOCK_N` ∈ {32, 64}、`num_warps` ∈ {4, 8}、`num_stages` ∈ {2, 3, 4}，把最好的写回 `launch_config`。
+  - 试一下官方教程「对角线那一块单独一个循环」的拆法，在 A10 上有没有收益（Max 1100 上看组合：不拆 + 关 pass 最快）。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）

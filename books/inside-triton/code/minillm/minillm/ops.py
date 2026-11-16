@@ -7,7 +7,7 @@
     import minillm.ops as ops
     y = ops.rmsnorm(x, w, 1e-6)          # 也可以写 torch.ops.minillm.rmsnorm(x, w, 1e-6)
 
-反向：silu_mul 用 Triton kernel；add、mm 直接复用前向的算子；rmsnorm、softmax 先用 PyTorch 写
+反向：silu_mul 用 Triton kernel；add、mm 直接复用前向的算子；rmsnorm、softmax、attention 先用 PyTorch 写
 （写成 Triton 是留给读者的练习）。
 """
 import torch
@@ -16,6 +16,7 @@ import triton.language as tl
 from torch.library import triton_op, wrap_triton
 
 from .device import DEVICE
+from .kernels import attention as _attn
 from .kernels import matmul as _mm
 from .kernels import norm as _norm
 from .kernels import pointwise as _pw
@@ -183,3 +184,45 @@ def _mm_bwd(ctx, grad):
 
 
 mm.register_autograd(_mm_bwd, setup_context=_mm_setup)
+
+
+# ---------------------------------------------------------- attention ----
+@triton_op("minillm::attention", mutates_args=())
+def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = False) -> torch.Tensor:
+    """FlashAttention 前向（第 17 章）。q、k、v：(Z, H, N, D)，fp16 / bf16，缩放取 1/√D。"""
+    Z, H, N, D = q.shape
+    q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+    o = torch.empty_like(q)
+    if q.numel() == 0:
+        return o
+    bm, bn, opts = _attn.launch_config(N, D, causal)
+    wrap_triton(_attn._attn_fwd_kernel)[(triton.cdiv(N, bm), Z * H)](
+        q, k, v, o, D ** -0.5, N, Z * H * N, HEAD_DIM=D, BLOCK_M=bm, BLOCK_N=bn,
+        CAUSAL=causal, EVEN_M=N % bm == 0, EVEN_N=N % bn == 0, **opts)
+    return o
+
+
+def _attention_setup(ctx, inputs, output):
+    q, k, v, causal = inputs
+    ctx.save_for_backward(q, k, v)
+    ctx.causal = causal
+
+
+def _attention_bwd(ctx, grad):
+    # 反向先在 fp32 里重算一遍注意力矩阵 P（会占 N × N 的显存；FlashAttention 的反向 kernel 是练习）：
+    #   dV = Pᵀ dO，dP = dO Vᵀ，dS = P ⊙ (dP − rowsum(dP ⊙ P))，dQ = dS K · scale，dK = dSᵀ Q · scale
+    q, k, v = ctx.saved_tensors
+    qf, kf, vf, gf = q.float(), k.float(), v.float(), grad.float()
+    scale = q.shape[-1] ** -0.5
+    s = qf @ kf.transpose(-1, -2) * scale
+    if ctx.causal:
+        n = q.shape[-2]
+        s = s.masked_fill(torch.ones(n, n, dtype=torch.bool, device=q.device).triu(1), float("-inf"))
+    p = torch.softmax(s, dim=-1)
+    dv = p.transpose(-1, -2) @ gf
+    dp = gf @ vf.transpose(-1, -2)
+    ds = p * (dp - (dp * p).sum(-1, keepdim=True))
+    return (ds @ kf * scale).to(q.dtype), (ds.transpose(-1, -2) @ qf * scale).to(k.dtype), dv.to(v.dtype), None
+
+
+attention.register_autograd(_attention_bwd, setup_context=_attention_setup)
