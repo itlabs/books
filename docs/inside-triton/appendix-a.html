@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附录 A 环境搭建</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li class="active"><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>附录 A 环境搭建</h1>
+<h2>这份附录怎么用</h2>
+<div class="goal-box">
+<p>正文讲 kernel 怎么写、为什么快，这份附录负责把环境装好。Triton 自己装起来不难，难在<strong>它和 PyTorch、GPU 驱动三者的版本要对得上</strong>：装错一个，报错常常出现在离真正原因很远的地方，比如 <code>undefined symbol</code>、<code>0 active drivers</code>，甚至什么错都不报，只是 <code>tl.dot</code> 悄悄没用上矩阵单元。</p>
+<p>下面按 GPU 厂商分节，每一节都只写本书验证机上真走通过的路；没走通过的路会明说。装完以后用第 6 节的体检脚本确认 14 项全过，再开始读第 4 章。<strong>先看第 0 节的版本基线。</strong></p>
+</div><h2>0. 版本基线（全书按这个写）</h2>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>本书取值</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Triton</td>
+<td><strong>3.9.0</strong>（2026-10-27 发布）</td>
+<td>源码锚点以 <code>triton-lang/triton</code> 的 <code>v3.9.0</code> 标签为准</td>
+</tr>
+<tr>
+<td>PyTorch</td>
+<td><strong>2.15.0</strong>（NVIDIA 驱动太老时用 2.14.1，见 2.3 节）</td>
+<td>torch 2.15.0 声明依赖 <code>triton~=3.9.0</code></td>
+</tr>
+<tr>
+<td>Intel 后端</td>
+<td><strong>triton-xpu 3.9.0</strong></td>
+<td>随 <code>torch==2.15.0+xpu</code> 一起装上，来自公开仓库 <code>intel/intel-xpu-backend-for-triton</code></td>
+</tr>
+<tr>
+<td>Helion</td>
+<td><strong>1.5.2</strong></td>
+<td>第 26 章用</td>
+</tr>
+<tr>
+<td>Python</td>
+<td><strong>3.12</strong></td>
+<td>见下面的提醒</td>
+</tr>
+<tr>
+<td>网页上的 CE 按钮</td>
+<td>Compiler Explorer 的 <strong>Triton 3.7.0</strong></td>
+<td>比基线落后两个小版本，见第 7 节</td>
+</tr>
+</tbody></table>
+<p>本书的两台验证机，正文里的性能数字都会注明是哪一台测的：</p>
+<table>
+<thead>
+<tr>
+<th>机器</th>
+<th>架构</th>
+<th>驱动</th>
+<th>装法</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>NVIDIA A10</td>
+<td>Ampere（sm_86），24 GB</td>
+<td>550.163.01（最高支持 CUDA 12.4）</td>
+<td>2.3 节</td>
+</tr>
+<tr>
+<td>Intel Data Center GPU Max 1100</td>
+<td>Xe-HPC（PVC），48 GB</td>
+<td>Level Zero 用户态驱动</td>
+<td>第 3 节</td>
+</tr>
+</tbody></table>
+<div class="warn">
+<strong>Python 选 3.12</strong>
+<p>写书时（2026-11-15）PyPI 上的 <code>triton==3.9.0</code> 只有 cp311、cp312、cp314、cp315 的 wheel，<strong>没有 3.10 和 3.13</strong>。用 3.13 的话，<code>pip</code> 会退回去装源码包，或者干脆报找不到版本。本书全程用 3.12。</p>
+</div><h2>1. 用 uv 管 Python 环境</h2>
+<p>本书的命令一律用 <strong>uv</strong>：建 venv 快，<code>uv venv --python 3.12</code> 在机器上没有 3.12 时会自己下载一份，装几个 GB 的 PyTorch wheel 也比 pip 快得多。装 uv（官方脚本，装到 <code>~/.local/bin</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+</div><p>习惯用 pip 也没关系，下表是逐条对照，本书后面的命令照着换就行：</p>
+<table>
+<thead>
+<tr>
+<th>uv</th>
+<th>pip</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>uv venv --python 3.12 .venv</code></td>
+<td><code>python3.12 -m venv .venv</code></td>
+</tr>
+<tr>
+<td><code>source .venv/bin/activate</code></td>
+<td>同左</td>
+</tr>
+<tr>
+<td><code>uv pip install 包名</code></td>
+<td><code>pip install 包名</code></td>
+</tr>
+<tr>
+<td><code>uv pip install 包名 --index-url URL</code></td>
+<td><code>pip install 包名 --index-url URL</code></td>
+</tr>
+<tr>
+<td><code>uv pip install --no-deps 包名</code></td>
+<td><code>pip install --no-deps 包名</code></td>
+</tr>
+<tr>
+<td><code>uv pip check</code></td>
+<td><code>pip check</code></td>
+</tr>
+</tbody></table>
+<div class="note">
+<strong>别混用</strong>
+<p><code>uv venv</code> 建出来的环境里<strong>默认没有 pip</strong>。在它里面敲 <code>pip install</code>，多半会落到系统的 pip 上，把包装到别处去。选定一种就一直用它。</p>
+</div><p>venv 要建在<strong>本地盘</strong>上。CUDA 版、XPU 版的 PyTorch 连同依赖都有好几 GB，放在网络盘上，安装和 <code>import torch</code> 都会慢得多。</p>
+<h2>2. NVIDIA GPU</h2>
+<h3>2.1 先看驱动支持到哪个 CUDA</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">nvidia-smi</code></pre>
+</div><p>输出右上角的 <code>CUDA Version</code> 是<strong>这个驱动最高能支持的 CUDA 版本</strong>，不是你装了哪个 CUDA toolkit。Triton 的 wheel 自带 <code>ptxas</code>，机器上的 <code>nvcc</code> 是什么版本都无所谓；<strong>真正卡人的是驱动</strong>。</p>
+<p>PyTorch 2.15.0 只出了 CUDA 13.2 版（<code>cu132</code>），要求驱动支持 CUDA 13，也就是 580 及以上。驱动够新走 2.2 节，不够走 2.3 节。</p>
+<h3>2.2 驱动 ≥ 580：直接装 torch 2.15.0</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">uv venv --python 3.12 .venv &amp;&amp; source .venv/bin/activate
+uv pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cu132   # 会一起装上 triton 3.9.0</code></pre>
+</div><div class="note">
+<strong>这条路本书没有在真机上走过</strong>
+<p>本书的 A10 驱动是 550，用的是 2.3 节的装法。上面的版本号和索引地址是 2026-11-15 在 PyTorch 官方索引上核对过的：<code>cu132</code> 下有 <code>torch-2.15.0+cu132</code> 和 <code>triton-3.9.0</code>。如果你走这条路遇到问题，以第 6 节体检脚本的结果为准。</p>
+</div><h3>2.3 驱动更老（本书 A10 走的路）：torch 2.14.1 + triton 3.9.0</h3>
+<p>不想升级驱动的话，可以装 CUDA 12.6 版的 torch 2.14.1，再<strong>强行</strong>把 Triton 换成 3.9.0：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">uv venv --python 3.12 .venv &amp;&amp; source .venv/bin/activate
+uv pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu126   # 会带上 triton 3.8.x
+uv pip install triton==3.9.0 --no-deps                                           # 覆盖成 3.9.0</code></pre>
+</div><p>torch 2.14.1 声明的依赖是 <code>triton~=3.8.0</code>，所以第二步必须加 <code>--no-deps</code>，之后 <code>uv pip check</code> 也会报这一条版本冲突。<strong>这是预期的，不用管它。</strong> 本书在 A10（驱动 550.163.01）上实测过这个组合：vector add、<code>tl.dot</code>（TTGIR 里是 <code>#ttg.nvidia_mma</code>）、<code>do_bench</code>、解释器、<code>torch.compile</code>、Gluon（含 <code>nvidia/ampere</code> 子包）、proton、Helion 全部通过。</p>
+<p>这毕竟是 PyTorch 官方配套表之外的组合。如果哪天 <code>torch.compile</code> 生成的 kernel 编不过，先怀疑这一条，试试换回 torch 2.14.1 自带的 triton 3.8。</p>
+<h2>3. Intel GPU</h2>
+<h3>3.1 驱动</h3>
+<p>Intel GPU 要装两样东西：内核驱动，以及用户态的 Level Zero 运行时和计算运行时。按 Intel 官方文档（<code>dgpu-docs.intel.com</code>）给你的 GPU 和发行版装。在 Ubuntu 24.04 上，先按文档加好 Intel 的软件源，Triton 用得到的用户态包是这几个：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">sudo apt install libze1 libze-intel-gpu1 intel-opencl-icd intel-ocloc libze-dev</code></pre>
+</div><p>装完用 oneAPI 的 <code>sycl-ls</code> 看一眼（也可以等第 6 节体检脚本告诉你）：输出里要有一行 <code>[level_zero:gpu]</code>。没有这一行，后面什么都跑不起来。再用 <code>clinfo -l</code> 看一眼，应当列出你的 GPU。这一条 Triton 用不到，但 PyTorch 的部分算子要用，见 3.3 节表格的最后一行。</p>
+<p>另外还要一个 C++ 编译器，<code>g++</code> 就行，原因见 3.3 节。</p>
+<h3>3.2 PyTorch 与 Triton</h3>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">uv venv --python 3.12 .venv &amp;&amp; source .venv/bin/activate
+uv pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/xpu   # 会一起装上 triton-xpu 3.9.0</code></pre>
+</div><p><code>import triton</code> 拿到的就是 Intel 后端：<code>triton-xpu</code> 这个发行包装进的正是 <code>triton/</code> 这个目录。</p>
+<div class="warn">
+<strong>不要再装 PyPI 上的 <code>triton</code></strong>
+<p><code>triton</code> 和 <code>triton-xpu</code> 装进的是<strong>同一个 <code>triton/</code> 目录</strong>，后装的会覆盖先装的。一旦哪条命令顺手带上了 <code>triton</code>（比如没加 <code>--index-url</code> 就装了别的依赖 torch 的包），Intel 后端就没了。出了怪问题，先 <code>uv pip list | grep -i triton</code> 看看，应当只有一个 <code>triton-xpu</code>。</p>
+</div><h3>3.3 第一次运行时的坑</h3>
+<p>Intel 后端第一次运行时要<strong>现场编一段 C++ 胶水代码</strong>（<code>spirv_utils</code>），编完放进缓存，以后复用。所以这一步要用到 C++ 编译器、Level Zero 的头文件和库，以及 <code>ocloc</code>。如果它们都按 3.1 节装在系统目录里，正常情况下什么都不用设。</p>
+<p>本书的 Max 1100 验证机走的是另一条路：Level Zero 和 GPU 驱动不在系统目录里，靠环境变量指过去。一路踩到的坑如下，每一条都是真实报错：</p>
+<table>
+<thead>
+<tr>
+<th>症状</th>
+<th>原因</th>
+<th>解法</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>加载 SYCL 运行时时报 <code>undefined symbol: urKernelSetArgLocal, version LIBUR_LOADER_0.12</code></td>
+<td><code>LD_LIBRARY_PATH</code> 里混进了另一份（自己编译的、或者更旧的）DPC++ / oneAPI 运行时。<code>LD_LIBRARY_PATH</code> 的优先级高于 wheel 自带的 RUNPATH，pip 装的 <code>libsycl</code> 于是链到了旧的 <code>libur_loader</code></td>
+<td>把那个目录从 <code>LD_LIBRARY_PATH</code> 里拿掉</td>
+</tr>
+<tr>
+<td><code>torch.xpu</code> 看到 0 个设备；Triton 报 <code>0 active drivers</code></td>
+<td>反过来，<code>LD_LIBRARY_PATH</code> 被清得太干净。Level Zero loader 和 GPU 驱动不在系统目录时，只能靠它找到</td>
+<td><code>LD_LIBRARY_PATH</code> 里<strong>只</strong>放 Level Zero loader 和 GPU 用户态驱动所在的目录</td>
+</tr>
+<tr>
+<td>胶水代码编译失败，报错里的编译命令是 PATH 里另一份 <code>icpx</code> / <code>dpclang++</code>，还带着 <code>-fsycl</code></td>
+<td>Triton 优先挑 SYCL 编译器，挑中的这一份和 pip 装的 SYCL 运行时不是同一个版本，头文件对不上</td>
+<td>设 <code>CXX=g++</code>（见下面的说明）</td>
+</tr>
+<tr>
+<td><code>fatal error: &#39;level_zero/ze_api.h&#39; file not found</code></td>
+<td>胶水代码要 <code>#include &lt;level_zero/ze_api.h&gt;</code>，pip 包里不带这个头文件</td>
+<td>装 <code>libze-dev</code>，或者用 <code>CPATH</code> 指向一份 Level Zero 的 <code>include/</code>，最好和 loader 同版本</td>
+</tr>
+<tr>
+<td><code>ld: cannot find -lze_loader</code></td>
+<td>链接器不看 <code>LD_LIBRARY_PATH</code>，它看的是 <code>LIBRARY_PATH</code></td>
+<td><code>LIBRARY_PATH</code> 指向 <code>libze_loader.so</code> 所在的目录</td>
+</tr>
+<tr>
+<td><code>torch.compile</code> 或 Helion 报 <code>FileNotFoundError: &#39;ocloc&#39;</code></td>
+<td>要生成原生二进制时得调用 <code>ocloc</code></td>
+<td>把 <code>ocloc</code> 所在的目录加进 <code>PATH</code></td>
+</tr>
+<tr>
+<td><code>F.scaled_dot_product_attention</code> 等算子报 <code>RuntimeError: could not create a primitive</code>；设 <code>ONEDNN_VERBOSE=1</code> 能看到 <code>OpenCL device not found</code></td>
+<td>这些算子走 oneDNN，而 oneDNN 要通过 OpenCL ICD loader 找到 GPU。<code>/etc/OpenCL/vendors/</code> 下没有 GPU 的 <code>.icd</code> 文件（<code>clinfo -l</code> 是空的，或者只有 CPU）</td>
+<td>装 <code>intel-opencl-icd</code>；或者自己建一个目录，放一个 <code>.icd</code> 文件，内容是 GPU 驱动里 <code>libigdrcl.so</code> 的绝对路径，再用 <code>OCL_ICD_VENDORS</code> 指向这个目录。Triton 本身不受影响</td>
+</tr>
+</tbody></table>
+<p>Triton 挑 C++ 编译器的顺序是：先看 <strong><code>CXX</code></strong>；没设 <code>CXX</code>，再依次找 <code>TRITON_INTEL_SYCL_COMPILER</code> 指定的编译器、<code>icpx</code>、<code>dpclang++</code>，最后退到 <code>clang++</code>、<code>g++</code>。挑中 SYCL 编译器时它会加 <code>-fsycl</code>，此时用的是那个编译器自带的 SYCL 头文件；挑中普通 C++ 编译器时，头文件改从 pip 包 <code>intel-sycl-rt</code> 里取，正好和运行时同版本。逻辑在 Intel 后端的 <code>triton/runtime/build.py</code>。所以只要设了 <code>CXX=g++</code>，机器上装了几份 oneAPI 都不会互相干扰。</p>
+<p><code>ocloc</code> 那一条还有一个<strong>不报错</strong>的后果，单独说：</p>
+<div class="warn">
+<strong>没有 <code>ocloc</code>，<code>tl.dot</code> 照样算对，但不走矩阵单元</strong>
+<p>Intel 后端靠查询设备扩展（例如 <code>cl_intel_subgroup_matrix_multiply_accumulate</code>）来判断能不能用 DPAS 矩阵指令。机器上没有 OpenCL 平台时（<code>clinfo -l</code> 是空的，<code>sycl-ls</code> 里只有 <code>level_zero:gpu</code>），这个查询要靠 <code>ocloc</code> 完成，见 Intel 后端的 <code>backends/intel/extension_utils.c</code>。找不到 <code>ocloc</code> 时，查询结果是「不支持」，<strong>没有任何报错或警告</strong>。于是 <code>tl.dot</code> 的结果完全正确，但 TTGIR 里没有 <code>#ttig.dpas</code>，性能差一个量级。第 6 节的体检脚本会把这种情况判为 FAIL；第 9 章会回到这个例子，讲「结果对，不代表编译对」。</p>
+</div><p>本书仓库里的 <code>books/inside-triton/verify/env-xpu.sh.example</code> 把上面这些设置都写好了，每个变量为什么要设也写了注释。复制成 <code>env-xpu.sh</code>，填上三个路径，每次开新终端先 <code>source</code> 它：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cp books/inside-triton/verify/env-xpu.sh.example env-xpu.sh   # 改里面的 ZE_LOADER_DIR / GPU_DRIVER_DIR / VENV
+source env-xpu.sh</code></pre>
+</div><h2>4. AMD GPU</h2>
+<p>本书<strong>没有 AMD 验证机</strong>，AMD 相关的内容（第 23 章等）用的是 Compiler Explorer 和第 8 节的离线编译。写书时（2026-11-15），PyTorch 官方 ROCm 索引上最新的是 <code>torch 2.14.1+rocm7.2</code>，还没有 2.15.0。要在 AMD GPU 上跑本书的代码，请按 PyTorch 官网（<code>pytorch.org</code> 的 Get Started 页）的安装选择器装 ROCm 版，再用第 6 节的体检脚本确认。</p>
+<h2>5. Gluon、proton 与 Helion</h2>
+<p><strong>Gluon</strong> 和 <strong>proton</strong>（Triton 自带的 profiler）都随 Triton 一起装好了，不用另装：</p>
+<ul>
+<li>Gluon 在 <code>triton.experimental.gluon</code>。名字里的 <code>experimental</code> 是真的，API 每个版本都可能变（第 24 章）；</li>
+<li>proton 在 <code>triton.profiler</code>（第 11 章）。采集不需要额外的包，但查看结果的 <code>proton-viewer</code> 要用到 <code>pandas</code> 和 <code>llnl-hatchet</code>，它们不随 Triton 一起安装：<code>uv pip install pandas llnl-hatchet</code>。</li>
+</ul>
+<p><strong>Helion</strong>（第 26 章）要单独装：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">uv pip install helion packaging</code></pre>
+</div><p>最后那个 <code>packaging</code> 不是写错：Helion 1.5.2 一导入就要用 <code>packaging</code>（<code>helion/_compat.py</code> 的第一批 import 里就有），但它的依赖声明里漏了这个包。不手动装，<code>import helion</code> 就会报 <code>ModuleNotFoundError: No module named &#39;packaging&#39;</code>。</p>
+<h2>6. 体检：probe-env.py</h2>
+<p>装完以后先跑本书的体检脚本。它是只读的，不装任何东西，共查 14 项，每一项单独 try，某一项失败不影响后面：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">.venv/bin/python books/inside-triton/verify/probe-env.py --helion</code></pre>
+</div><p>它会先打印 venv 状态、相关的环境变量、PATH 里能找到的编译器、驱动和设备信息，然后依次真跑 vector add、<code>tl.dot</code>、<code>do_bench</code>、解释器、<code>torch.compile</code>、Gluon、proton、Helion，最后给出汇总。下面是 Max 1100 上的汇总：</p>
+<p>运行结果（Max 1100，torch 2.15.0+xpu，triton-xpu 3.9.0）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">===== 汇总 =====
+OK   | import torch
+OK   | torch 设备
+OK   | import triton
+OK   | active driver / target / DEVICE
+OK   | vector add（逐点 + mask）
+OK   | 编译产物（asm 各级 IR）
+OK   | tl.dot（fp16 输入，fp32 累加，64x64x64）
+OK   | triton.testing.do_bench
+OK   | TRITON_INTERPRET 可用（CPU 解释器）
+OK   | torch.compile（Inductor 生成 Triton kernel）
+OK   | import triton.experimental.gluon
+OK   | import triton.profiler (proton)
+OK   | import helion
+OK   | Helion 固定 Config 的 add kernel（--helion）
+
+共 14 项，失败 0 项。</code></pre>
+</div><p>A10 上也是 14 项全过。汇总上面的明细里有两行值得留意：</p>
+<ul>
+<li><strong><code>tl.dot</code> 那一行会打印 TTGIR 里的矩阵 layout。</strong> NVIDIA 上应当是 <code>#ttg.nvidia_mma</code>，Intel 上应当是 <code>#ttig.dpas</code>。哪个都没有，就说明 <code>tl.dot</code> 没用上矩阵单元，脚本会把这一项判为 FAIL。</li>
+<li><strong><code>do_bench</code> 那一行是一个粗略的带宽数字</strong>：把 64 MiB 的张量乘以 2，算读写合计的带宽。A10 上大约 473 GB/s（标称 600 GB/s），Max 1100 上大约 531 GB/s。它只用来确认量级对不对；怎么测才准，是第 11 章的事。</li>
+</ul>
+<h2>7. 先设好一个开关：<code>TRITON_DEFAULT_FP_FUSION</code></h2>
+<p>在 NVIDIA 和 AMD 上，Triton 3.9 第一次编译 kernel 时会打印一条警告（<code>knobs.py</code> 前面的路径因机器而异）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">…/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.</code></pre>
+</div><p><strong>FP fusion</strong> 指的是把 <code>a * b + c</code> 融合成一条 FMA（乘加）指令：只舍入一次，所以和分两步算的结果在最后一位上可能不同。3.9 默认开启，3.10 将改成默认关闭。这会影响和 PyTorch 结果的逐位比较（第 7 章、第 9 章）。</p>
+<p>Intel 后端看不到这条警告：它直接读同一个开关的默认值，没有经过发警告的那条路径。但开关同样有效，默认同样是开启的。</p>
+<p>本书正文统一按 <strong>3.9 的默认行为（开启）</strong> 写。把它显式设上，警告就不会再出现；以后升级到 3.10，行为也不会悄悄变：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">export TRITON_DEFAULT_FP_FUSION=1</code></pre>
+</div><h2>8. 没有 GPU 时能做什么</h2>
+<p>这本书有相当一部分内容不需要 GPU：</p>
+<ol>
+<li><p><strong>网页上 <code>triton-ir</code> 代码块的「🔬 在 Compiler Explorer 看 IR」按钮。</strong> 点开是 Compiler Explorer 上的三栏：源码、编译器、Device Viewer。Device Viewer 里能切换 source / TTIR / TTGIR / LLVM IR / PTX（或 AMDGCN），CE 还会给源码行和对应的 IR 行上同样的底色。注意 CE 上是 <strong>Triton 3.7.0</strong>，比本书基线旧两个小版本。正文贴的 IR 都是 3.9.0 dump 出来的，两者有差别的地方，正文会用提示框说明。</p>
+</li>
+<li><p><strong>本地离线编译</strong>，看 3.9.0 的 IR。装一个 CPU 版的 PyTorch 和 Triton：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">uv venv --python 3.12 .venv &amp;&amp; source .venv/bin/activate
+uv pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+uv pip install triton==3.9.0 numpy</code></pre>
+</div><p>然后用本书仓库里的 <code>triton_ir_local.py</code>。它和 CE 用的是同一个办法：张量换成 FakeTensor，GPU driver 换成一个只报告目标架构的 mock，kernel 只编译、不运行。所以 NVIDIA 和 AMD 目标的 IR 都能编出来：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">python books/inside-triton/verify/triton_ir_local.py my_kernel.py --show ttgir                  # NVIDIA sm_86
+python books/inside-triton/verify/triton_ir_local.py my_kernel.py --arch 90 --show ttgir        # Hopper
+python books/inside-triton/verify/triton_ir_local.py my_kernel.py --backend hip --arch gfx942 --show ttgir</code></pre>
+</div><p>要求和 CE 一样：脚本里必须真的启动一次 kernel（<code>kernel[grid](...)</code>），张量写 <code>device=&quot;cuda&quot;</code>。</p>
+</li>
+<li><p><strong>Triton 解释器。</strong> 设 <code>TRITON_INTERPRET=1</code>，kernel 就改在 CPU 上用 NumPy 逐个 program 模拟执行，张量用普通的 CPU 张量。它慢，也不模拟任何性能特征，但用来检查<strong>结果对不对</strong>、在 kernel 里打断点，都很好用（第 9 章）。同样是上面那个 CPU 环境：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs &lt; n
+    tl.store(out_ptr + offs, tl.load(x_ptr + offs, mask=mask) + tl.load(y_ptr + offs, mask=mask), mask=mask)
+
+x = torch.arange(10, dtype=torch.float32); y = torch.ones(10); out = torch.empty(10)
+add_kernel[(triton.cdiv(10, 4),)](x, y, out, 10, BLOCK=4)
+print(out.tolist())</code></pre>
+</div><p>运行结果（<code>TRITON_INTERPRET=1 python add.py</code>，CPU 版 torch 2.15.0 + triton 3.9.0）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]</code></pre>
+</div><p>忘了设 <code>TRITON_INTERPRET=1</code>，在没有 GPU 的机器上会得到下面这个报错。它说的是「一个可用的 GPU 后端都没找到」：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">RuntimeError: 0 active drivers ([]). There should only be one.</code></pre>
+</div></li>
+</ol>
+<h2>9. 跑本书的代码与校验脚本</h2>
+<p>贯穿全书的 minillm 项目（第 4 章起）是一个能 <code>pip install -e</code> 的小包。它故意没有把 torch 和 triton 写进依赖，因为不同 GPU 要装不同的 wheel，写进去反而可能装错。所以先按上面装好环境，再：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm
+uv pip install -e '.[test]'
+pytest</code></pre>
+</div><p>在仓库根目录还有两个校验脚本（详见 <code>books/inside-triton/verify/README.md</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-triton.sh         # 正文里的完整代码块：能跑的真跑，triton-ir 块离线编译
+books/inside-triton/verify/verify-minillm.sh        # minillm 的全部测试</code></pre>
+</div><p><code>verify-triton.sh</code> 会读每个代码块开头的 <code># arch:</code> 注释，判断它能不能在你这台机器上跑。不能跑的块记为「跳过」，最后列出来，<strong>跳过不算通过</strong>。</p>
+<hr>
+<p><strong>这份附录的要点</strong></p>
+<ul>
+<li>本书基线是 <strong>Triton 3.9.0 + PyTorch 2.15.0 + Python 3.12</strong>。三者版本要对得上，<strong>真正卡人的是 GPU 驱动</strong>。</li>
+<li>NVIDIA：驱动 ≥ 580 直接装 <code>torch==2.15.0</code>（cu132）。驱动更老的话，torch 2.14.1+cu126 加 <code>triton==3.9.0 --no-deps</code> 也能用，本书的 A10 就是这么装的。</li>
+<li>Intel：<code>torch==2.15.0</code> 从 <code>xpu</code> 索引装，会带上 triton-xpu 3.9.0；<strong>别再装 PyPI 的 <code>triton</code></strong>。第一次运行时要编胶水代码，所以要 <code>CXX=g++</code>、Level Zero 的头文件和库，以及 PATH 里的 <code>ocloc</code>。少了 <code>ocloc</code>，<code>tl.dot</code> 会悄悄不走 DPAS。</li>
+<li>Helion 要多装一个 <code>packaging</code>。显式设 <code>TRITON_DEFAULT_FP_FUSION=1</code>：消掉 3.9 的警告，行为与正文一致，升级到 3.10 也不会悄悄变。</li>
+<li>装完先跑 <code>probe-env.py --helion</code>，14 项全过再往下读。没有 GPU 也能看 IR（CE、<code>triton_ir_local.py</code>），也能用 <code>TRITON_INTERPRET=1</code> 检查结果对不对。</li>
+</ul>
+
+<div class="chapter-nav">
+  <span></span>
+  <a class="nav-next" href="appendix-b.html">附录 B 概念对照表 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

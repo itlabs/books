@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 18 章 够用的 MLIR</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li class="active"><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 18 章 够用的 MLIR</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前面十几章已经贴了很多 TTIR、TTGIR，靠的是「大概看得懂」。第四部分要认真读编译器了：一个 kernel 从 Python 变成机器码，中间经过几十个 pass，每个 pass 都在改写 IR。读懂这些 IR，需要一点 MLIR 的知识。Triton 的每一级 IR 都是 MLIR。</p>
+<p>这一章只讲读 Triton IR 必需的那部分，读完你会拿到三样东西。一是一张「Python 写法 → TTIR」的对照：每一行 IR 是什么、为什么长这样，包括 SSA 值的名字从哪来、广播为什么变成了 <code>tt.splat</code>、Python 的 <code>for</code> 和 <code>if</code> 为什么变成了带返回值的 <code>scf.for</code>、<code>scf.if</code>。二是 MLIR 的五个基本概念：op、值、类型与属性、region 与 block、方言，各自配一行真实的 3.9.0 IR。三是怎么看一个 pass 做了什么：用 <code>MLIR_ENABLE_DUMP</code> 拿到每个 pass 之前的 IR（NVIDIA 后端 73 个 pass，Intel 后端 71 个），以及一个浏览器里能跑的 30 行小程序，自己找出循环不变量，和 Triton 的 <code>triton-licm</code> 做的一模一样。</p>
+<p>更系统的 MLIR 知识在本仓库的《深入 MLIR》里，本章在需要的地方指过去。</p>
+</div><h2>一个 kernel 的 TTIR</h2>
+<p>拿一个最简单的 kernel：<code>out = x · alpha + y</code>。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton → TTIR</span>
+    <a class="ce-btn" href="https://godbolt.org/#%7B%22version%22%3A4%2C%22content%22%3A%5B%7B%22type%22%3A%22row%22%2C%22content%22%3A%5B%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22codeEditor%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22source%22%3A%22%23%20IR%3A%20ttir%5Cnimport%20torch%5Cnimport%20triton%5Cnimport%20triton.language%20as%20tl%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20scale_add(x_ptr%2C%20y_ptr%2C%20out_ptr%2C%20n%2C%20alpha%2C%20BLOCK%3A%20tl.constexpr)%3A%5Cn%20%20%20%20pid%20%3D%20tl.program_id(0)%5Cn%20%20%20%20offs%20%3D%20pid%20*%20BLOCK%20%2B%20tl.arange(0%2C%20BLOCK)%5Cn%20%20%20%20mask%20%3D%20offs%20%3C%20n%5Cn%20%20%20%20x%20%3D%20tl.load(x_ptr%20%2B%20offs%2C%20mask%3Dmask)%5Cn%20%20%20%20y%20%3D%20tl.load(y_ptr%20%2B%20offs%2C%20mask%3Dmask)%5Cn%20%20%20%20tl.store(out_ptr%20%2B%20offs%2C%20x%20*%20alpha%20%2B%20y%2C%20mask%3Dmask)%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20row_sum(x_ptr%2C%20out_ptr%2C%20n_cols%2C%20stride%2C%20BLOCK%3A%20tl.constexpr)%3A%5Cn%20%20%20%20row%20%3D%20tl.program_id(0)%5Cn%20%20%20%20acc%20%3D%20tl.zeros(%5BBLOCK%5D%2C%20dtype%3Dtl.float32)%5Cn%20%20%20%20for%20start%20in%20range(0%2C%20n_cols%2C%20BLOCK)%3A%5Cn%20%20%20%20%20%20%20%20cols%20%3D%20start%20%2B%20tl.arange(0%2C%20BLOCK)%5Cn%20%20%20%20%20%20%20%20acc%20%2B%3D%20tl.load(x_ptr%20%2B%20row%20*%20stride%20%2B%20cols%2C%20mask%3Dcols%20%3C%20n_cols%2C%20other%3D0.0)%5Cn%20%20%20%20total%20%3D%20tl.sum(acc%2C%20axis%3D0)%5Cn%20%20%20%20if%20total%20%3C%200%3A%5Cn%20%20%20%20%20%20%20%20total%20%3D%20-total%5Cn%20%20%20%20tl.store(out_ptr%20%2B%20row%2C%20total)%5Cn%5Cn%5Cnx%20%3D%20torch.empty(4096%2C%20device%3D%5C%22cuda%5C%22)%5Cnout%20%3D%20torch.empty(4096%2C%20device%3D%5C%22cuda%5C%22)%5Cnscale_add%5B(4%2C)%5D(x%2C%20x%2C%20out%2C%204096%2C%202.0%2C%20BLOCK%3D1024)%5Cnm%20%3D%20torch.empty(64%2C%201000%2C%20device%3D%5C%22cuda%5C%22)%5Cnrow_sum%5B(64%2C)%5D(m%2C%20out%2C%201000%2C%201000%2C%20BLOCK%3D256)%22%2C%22lang%22%3A%22triton%22%7D%7D%2C%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22compiler%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22source%22%3A1%2C%22lang%22%3A%22triton%22%2C%22compiler%22%3A%22triton_nvidia_370%22%2C%22options%22%3A%22--arch%2086%22%7D%7D%2C%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22device%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22editorid%22%3A1%2C%22treeid%22%3A0%2C%22compilerName%22%3A%22triton_nvidia_370%22%2C%22device%22%3A%22scale_add%20%5Bstage%202%5D.ttir%22%7D%7D%5D%7D%5D%7D" target="_blank" rel="noopener">🔬 在 Compiler Explorer 看 IR</a></div>
+  <pre class="line-numbers"><code class="language-python"># IR: ttir
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def scale_add(x_ptr, y_ptr, out_ptr, n, alpha, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs &lt; n
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    tl.store(out_ptr + offs, x * alpha + y, mask=mask)
+
+
+@triton.jit
+def row_sum(x_ptr, out_ptr, n_cols, stride, BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    acc = tl.zeros([BLOCK], dtype=tl.float32)
+    for start in range(0, n_cols, BLOCK):
+        cols = start + tl.arange(0, BLOCK)
+        acc += tl.load(x_ptr + row * stride + cols, mask=cols &lt; n_cols, other=0.0)
+    total = tl.sum(acc, axis=0)
+    if total &lt; 0:
+        total = -total
+    tl.store(out_ptr + row, total)
+
+
+x = torch.empty(4096, device="cuda")
+out = torch.empty(4096, device="cuda")
+scale_add[(4,)](x, x, out, 4096, 2.0, BLOCK=1024)
+m = torch.empty(64, 1000, device="cuda")
+row_sum[(64,)](m, out, 1000, 1000, BLOCK=256)</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">不需要 GPU：</span><code>CE 只编译不运行（triton_nvidia_370 --arch 86）；Device 面板里可切换 source / TTIR / TTGIR / LLVM IR / PTX / SASS</code></div>
+</div><p>（第二个 kernel <code>row_sum</code> 下一节用。）用 3.9.0 编出来的 <code>scale_add</code> 的 TTIR，去掉了每一行末尾的 <code>loc(...)</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">module {
+  tt.func public @scale_add(%x_ptr: !tt.ptr&lt;f32&gt; {tt.divisibility = 16 : i32}, %y_ptr: !tt.ptr&lt;f32&gt; {tt.divisibility = 16 : i32}, %out_ptr: !tt.ptr&lt;f32&gt; {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}, %alpha: f32) attributes {noinline = false} {
+    %c1024_i32 = arith.constant 1024 : i32
+    %pid = tt.get_program_id x : i32
+    %offs = arith.muli %pid, %c1024_i32 : i32
+    %offs_0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor&lt;1024xi32&gt;
+    %offs_1 = tt.splat %offs : i32 -&gt; tensor&lt;1024xi32&gt;
+    %offs_2 = arith.addi %offs_1, %offs_0 : tensor&lt;1024xi32&gt;
+    %mask = tt.splat %n : i32 -&gt; tensor&lt;1024xi32&gt;
+    %mask_3 = arith.cmpi slt, %offs_2, %mask : tensor&lt;1024xi32&gt;
+    %x = tt.splat %x_ptr : !tt.ptr&lt;f32&gt; -&gt; tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;
+    %x_4 = tt.addptr %x, %offs_2 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;, tensor&lt;1024xi32&gt;
+    %x_5 = tt.load %x_4, %mask_3 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;
+    %y = tt.splat %y_ptr : !tt.ptr&lt;f32&gt; -&gt; tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;
+    %y_6 = tt.addptr %y, %offs_2 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;, tensor&lt;1024xi32&gt;
+    %y_7 = tt.load %y_6, %mask_3 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;
+    %0 = tt.splat %out_ptr : !tt.ptr&lt;f32&gt; -&gt; tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;
+    %1 = tt.addptr %0, %offs_2 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;, tensor&lt;1024xi32&gt;
+    %2 = tt.splat %alpha : f32 -&gt; tensor&lt;1024xf32&gt;
+    %3 = arith.mulf %x_5, %2 : tensor&lt;1024xf32&gt;
+    %4 = arith.addf %3, %y_7 : tensor&lt;1024xf32&gt;
+    tt.store %1, %4, %mask_3 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;
+    tt.return
+  }
+}</code></pre>
+</div><p>逐个概念看。</p>
+<h3>op：一行就是一个操作</h3>
+<p>MLIR 里的一切都是 <strong>op</strong>（operation）。一个 op 的完整样子是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">%结果 = 方言.op名 %操作数, %操作数 {属性} : 类型</code></pre>
+</div><p>比如 <code>%x_4 = tt.addptr %x, %offs_2 : tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;, tensor&lt;1024xi32&gt;</code>：方言是 <code>tt</code>（Triton），op 名是 <code>addptr</code>，两个操作数，冒号后面是操作数的类型。点号前面的部分永远是方言名，所以扫一眼就知道每一行属于谁：<code>tt.</code> 是 Triton 自己的，<code>arith.</code> 是 MLIR 内建的算术方言。<code>module</code>、<code>tt.func</code> 也是 op，它们的特别之处是<strong>里面装着别的 op</strong>（下一节的 region）。</p>
+<p>每个方言的 op 可以定义自己的打印格式（自定义格式），所以 <code>tt.get_program_id x</code> 和 <code>arith.cmpi slt, ...</code> 读起来各不相同。所有 op 也都能打印成统一的<strong>通用格式</strong>，下一节的 <code>tt.reduce</code> 就是。两种格式的规则见《深入 MLIR》第 3 章。</p>
+<h3>值：SSA，名字来自 Python 变量</h3>
+<p><code>%</code> 开头的是<strong>值</strong>（value）。每个值只被定义一次（SSA，静态单赋值），之后可以被用很多次。Python 里写 <code>offs = pid * BLOCK + tl.arange(0, BLOCK)</code> 一行，IR 里变成了 <code>%offs</code>、<code>%offs_0</code>、<code>%offs_1</code>、<code>%offs_2</code> 四个值：乘法、<code>arange</code>、广播、加法，每一步一个新值。</p>
+<p>这些名字不是 MLIR 默认的（默认是 <code>%0</code>、<code>%1</code>、<code>%2</code>……，就像最后几行那样）。Triton 在生成 IR 时，把 Python 的变量名记进了每个 op 的位置信息（<code>loc(&quot;offs&quot;)</code>），打印时又打开了「用位置信息里的名字做前缀」的选项（<code>python/src/ir.cc</code> 的 <code>getOpPrintingFlags()</code>：<code>printNameLocAsPrefix(true)</code>）。所以 <code>%offs_2</code> 的意思是「第三个名叫 offs 的中间值」。没有对应 Python 变量的中间结果（比如 <code>x * alpha + y</code>），就退回 <code>%0</code>、<code>%1</code>。读 IR 时，<strong>先找名字，就能对回源码</strong>。</p>
+<h3>类型与属性</h3>
+<p>冒号后面的是<strong>类型</strong>：</p>
+<ul>
+<li><code>i32</code>、<code>f32</code>：标量。</li>
+<li><code>!tt.ptr&lt;f32&gt;</code>：指向 f32 的指针。<code>!</code> 开头的是方言自己定义的类型。</li>
+<li><code>tensor&lt;1024xi32&gt;</code>、<code>tensor&lt;1024x!tt.ptr&lt;f32&gt;&gt;</code>：1024 个 i32 的张量、1024 个指针的张量。Triton 的「块」在 IR 里就是 <code>tensor</code>。</li>
+</ul>
+<p>花括号里的是<strong>属性</strong>（attribute）：编译期就确定的常量信息。<code>tt.make_range {end = 1024 : i32, start = 0 : i32}</code> 是 <code>tl.arange(0, 1024)</code> 的两个端点；<code>arith.cmpi slt</code> 里的 <code>slt</code>（signed less than）也是一个属性。</p>
+<p>最值得注意的是函数参数上的 <code>{tt.divisibility = 16 : i32}</code>。这就是第 4 章讲的特化：调用时 <code>n = 4096</code> 能被 16 整除，Triton 就给它打上这个标记，编译器后面据此判断对齐。<code>alpha</code> 是浮点数，没有这个标记。第 15 章那个 N = 3000 的坑，就是因为 3000 不能被 16 整除，参数上没有这个属性，编译器什么也证明不了。</p>
+<h3>广播变成了显式的 op</h3>
+<p>Python 里 <code>pid * BLOCK + tl.arange(0, BLOCK)</code> 是一个标量加一个张量，靠的是广播。IR 里没有隐式广播：标量 <code>%offs</code> 先用 <code>tt.splat</code> 变成 <code>tensor&lt;1024xi32&gt;</code>（每个元素都是同一个值），才能和 <code>%offs_0</code> 相加。<code>x_ptr + offs</code> 也一样：指针先 splat 成 1024 个相同的指针，再 <code>tt.addptr</code> 逐元素加偏移。二维的情形还会出现 <code>tt.expand_dims</code> 和 <code>tt.broadcast</code>（第 16 章的 IR 里见过）。<strong>IR 里的每一个类型都是确定的</strong>，Python 里那些「自动」的东西，到这里都变成了看得见的 op。</p>
+<h2>控制流：region 和 block</h2>
+<p><code>row_sum</code> 有一个循环、一个归约、一个 <code>if</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">    %acc = scf.for %start = %c0_i32 to %n_cols step %c256_i32 iter_args(%acc_1 = %cst_0) -&gt; (tensor&lt;256xf32&gt;)  : i32 {
+      %cols = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor&lt;256xi32&gt;
+      ...
+      %acc_10 = tt.load %acc_9, %acc_5, %cst_0 : tensor&lt;256x!tt.ptr&lt;f32&gt;&gt;
+      %acc_11 = arith.addf %acc_1, %acc_10 : tensor&lt;256xf32&gt;
+      scf.yield %acc_11 : tensor&lt;256xf32&gt;
+    }
+    %total = "tt.reduce"(%acc) &lt;{axis = 0 : i32}&gt; ({
+    ^bb0(%total_1: f32, %total_2: f32):
+      %total_3 = arith.addf %total_1, %total_2 : f32
+      tt.reduce.return %total_3 : f32
+    }) : (tensor&lt;256xf32&gt;) -&gt; f32
+    %0 = arith.cmpf olt, %total, %cst : f32
+    %1 = scf.if %0 -&gt; (f32) {
+      %total_1 = arith.negf %total : f32
+      scf.yield %total_1 : f32
+    } else {
+      scf.yield %total : f32
+    }</code></pre>
+</div><p>花括号括起来的那一段叫 <strong>region</strong>：一个 op 里装着的一段代码。region 里是一个或多个 <strong>block</strong>，block 里是一串 op。<code>scf.for</code>、<code>scf.if</code>、<code>tt.reduce</code>、<code>tt.func</code>、<code>module</code> 都是带 region 的 op。</p>
+<p><strong><code>scf.for</code> 怎样表达「循环里改了 acc」。</strong> SSA 里一个值只能定义一次，可 Python 的循环每一轮都在给 <code>acc</code> 赋新值。办法是 <strong><code>iter_args</code></strong>：<code>iter_args(%acc_1 = %cst_0)</code> 说「循环体里有一个值叫 <code>%acc_1</code>，第一轮它等于 <code>%cst_0</code>（全零）」；循环体末尾的 <code>scf.yield %acc_11</code> 说「下一轮的 <code>%acc_1</code> 是 <code>%acc_11</code>」；循环结束以后，最后一次 yield 的值成为 <code>scf.for</code> 的结果 <code>%acc</code>。所以<strong>循环里被修改、循环后还要用的变量，都会变成 <code>iter_args</code></strong>。第 12 章 GEMM 的累加器、第 17 章 FlashAttention 的 m、l、acc，都是这么进 IR 的。</p>
+<p><strong><code>scf.if</code> 也有返回值。</strong> Python 里 <code>if total &lt; 0: total = -total</code> 给 <code>total</code> 重新赋值，IR 里变成了一个「返回一个 f32」的 <code>scf.if</code>：两个分支各 yield 一个值，结果是 <code>%1</code>。后面的 <code>tt.store</code> 存的是 <code>%1</code>，不是 <code>%total</code>。（<code>if</code> 的条件是运行时的值，所以变成了 <code>scf.if</code>；如果条件是 <code>tl.constexpr</code>，Python 前端在生成 IR 时就选好了分支，IR 里根本不会出现 <code>if</code>。第 17 章 <code>if CAUSAL:</code> 就是这样。）</p>
+<p><strong><code>tt.reduce</code> 带着一个函数。</strong> <code>tl.sum(acc, axis=0)</code> 变成了 <code>tt.reduce</code>，它用的是<strong>通用格式</strong>：<code>&quot;op名&quot;(操作数) &lt;{属性}&gt; ({region}) : (操作数类型) -&gt; 结果类型</code>。region 里的 <code>^bb0(%total_1: f32, %total_2: f32):</code> 是一个 block 的开头，括号里是 <strong>block 参数</strong>：这个 block 被调用时传进来的两个值。block 里只做一件事：把两个数相加，用 <code>tt.reduce.return</code> 返回。也就是说，<strong>region 在这里就是一个「合并函数」</strong>：<code>tt.reduce</code> 用它两两合并所有元素。<code>tl.max</code> 的 region 里是 <code>arith.maxnumf</code>，自己写的 <code>tl.reduce(x, axis, combine_fn)</code> 的 region 里就是你的 <code>combine_fn</code>。</p>
+<p>region、block、block 参数在 MLIR 里的完整规则（block 之间怎么跳转、什么时候需要多个 block），见《深入 MLIR》第 2 章。Triton 的 TTIR、TTGIR 里几乎只有单 block 的 region；到了很后面的 <code>convert-scf-to-cf</code> pass，<code>scf.for</code> 才被拆成多个 block 加跳转。</p>
+<h2>方言：IR 里的「命名空间」</h2>
+<p>一个 kernel 的 IR 里同时有好几个方言的 op，每个方言管一类事情。下表是在本书的 IR 里出现过的：</p>
+<table>
+<thead>
+<tr>
+<th>方言</th>
+<th>前缀</th>
+<th>管什么</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>builtin</td>
+<td>（无）</td>
+<td>模块</td>
+<td><code>module</code></td>
+</tr>
+<tr>
+<td>Triton</td>
+<td><code>tt.</code></td>
+<td>Triton 语言本身：program id、指针、load / store、dot、归约</td>
+<td><code>tt.load</code>、<code>tt.dot</code>、<code>tt.reduce</code></td>
+</tr>
+<tr>
+<td>arith</td>
+<td><code>arith.</code></td>
+<td>标量和逐元素的算术（MLIR 内建）</td>
+<td><code>arith.addf</code>、<code>arith.cmpi</code></td>
+</tr>
+<tr>
+<td>math</td>
+<td><code>math.</code></td>
+<td>超越函数（MLIR 内建）</td>
+<td><code>math.exp2</code>、<code>math.rsqrt</code></td>
+</tr>
+<tr>
+<td>scf</td>
+<td><code>scf.</code></td>
+<td>结构化控制流（MLIR 内建）</td>
+<td><code>scf.for</code>、<code>scf.if</code>、<code>scf.yield</code></td>
+</tr>
+<tr>
+<td>TritonGPU</td>
+<td><code>ttg.</code></td>
+<td>和具体 GPU 无关的 GPU 概念：layout、shared memory、异步拷贝</td>
+<td><code>ttg.convert_layout</code>、<code>ttg.local_alloc</code></td>
+</tr>
+<tr>
+<td>TritonNvidiaGPU</td>
+<td><code>ttng.</code></td>
+<td>NVIDIA 专有：TMA、wgmma、tcgen05、mbarrier</td>
+<td><code>ttng.warp_group_dot</code></td>
+</tr>
+<tr>
+<td>TritonIntelGPU</td>
+<td><code>ttig.</code></td>
+<td>Intel 专有：DPAS、2D block IO、预取</td>
+<td><code>ttig.descriptor_prefetch</code></td>
+</tr>
+<tr>
+<td>llvm</td>
+<td><code>llvm.</code></td>
+<td>最后一级，和 LLVM IR 一一对应</td>
+<td><code>llvm.intr.assume</code></td>
+</tr>
+</tbody></table>
+<p>TTIR 里只有前几行：<code>tt</code>、<code>arith</code>、<code>math</code>、<code>scf</code>。从 TTIR 到 TTGIR，<code>ttg</code> 和后端自己的方言加了进来；再往后，所有东西都变成 <code>llvm</code>。<strong>一个方言就是一组 op、类型和属性</strong>，下表里没有「谁比谁高级」，只有分工。MLIR 内建方言的全景见《深入 MLIR》第 6 章。</p>
+<h2>在浏览器里读一段 IR</h2>
+<p>读 IR 最常做的三件事：数一数有哪些 op；顺着一个值找它在哪里定义、被谁用；看看循环里有哪些东西其实每一轮都一样。下面的小程序把这三件事都做了，输入就是 <code>row_sum</code> 的 TTIR。只用标准库，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E8%AF%BB%20Triton%20IR%EF%BC%9A%E6%95%B0%20op%E3%80%81%E6%89%BE%E5%AE%9A%E4%B9%89%E5%92%8C%E4%BD%BF%E7%94%A8%E3%80%81%E6%89%BE%E5%87%BA%E5%BE%AA%E7%8E%AF%E4%B8%8D%E5%8F%98%E9%87%8F%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0A%23%20TTIR%20%E6%98%AF%E7%AC%AC%2018%20%E7%AB%A0%20row_sum%20kernel%20%E7%9A%84%203.9.0%20%E8%BE%93%E5%87%BA%EF%BC%88%E5%8E%BB%E6%8E%89%E4%BA%86%20loc(...)%EF%BC%89%E3%80%82%0Aimport%20re%0Afrom%20collections%20import%20Counter%0A%0ATTIR%20%3D%20%22%22%22%0Att.func%20public%20%40row_sum(%25x_ptr%3A%20!tt.ptr%3Cf32%3E%2C%20%25out_ptr%3A%20!tt.ptr%3Cf32%3E%2C%20%25n_cols%3A%20i32%2C%20%25stride%3A%20i32)%20%7B%0A%20%20%25cst%20%3D%20arith.constant%200.000000e%2B00%20%3A%20f32%0A%20%20%25c256_i32%20%3D%20arith.constant%20256%20%3A%20i32%0A%20%20%25c0_i32%20%3D%20arith.constant%200%20%3A%20i32%0A%20%20%25cst_0%20%3D%20arith.constant%20dense%3C0.000000e%2B00%3E%20%3A%20tensor%3C256xf32%3E%0A%20%20%25row%20%3D%20tt.get_program_id%20x%20%3A%20i32%0A%20%20%25acc%20%3D%20scf.for%20%25start%20%3D%20%25c0_i32%20to%20%25n_cols%20step%20%25c256_i32%20iter_args(%25acc_1%20%3D%20%25cst_0)%20-%3E%20(tensor%3C256xf32%3E)%20%20%3A%20i32%20%7B%0A%20%20%20%20%25cols%20%3D%20tt.make_range%20%7Bend%20%3D%20256%20%3A%20i32%2C%20start%20%3D%200%20%3A%20i32%7D%20%3A%20tensor%3C256xi32%3E%0A%20%20%20%20%25cols_2%20%3D%20tt.splat%20%25start%20%3A%20i32%20-%3E%20tensor%3C256xi32%3E%0A%20%20%20%20%25cols_3%20%3D%20arith.addi%20%25cols_2%2C%20%25cols%20%3A%20tensor%3C256xi32%3E%0A%20%20%20%20%25acc_4%20%3D%20tt.splat%20%25n_cols%20%3A%20i32%20-%3E%20tensor%3C256xi32%3E%0A%20%20%20%20%25acc_5%20%3D%20arith.cmpi%20slt%2C%20%25cols_3%2C%20%25acc_4%20%3A%20tensor%3C256xi32%3E%0A%20%20%20%20%25acc_6%20%3D%20arith.muli%20%25row%2C%20%25stride%20%3A%20i32%0A%20%20%20%20%25acc_7%20%3D%20tt.addptr%20%25x_ptr%2C%20%25acc_6%20%3A%20!tt.ptr%3Cf32%3E%2C%20i32%0A%20%20%20%20%25acc_8%20%3D%20tt.splat%20%25acc_7%20%3A%20!tt.ptr%3Cf32%3E%20-%3E%20tensor%3C256x!tt.ptr%3Cf32%3E%3E%0A%20%20%20%20%25acc_9%20%3D%20tt.addptr%20%25acc_8%2C%20%25cols_3%20%3A%20tensor%3C256x!tt.ptr%3Cf32%3E%3E%2C%20tensor%3C256xi32%3E%0A%20%20%20%20%25acc_10%20%3D%20tt.load%20%25acc_9%2C%20%25acc_5%2C%20%25cst_0%20%3A%20tensor%3C256x!tt.ptr%3Cf32%3E%3E%0A%20%20%20%20%25acc_11%20%3D%20arith.addf%20%25acc_1%2C%20%25acc_10%20%3A%20tensor%3C256xf32%3E%0A%20%20%20%20scf.yield%20%25acc_11%20%3A%20tensor%3C256xf32%3E%0A%20%20%7D%0A%20%20%25total%20%3D%20%22tt.reduce%22(%25acc)%20%3C%7Baxis%20%3D%200%20%3A%20i32%7D%3E%20(%7B%0A%20%20%5Ebb0(%25total_1%3A%20f32%2C%20%25total_2%3A%20f32)%3A%0A%20%20%20%20%25total_3%20%3D%20arith.addf%20%25total_1%2C%20%25total_2%20%3A%20f32%0A%20%20%20%20tt.reduce.return%20%25total_3%20%3A%20f32%0A%20%20%7D)%20%3A%20(tensor%3C256xf32%3E)%20-%3E%20f32%0A%20%20%250%20%3D%20arith.cmpf%20olt%2C%20%25total%2C%20%25cst%20%3A%20f32%0A%20%20%251%20%3D%20scf.if%20%250%20-%3E%20(f32)%20%7B%0A%20%20%20%20%25total_1%20%3D%20arith.negf%20%25total%20%3A%20f32%0A%20%20%20%20scf.yield%20%25total_1%20%3A%20f32%0A%20%20%7D%20else%20%7B%0A%20%20%20%20scf.yield%20%25total%20%3A%20f32%0A%20%20%7D%0A%20%20%252%20%3D%20tt.addptr%20%25out_ptr%2C%20%25row%20%3A%20!tt.ptr%3Cf32%3E%2C%20i32%0A%20%20tt.store%20%252%2C%20%251%20%3A%20!tt.ptr%3Cf32%3E%0A%20%20tt.return%0A%7D%0A%22%22%22%0A%0AOP%20%3D%20re.compile(r'%5E%5Cs*(%3F%3A(%25%5B%5Cw%5D%2B)(%3F%3A%3A%5Cd%2B)%3F%20%3D%20)%3F%22%3F(%5Ba-z_%5D%2B%5C.%5Ba-z_.%5D%2B)%22%3F(.*)%24')%0Aops%20%3D%20%5B%5D%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20(%E8%A1%8C%E5%8F%B7%2C%20%E7%BB%93%E6%9E%9C%2C%20op%20%E5%90%8D%2C%20%E7%94%A8%E5%88%B0%E7%9A%84%E5%80%BC%2C%20%E5%B5%8C%E5%A5%97%E6%B7%B1%E5%BA%A6)%0Adepth%20%3D%200%0Afor%20no%2C%20line%20in%20enumerate(TTIR.strip().splitlines()%2C%201)%3A%0A%20%20%20%20m%20%3D%20OP.match(line)%0A%20%20%20%20if%20m%20and%20not%20line.strip().startswith(%22tt.func%22)%3A%0A%20%20%20%20%20%20%20%20result%2C%20name%2C%20rest%20%3D%20m.groups()%0A%20%20%20%20%20%20%20%20rest%20%3D%20re.sub(r%22%25%5B%5Cw%5D%2B%20%3D%20%22%2C%20%22%22%2C%20rest)%20%20%20%20%20%20%20%20%23%20scf.for%20%E9%87%8C%E7%9A%84%20%25start%20%3D%20%E2%80%A6%E3%80%81%25acc_1%20%3D%20%E2%80%A6%20%E6%98%AF%E5%AE%9A%E4%B9%89%EF%BC%8C%E4%B8%8D%E6%98%AF%E4%BD%BF%E7%94%A8%0A%20%20%20%20%20%20%20%20ops.append((no%2C%20result%2C%20name%2C%20re.findall(r%22%25%5B%5Cw%5D%2B%22%2C%20rest)%2C%20depth))%0A%20%20%20%20depth%20%2B%3D%20line.count(%22%7B%22)%20-%20line.count(%22%7D%22)%0A%0A%23%20%E2%91%A0%20%E6%AF%8F%E4%B8%AA%E6%96%B9%E8%A8%80%E6%9C%89%E5%93%AA%E4%BA%9B%20op%0Aby_dialect%20%3D%20Counter(name.split(%22.%22)%5B0%5D%20for%20_%2C%20_%2C%20name%2C%20_%2C%20_%20in%20ops)%0Aprint(%22%E2%91%A0%20%E6%96%B9%E8%A8%80%EF%BC%9A%22%20%2B%20%22%EF%BC%8C%22.join(f%22%7Bd%7D%20%7Bn%7D%20%E4%B8%AA%22%20for%20d%2C%20n%20in%20by_dialect.most_common()))%0A%0A%23%20%E2%91%A1%20%E4%B8%80%E4%B8%AA%E5%80%BC%E5%9C%A8%E5%93%AA%E9%87%8C%E5%AE%9A%E4%B9%89%E3%80%81%E5%9C%A8%E5%93%AA%E9%87%8C%E8%A2%AB%E7%94%A8%E5%88%B0%EF%BC%88def-use%20%E9%93%BE%EF%BC%89%0Afor%20v%20in%20(%22%25row%22%2C%20%22%25acc_1%22%2C%20%22%25acc%22)%3A%0A%20%20%20%20d%20%3D%20%5Bf%22%E7%AC%AC%20%7Bno%7D%20%E8%A1%8C%20%7Bname%7D%22%20for%20no%2C%20res%2C%20name%2C%20_%2C%20_%20in%20ops%20if%20res%20%3D%3D%20v%5D%0A%20%20%20%20u%20%3D%20%5Bf%22%E7%AC%AC%20%7Bno%7D%20%E8%A1%8C%20%7Bname%7D%22%20for%20no%2C%20res%2C%20name%2C%20used%2C%20_%20in%20ops%20if%20v%20in%20used%20and%20res%20!%3D%20v%5D%0A%20%20%20%20print(f%22%E2%91%A1%20%7Bv%3A7%7D%20%E5%AE%9A%E4%B9%89%EF%BC%9A%7Bd%5B0%5D%20if%20d%20else%20'%E5%BE%AA%E7%8E%AF%E7%9A%84%20iter_args%EF%BC%88%E5%9D%97%E5%8F%82%E6%95%B0%EF%BC%89'%7D%EF%BC%9B%E8%A2%AB%E7%94%A8%E5%88%B0%EF%BC%9A%7B'%E3%80%81'.join(u)%7D%22)%0A%0A%23%20%E2%91%A2%20%E5%BE%AA%E7%8E%AF%E4%B8%8D%E5%8F%98%E9%87%8F%EF%BC%9A%E5%9C%A8%20scf.for%20%E9%87%8C%E9%9D%A2%EF%BC%8C%E8%80%8C%E4%B8%94%E7%94%A8%E5%88%B0%E7%9A%84%E5%80%BC%E5%85%A8%E9%83%BD%E5%9C%A8%E5%BE%AA%E7%8E%AF%E5%A4%96%E9%9D%A2%E5%AE%9A%E4%B9%89%EF%BC%88%E6%88%96%E8%80%85%E6%98%AF%E5%B8%B8%E9%87%8F%EF%BC%89%0Aloop%20%3D%20next(i%20for%20i%2C%20op%20in%20enumerate(ops)%20if%20op%5B2%5D%20%3D%3D%20%22scf.for%22)%0Aend%20%3D%20next(i%20for%20i%20in%20range(loop%20%2B%201%2C%20len(ops))%20if%20ops%5Bi%5D%5B2%5D%20%3D%3D%20%22scf.yield%22%20and%20ops%5Bi%5D%5B4%5D%20%3D%3D%20ops%5Bloop%5D%5B4%5D%20%2B%201)%0Ainside%20%3D%20%7Bops%5Bi%5D%5B1%5D%20for%20i%20in%20range(loop%20%2B%201%2C%20end)%7D%20%7C%20%7B%22%25start%22%2C%20%22%25acc_1%22%7D%20%20%20%20%20%20%20%23%20%E5%BE%AA%E7%8E%AF%E5%8F%98%E9%87%8F%E5%92%8C%20iter_args%20%E4%B9%9F%E7%AE%97%E3%80%8C%E9%87%8C%E9%9D%A2%E3%80%8D%0Ainvariant%20%3D%20%5B%5D%0Afor%20no%2C%20res%2C%20name%2C%20used%2C%20_%20in%20ops%5Bloop%20%2B%201%3Aend%5D%3A%0A%20%20%20%20if%20name%20!%3D%20%22tt.load%22%20and%20not%20(set(used)%20%26%20inside)%3A%20%20%20%20%20%20%20%20%20%20%23%20load%20%E8%AF%BB%E5%86%85%E5%AD%98%EF%BC%8C%E8%BF%99%E9%87%8C%E4%BF%9D%E5%AE%88%E5%9C%B0%E4%B8%8D%E5%8A%A8%E5%AE%83%0A%20%20%20%20%20%20%20%20invariant.append(f%22%7Bres%7D%20%3D%20%7Bname%7D%22)%0A%20%20%20%20%20%20%20%20inside.discard(res)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%AE%83%E8%A2%AB%E6%8F%90%E5%87%BA%E5%8E%BB%E4%BA%86%EF%BC%8C%E7%94%A8%E5%AE%83%E7%9A%84%20op%20%E4%B9%9F%E5%8F%AF%E8%83%BD%E4%B8%8D%E5%8F%98%0Aprint(%22%E2%91%A2%20%E8%83%BD%E6%8F%90%E5%88%B0%E5%BE%AA%E7%8E%AF%E5%A4%96%E9%9D%A2%E7%9A%84%EF%BC%9A%22%20%2B%20%22%EF%BC%8C%22.join(invariant))"># 读 Triton IR：数 op、找定义和使用、找出循环不变量。只用标准库。
+# TTIR 是第 18 章 row_sum kernel 的 3.9.0 输出（去掉了 loc(...)）。
+import re
+from collections import Counter
+
+TTIR = """
+tt.func public @row_sum(%x_ptr: !tt.ptr&lt;f32&gt;, %out_ptr: !tt.ptr&lt;f32&gt;, %n_cols: i32, %stride: i32) {
+  %cst = arith.constant 0.000000e+00 : f32
+  %c256_i32 = arith.constant 256 : i32
+  %c0_i32 = arith.constant 0 : i32
+  %cst_0 = arith.constant dense&lt;0.000000e+00&gt; : tensor&lt;256xf32&gt;
+  %row = tt.get_program_id x : i32
+  %acc = scf.for %start = %c0_i32 to %n_cols step %c256_i32 iter_args(%acc_1 = %cst_0) -&gt; (tensor&lt;256xf32&gt;)  : i32 {
+    %cols = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor&lt;256xi32&gt;
+    %cols_2 = tt.splat %start : i32 -&gt; tensor&lt;256xi32&gt;
+    %cols_3 = arith.addi %cols_2, %cols : tensor&lt;256xi32&gt;
+    %acc_4 = tt.splat %n_cols : i32 -&gt; tensor&lt;256xi32&gt;
+    %acc_5 = arith.cmpi slt, %cols_3, %acc_4 : tensor&lt;256xi32&gt;
+    %acc_6 = arith.muli %row, %stride : i32
+    %acc_7 = tt.addptr %x_ptr, %acc_6 : !tt.ptr&lt;f32&gt;, i32
+    %acc_8 = tt.splat %acc_7 : !tt.ptr&lt;f32&gt; -&gt; tensor&lt;256x!tt.ptr&lt;f32&gt;&gt;
+    %acc_9 = tt.addptr %acc_8, %cols_3 : tensor&lt;256x!tt.ptr&lt;f32&gt;&gt;, tensor&lt;256xi32&gt;
+    %acc_10 = tt.load %acc_9, %acc_5, %cst_0 : tensor&lt;256x!tt.ptr&lt;f32&gt;&gt;
+    %acc_11 = arith.addf %acc_1, %acc_10 : tensor&lt;256xf32&gt;
+    scf.yield %acc_11 : tensor&lt;256xf32&gt;
+  }
+  %total = "tt.reduce"(%acc) &lt;{axis = 0 : i32}&gt; ({
+  ^bb0(%total_1: f32, %total_2: f32):
+    %total_3 = arith.addf %total_1, %total_2 : f32
+    tt.reduce.return %total_3 : f32
+  }) : (tensor&lt;256xf32&gt;) -&gt; f32
+  %0 = arith.cmpf olt, %total, %cst : f32
+  %1 = scf.if %0 -&gt; (f32) {
+    %total_1 = arith.negf %total : f32
+    scf.yield %total_1 : f32
+  } else {
+    scf.yield %total : f32
+  }
+  %2 = tt.addptr %out_ptr, %row : !tt.ptr&lt;f32&gt;, i32
+  tt.store %2, %1 : !tt.ptr&lt;f32&gt;
+  tt.return
+}
+"""
+
+OP = re.compile(r'^\s*(?:(%[\w]+)(?::\d+)? = )?"?([a-z_]+\.[a-z_.]+)"?(.*)$')
+ops = []                                    # (行号, 结果, op 名, 用到的值, 嵌套深度)
+depth = 0
+for no, line in enumerate(TTIR.strip().splitlines(), 1):
+    m = OP.match(line)
+    if m and not line.strip().startswith("tt.func"):
+        result, name, rest = m.groups()
+        rest = re.sub(r"%[\w]+ = ", "", rest)        # scf.for 里的 %start = …、%acc_1 = … 是定义，不是使用
+        ops.append((no, result, name, re.findall(r"%[\w]+", rest), depth))
+    depth += line.count("{") - line.count("}")
+
+# ① 每个方言有哪些 op
+by_dialect = Counter(name.split(".")[0] for _, _, name, _, _ in ops)
+print("① 方言：" + "，".join(f"{d} {n} 个" for d, n in by_dialect.most_common()))
+
+# ② 一个值在哪里定义、在哪里被用到（def-use 链）
+for v in ("%row", "%acc_1", "%acc"):
+    d = [f"第 {no} 行 {name}" for no, res, name, _, _ in ops if res == v]
+    u = [f"第 {no} 行 {name}" for no, res, name, used, _ in ops if v in used and res != v]
+    print(f"② {v:7} 定义：{d[0] if d else '循环的 iter_args（块参数）'}；被用到：{'、'.join(u)}")
+
+# ③ 循环不变量：在 scf.for 里面，而且用到的值全都在循环外面定义（或者是常量）
+loop = next(i for i, op in enumerate(ops) if op[2] == "scf.for")
+end = next(i for i in range(loop + 1, len(ops)) if ops[i][2] == "scf.yield" and ops[i][4] == ops[loop][4] + 1)
+inside = {ops[i][1] for i in range(loop + 1, end)} | {"%start", "%acc_1"}       # 循环变量和 iter_args 也算「里面」
+invariant = []
+for no, res, name, used, _ in ops[loop + 1:end]:
+    if name != "tt.load" and not (set(used) &amp; inside):          # load 读内存，这里保守地不动它
+        invariant.append(f"{res} = {name}")
+        inside.discard(res)                                       # 它被提出去了，用它的 op 也可能不变
+print("③ 能提到循环外面的：" + "，".join(invariant))</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">① 方言：tt 13 个，arith 11 个，scf 5 个
+② %row    定义：第 6 行 tt.get_program_id；被用到：第 13 行 arith.muli、第 33 行 tt.addptr
+② %acc_1  定义：循环的 iter_args（块参数）；被用到：第 18 行 arith.addf
+② %acc    定义：第 7 行 scf.for；被用到：第 21 行 tt.reduce
+③ 能提到循环外面的：%cols = tt.make_range，%acc_4 = tt.splat，%acc_6 = arith.muli，%acc_7 = tt.addptr，%acc_8 = tt.splat</code></pre>
+</div><p>第 ③ 条值得多看一眼：<code>%acc_6 = arith.muli %row, %stride</code>（行号乘 stride）每一轮循环都一样，Python 源码里 <code>row * stride</code> 写在循环里，TTIR 也就老老实实放在循环里。我们的小程序找出了 5 个这样的 op。下一节会看到，Triton 的 <code>triton-licm</code> pass 做的正是这件事，提出去的恰好是这 5 个。这就是 pass 的本质：<strong>读 IR，按某个规则改写 IR</strong>。</p>
+<h2>pass：看一次变换</h2>
+<p>Triton 的编译过程，就是一串 pass 依次改写同一个 module。想看每个 pass 做了什么，设两个环境变量：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">MLIR_ENABLE_DUMP=row_sum MLIR_DUMP_PATH=dump.txt python my_kernel.py</code></pre>
+</div><ul>
+<li><code>MLIR_ENABLE_DUMP=1</code> 对所有 kernel 打开；写成 kernel 的名字，就只看这一个。它在每个 pass <strong>之前</strong>把整个 module 打印一遍（<code>python/src/ir.cc</code> 的 <code>enable_debug</code>；pass 之后只在失败时打印）。</li>
+<li><code>MLIR_DUMP_PATH</code> 把输出写进文件，不设就打到标准错误。输出很长：<code>row_sum</code> 这么小的 kernel，也有四十多万字节。</li>
+<li>磁盘缓存里已经有这个 kernel 时不会重新编译，也就什么都不打印。先清空 <code>TRITON_CACHE_DIR</code>，或者指向一个空目录（第 4 章）。</li>
+</ul>
+<p>数一数 <code>// -----// IR Dump Before</code> 这一行出现了几次，就知道有多少个 pass：<code>row_sum</code> 编到 sm_86 是 73 个，在 Max 1100 上是 71 个。两边有一部分是同一批（<code>CanonicalizerPass</code>、<code>CSEPass</code>、<code>TritonLoopInvariantCodeMotion</code>、<code>ConvertTritonToTritonGPU</code>……），也有各自的（NVIDIA 的 <code>TritonGPUAccelerateMatmul</code> 对应 Intel 的 <code>TritonIntelGPUAccelerateMatmul</code>；第 15 章的 <code>TritonIntelGPUMaterializeBlockPointer</code>、第 17 章的 <code>TritonIntelGPUReduceVariableLiveness</code> 只在 Intel 这边）。第 19 章会把整条流水线摊开来讲。</p>
+<p>找到 <code>triton-licm</code> 之前和之后的两份 dump，对比循环附近（sm_86，去掉了 <code>loc</code>）：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">triton-licm 之前</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">%acc = scf.for %start = %c0_i32 to %n_cols
+    step %c256_i32 iter_args(%acc_1 = %cst_0) ... {
+  %cols = tt.make_range {end = 256, start = 0}
+  %cols_2 = tt.splat %start
+  %cols_3 = arith.addi %cols_2, %cols
+  %acc_4 = tt.splat %n_cols
+  %acc_5 = arith.cmpi slt, %cols_3, %acc_4
+  %acc_6 = arith.muli %row, %stride
+  %acc_7 = tt.addptr %x_ptr, %acc_6
+  %acc_8 = tt.splat %acc_7
+  %acc_9 = tt.addptr %acc_8, %cols_3
+  %acc_10 = tt.load %acc_9, %acc_5, %cst_0
+  %acc_11 = arith.addf %acc_1, %acc_10
+  scf.yield %acc_11
+}</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">triton-licm 之后</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">%cols = tt.make_range {end = 256, start = 0}
+%acc = tt.splat %n_cols
+%acc_1 = arith.muli %row, %stride
+%acc_2 = tt.addptr %x_ptr, %acc_1
+%acc_3 = tt.splat %acc_2
+%acc_4 = scf.for %start = %c0_i32 to %n_cols
+    step %c256_i32 iter_args(%acc_5 = %cst_0) ... {
+  %cols_6 = tt.splat %start
+  %cols_7 = arith.addi %cols_6, %cols
+  %acc_8 = arith.cmpi slt, %cols_7, %acc
+  %acc_9 = tt.addptr %acc_3, %cols_7
+  %acc_10 = tt.load %acc_9, %acc_8, %cst_0
+  %acc_11 = arith.addf %acc_5, %acc_10
+  scf.yield %acc_11
+}</code></pre>
+</div></div>
+</div><p>（为了排版，类型和 layout 都删掉了。）提到循环外面的正好是那 5 个 op，循环体从 11 个 op 变成了 6 个。值的编号也全变了：<code>%acc_6</code> 变成了 <code>%acc_1</code>。打印时名字是按出现的顺序现编的，<strong>不同 pass 之间对比 IR 时，不要靠编号对应，要靠 op 和名字前缀</strong>。</p>
+<p>另一个值得对比的是 <code>convert-triton-to-tritongpu</code>（<code>ConvertTritonToTritonGPU</code>）前后。这是从 TTIR 到 TTGIR 的那一步，op 几乎不变，变的是类型和 module 的属性：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">// 之前（TTIR）
+module {
+    %cst_0 = arith.constant dense&lt;0.000000e+00&gt; : tensor&lt;256xf32&gt;
+// 之后（TTGIR）
+#blocked = #ttg.blocked&lt;{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}&gt;
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:86", "ttg.threads-per-warp" = 32 : i32} {
+    %cst_0 = arith.constant dense&lt;0.000000e+00&gt; : tensor&lt;256xf32, #blocked&gt;</code></pre>
+</div><p><code>tensor&lt;256xf32&gt;</code> 变成了 <code>tensor&lt;256xf32, #blocked&gt;</code>：类型后面多了一个<strong>编码</strong>（encoding）属性，说明这 256 个元素怎样分给线程：每个线程 1 个，一个 warp 32 个线程，4 个 warp。module 上也多了 <code>num-warps</code>、<code>threads-per-warp</code>、目标 GPU 这些属性。<code>#blocked = ...</code> 是一个<strong>属性别名</strong>：一长串属性起个短名字，下面用 <code>#blocked</code> 引用。<strong>TTIR 和 TTGIR 的区别，本质上就是张量类型带不带 layout</strong>。layout 是 Triton 最核心的设计，第 20、21 章专门讲。</p>
+<p>这种「op 不变、类型变了」的改写，在 MLIR 里叫 <strong>dialect conversion</strong>；把高层方言一步步换成低层方言的过程，叫 <strong>lowering</strong>。Triton 的 lowering 是 TTIR → TTGIR → LLVM 方言 → LLVM IR → PTX / SPIR-V。框架层面的细节（<code>TypeConverter</code>、<code>ConversionTarget</code>、pattern 怎么写）在《深入 MLIR》第 13、14、16 章。读 Triton IR 用不到那么多，记住一点就够了：<strong>每个 pass 的输入和输出都是合法的 IR</strong>，所以任何两个 pass 之间都可以停下来看。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>自己 dump 一次。</strong> 用一个空的 <code>TRITON_CACHE_DIR</code>，<code>MLIR_ENABLE_DUMP=row_sum MLIR_DUMP_PATH=dump.txt</code> 跑本章的 <code>row_sum</code>。数一数你的 GPU 上有多少个 pass。找到 <code>ConvertTritonGPUToLLVM</code> 之前的那份 dump，里面还剩哪些方言？</li>
+<li><strong>在 Compiler Explorer 里看 <code>if</code> 怎么变。</strong> 打开本章的 CE 链接，把 <code>row_sum</code> 里的 <code>if total &lt; 0</code> 改成一个 <code>tl.constexpr</code> 参数控制的 <code>if</code>，看 TTIR 里的 <code>scf.if</code> 是不是消失了。再把 <code>tl.sum</code> 换成 <code>tl.max</code>，看 <code>tt.reduce</code> 的 region 里变成了什么。</li>
+<li><strong>改进浏览器里的小程序。</strong> 它保守地不移动 <code>tt.load</code>。如果循环里有一个 load 的地址每一轮都一样（比如读一个标量参数），能不能把它提出去？什么情况下不能（提示：循环里有 store 吗）？</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>Triton 的每一级 IR 都是 MLIR。一行一个 <strong>op</strong>：<code>%结果 = 方言.op名 操作数 {属性} : 类型</code>，点号前面是方言。</li>
+<li><strong>值</strong>是 SSA 的：每个只定义一次。名字（<code>%offs_2</code>）来自 Python 变量名（<code>printNameLocAsPrefix</code>），读 IR 先找名字就能对回源码；没名字的中间值是 <code>%0</code>、<code>%1</code>。</li>
+<li><strong>类型</strong>：<code>tensor&lt;1024xf32&gt;</code> 是一个块，<code>!tt.ptr&lt;f32&gt;</code> 是指针；<strong>属性</strong>是编译期常量，函数参数上的 <code>tt.divisibility = 16</code> 就是第 4 章的特化。Python 里的隐式广播在 IR 里都是显式的 <code>tt.splat</code> / <code>tt.broadcast</code>。</li>
+<li><strong>region</strong> 是 op 里装着的代码。循环里被修改的变量变成 <code>scf.for</code> 的 <code>iter_args</code> 和 <code>scf.yield</code>；运行时的 <code>if</code> 变成带返回值的 <code>scf.if</code>，constexpr 的 <code>if</code> 在前端就消失了；<code>tt.reduce</code> 的 region 是合并函数，block 参数是两个待合并的值。</li>
+<li><strong>pass</strong> 读 IR、改写 IR。<code>MLIR_ENABLE_DUMP=&lt;kernel&gt;</code> 加 <code>MLIR_DUMP_PATH</code> 拿到每个 pass 之前的 IR（要先清缓存）；sm_86 上 73 个 pass，Max 1100 上 71 个。<code>triton-licm</code> 把 5 个循环不变量提到了循环外；<code>convert-triton-to-tritongpu</code> 给张量类型加上了 <code>#blocked</code> layout，这就是 TTIR 和 TTGIR 的区别。对比不同 pass 的 IR 时不要靠编号。</li>
+</ul>
+<p>下一章把整条编译流水线摊开：从 Python AST 到 TTIR、TTGIR、LLVM IR，再到 PTX / AMDGCN / SPIR-V，每一段由哪些 pass 组成、缓存在哪里，以及怎么拿到任何一级的 IR。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch17.html">← 第 17 章 FlashAttention 前向</a>
+  <a class="nav-next" href="ch19.html">第 19 章 编译管线全景 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

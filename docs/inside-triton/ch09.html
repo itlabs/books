@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 调试与测试</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li class="active"><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 9 章 调试与测试</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>GPU kernel 出错的方式很少是「报一个清楚的错」。更常见的是三种：结果有一点点不对（容差到底该放多宽）、结果完全不对但不报错（越界、漏写 mask）、结果是对的但慢了一个数量级（该用的硬件没用上）。这一章把 Triton 提供的调试手段过一遍，并且<strong>给每一种手段都标明它抓不到什么</strong>。</p>
+<p>读完你会拿到四样东西。一是 <code>TRITON_INTERPRET=1</code>：kernel 在 CPU 上用 NumPy 一个 program 一个 program 地执行，可以直接 <code>print</code>；以及它的两个盲区（实测）：不检查越界，而且 <code>other</code> 不给时填的是 0，和 GPU 上的「未定义」不一样。二是 GPU 上的 <code>tl.device_print</code>、<code>tl.device_assert</code>，以及它们什么时候才生效。三是一张常见错误的真实报错对照表，其中一条在 NVIDIA 上报错、在 Intel 上一声不吭。四是容差该怎么定，以及一类新的测试：不检查结果，而检查<strong>编译产物</strong>。</p>
+</div><p>先看一张全章的地图：按你看到的症状，该用哪一种手段，每一种手段又有什么盲区。</p>
+<div class="concept">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs><marker id="c91a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="20" y="20" width="150" height="52" rx="6" fill="#fdf1ec" stroke="#e06a3b"/><text x="95" y="42" text-anchor="middle" fill="#e06a3b" font-weight="bold">编译时报错</text><text x="95" y="60" text-anchor="middle" fill="#374151">CompilationError</text>
+    <rect x="20" y="88" width="150" height="52" rx="6" fill="#fdf1ec" stroke="#e06a3b"/><text x="95" y="110" text-anchor="middle" fill="#e06a3b" font-weight="bold">结果不对</text><text x="95" y="128" text-anchor="middle" fill="#374151">差得离谱、NaN</text>
+    <rect x="20" y="156" width="150" height="52" rx="6" fill="#fdf1ec" stroke="#e06a3b"/><text x="95" y="178" text-anchor="middle" fill="#e06a3b" font-weight="bold">结果差一点</text><text x="95" y="196" text-anchor="middle" fill="#374151">assert_close 不过</text>
+    <rect x="20" y="224" width="150" height="52" rx="6" fill="#fdf1ec" stroke="#e06a3b"/><text x="95" y="246" text-anchor="middle" fill="#e06a3b" font-weight="bold">结果对，但慢</text><text x="95" y="264" text-anchor="middle" fill="#374151">慢了一个数量级</text>
+  </g>
+  <g stroke="#6b7280" stroke-width="1.6">
+    <line x1="170" y1="46" x2="206" y2="46" marker-end="url(#c91a)"/><line x1="170" y1="114" x2="206" y2="114" marker-end="url(#c91a)"/>
+    <line x1="170" y1="182" x2="206" y2="182" marker-end="url(#c91a)"/><line x1="170" y1="250" x2="206" y2="250" marker-end="url(#c91a)"/>
+  </g>
+  <g font-size="12">
+    <rect x="212" y="20" width="250" height="52" rx="6" fill="#ebf4ff" stroke="#2b6cb0"/><text x="224" y="42" fill="#2b6cb0">看最后一行原因和 ^ 指的位置</text><text x="224" y="60" fill="#374151">本章的报错对照表</text>
+    <rect x="212" y="88" width="250" height="52" rx="6" fill="#ebf4ff" stroke="#2b6cb0"/><text x="224" y="110" fill="#2b6cb0">TRITON_INTERPRET=1 + print</text><text x="224" y="128" fill="#374151">GPU 上 device_print；TRITON_DEBUG=1</text>
+    <rect x="212" y="156" width="250" height="52" rx="6" fill="#ebf4ff" stroke="#2b6cb0"/><text x="224" y="178" fill="#2b6cb0">和 fp64 的结果比</text><text x="224" y="196" fill="#374151">容差 = 输出舍入 × 倍数，按 √K 放宽</text>
+    <rect x="212" y="224" width="250" height="52" rx="6" fill="#ebf4ff" stroke="#2b6cb0"/><text x="224" y="246" fill="#2b6cb0">看编译产物（warmup → asm）</text><text x="224" y="264" fill="#374151">mma / dpas、block_io、n_spills</text>
+  </g>
+  <g font-size="11.5" fill="#6b7280">
+    <text x="478" y="42">同一错误在不同后端</text><text x="478" y="58">可能一个报错、一个不报</text>
+    <text x="478" y="110">解释器不查越界；</text><text x="478" y="126">other 不给时填 0</text>
+    <text x="478" y="178">不要拿同 dtype 的</text><text x="478" y="194">PyTorch 结果当标准答案</text>
+    <text x="478" y="246">数值测试抓不到；</text><text x="478" y="262">写进 test_codegen.py</text>
+  </g>
+  <text x="478" y="14" font-size="11.5" fill="#6b7280" font-weight="bold">盲区 / 注意</text>
+</svg>
+<div class="caption">图 9-1　按症状选调试手段。橙色是你看到的症状，蓝色是本章对应的手段，右边灰色是每一种手段的盲区</div>
+</div><h2>第一道防线：TRITON_INTERPRET=1</h2>
+<p>设置环境变量 <code>TRITON_INTERPRET=1</code>，<code>@triton.jit</code> 的函数就不再编译成 GPU 代码，而是由一个 Python 写的解释器执行（<code>python/triton/runtime/interpreter.py</code>）：张量用 NumPy 数组表示，grid 里的 program 一个接一个地串行执行。它慢，也不模拟任何 GPU 的性能特征，但有两个巨大的好处：<strong>不需要 GPU</strong>（附录 A 第 8 节），而且 kernel 里可以<strong>直接用 Python 的 <code>print</code></strong>，甚至打断点。</p>
+<p>下面的 kernel 让 1 号 program 把它的下标打出来，分别用普通的 <code>print</code> 和 <code>tl.device_print</code>；然后同一个 kernel 再跑一次，这次故意不写 mask：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr, USE_MASK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    if pid == 1:
+        print("pid", pid, "offs", offs)            # 解释器里：普通的 Python print
+        tl.device_print("device_print offs", offs)
+    if USE_MASK:
+        mask = offs &lt; n
+        x = tl.load(x_ptr + offs, mask=mask); y = tl.load(y_ptr + offs, mask=mask)
+        tl.store(out_ptr + offs, x + y, mask=mask)
+    else:
+        x = tl.load(x_ptr + offs); y = tl.load(y_ptr + offs)
+        tl.store(out_ptr + offs, x + y)
+
+
+n = 10
+x = torch.arange(n, dtype=torch.float32); y = torch.ones(n); out = torch.empty(n)
+add_kernel[(triton.cdiv(n, 4),)](x, y, out, n, BLOCK=4, USE_MASK=True)
+print("mask:", out.tolist())
+try:
+    add_kernel[(triton.cdiv(n, 4),)](x, y, out, n, BLOCK=4, USE_MASK=False)
+    print("no mask:", out.tolist())
+except Exception as e:
+    print("no mask 报错：", type(e).__name__, str(e)[:300])</code></pre>
+</div><p>注意张量是 CPU 上的（<code>torch.arange(n)</code> 没有指定 <code>device</code>），在纯 CPU 的环境里运行（附录 A 第 8 节）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">TRITON_INTERPRET=1 python interp.py</code></pre>
+</div><p>运行结果（纯 CPU 环境，CPU 版 torch 2.15.0 + triton 3.9.0）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pid [1] offs [4 5 6 7]
+(1, 0, 0)  device_print offs:  [4 5 6 7]
+mask: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+pid [1] offs [4 5 6 7]
+(1, 0, 0)  device_print offs:  [4 5 6 7]
+no mask: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+munmap_chunk(): invalid pointer</code></pre>
+</div><p>前三行没什么意外：解释器里，<code>offs</code> 就是一个 NumPy 数组 <code>[4 5 6 7]</code>，<code>print</code> 能直接打出来；<code>tl.device_print</code> 也能用，前面多了 program 的编号 <code>(1, 0, 0)</code>；结果正确。</p>
+<p>第二次运行才是重点。最后一个 program（pid = 2）的 <code>offs</code> 是 <code>[8 9 10 11]</code>，不写 mask，就会越界读写 <code>x</code>、<code>y</code>、<code>out</code> 后面的两个元素。<strong>解释器没有报错</strong>，输出看起来完全正确，直到进程退出时，C 库发现堆内存被写坏了，才把进程杀掉（这一行报错的文字每次运行可能不同，我见过 <code>munmap_chunk(): invalid pointer</code> 和 <code>corrupted size vs. prev_size</code>）。原因在 <code>interpreter.py</code> 里：<code>create_masked_load</code> / <code>create_masked_store</code> 直接用原始指针读写内存，没有任何边界检查。</p>
+<p>所以解释器有两个必须记住的盲区：</p>
+<ul>
+<li><strong>它不检查越界。</strong> 越界的读写会真的读写主机内存。想靠解释器抓越界，抓不到；要靠下面讲的 <code>device_assert</code>，或者在测试里专门构造「长度不是 BLOCK 整数倍」的输入。</li>
+<li><strong><code>other</code> 不给时，它填 0。</strong> <code>create_masked_load</code> 里写的是 <code>if other is None: other = np.zeros_like(...)</code>。而 <code>tl.load</code> 的文档说，被 mask 掉的位置是<strong>未定义</strong>的（第 4 章）。所以一个对行求和、却忘了写 <code>other</code> 的 kernel，在解释器里恰好是对的，因为 0 正好是求和的单位元。我在 Max 1100 上也试了同样的 kernel：被 mask 掉的位置读出来碰巧也是 0，结果同样正确。但这是这个后端、这个版本的实现细节，文档没有承诺，换一个后端或者升级一次 Triton 就可能变成垃圾值。<strong>解释器跑通了、甚至这台 GPU 上跑通了，都不代表这个 kernel 是对的：该写的 <code>other</code> 一定要写。</strong></li>
+</ul>
+<h2>在 GPU 上看值：device_print 与 device_assert</h2>
+<p>在 GPU 上也能打印。<code>tl.device_print</code> 在运行时打印，<code>tl.static_print</code> 在编译时打印（第 5 章用它看过类型）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+import triton.language as tl
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+@triton.jit
+def print_kernel(x_ptr, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    x = tl.load(x_ptr + offs)
+    tl.static_print("编译时：x 的类型是", x.dtype, "，形状是", x.shape)   # 编译的时候打印一次
+    if tl.program_id(0) == 1:                                              # 只让 1 号 program 打印
+        tl.device_print("x", x)                                            # 运行的时候，在 GPU 上打印
+
+
+x = torch.arange(4, device=DEVICE, dtype=torch.float32)
+print_kernel[(2,)](x, BLOCK=4)
+getattr(torch, DEVICE.type).synchronize()       # device_print 的输出在 kernel 结束以后才会出现</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100，节选）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">pid (1, 0, 0) idx (0) x: 0.000000
+pid (1, 0, 0) idx (1) x: 1.000000
+pid (1, 0, 0) idx (2) x: 2.000000
+pid (1, 0, 0) idx (3) x: 3.000000
+pid (1, 0, 0) idx (0) x: 0.000000
+pid (1, 0, 0) idx (1) x: 1.000000
+pid (1, 0, 0) idx (2) x: 2.000000
+pid (1, 0, 0) idx (3) x: 3.000000
+……（中间省略，pid (1, 0, 0) 开头的一共 128 行）
+编译时：x 的类型是 fp32 ，形状是 ['4']</code></pre>
+</div><p>这里有两点要注意：</p>
+<ul>
+<li><strong><code>device_print</code> 是每个线程各打印自己手里的值</strong>，所以同一个元素可能被打印很多遍。上面这个 kernel 的 <code>BLOCK</code> 只有 4，一个 program 却有 128 个线程（默认 4 个 warp），每个元素由 32 个线程同时持有（第 3 章的重复分配），于是 4 个元素一共打印了 128 行。行的顺序也不保证。调试时，最好只让一个 program 打印（像上面那样加 <code>if tl.program_id(0) == 1</code>），并且只打印你关心的那几个值。</li>
+<li><code>static_print</code> 那一行出现在最后，是因为输出被重定向到文件时，两者走的是不同的缓冲区。在终端里直接运行，它会先出现。</li>
+</ul>
+<p><strong><code>tl.device_assert(cond, msg)</code></strong> 在条件不满足时报错。但它<strong>只在 debug 模式下才生效</strong>：不设 <code>TRITON_DEBUG=1</code>（或者 <code>@triton.jit(debug=True)</code>），编译器会直接把它删掉。我在 Max 1100 上试过：一个故意放进负数的输入，<code>tl.device_assert(x &gt; 0, &quot;x 必须是正数&quot;)</code> 在默认模式下一声不吭；设了 <code>TRITON_DEBUG=1</code> 以后，每个不满足条件的线程都打印一行，然后进程中止：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">/tmp/demo9/errors.py:16: unknown: global id: [129,0,0], local id: [1,0,0] Assertion `x 必须是正数` failed.
+/tmp/demo9/errors.py:16: unknown: global id: [133,0,0], local id: [5,0,0] Assertion `x 必须是正数` failed.
+……</code></pre>
+</div><p>第 5 章的 int32 溢出检查，用的就是同一套机制。debug 模式会让 kernel 慢很多，所以它是调试工具，不是线上的保护。另外还有 <strong><code>tl.static_assert</code></strong>，它在编译时检查，比如 <code>tl.static_assert(BLOCK % 16 == 0)</code>，不满足就编译失败，没有运行时开销。</p>
+<h2>常见错误和它们的报错</h2>
+<p>下面这些都是我在 Max 1100 上真实触发的报错（编译期的报错和 GPU 无关，各个后端一样）。Triton 编译期的报错有统一的格式：先是 <code>triton.compiler.errors.CompilationError: at 行:列:</code>，再是出错的那几行源码和一个指向出错位置的 <code>^</code>，最后一行是原因。</p>
+<table>
+<thead>
+<tr>
+<th>错误</th>
+<th>最后一行报错</th>
+<th>怎么修</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>tl.arange(0, n)</code> 的 <code>n</code> 不是 <code>tl.constexpr</code></td>
+<td><code>arange&#39;s arguments must be of type tl.constexpr</code></td>
+<td>把 <code>n</code> 声明成 <code>tl.constexpr</code>；或者 <code>BLOCK</code> 用常量，长度靠 mask</td>
+</tr>
+<tr>
+<td><code>tl.arange</code> 的长度不是 2 的幂（第 4 章）</td>
+<td><code>arange&#39;s range must be a power of 2</code></td>
+<td><code>triton.next_power_of_2(n)</code>，多出来的部分 mask 掉</td>
+</tr>
+<tr>
+<td>两个形状不同的块相加</td>
+<td><code>Cannot make_shape_compatible: incompatible dimensions at index 0: 16 and 32</code></td>
+<td>检查 <code>[:, None]</code> / <code>[None, :]</code> 的广播</td>
+</tr>
+<tr>
+<td>在 kernel 里调用 PyTorch（<code>torch.sigmoid(x)</code>）</td>
+<td><code>RuntimeError: Unsupported function referenced: &lt;built-in method sigmoid ...&gt;</code></td>
+<td>用 <code>tl.sigmoid</code>；kernel 里只能用 <code>tl.*</code> 和被 <code>@triton.jit</code> 修饰的函数</td>
+</tr>
+<tr>
+<td>fp16 的 8×8 <code>tl.dot</code>（K 只有 8）</td>
+<td>NVIDIA：<code>Input shapes should have M &gt;= 1, N &gt;= 1 and K &gt;= 16</code>；<strong>Intel：不报错</strong></td>
+<td>见下文</td>
+</tr>
+</tbody></table>
+<p>最后一行值得多说两句。<code>tl.dot</code> 的形状下限由各后端的 <code>min_dot_size</code> 决定（第 7 章）。NVIDIA 后端要求 16 位类型的 K 至少是 16，否则直接报错。Intel 后端除 int8 以外没有下限，尺寸不适合 DPAS 时，<strong>直接退回普通乘加</strong>。我在 Max 1100 上跑了这个 8×8 的 fp16 dot：结果是对的，但 TTGIR 里没有 <code>#ttig.dpas</code>。同一段代码，在一个后端上是编译错误，在另一个后端上是「对，但慢」。</p>
+<p>还有几类错误<strong>根本没有报错</strong>，只能靠测试去抓：</p>
+<ul>
+<li><strong>漏写 mask</strong>：越界读写。GPU 上可能读到垃圾、写坏别的张量，也可能刚好没事。解释器里也不报错（上一节）。</li>
+<li><strong><code>other</code> 写错或没写</strong>：归约结果错（第 5 章），解释器里还可能被掩盖。</li>
+<li><strong>int32 下标溢出</strong>：大张量上下标悄悄变成负数（第 5 章）。<code>TRITON_DEBUG=1</code> 能查出来。</li>
+<li><strong>该用的硬件没用上</strong>：结果完全正确，只是慢（本章最后一节）。</li>
+</ul>
+<h2>数值对比：容差怎么定</h2>
+<p>第 7 章说过，判断一个 GEMM 对不对，要以 fp64 的结果为准，容差按输出的 dtype 定。这里把道理说完整。</p>
+<p>一个 kernel 的输出误差，主要来自两处：</p>
+<ol>
+<li><strong>输出的舍入</strong>：结果存成 fp16，每个数就有最多 2⁻¹¹（约 4.9e-4）的相对误差；bf16 是 2⁻⁸（约 3.9e-3）；fp32 是 2⁻²⁴（约 6e-8）。这一项和算法无关，是一个<strong>下限</strong>。</li>
+<li><strong>累加的舍入</strong>：一次归约（求和、点积）有 K 项，每加一次就舍入一次。误差随 K 增长，增长多快取决于累加器的精度。</li>
+</ol>
+<p>第二项可以模拟。下面的程序用 Python 标准库的 <code>struct</code> 模拟 fp16 和 fp32 的舍入（<code>struct</code> 的 <code>&#39;e&#39;</code> 格式就是 IEEE 半精度），对长度为 K 的点积分别用 fp32 和 fp16 的累加器计算，和精确结果比较。直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20%E7%82%B9%E7%A7%AF%E7%9A%84%E8%88%8D%E5%85%A5%E8%AF%AF%E5%B7%AE%E6%80%8E%E4%B9%88%E9%9A%8F%E9%95%BF%E5%BA%A6%20K%20%E5%A2%9E%E9%95%BF%EF%BC%9A%E7%94%A8%20struct%20%E6%A8%A1%E6%8B%9F%20fp16%20%2F%20fp32%20%E7%9A%84%E8%88%8D%E5%85%A5%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0Aimport%20math%0Aimport%20random%0Aimport%20struct%0A%0A%0Adef%20to16(x)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%88%8D%E5%85%A5%E5%88%B0%20fp16%EF%BC%88struct%20%E7%9A%84%20'e'%20%E6%A0%BC%E5%BC%8F%E5%B0%B1%E6%98%AF%20IEEE%20%E5%8D%8A%E7%B2%BE%E5%BA%A6%EF%BC%89%0A%20%20%20%20return%20struct.unpack(%22e%22%2C%20struct.pack(%22e%22%2C%20x))%5B0%5D%0A%0A%0Adef%20to32(x)%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E8%88%8D%E5%85%A5%E5%88%B0%20fp32%0A%20%20%20%20return%20struct.unpack(%22f%22%2C%20struct.pack(%22f%22%2C%20x))%5B0%5D%0A%0A%0Adef%20dot(a%2C%20b%2C%20rnd)%3A%0A%20%20%20%20acc%20%3D%200.0%0A%20%20%20%20for%20x%2C%20y%20in%20zip(a%2C%20b)%3A%0A%20%20%20%20%20%20%20%20acc%20%3D%20rnd(acc%20%2B%20rnd(x%20*%20y))%20%20%20%23%20%E6%AF%8F%E4%B9%98%E4%B8%80%E6%AC%A1%E3%80%81%E5%8A%A0%E4%B8%80%E6%AC%A1%E9%83%BD%E8%88%8D%E5%85%A5%E5%88%B0%E7%B4%AF%E5%8A%A0%E5%99%A8%E7%9A%84%E7%B2%BE%E5%BA%A6%0A%20%20%20%20return%20acc%0A%0A%0Arandom.seed(0)%0ATRIALS%20%3D%2020%0Aprint(%22%20%20%20%20K%20%20%20%20fp32%20%E7%B4%AF%E5%8A%A0%E5%99%A8%20%20%20fp16%20%E7%B4%AF%E5%8A%A0%E5%99%A8%20%20%20%E2%88%9AK%C2%B72%E2%81%BB%C2%B2%E2%81%B4%20%20%20%20%20%20%E2%88%9AK%C2%B72%E2%81%BB%C2%B9%C2%B9%20%20%20%20%20%EF%BC%88%E7%9B%B8%E5%AF%B9%E8%AF%AF%E5%B7%AE%EF%BC%8C%E5%8F%96%2020%20%E6%AC%A1%E7%9A%84%E5%B9%B3%E5%9D%87%EF%BC%89%22)%0Afor%20K%20in%20(64%2C%20256%2C%201024%2C%204096)%3A%0A%20%20%20%20e32%20%3D%20e16%20%3D%200.0%0A%20%20%20%20for%20_%20in%20range(TRIALS)%3A%0A%20%20%20%20%20%20%20%20a%20%3D%20%5Bto16(random.uniform(-1%2C%201))%20for%20_%20in%20range(K)%5D%20%20%20%20%20%20%23%20%E8%BE%93%E5%85%A5%E6%98%AF%20fp16%0A%20%20%20%20%20%20%20%20b%20%3D%20%5Bto16(random.uniform(-1%2C%201))%20for%20_%20in%20range(K)%5D%0A%20%20%20%20%20%20%20%20exact%20%3D%20math.fsum(x%20*%20y%20for%20x%2C%20y%20in%20zip(a%2C%20b))%0A%20%20%20%20%20%20%20%20scale%20%3D%20math.sqrt(math.fsum(x%20*%20x%20*%20y%20*%20y%20for%20x%2C%20y%20in%20zip(a%2C%20b)))%20%20%20%23%20%E7%BB%93%E6%9E%9C%E7%9A%84%E5%85%B8%E5%9E%8B%E5%A4%A7%E5%B0%8F%0A%20%20%20%20%20%20%20%20e32%20%2B%3D%20abs(dot(a%2C%20b%2C%20to32)%20-%20exact)%20%2F%20scale%0A%20%20%20%20%20%20%20%20e16%20%2B%3D%20abs(dot(a%2C%20b%2C%20to16)%20-%20exact)%20%2F%20scale%0A%20%20%20%20print(f%22%7BK%3A5%7D%20%20%20%20%7Be32%20%2F%20TRIALS%3A10.2e%7D%20%20%20%20%7Be16%20%2F%20TRIALS%3A10.2e%7D%20%20%20%20%22%0A%20%20%20%20%20%20%20%20%20%20f%22%7Bmath.sqrt(K)%20*%202**-24%3A10.2e%7D%20%20%20%7Bmath.sqrt(K)%20*%202**-11%3A10.2e%7D%22)"># 点积的舍入误差怎么随长度 K 增长：用 struct 模拟 fp16 / fp32 的舍入。只用标准库。
+import math
+import random
+import struct
+
+
+def to16(x):                      # 舍入到 fp16（struct 的 'e' 格式就是 IEEE 半精度）
+    return struct.unpack("e", struct.pack("e", x))[0]
+
+
+def to32(x):                      # 舍入到 fp32
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def dot(a, b, rnd):
+    acc = 0.0
+    for x, y in zip(a, b):
+        acc = rnd(acc + rnd(x * y))   # 每乘一次、加一次都舍入到累加器的精度
+    return acc
+
+
+random.seed(0)
+TRIALS = 20
+print("    K    fp32 累加器   fp16 累加器   √K·2⁻²⁴      √K·2⁻¹¹     （相对误差，取 20 次的平均）")
+for K in (64, 256, 1024, 4096):
+    e32 = e16 = 0.0
+    for _ in range(TRIALS):
+        a = [to16(random.uniform(-1, 1)) for _ in range(K)]      # 输入是 fp16
+        b = [to16(random.uniform(-1, 1)) for _ in range(K)]
+        exact = math.fsum(x * y for x, y in zip(a, b))
+        scale = math.sqrt(math.fsum(x * x * y * y for x, y in zip(a, b)))   # 结果的典型大小
+        e32 += abs(dot(a, b, to32) - exact) / scale
+        e16 += abs(dot(a, b, to16) - exact) / scale
+    print(f"{K:5}    {e32 / TRIALS:10.2e}    {e16 / TRIALS:10.2e}    "
+          f"{math.sqrt(K) * 2**-24:10.2e}   {math.sqrt(K) * 2**-11:10.2e}")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">    K    fp32 累加器   fp16 累加器   √K·2⁻²⁴      √K·2⁻¹¹     （相对误差，取 20 次的平均）
+   64      1.15e-07      1.04e-03      4.77e-07     3.91e-03
+  256      1.92e-07      2.07e-03      9.54e-07     7.81e-03
+ 1024      4.84e-07      5.76e-03      1.91e-06     1.56e-02
+ 4096      9.91e-07      8.44e-03      3.81e-06     3.12e-02</code></pre>
+</div><p>两件事：</p>
+<ul>
+<li><strong>fp16 累加器的误差大约按 √K 增长</strong>（K 涨 64 倍，误差涨 8 倍左右），而且比 fp32 累加器大四个数量级。这正是第 7 章在 GPU 上看到的现象。</li>
+<li><strong><code>√K × 单位舍入误差</code> 是一个实用的估计</strong>：实测的误差都落在这一列下面。舍入误差有正有负，大致相互抵消，所以按 √K 而不是 K 增长。但这是统计意义上的：遇到所有项都同号、或者数值范围很大的输入，误差会更接近线性增长。</li>
+</ul>
+<p>据此，minillm 的测试遵循三条规则：</p>
+<ul>
+<li><strong>参考结果用 fp64 算</strong>（或者至少用比被测 kernel 高一级的精度），不要拿 PyTorch 的同 dtype 结果当标准答案；</li>
+<li><strong>容差 = 输出 dtype 的舍入误差 × 一个小的倍数</strong>，再按累加长度适当放宽。矩阵乘的测试用相对于 |C| 最大值的误差：fp16 输出小于 2e-3，bf16 小于 1.6e-2（<code>tests/test_matmul.py</code>）；</li>
+<li><strong>逐点的、不涉及累加的 kernel，要求逐位相同</strong>（<code>add</code> 的测试就是 <code>rtol=0, atol=0</code>）。</li>
+</ul>
+<p><code>torch.testing.assert_close</code> 的默认容差也是按 dtype 定的，写在 PyTorch 源码 <code>torch/testing/_comparison.py</code> 的 <code>_DTYPE_PRECISIONS</code> 里：</p>
+<table>
+<thead>
+<tr>
+<th>dtype</th>
+<th align="right">默认 <code>rtol</code></th>
+<th align="right">默认 <code>atol</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>float16</td>
+<td align="right">1e-3</td>
+<td align="right">1e-5</td>
+</tr>
+<tr>
+<td>bfloat16</td>
+<td align="right">1.6e-2</td>
+<td align="right">1e-5</td>
+</tr>
+<tr>
+<td>float32</td>
+<td align="right">1.3e-6</td>
+<td align="right">1e-5</td>
+</tr>
+</tbody></table>
+<p>注意 fp16 的默认 <code>rtol</code> 是 1e-3，只比输出舍入的 4.9e-4 宽一倍，没有给累加误差留余量。所以一个长 K 的 fp16 GEMM 和 PyTorch 比，用默认容差常常不通过，这并不说明你写错了（第 7 章）。逐点的 kernel 和短的归约，用默认容差正合适。</p>
+<h2>结果对，不代表编译对</h2>
+<p>最后一类问题最隐蔽：<strong>结果完全正确，但 kernel 没有用上该用的硬件</strong>，慢了一个数量级。本书已经见过三次：</p>
+<ul>
+<li>附录 A：Max 1100 上 PATH 里没有 <code>ocloc</code>、又没有 OpenCL 平台时，设备扩展查询返回「不支持」，<code>tl.dot</code> 的结果对（体检脚本测得误差为 0），TTGIR 里却没有 <code>#ttig.dpas</code>；</li>
+<li>第 7 章：<code>input_precision=&quot;tf32x3&quot;</code> 在 Intel 后端上退回了普通乘加，慢 8 倍；</li>
+<li>本章：Intel 上 K 太小的 <code>tl.dot</code> 退回普通乘加，不报错。</li>
+</ul>
+<p>数值测试抓不到这些。要抓，就得检查<strong>编译产物</strong>。<code>JITFunction.warmup(...)</code> 只编译、不启动，返回编译好的 kernel，它的 <code>asm</code> 字典里有每一级的 IR（Triton 官方教程 02 也用它来看编译结果）。minillm 新增的 <code>tests/test_codegen.py</code> 就是这么写的：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">MATRIX_LAYOUT = re.compile(r"#ttg\.nvidia_mma|#ttig\.dpas|#ttg\.amd_mfma")
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_matmul_uses_matrix_units(dtype):
+    k = mm._matmul_kernel.warmup(dtype, dtype, dtype, 256, 256, 256, 256, 1, 256, 1, 256, 1,
+                                 BLOCK_M=128, BLOCK_N=128, BLOCK_K=32, ACC_DTYPE=tl.float32, num_warps=8,
+                                 grid=(1,))
+    assert MATRIX_LAYOUT.search(k.asm["ttgir"]), "tl.dot 没有用上矩阵单元（TTGIR 里没有 mma / dpas layout）"</code></pre>
+</div><p><code>warmup</code> 的张量参数可以直接传 dtype，不必真的分配张量。同一个文件里还有：Intel GPU 上，descriptor 版本的 GEMM 要有 <code>ttig.block_io</code> 和 <code>LSC2DBlockRead</code>（第 8 章）；softmax 和 rmsnorm 在 minillm 的 <code>num_warps</code> 规则下不能有寄存器溢出（第 6 章，<code>n_spills</code> 要在 kernel 真正加载以后才有，所以那几项是真的启动一次）。</p>
+<p>这类测试管不管用？我在 Max 1100 上故意把环境弄坏：PATH 里去掉 <code>ocloc</code>，也不注册 OpenCL ICD（附录 A 第 3.3 节的两个坑同时出现）。结果 <code>test_codegen.py</code> 里两个检查矩阵单元的测试、一个检查二维块读取的测试都失败了：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">FAILED tests/test_codegen.py::test_matmul_uses_matrix_units[dtype0] - Asserti...
+FAILED tests/test_codegen.py::test_matmul_uses_matrix_units[dtype1] - Asserti...
+FAILED tests/test_codegen.py::test_matmul_desc_uses_2d_block_io - AssertionEr...
+3 failed, 5 passed in 7.76s</code></pre>
+</div><p>正常的环境里，它们全部通过。</p>
+<h2>minillm 进度</h2>
+<p>新增 <code>tests/test_codegen.py</code>（8 个测试）。现在完整跑一遍：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-minillm.sh -q</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">........................................................................ [ 62%]
+...........................................                              [100%]
+115 passed in 3.96s</code></pre>
+</div><h2>动手</h2>
+<ol>
+<li><strong>看一看 <code>other</code> 不写时读出来的是什么。</strong> 把第 5 章的 <code>row_max_kernel</code> 改成不传 <code>other</code>（只写 <code>mask=</code>），分别在 <code>TRITON_INTERPRET=1</code> 下和你的 GPU 上运行，输入用全是负数的行。两边的结果一样吗？用解释器源码里 <code>create_masked_load</code> 的那一行解释解释器的结果；GPU 上的结果，只能说明你这个后端的实现碰巧是什么。</li>
+<li><strong>让 <code>device_print</code> 只打印一次。</strong> 把本章的 <code>print_kernel</code> 改成 <code>num_warps=1</code>、<code>BLOCK=32</code>，数一数打印了几行。再改成 <code>BLOCK=4</code>、<code>num_warps=1</code>，又是几行？用第 3 章的 layout 模型解释。</li>
+<li><strong>在浏览器的模拟器里</strong>，把输入从 <code>random.uniform(-1, 1)</code> 改成 <code>random.uniform(0, 1)</code>（所有乘积都是正数）。fp16 累加器的误差还是按 √K 增长吗？和 <code>√K·2⁻¹¹</code> 那一列比一比。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>TRITON_INTERPRET=1</code> 让 kernel 在 CPU 上用 NumPy 逐个 program 地执行，不需要 GPU，可以直接 <code>print</code>。它有两个盲区：<strong>不检查越界</strong>（越界会真的写坏主机内存，实测进程在退出时才崩），以及 <strong><code>other</code> 不给时填 0</strong>（GPU 上是未定义），可能掩盖归约的 bug。</li>
+<li>GPU 上，<code>tl.device_print</code> 是每个线程各打印自己持有的值，元素重复分配时会打印很多遍；<code>tl.static_print</code> 在编译时打印。<code>tl.device_assert</code> 只在 <code>TRITON_DEBUG=1</code> 或 <code>debug=True</code> 时生效；<code>tl.static_assert</code> 在编译时检查。</li>
+<li>编译期报错有统一的格式（<code>CompilationError: at 行:列:</code>，加源码和 <code>^</code>）。同一个错误在不同后端上可能表现不同：fp16 的 8×8 <code>tl.dot</code> 在 NVIDIA 上报错，在 Intel 上退回普通乘加、不报错。</li>
+<li>容差：以 fp64 为准；下限是输出 dtype 的舍入误差（fp16 约 4.9e-4，bf16 约 3.9e-3）；累加误差大致按 √K 增长；逐点的 kernel 要求逐位相同。<code>assert_close</code> 对 fp16 的默认 <code>rtol</code> 是 1e-3，长 K 的 GEMM 常常不够。</li>
+<li>结果对，不代表编译对。用 <code>JITFunction.warmup</code> 拿到编译产物，检查 TTGIR / LLVM IR 里有没有矩阵单元的 layout、二维块读取，再检查 <code>n_spills</code>。minillm 的 <code>tests/test_codegen.py</code> 在故意弄坏的环境里能抓到附录 A 的那个坑。</li>
+</ul>
+<p><strong>minillm 进度</strong>：新增 <code>tests/test_codegen.py</code>；测试共 115 个。</p>
+<p>下一章，我们把 minillm 的 kernel 接进 PyTorch：用 <code>torch.library</code> 注册成 custom op，补上反向传播，让 <code>torch.compile</code> 能把它们当成普通算子来编译，并顺便看一眼 Inductor 生成的 Triton 代码和我们手写的有什么不同。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch08.html">← 第 8 章 访存的三种写法</a>
+  <a class="nav-next" href="ch10.html">第 10 章 接入 PyTorch →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

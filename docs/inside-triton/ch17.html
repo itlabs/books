@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 章 FlashAttention 前向</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li class="active"><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 17 章 FlashAttention 前向</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>第 1 章留了一个悬念：attention 是 <code>torch.compile</code> 融合不了的，因为要<strong>换一个算法</strong>才能把两次矩阵乘和中间的 softmax 放进一个 kernel。第 6 章准备好了那个算法的核心，online softmax。这一章把它和第三部分讲过的手段合在一起：tensor descriptor、tile 的选择、寄存器预算、看 IR，写出 minillm 的 FlashAttention 前向，并和 PyTorch 的 <code>scaled_dot_product_attention</code>（SDPA）正面比较。</p>
+<p>读完你会拿到四样东西。一是算法本身，用一个只用标准库的模型验证它和教科书公式完全一致，并算出一个意外的结论：<strong>FlashAttention 的算术强度恰好等于 <code>BLOCK_M</code></strong>。二是一个 60 行的 kernel，在 Max 1100 上因果 attention 和 SDPA 一样快，非因果达到 SDPA 的 88% 左右。三是两个从 IR 里挖出来的发现：<code>tl.trans(k)</code> 根本没有产生转置，K 被直接按列读进了矩阵单元；Intel 后端默认会把 Q 的读取挪进循环里重读，在因果 attention 上这让 kernel 慢了 19%。四是一个精度陷阱：把缩放因子提前乘到 Q 上看起来更快，但在注意力集中时，误差变成了原来的 8 倍。</p>
+</div><h2>教科书写法的问题</h2>
+<p>attention 的公式是 O = softmax(Q·Kᵀ·scale)·V，scale = 1/√D。Q、K、V、O 的形状都是 (Z, H, N, D)：Z 个样本，每个 H 个头，每个头 N 个 token，每个 token 一个 D 维向量。照着公式写成 PyTorch：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">s = q @ k.transpose(-1, -2) * q.shape[-1] ** -0.5     # (Z, H, N, N)：注意力矩阵
+o = torch.softmax(s, dim=-1) @ v</code></pre>
+</div><p>问题在中间那个 (Z, H, N, N) 的矩阵。N = 4096、32 个头、4 个样本时，它有 4 × 32 × 4096² 个元素，bf16 就是 4 GiB，softmax 的输出还要再占 4 GiB。更糟的是，它要在显存里走好几趟：矩阵乘写出去，softmax 读进来再写出去，第二次矩阵乘再读进来。第 1 章「数趟数」的方法在这里同样适用。</p>
+<p>FlashAttention 的思路是：<strong>注意力矩阵一块一块地算，算完一块就用掉，永远不写回显存</strong>。一个 program 负责 Q 的 <code>BLOCK_M</code> 行，沿着 N 方向每次读 K、V 的 <code>BLOCK_N</code> 行，算出 <code>BLOCK_M × BLOCK_N</code> 的一小块分数，立刻做 softmax、乘上 V、累加进输出。</p>
+<div class="concept">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <g font-size="12.5" font-weight="bold" fill="#374151"><text x="30" y="24">一个 program 的工作（非因果）</text><text x="420" y="24">因果：上三角整块跳过</text></g>
+  <g font-size="11.5">
+    <rect x="30" y="80" width="40" height="160" fill="#f3f4f6" stroke="#6b7280"/><text x="50" y="256" text-anchor="middle" fill="#6b7280">Q</text>
+    <rect x="30" y="120" width="40" height="30" fill="#2b6cb0"/><text x="76" y="140" fill="#2b6cb0">BLOCK_M 行</text>
+    <rect x="160" y="40" width="160" height="30" fill="#f3f4f6" stroke="#6b7280"/><text x="330" y="60" fill="#6b7280">Kᵀ</text>
+    <rect x="200" y="40" width="30" height="30" fill="#e06a3b"/><text x="215" y="34" text-anchor="middle" fill="#e06a3b">BLOCK_N</text>
+    <rect x="160" y="80" width="160" height="160" fill="#ffffff" stroke="#d1d5db" stroke-dasharray="4 3"/>
+    <rect x="160" y="120" width="160" height="30" fill="#ebf4ff" stroke="#2b6cb0"/>
+    <rect x="200" y="120" width="30" height="30" fill="#fdf1ec" stroke="#e06a3b" stroke-width="2"/>
+    <text x="240" y="176" text-anchor="middle" fill="#374151">分数块 S = Q·Kᵀ：只在寄存器里</text>
+    <text x="240" y="194" text-anchor="middle" fill="#374151">整个 N × N 从来不写回显存</text>
+    <path d="M 175 160 L 305 160" stroke="#2b6cb0" stroke-width="2" marker-end="url(#a171)"/>
+    <text x="240" y="216" text-anchor="middle" fill="#2b6cb0">沿 N 一块一块往右扫（online softmax）</text>
+  </g>
+  <g font-size="11.5">
+    <rect x="440" y="60" width="200" height="200" fill="#ffffff" stroke="#6b7280"/>
+    <g fill="#ebf4ff" stroke="#2b6cb0">
+      <rect x="440" y="60" width="50" height="50"/>
+      <rect x="440" y="110" width="50" height="50"/><rect x="490" y="110" width="50" height="50"/>
+      <rect x="440" y="160" width="50" height="50"/><rect x="490" y="160" width="50" height="50"/><rect x="540" y="160" width="50" height="50"/>
+      <rect x="440" y="210" width="50" height="50"/><rect x="490" y="210" width="50" height="50"/><rect x="540" y="210" width="50" height="50"/><rect x="590" y="210" width="50" height="50"/>
+    </g>
+    <g fill="#fdf1ec" stroke="#e06a3b"><path d="M 440 60 L 490 110 L 440 110 Z"/><path d="M 490 110 L 540 160 L 490 160 Z"/><path d="M 540 160 L 590 210 L 540 210 Z"/><path d="M 590 210 L 640 260 L 590 260 Z"/></g>
+    <text x="600" y="100" text-anchor="middle" fill="#9ca3af">不算</text>
+    <text x="540" y="282" text-anchor="middle" fill="#374151">对角线上的块要逐元素 mask，下面的块全算</text>
+  </g>
+  <defs><marker id="a171" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2b6cb0"/></marker></defs>
+</svg>
+<div class="caption">图 17-1　FlashAttention 的分块。左：一个 program 拿着 Q 的一块（蓝），依次读 K、V 的每一块（橙），算出一小块分数，用完就丢。右：因果 attention 里第 i 行只看前 i 列，对角线以上的块整块跳过，计算量减半</div>
+</div><h2>把 online softmax 用到 attention 上</h2>
+<p>第 6 章的 online softmax 一边扫一边维护两个量：到目前为止的最大值 m，以及以 m 为基准的指数和 l。每来一块新数据，如果最大值变大了，之前的 l 就要乘上修正因子 α = exp(m − m_new)。</p>
+<p>attention 要多维护一样东西：输出的累加器 acc = Σ exp(s_j − m)·v_j。它也是「以 m 为基准」算出来的，所以<strong>最大值一变，acc 也要乘上同一个 α</strong>。扫完整行以后，acc / l 就是这一行的输出。下面用纯 Python 把两种算法都写一遍，比一比结果；再数一数两者各要从显存搬多少字节。只用标准库，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20FlashAttention%20%E7%9A%84%E4%B8%A4%E4%BB%B6%E4%BA%8B%EF%BC%8C%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%EF%BC%9A%0A%23%20%20%20%E2%91%A0%20%E5%88%86%E5%9D%97%20%2B%20online%20softmax%20%E7%AE%97%E5%87%BA%E6%9D%A5%E7%9A%84%EF%BC%8C%E5%92%8C%E3%80%8C%E5%85%88%E7%AE%97%E6%95%B4%E4%B8%AA%E6%B3%A8%E6%84%8F%E5%8A%9B%E7%9F%A9%E9%98%B5%E3%80%8D%E5%AE%8C%E5%85%A8%E4%B8%80%E6%A0%B7%EF%BC%9B%0A%23%20%20%20%E2%91%A1%20%E5%AE%83%E5%B0%91%E6%90%AC%E4%BA%86%E5%A4%9A%E5%B0%91%E5%AD%97%E8%8A%82%E3%80%82%0Aimport%20math%0Aimport%20random%0A%0Arandom.seed(0)%0AN%2C%20D%2C%20BLOCK_M%2C%20BLOCK_N%20%3D%2010%2C%204%2C%204%2C%203%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%95%85%E6%84%8F%E5%8F%96%E4%B8%8D%E6%95%B4%E9%99%A4%E7%9A%84%E5%A4%A7%E5%B0%8F%EF%BC%9A%E6%9C%80%E5%90%8E%E4%B8%80%E5%9D%97%E6%98%AF%E4%B8%8D%E5%AE%8C%E6%95%B4%E7%9A%84%0AQ%2C%20K%2C%20V%20%3D%20(%5B%5Brandom.gauss(0%2C%201)%20for%20_%20in%20range(D)%5D%20for%20_%20in%20range(N)%5D%20for%20_%20in%20range(3))%0Ascale%20%3D%201%20%2F%20math.sqrt(D)%0Adot%20%3D%20lambda%20a%2C%20b%3A%20sum(x%20*%20y%20for%20x%2C%20y%20in%20zip(a%2C%20b))%0A%0A%23%20%E7%9B%B4%E6%8E%A5%E7%AE%97%EF%BC%9A%E6%AF%8F%E4%B8%80%E8%A1%8C%E5%85%88%E7%AE%97%E5%87%BA%E6%95%B4%E8%A1%8C%E7%9A%84%20S%20%3D%20q%C2%B7K%E1%B5%80%EF%BC%8Csoftmax%EF%BC%8C%E5%86%8D%E4%B9%98%20V%0Aref%20%3D%20%5B%5D%0Afor%20q%20in%20Q%3A%0A%20%20%20%20s%20%3D%20%5Bdot(q%2C%20k)%20*%20scale%20for%20k%20in%20K%5D%0A%20%20%20%20e%20%3D%20%5Bmath.exp(x%20-%20max(s))%20for%20x%20in%20s%5D%0A%20%20%20%20ref.append(%5Bsum(e%5Bj%5D%20*%20V%5Bj%5D%5Bd%5D%20for%20j%20in%20range(N))%20%2F%20sum(e)%20for%20d%20in%20range(D)%5D)%0A%0A%23%20FlashAttention%EF%BC%9AQ%20%E6%8C%89%20BLOCK_M%20%E8%A1%8C%E4%B8%80%E5%9D%97%EF%BC%8CK%E3%80%81V%20%E6%8C%89%20BLOCK_N%20%E8%A1%8C%E4%B8%80%E5%9D%97%EF%BC%9B%E6%AF%8F%E4%B8%80%E8%A1%8C%E5%8F%AA%E8%AE%B0%20m%E3%80%81l%E3%80%81acc%20%E4%B8%89%E6%A0%B7%E4%B8%9C%E8%A5%BF%0Aout%20%3D%20%5B%5D%0Afor%20i0%20in%20range(0%2C%20N%2C%20BLOCK_M)%3A%0A%20%20%20%20for%20q%20in%20Q%5Bi0%3Ai0%20%2B%20BLOCK_M%5D%3A%0A%20%20%20%20%20%20%20%20m%2C%20l%2C%20acc%20%3D%20-math.inf%2C%200.0%2C%20%5B0.0%5D%20*%20D%0A%20%20%20%20%20%20%20%20for%20j0%20in%20range(0%2C%20N%2C%20BLOCK_N)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20s%20%3D%20%5Bdot(q%2C%20k)%20*%20scale%20for%20k%20in%20K%5Bj0%3Aj0%20%2B%20BLOCK_N%5D%5D%20%20%20%20%20%20%20%23%20%E8%BF%99%E4%B8%80%E5%9D%97%E7%9A%84%20BLOCK_N%20%E4%B8%AA%E5%88%86%E6%95%B0%0A%20%20%20%20%20%20%20%20%20%20%20%20m_new%20%3D%20max(m%2C%20max(s))%0A%20%20%20%20%20%20%20%20%20%20%20%20alpha%20%3D%20math.exp(m%20-%20m_new)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%97%A7%E7%9A%84%E7%B4%AF%E5%8A%A0%E6%8C%89%E6%96%B0%E7%9A%84%E6%9C%80%E5%A4%A7%E5%80%BC%E7%BC%A9%E5%B0%8F%0A%20%20%20%20%20%20%20%20%20%20%20%20p%20%3D%20%5Bmath.exp(x%20-%20m_new)%20for%20x%20in%20s%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20l%20%3D%20l%20*%20alpha%20%2B%20sum(p)%0A%20%20%20%20%20%20%20%20%20%20%20%20acc%20%3D%20%5Ba%20*%20alpha%20%2B%20sum(pj%20*%20v%5Bd%5D%20for%20pj%2C%20v%20in%20zip(p%2C%20V%5Bj0%3Aj0%20%2B%20BLOCK_N%5D))%20for%20d%2C%20a%20in%20enumerate(acc)%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20m%20%3D%20m_new%0A%20%20%20%20%20%20%20%20out.append(%5Ba%20%2F%20l%20for%20a%20in%20acc%5D)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%9C%80%E5%90%8E%E6%89%8D%E9%99%A4%E4%BB%A5%20l%0Aprint(f%22%E2%91%A0%20%E4%B8%A4%E7%A7%8D%E7%AE%97%E6%B3%95%E7%9A%84%E6%9C%80%E5%A4%A7%E5%B7%AE%E5%88%AB%EF%BC%9A%7Bmax(abs(a%20-%20b)%20for%20r%2C%20o%20in%20zip(ref%2C%20out)%20for%20a%2C%20b%20in%20zip(r%2C%20o))%3A.1e%7D%22)%0A%0A%23%20%E2%91%A1%20%E4%B8%80%E4%B8%AA%E5%A4%B4%E8%A6%81%E4%BB%8E%E6%98%BE%E5%AD%98%E6%90%AC%E5%A4%9A%E5%B0%91%E5%AD%97%E8%8A%82%EF%BC%88bf16%EF%BC%8C%E6%AF%8F%E4%B8%AA%E5%85%83%E7%B4%A0%202%20%E5%AD%97%E8%8A%82%EF%BC%89%E3%80%82%0A%23%20%20%20%20naive%EF%BC%9AS%20%3D%20Q%C2%B7K%E1%B5%80%20%E5%86%99%E5%87%BA%E5%8E%BB%EF%BC%8Csoftmax%20%E8%AF%BB%20S%20%E5%86%99%20P%EF%BC%8CP%C2%B7V%20%E5%86%8D%E8%AF%BB%20P%EF%BC%9BQ%E3%80%81K%E3%80%81V%20%E5%90%84%E8%AF%BB%E4%B8%80%E9%81%8D%EF%BC%8CO%20%E5%86%99%E4%B8%80%E9%81%8D%0A%23%20%20%20%20flash%EF%BC%9AQ%20%E8%AF%BB%E4%B8%80%E9%81%8D%E3%80%81O%20%E5%86%99%E4%B8%80%E9%81%8D%EF%BC%9B%E6%AF%8F%E4%B8%80%E5%9D%97%20Q%20%E9%83%BD%E8%A6%81%E6%8A%8A%E6%95%B4%E4%B8%AA%20K%E3%80%81V%20%E8%AF%BB%E4%B8%80%E9%81%8D%EF%BC%88%E4%B8%8D%E7%AE%97%20L2%20%E5%91%BD%E4%B8%AD%EF%BC%89%0Aprint(%22%E2%91%A1%20%E4%B8%80%E4%B8%AA%E5%A4%B4%E3%80%81head_dim%3D128%EF%BC%9A%22)%0Aprint(%22%20%20%20%20%20%20N%20%20%20%20naive%20%E6%90%AC%E7%9A%84%E5%AD%97%E8%8A%82%20%20%20%E5%BC%BA%E5%BA%A6%20%20%20%20%20flash%EF%BC%88BLOCK_M%3D64%20%2F%20128%20%2F%20256%EF%BC%89%E6%90%AC%E7%9A%84%E5%AD%97%E8%8A%82%E4%B8%8E%E5%BC%BA%E5%BA%A6%22)%0AD%20%3D%20128%0Afor%20n%20in%20(1024%2C%204096%2C%2016384)%3A%0A%20%20%20%20flops%20%3D%204%20*%20n%20*%20n%20*%20D%0A%20%20%20%20naive%20%3D%204%20*%20n%20*%20n%20*%202%20%2B%204%20*%20n%20*%20D%20*%202%0A%20%20%20%20cells%20%3D%20%5B%5D%0A%20%20%20%20for%20bm%20in%20(64%2C%20128%2C%20256)%3A%0A%20%20%20%20%20%20%20%20flash%20%3D%202%20*%20n%20*%20D%20*%202%20%2B%202%20*%20math.ceil(n%20%2F%20bm)%20*%20n%20*%20D%20*%202%0A%20%20%20%20%20%20%20%20cells.append(f%22%7Bflash%20%2F%202**20%3A6.0f%7D%20MiB%20%7Bflops%20%2F%20flash%3A4.0f%7D%22)%0A%20%20%20%20print(f%22%20%20%7Bn%3A6%7D%20%7Bnaive%20%2F%202**20%3A10.0f%7D%20MiB%20%7Bflops%20%2F%20naive%3A6.0f%7D%20%20%20%20%20%22%20%2B%20%22%20%20%20%22.join(cells))"># FlashAttention 的两件事，只用标准库：
+#   ① 分块 + online softmax 算出来的，和「先算整个注意力矩阵」完全一样；
+#   ② 它少搬了多少字节。
+import math
+import random
+
+random.seed(0)
+N, D, BLOCK_M, BLOCK_N = 10, 4, 4, 3            # 故意取不整除的大小：最后一块是不完整的
+Q, K, V = ([[random.gauss(0, 1) for _ in range(D)] for _ in range(N)] for _ in range(3))
+scale = 1 / math.sqrt(D)
+dot = lambda a, b: sum(x * y for x, y in zip(a, b))
+
+# 直接算：每一行先算出整行的 S = q·Kᵀ，softmax，再乘 V
+ref = []
+for q in Q:
+    s = [dot(q, k) * scale for k in K]
+    e = [math.exp(x - max(s)) for x in s]
+    ref.append([sum(e[j] * V[j][d] for j in range(N)) / sum(e) for d in range(D)])
+
+# FlashAttention：Q 按 BLOCK_M 行一块，K、V 按 BLOCK_N 行一块；每一行只记 m、l、acc 三样东西
+out = []
+for i0 in range(0, N, BLOCK_M):
+    for q in Q[i0:i0 + BLOCK_M]:
+        m, l, acc = -math.inf, 0.0, [0.0] * D
+        for j0 in range(0, N, BLOCK_N):
+            s = [dot(q, k) * scale for k in K[j0:j0 + BLOCK_N]]       # 这一块的 BLOCK_N 个分数
+            m_new = max(m, max(s))
+            alpha = math.exp(m - m_new)                                 # 旧的累加按新的最大值缩小
+            p = [math.exp(x - m_new) for x in s]
+            l = l * alpha + sum(p)
+            acc = [a * alpha + sum(pj * v[d] for pj, v in zip(p, V[j0:j0 + BLOCK_N])) for d, a in enumerate(acc)]
+            m = m_new
+        out.append([a / l for a in acc])                                # 最后才除以 l
+print(f"① 两种算法的最大差别：{max(abs(a - b) for r, o in zip(ref, out) for a, b in zip(r, o)):.1e}")
+
+# ② 一个头要从显存搬多少字节（bf16，每个元素 2 字节）。
+#    naive：S = Q·Kᵀ 写出去，softmax 读 S 写 P，P·V 再读 P；Q、K、V 各读一遍，O 写一遍
+#    flash：Q 读一遍、O 写一遍；每一块 Q 都要把整个 K、V 读一遍（不算 L2 命中）
+print("② 一个头、head_dim=128：")
+print("      N    naive 搬的字节   强度     flash（BLOCK_M=64 / 128 / 256）搬的字节与强度")
+D = 128
+for n in (1024, 4096, 16384):
+    flops = 4 * n * n * D
+    naive = 4 * n * n * 2 + 4 * n * D * 2
+    cells = []
+    for bm in (64, 128, 256):
+        flash = 2 * n * D * 2 + 2 * math.ceil(n / bm) * n * D * 2
+        cells.append(f"{flash / 2**20:6.0f} MiB {flops / flash:4.0f}")
+    print(f"  {n:6} {naive / 2**20:10.0f} MiB {flops / naive:6.0f}     " + "   ".join(cells))</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">① 两种算法的最大差别：2.2e-16
+② 一个头、head_dim=128：
+      N    naive 搬的字节   强度     flash（BLOCK_M=64 / 128 / 256）搬的字节与强度
+    1024          9 MiB     57          8 MiB   60        4 MiB  114        2 MiB  205
+    4096        132 MiB     62        130 MiB   63       66 MiB  124       34 MiB  241
+   16384       2064 MiB     64       2056 MiB   64     1032 MiB  127      520 MiB  252</code></pre>
+</div><p>第一部分：两种算法的差别是 10⁻¹⁶，也就是双精度浮点的舍入误差，<strong>它们在数学上完全等价</strong>。FlashAttention 不是近似算法。</p>
+<p>第二部分的结论比较出人意料。naive 写法要来回搬 N × N 的矩阵 4 趟；FlashAttention 不写注意力矩阵，但<strong>每一块 Q 都要把整个 K、V 读一遍</strong>，一共读 N / BLOCK_M 遍。算一算强度：运算量是 4·N²·D（两次矩阵乘），flash 搬的字节约为 2 × (N / BLOCK_M) × N × D × 2 = 4·N²·D / BLOCK_M，两者一除，<strong>强度恰好等于 <code>BLOCK_M</code></strong>。<code>BLOCK_M = 64</code> 时，它搬的字节几乎和 naive 一样多。</p>
+<p>第 11 章量过 Max 1100 的拐点：bf16 矩阵单元 172 TFLOP/s ÷ 显存 774 GB/s ≈ 222 FLOP/字节。只有 <code>BLOCK_M = 256</code> 时强度（241–252）才越过拐点；128 只有 124。这是「不算 L2 命中」的最坏情况：同一个头的那十几个 program 大致同时在跑，读的是同一份 K、V，真实的显存流量会少得多。下面会看到，<code>BLOCK_M</code> = 128 和 256 实测差不多。但模型说明了一件事：<strong>FlashAttention 最大的收益不是少搬字节，而是不需要 N × N 的显存</strong>，以及把三个 kernel 变成了一个。</p>
+<h2>kernel</h2>
+<p>minillm 的 <code>kernels/attention.py</code>：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def _attn_fwd_kernel(q_ptr, k_ptr, v_ptr, o_ptr, sm_scale, N_CTX, ROWS,
+                     HEAD_DIM: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                     CAUSAL: tl.constexpr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
+    pid_m = tl.program_id(0)
+    hz = tl.program_id(1)                          # 第几个 (batch, head)
+    # 把 (Z, H, N, D) 看成 (Z·H·N, D) 的二维矩阵：第 hz 个头从第 hz·N 行开始
+    q_desc = tl.make_tensor_descriptor(q_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_M, HEAD_DIM])
+    k_desc = tl.make_tensor_descriptor(k_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_N, HEAD_DIM])
+    v_desc = tl.make_tensor_descriptor(v_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_N, HEAD_DIM])
+    base = hz * N_CTX
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    q = q_desc.load([base + pid_m * BLOCK_M, 0])
+    qk_scale = sm_scale * 1.4426950408889634        # 用 exp2 代替 exp：exp(x) = exp2(x·log2(e))
+
+    m_i = tl.full([BLOCK_M], -float("inf"), tl.float32)   # 每一行到目前为止的最大值
+    l_i = tl.zeros([BLOCK_M], tl.float32)                  # 每一行以 m_i 为基准的指数和
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], tl.float32)        # 还没除以 l_i 的输出
+    # causal：第 i 行只看前 i 列，这一块之后的 K、V 整块跳过
+    hi = tl.minimum((pid_m + 1) * BLOCK_M, N_CTX) if CAUSAL else N_CTX
+    for start_n in range(0, hi, BLOCK_N):
+        k = k_desc.load([base + start_n, 0])
+        qk = tl.dot(q, tl.trans(k)) * qk_scale             # BLOCK_M × BLOCK_N，fp32
+        offs_n = start_n + tl.arange(0, BLOCK_N)
+        if CAUSAL:
+            qk = tl.where(offs_m[:, None] &gt;= offs_n[None, :], qk, -float("inf"))
+        elif not EVEN_N:
+            # 最后一块越过了这个头的末尾：读到的是下一个头的 K（或越界填的 0），要屏蔽掉
+            qk = tl.where(offs_n[None, :] &lt; N_CTX, qk, -float("inf"))
+        m_new = tl.maximum(m_i, tl.max(qk, 1))
+        p = tl.math.exp2(qk - m_new[:, None])
+        alpha = tl.math.exp2(m_i - m_new)                  # 最大值变大了：之前的累加要缩小这么多倍
+        l_i = l_i * alpha + tl.sum(p, 1)
+        v = v_desc.load([base + start_n, 0])
+        acc = tl.dot(p.to(v.dtype), v, acc * alpha[:, None])
+        m_i = m_new
+    o = (acc / l_i[:, None]).to(o_ptr.dtype.element_ty)
+    if EVEN_M:
+        o_desc = tl.make_tensor_descriptor(o_ptr, [ROWS, HEAD_DIM], [HEAD_DIM, 1], [BLOCK_M, HEAD_DIM])
+        o_desc.store([base + pid_m * BLOCK_M, 0], o)
+    else:
+        # N 不是 BLOCK_M 的整数倍：最后一块的尾巴属于下一个头，descriptor 不知道头的边界，改用带 mask 的 store
+        offs_d = tl.arange(0, HEAD_DIM)
+        o_ptrs = o_ptr + (base + offs_m)[:, None].to(tl.int64) * HEAD_DIM + offs_d[None, :]
+        tl.store(o_ptrs, o, mask=offs_m[:, None] &lt; N_CTX)</code></pre>
+</div><p>逐段看：</p>
+<ul>
+<li><strong>grid 是二维的</strong>：<code>(cdiv(N, BLOCK_M), Z·H)</code>。第一维是这个头里的第几块 Q，第二维是第几个头。每个 program 只读自己那个头的 K、V。</li>
+<li><strong>descriptor 把四维张量看成二维</strong>：连续存放的 (Z, H, N, D) 就是一个 (Z·H·N, D) 的矩阵，第 hz 个头从第 hz·N 行开始。代价是 descriptor 只知道整个矩阵的边界，不知道头和头之间的边界：N 不是块大小的整数倍时，最后一块会读进下一个头的数据。K 那边用 <code>where</code> 把多出来的列设成 −∞（<code>EVEN_N</code> 为假时）；O 那边如果用 descriptor 写，会把下一个头的输出覆盖掉，所以 <code>EVEN_M</code> 为假时改用带 mask 的指针 store。我试过换成三维 descriptor（形状 (Z·H, N, D)，块 (1, BLOCK_M, D)），它知道头的边界，但在 Max 1100 上慢了 2%–4%，所以没用。</li>
+<li><strong>两次 <code>tl.dot</code></strong>：第一次是 Q·Kᵀ，得到 fp32 的分数块；第二次是 P·V，P 先转回 bf16（矩阵单元的输入），累加器仍是 fp32。累加器在进入第二次 <code>tl.dot</code> 之前先乘上 α，<code>tl.dot(a, b, acc)</code> 就是 a·b + acc，正好把修正和累加合成一步。</li>
+<li><strong><code>exp2</code> 代替 <code>exp</code></strong>：exp(x) = 2^(x·log₂e)。硬件上通常只有以 2 为底的指数指令，<code>tl.exp</code> 本来也要先乘一个 log₂e。把 log₂e 并进 <code>qk_scale</code>，每个元素少一次乘法；m、l 的含义不变，只是换了底。</li>
+<li><strong>causal 只循环到对角线</strong>：<code>hi = (pid_m + 1) · BLOCK_M</code>。对角线以上的块（图 17-1 右边的白色部分）一块也不读，计算量减半；对角线上的块再用 <code>where</code> 逐元素 mask。</li>
+<li><strong>除以 l 放在最后</strong>：循环里只累加未归一化的 acc，扫完整行才除一次。</li>
+</ul>
+<p><code>attention()</code> 这个包装函数负责选块大小（下一节）、处理 <code>EVEN_M</code> / <code>EVEN_N</code>。<code>tests/test_attention.py</code> 对 N = 1、17、128、1000、1024，D = 64、128，fp16 / bf16，因果 / 非因果的所有组合和 fp32 的 SDPA 比较，共 43 个测试。</p>
+<h2>和 PyTorch 比</h2>
+<p>把三种写法放在一起，总 token 数固定为 16384（N = 1024 时 16 个样本，N = 16384 时 1 个），32 个头，D = 128：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import torch.nn.functional as F
+import triton
+
+from minillm import DEVICE
+from minillm.kernels.attention import attention
+
+gpu = getattr(torch, DEVICE.type)
+
+
+def naive(q, k, v, causal):
+    """教科书写法：把 N × N 的注意力矩阵整个算出来、存下来。"""
+    s = q @ k.transpose(-1, -2) * q.shape[-1] ** -0.5
+    if causal:
+        n = q.shape[-2]
+        s = s.masked_fill(torch.ones(n, n, dtype=torch.bool, device=q.device).triu(1), float("-inf"))
+    return torch.softmax(s, dim=-1) @ v
+
+
+def measure(fn):
+    """返回 (毫秒, 除输入以外的峰值显存 GiB)。"""
+    gpu.synchronize(); gpu.empty_cache(); gpu.reset_peak_memory_stats()
+    base = gpu.memory_allocated()
+    fn(); gpu.synchronize()
+    peak = (gpu.max_memory_allocated() - base) / 2**30
+    return triton.testing.do_bench(fn), peak
+
+
+H, D = 32, 128
+print(f"{gpu.get_device_name()}，triton {triton.__version__}，torch {torch.__version__}，bf16，{H} 个头，head_dim {D}")
+for causal in (False, True):
+    print(f"causal={causal}：  N      naive（PyTorch 逐步算）       SDPA                 minillm")
+    for n in (1024, 4096, 16384):
+        z = 16384 // n                                  # 每一行的 token 总数都是 16384
+        q, k, v = (torch.randn(z, H, n, D, device=DEVICE, dtype=torch.bfloat16) for _ in range(3))
+        torch.testing.assert_close(attention(q, k, v, causal), F.scaled_dot_product_attention(q, k, v, is_causal=causal),
+                                   atol=2e-2, rtol=2e-2)
+        flops = 4 * z * H * n * n * D * (0.5 if causal else 1)
+        cells = []
+        # naive 要存下 z·H·N·N 个 bf16 的注意力矩阵（还有 softmax 的输出），先估一下放不放得下
+        fits = 3 * z * H * n * n * 2 &lt; 0.8 * gpu.get_device_properties().total_memory
+        for fn in (lambda: naive(q, k, v, causal) if fits else None,
+                   lambda: F.scaled_dot_product_attention(q, k, v, is_causal=causal),
+                   lambda: attention(q, k, v, causal)):
+            r = measure(fn) if fits or len(cells) else None
+            cells.append("      显存不够       " if r is None else f"{flops / r[0] / 1e9:5.1f} TF/s {r[1]:5.2f} GiB")
+        print(f"            {n:6}   " + "   ".join(cells))
+        del q, k, v</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，torch 2.15.0+xpu，bf16，32 个头，head_dim 128
+causal=False：  N      naive（PyTorch 逐步算）       SDPA                 minillm
+              1024    27.6 TF/s  2.12 GiB   102.9 TF/s  0.12 GiB    87.1 TF/s  0.12 GiB
+              4096    24.2 TF/s  8.12 GiB   103.7 TF/s  0.12 GiB    91.3 TF/s  0.12 GiB
+             16384         显存不够          107.7 TF/s  0.12 GiB    94.7 TF/s  0.12 GiB
+causal=True：  N      naive（PyTorch 逐步算）       SDPA                 minillm
+              1024     8.9 TF/s  2.12 GiB    73.1 TF/s  0.12 GiB    73.8 TF/s  0.12 GiB
+              4096     7.3 TF/s  8.12 GiB    91.4 TF/s  0.12 GiB    88.6 TF/s  0.12 GiB
+             16384         显存不够           97.8 TF/s  0.12 GiB    99.5 TF/s  0.12 GiB</code></pre>
+</div><ul>
+<li><strong>naive 写法</strong>慢了约 4 到 12 倍，还要几个 GiB 的显存：N = 4096 时是 8.12 GiB，正好是两个 4 GiB 的 bf16 矩阵（分数和 softmax 的输出）加上输出。N = 16384 时，光分数矩阵就要 16 GiB，算上 softmax 的输出和中间结果放不下，脚本直接跳过了。因果时它更慢，因为 mask 要再写一个 N × N 的矩阵，而且上三角那一半照算不误。</li>
+<li><strong>SDPA 和 minillm 都只要 0.12 GiB</strong>，也就是输出 O 本身的大小。用 PyTorch 的 profiler 看，SDPA 在 Max 1100 上只启动了一个名叫 <code>micro_sdpa</code> 的 kernel，它来自 oneDNN（第 1 章）。</li>
+<li><strong>因果 attention，minillm 和 SDPA 一样快</strong>（三个长度上互有胜负，差别在 3% 以内）；<strong>非因果，minillm 是 SDPA 的 85%–88%</strong>。差距在哪里，我没有深究：<code>micro_sdpa</code> 是 oneDNN 专门为这个算子写的 kernel，不是用 Triton 写的，它用了哪些技巧本书没有去读。</li>
+</ul>
+<p>这个脚本连着测了几十秒，GPU 的频率会随温度下降。我单独测同一个非因果 kernel：刚开始是 94 TFLOP/s，连续跑几轮以后稳定在 84 左右；SDPA 同样从 113 降到 104。所以<strong>只比较同一次运行里相邻的两个数字</strong>，不要拿这张表和下面单独测的表直接比。下面那些扫参数的实验，每个配置测量之前都先停 4–5 秒。</p>
+<p>head_dim = 64 时（同样 4 × 32 个头、N = 4096），SDPA 非因果 98.1、因果 81.7 TFLOP/s，minillm 分别是 91.1 和 76.7，大约是 SDPA 的 93%。</p>
+<h2>选 tile：又是寄存器</h2>
+<p>一个 program 要同时在寄存器里放三样大东西：Q 的一块（BLOCK_M × D，bf16）、累加器（BLOCK_M × D，fp32）、分数块（BLOCK_M × BLOCK_N，fp32）。第 12 章的规则在这里同样成立：寄存器放不下就溢出，溢出就慢。在 Max 1100 上扫一遍（D = 128，非因果，Z = 4、H = 32、N = 4096，<code>num_stages = 2</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>BLOCK_M × BLOCK_N</th>
+<th align="right">num_warps</th>
+<th align="right">每个 warp 几行</th>
+<th align="right">累加器/线程</th>
+<th align="right">n_spills</th>
+<th align="right">TFLOP/s</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>64 × 64</td>
+<td align="right">4</td>
+<td align="right">16</td>
+<td align="right">128</td>
+<td align="right">273</td>
+<td align="right">55.5</td>
+</tr>
+<tr>
+<td>64 × 64</td>
+<td align="right">8</td>
+<td align="right">8</td>
+<td align="right">64</td>
+<td align="right">85</td>
+<td align="right">54.0</td>
+</tr>
+<tr>
+<td>128 × 64</td>
+<td align="right">8</td>
+<td align="right">16</td>
+<td align="right">128</td>
+<td align="right">205</td>
+<td align="right">74.3</td>
+</tr>
+<tr>
+<td>128 × 64</td>
+<td align="right">16</td>
+<td align="right">8</td>
+<td align="right">64</td>
+<td align="right">55</td>
+<td align="right">94.2</td>
+</tr>
+<tr>
+<td>128 × 128</td>
+<td align="right">16</td>
+<td align="right">8</td>
+<td align="right">64</td>
+<td align="right">39</td>
+<td align="right">74.3</td>
+</tr>
+<tr>
+<td>128 × 32</td>
+<td align="right">16</td>
+<td align="right">8</td>
+<td align="right">64</td>
+<td align="right">19</td>
+<td align="right">81.3</td>
+</tr>
+<tr>
+<td>256 × 64</td>
+<td align="right">16</td>
+<td align="right">16</td>
+<td align="right">128</td>
+<td align="right">205</td>
+<td align="right">90.0</td>
+</tr>
+<tr>
+<td>256 × 64</td>
+<td align="right">32</td>
+<td align="right">8</td>
+<td align="right">64</td>
+<td align="right">55</td>
+<td align="right">94.0</td>
+</tr>
+<tr>
+<td>256 × 32</td>
+<td align="right">32</td>
+<td align="right">8</td>
+<td align="right">64</td>
+<td align="right">19</td>
+<td align="right">81.5</td>
+</tr>
+<tr>
+<td><strong>256 × 128</strong></td>
+<td align="right"><strong>32</strong></td>
+<td align="right"><strong>8</strong></td>
+<td align="right"><strong>64</strong></td>
+<td align="right"><strong>39</strong></td>
+<td align="right"><strong>102.8</strong></td>
+</tr>
+</tbody></table>
+<p>（「累加器/线程」= BLOCK_M × D ÷ (16 × num_warps)，Intel 上一个 warp 16 个线程，第 12 章。）</p>
+<ul>
+<li><strong>每个 warp 分 8 行最好</strong>。分到 16 行时，累加器每个线程 128 个，加上 Q 和分数块，溢出 200 多；分到 8 行时溢出降到几十。所有 8 行的配置都比 16 行的快。所有配置的 <code>n_regs</code> 都是 256：Intel 后端发现溢出太多时，会自动换成大寄存器模式（第 6 章），这已经是用满大寄存器以后的溢出量。</li>
+<li><strong><code>BLOCK_N</code> 不是越小越好</strong>。32 的溢出最少，但每读一块 K、V 只做一半的计算，循环的固定开销（求最大值、算 α、缩放累加器）占比变大。</li>
+<li><strong><code>BLOCK_M</code> = 128 和 256 差不多</strong>，和上一节模型的预测（强度 124 对 252）不一样：同一个头的 program 读同一份 K、V，L2 替我们挡住了大部分重复读取。</li>
+</ul>
+<p>因果时，最好的配置换了：256 × 128 的溢出从 39 涨到 368，只有 28.5 TFLOP/s。多出来的那个 <code>BLOCK_M × BLOCK_N</code> 的比较和 <code>where</code> 也要占寄存器。因果时退回 256 × 64。head_dim = 64 时没有任何溢出，256 × 128 也最好。<strong>最好的配置随 D、随因果与否而变</strong>，这正是第 14 章 autotune 的用武之地。minillm 为了测试快，把这几个配置写成了一张表（<code>launch_config</code>），每一项都有本节的实测为据。</p>
+<h2>编译器替你做了什么</h2>
+<p>拿 <code>kernel.asm[&quot;ttgir&quot;]</code> 看循环里的几条关键指令（256 × 64，D = 128，去掉了 <code>loc(...)</code>，类型有删节）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">      ttig.descriptor_prefetch %k_desc[%k_11, %c0_i32] {ttig.block_io = "column_major", ...} : !tt.tensordesc&lt;64x128xbf16&gt;
+      ttig.descriptor_prefetch %v_desc[%k_11, %c0_i32] {ttig.block_io = "row_major", ...} : !tt.tensordesc&lt;64x128xbf16&gt;
+      %k_12 = tt.descriptor_load %k_desc[%k, %c0_i32] {ttig.block_io = "column_major", ...} : !tt.tensordesc&lt;64x128xbf16&gt; -&gt; tensor&lt;128x64xbf16, #ttg.dot_op&lt;{opIdx = 1, parent = #mma, kWidth = 2}&gt;&gt;
+      %v = tt.descriptor_load %v_desc[%k, %c0_i32] {ttig.block_io = "row_major", ...} : !tt.tensordesc&lt;64x128xbf16&gt; -&gt; tensor&lt;64x128xbf16, #ttg.dot_op&lt;{opIdx = 1, parent = #mma, kWidth = 2}&gt;&gt;
+      %q_13 = tt.descriptor_load %q_desc[%q_4, %c0_i32] {ttig.block_io = "row_major", ...} : !tt.tensordesc&lt;256x128xbf16&gt; -&gt; tensor&lt;256x128xbf16, #ttg.dot_op&lt;{opIdx = 0, parent = #mma, kWidth = 1}&gt;&gt;
+      %qk_14 = tt.dot %q_13, %k_12, %cst_3 : tensor&lt;256x128xbf16, ...&gt; * tensor&lt;128x64xbf16, ...&gt; -&gt; tensor&lt;256x64xf32, #mma&gt;
+      %acc_29 = tt.dot %acc_28, %v, %acc_27 : tensor&lt;256x64xbf16, ...&gt; * tensor&lt;64x128xbf16, ...&gt; -&gt; tensor&lt;256x128xf32, #mma&gt;</code></pre>
+</div><h3>转置去哪了</h3>
+<p>kernel 里写的是 <code>tl.dot(q, tl.trans(k))</code>，IR 里却<strong>没有任何 <code>tt.trans</code></strong>。描述符的块是 64 × 128（BLOCK_N × D，K 在内存里的样子），<code>descriptor_load</code> 出来的却直接是 128 × 64（D × BLOCK_N，矩阵乘要的 Kᵀ），标注 <code>block_io = &quot;column_major&quot;</code>。Intel 的二维块读取指令可以<strong>在读的同时转置</strong>，编译器把 <code>trans</code> 折进了 load。V 不需要转置，就是 <code>row_major</code>。所以写 attention 的时候不必预先把 K 转置好再存。</p>
+<p>在 NVIDIA 上又是另一番样子。用附录 A 第 8 节的离线编译，把同样结构的指针版 kernel（128 × 64，8 个 warp，3 级流水）编到 sm_86，看 TTGIR 的循环体（节选）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">TTGIR</span></div>
+  <pre class="line-numbers"><code class="language-ttgir">      %qk_75 = ttg.local_load %k_74 token %k_73 : !ttg.memdesc&lt;64x128xf16, #shared, #smem, mutable&gt; -&gt; tensor&lt;64x128xf16, #linear&gt;
+      %qk_76 = tt.trans %qk_75 {order = array&lt;i32: 1, 0&gt;} : tensor&lt;64x128xf16, #linear&gt; -&gt; tensor&lt;128x64xf16, #ttg.dot_op&lt;{opIdx = 1, parent = #mma, kWidth = 2}&gt;&gt;
+      %q_77 = ttg.local_load %q_20 : !ttg.memdesc&lt;128x128xf16, #shared, #smem&gt; -&gt; tensor&lt;128x128xf16, #ttg.dot_op&lt;{opIdx = 0, parent = #mma, kWidth = 2}&gt;&gt;
+      %qk_78 = tt.dot %q_77, %qk_76, %cst_4, inputPrecision = tf32 : ...</code></pre>
+</div><p>K 先用 <code>cp.async</code> 搬进 shared memory（第 13 章的多缓冲），读回寄存器时，编译器专门挑了一个 <code>#linear</code> layout，转置以后正好是矩阵乘要的 <code>dot_op</code> layout。<code>tt.trans</code> 还在，但我推测它只是给寄存器重新编号，不搬数据。第 21 章讲 linear layout 时再验证。</p>
+<h3>Q 被挪进了循环</h3>
+<p>再看 <code>%q_13</code>：<strong>Q 的 <code>descriptor_load</code> 出现在循环体里面</strong>。kernel 里明明是在循环之前读一次 Q。</p>
+<p>这是 Intel 后端一个 pass 做的事：<code>ReduceVariableLiveness</code>（<code>third_party/intel/lib/TritonIntelGPUTransforms/ReduceVariableLiveness.cpp</code>）。它发现循环里寄存器压力很大，而 Q 这个 256 × 128 的大张量从循环开始一直活到结束，于是把它的 load 挪到用它的地方，<strong>每一轮重新读一次</strong>（数据多半还在缓存里）。Q 不必一直占着寄存器，溢出就少了。源码注释里写着，这个变换就是为 attention 这类 kernel 做的。回头看上面 sm_86 的那段 IR，<code>%q_77 = ttg.local_load %q_20</code> 也在循环里：NVIDIA 后端把 Q 放进 shared memory（循环之前的 <code>ttg.local_alloc</code>），每一轮再读回寄存器。两个后端用不同的办法做了同一件事：<strong>不让 Q 在整个循环里一直占着寄存器</strong>。</p>
+<p>它是一个编译选项，默认打开，可以在启动 kernel 时传 <code>reduce_variable_liveness=False</code> 关掉。关掉以后 Q 回到循环外面，对比一下（256 × 64 和 256 × 128，D = 128）：</p>
+<table>
+<thead>
+<tr>
+<th>情形</th>
+<th>配置</th>
+<th>打开（默认）</th>
+<th>关掉</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>非因果</td>
+<td>256 × 128</td>
+<td>102.4 TFLOP/s，溢出 39</td>
+<td>83.6，溢出 111</td>
+</tr>
+<tr>
+<td>非因果</td>
+<td>256 × 64</td>
+<td>93.8，溢出 55</td>
+<td>92.1，溢出 85</td>
+</tr>
+<tr>
+<td><strong>因果</strong></td>
+<td><strong>256 × 64</strong></td>
+<td><strong>78.0，溢出 60</strong></td>
+<td><strong>96.4，溢出 91</strong></td>
+</tr>
+</tbody></table>
+<p>非因果时，这个 pass 有用，256 × 128 上差了 22%。但因果时正好反过来：<strong>关掉它、溢出更多，反而快了 24%</strong>。为什么？第 22 章会一步步定位：触发条件是对角线上的那个 mask，不是循环次数；真正的差别在 Triton 下面两级，IGC 的寄存器分配器在一种 IR 上用上了减少 bank 冲突的策略，在另一种上没有。<strong>「溢出越少越快」只是一个经验法则</strong>：编译器为了减少溢出做的变换，本身也有代价。minillm 在因果、D = 128 时关掉这个 pass。</p>
+<h3>一个精度陷阱</h3>
+<p>我最初发现这件事，是因为另一个改动。把缩放因子提前乘到 Q 上：<code>q = (q * qk_scale).to(q.dtype)</code>，循环里就省掉了每个元素一次乘法。Triton 官方教程在 2023 年 7 月到 9 月之间就是这么写的（PR #1917 引入，#2332 改成了在循环里用 fp32 缩放）。我试了一下，因果时快了 19%，非因果时没有变化。仔细一看，原因并不是省了乘法：<strong><code>q * qk_scale</code> 不再是一个 load 了</strong>，<code>ReduceVariableLiveness</code> 没法把它挪进循环，Q 就一直留在寄存器里，和上面关掉 pass 是同一个效果。</p>
+<p>这个改动还有代价：乘完的 Q 要转回 bf16 才能进矩阵单元，<strong>多了一次舍入</strong>。拿 fp32 算出来的 SDPA 做参考，比较最大误差和平均误差（Z = 4、H = 32、N = 4096、D = 128）：</p>
+<table>
+<thead>
+<tr>
+<th>输入</th>
+<th>SDPA（bf16）</th>
+<th>minillm：循环里缩放</th>
+<th>提前缩放 Q</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Q、K ~ N(0, 1)</td>
+<td>最大 0.0010，平均 0.00005</td>
+<td>0.0010 / 0.00005</td>
+<td>0.0017 / 0.00006</td>
+</tr>
+<tr>
+<td>Q、K ~ N(0, 9)（注意力集中）</td>
+<td>0.0157 / 0.00086</td>
+<td>0.0157 / 0.00086</td>
+<td><strong>0.0958 / 0.00267</strong></td>
+</tr>
+</tbody></table>
+<p>Q、K 的元素放大 3 倍时，分数放大 9 倍，softmax 变得很「尖」：每一行的注意力几乎都集中在少数几个位置上。这时 exp 会把分数上的小误差放大，提前缩放的版本最大误差是参考的 6 倍、平均误差是 3 倍（因果时最大误差是 8 倍）。真实模型里，注意力集中的头并不少见。minillm 在循环里用 fp32 缩放，和 SDPA 的误差一模一样；<code>tests/test_attention.py::test_attention_peaky</code> 专门检查这种情形。</p>
+<h3>官方教程的一个技巧</h3>
+<p>Triton 官方教程的 FlashAttention 把因果的循环拆成两段：对角线以前的块不需要 mask，用一个不带 <code>where</code> 的循环；只有对角线上的块用带 mask 的循环。这样大部分块省掉了比较和 <code>where</code>。我在 minillm 的 kernel 上试了一下（因果，256 × 64，D = 128）：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th align="right">不拆</th>
+<th align="right">拆成两段</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>关掉 <code>ReduceVariableLiveness</code></td>
+<td align="right"><strong>95.9</strong></td>
+<td align="right">78.4</td>
+</tr>
+<tr>
+<td>打开（默认）</td>
+<td align="right">78.3</td>
+<td align="right">83.7</td>
+</tr>
+</tbody></table>
+<p>拆开以后循环体复制了一份，代码变大。在默认设置下它有用（78 → 84），但比不上「不拆、关掉 pass」的 96。<strong>优化手段之间会互相影响</strong>，一个在 NVIDIA 上有用的技巧，换一个后端、换一组别的选项，可能就变成负的。本书还没在 A10 上验证官方教程这个技巧的效果。</p>
+<h2>minillm 进度</h2>
+<p>新增 <code>kernels/attention.py</code>（<code>_attn_fwd_kernel</code> 和包装函数 <code>attention</code>）、<code>ops.attention</code>（一个 <code>triton_op</code>）。反向暂时在 PyTorch 里用 fp32 重算注意力矩阵：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">#   dV = Pᵀ dO，dP = dO Vᵀ，dS = P ⊙ (dP − rowsum(dP ⊙ P))，dQ = dS K · scale，dK = dSᵀ Q · scale</code></pre>
+</div><p>它要 N × N 的显存，只是为了让 <code>opcheck</code> 和梯度测试能过。真正的 FlashAttention 反向是本章的练习。新增测试：<code>tests/test_attention.py</code>（43 个），<code>tests/test_ops.py</code> 里加了 <code>attention</code> 的 <code>opcheck</code>、梯度测试，以及 <code>torch.compile(fullgraph=True)</code> 以后的结果检查（第 10 章的教训）。测试共 186 个。</p>
+<p>写那个编译测试时还碰到一件小事：我最初让编译后的结果和 eager 的结果逐位相等，在换了块大小以后失败了，差别在 0.002 以内。Inductor 生成的代码里，kernel 是由它重新编译、启动的，舍入和 eager 那一份可以差一点。改成和 fp32 的参考实现比较就好了。<strong>对编译后的结果，检查「对不对」，不要检查「一不一样」。</strong></p>
+<h2>动手</h2>
+<ol>
+<li><strong>在你的 GPU 上跑「和 PyTorch 比」。</strong> A10 只有 24 GB 显存，naive 在 N = 4096 时还放得下吗？SDPA 在 A10 上背后是哪个 kernel（用 <code>torch.profiler</code> 看）？minillm 用的是为 NVIDIA 随手挑的 128 × 64、8 个 warp、3 级流水，离 SDPA 有多远？用第 14 章的 autotune 扫一遍 <code>BLOCK_M</code>、<code>BLOCK_N</code>、<code>num_warps</code>、<code>num_stages</code>，能追上多少？</li>
+<li><strong>把对角线那一块拆出来。</strong> 照着上一节的描述，把因果的循环拆成「不带 mask」和「带 mask」两段，在你的 GPU 上测一测。在 NVIDIA 上，它有没有官方教程说的那种收益？</li>
+<li><strong>写 FlashAttention 的反向。</strong> 前向多存一个每行的 logsumexp（m + log l，形状 (Z, H, N)），反向就能一块一块地重算 P，不必存 N × N 的矩阵。先写 dV 和 dK（一个 program 负责 K、V 的一块，沿 Q 方向循环），再写 dQ。用 <code>tests/test_ops.py</code> 的 <code>test_backward</code> 检查。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>FlashAttention：一个 program 负责 Q 的 <code>BLOCK_M</code> 行，沿 N 一块一块地读 K、V，用 online softmax 维护每行的 m、l 和累加器 acc（最大值一变，l 和 acc 都乘上同一个 α），扫完才除以 l。N × N 的注意力矩阵从来不写回显存。它和教科书公式在数学上完全等价。</li>
+<li>不算 L2 时，FlashAttention 的算术强度恰好等于 <code>BLOCK_M</code>：它省掉的主要是 N × N 的显存和 kernel 的数量，搬的字节不一定少。实测 L2 挡住了大部分 K、V 的重复读取。</li>
+<li>Max 1100 上，因果 attention 和 SDPA 一样快，非因果约为 SDPA 的 85%–88%；naive 写法慢 4–12 倍，N = 4096 时要 8 GiB 显存。</li>
+<li>选 tile 还是看寄存器：每个 warp 分 8 行最好。最好的配置随 head_dim、因果与否而变（256 × 128 在非因果时最快，在因果时溢出到只剩 28 TFLOP/s）。</li>
+<li>读 IR 的收获：<code>tl.trans(k)</code> 被折进了按列的二维块读取，不产生数据搬运；Intel 的 <code>ReduceVariableLiveness</code> pass 把 Q 的读取挪进了循环，非因果时快 22%，因果时慢 19%，可以用 <code>reduce_variable_liveness=False</code> 关掉。溢出更少不一定更快。</li>
+<li>精度：把缩放提前乘到 Q 上多了一次 bf16 舍入，注意力集中时最大误差变成 6–8 倍。缩放放在 fp32 的分数上。</li>
+</ul>
+<p><strong>minillm 进度</strong>：新增 <code>kernels/attention.py</code>、<code>ops.attention</code>（前向是 Triton kernel，反向暂用 PyTorch），测试共 186 个。第三部分到此结束。</p>
+<p>下一部分换一个方向：不再是「怎么把 kernel 写快」，而是「编译器拿到你的 kernel 以后做了什么」。第 18 章先补上读懂 Triton IR 所需的那一点 MLIR。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch16.html">← 第 16 章 低精度</a>
+  <a class="nav-next" href="ch18.html">第 18 章 够用的 MLIR →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<!-- IR 高亮：prism-llvm 管 LLVM IR / SPIR-V；mlir-syntax.js 在它基础上派生出 mlir 语言 -->
+<script src="vendor/prism-llvm.min.js"></script>
+<script src="assets/mlir-syntax.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

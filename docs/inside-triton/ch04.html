@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 第一个 kernel：vector add 的完整生命周期</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li class="active"><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 4 章 第一个 kernel：vector add 的完整生命周期</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>前三章里，你已经见过好几次 <code>add_kernel[grid](x, y, out, n, BLOCK=1024)</code> 这一行。它看起来像一次普通的函数调用，背后却走了一条很长的路：算一个「特化键」，查内存里的缓存，查磁盘上的缓存，都没有的话就把这个 Python 函数编译成 GPU 机器码，最后才启动。这一章把这条路从头走一遍。</p>
+<p>读完你会拿到三样东西。一是 kernel 里每一样东西的确切含义：<code>@triton.jit</code>、grid、<code>tl.program_id</code>、mask 与 <code>other</code>、<code>tl.constexpr</code>。二是一份实测的账单：在 Max 1100 上，第一次编译、命中磁盘缓存、命中内存缓存分别花多少时间，以及<strong>哪些参数变化会触发重新编译</strong>。这件事直接关系到推理服务里的冷启动和「为什么我的 kernel 隔一会儿就卡一下」。三是 minillm 项目的第一批 kernel：<code>add</code> 和 <code>silu_mul</code>，带测试，带性能测量。</p>
+</div><h2>一个 kernel 的一生</h2>
+<p>先看全貌。从你写下 <code>@triton.jit</code> 到 GPU 上真的跑起来，中间经过这些步骤：</p>
+<div class="concept">
+<svg viewBox="0 0 720 400" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="c41a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="c41g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3f9b5c"/></marker>
+    <marker id="c41o" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e06a3b"/></marker>
+  </defs>
+  <g font-size="12.5">
+    <rect x="20" y="16" width="300" height="46" rx="6" fill="#ebf4ff" stroke="#2b6cb0"/>
+    <text x="32" y="36" fill="#2b6cb0" font-family="monospace">@triton.jit def add_kernel(...)</text>
+    <text x="32" y="54" fill="#374151">定义时：包成一个 JITFunction 对象，什么也不编译</text>
+    <rect x="20" y="86" width="300" height="46" rx="6" fill="#ebf4ff" stroke="#2b6cb0"/>
+    <text x="32" y="106" fill="#2b6cb0" font-family="monospace">add_kernel[grid](x, y, out, n, …)</text>
+    <text x="32" y="124" fill="#374151">每次调用：先算特化键（类型、常量、对齐）</text>
+    <rect x="20" y="156" width="300" height="38" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+    <text x="32" y="180" fill="#374151">① 进程内存里的缓存有这个键吗？</text>
+    <rect x="20" y="226" width="300" height="38" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+    <text x="32" y="250" fill="#374151">② 磁盘缓存（~/.triton/cache）有吗？</text>
+    <rect x="20" y="296" width="300" height="62" rx="6" fill="#fdf1ec" stroke="#e06a3b"/>
+    <text x="32" y="318" fill="#e06a3b" font-weight="bold">③ 编译（Max 1100 上约 0.1 秒）</text>
+    <text x="32" y="336" fill="#374151">Python AST → TTIR → TTGIR → LLVM IR</text>
+    <text x="32" y="352" fill="#374151">→ PTX → cubin（NVIDIA）/ SPIR-V（Intel）</text>
+    <rect x="440" y="156" width="260" height="38" rx="6" fill="#e9f6ee" stroke="#3f9b5c"/>
+    <text x="452" y="180" fill="#3f9b5c" font-weight="bold">启动（约 0.05–0.2 毫秒）</text>
+    <rect x="440" y="226" width="260" height="38" rx="6" fill="#e9f6ee" stroke="#3f9b5c"/>
+    <text x="452" y="250" fill="#374151">从磁盘加载（约 1–3 毫秒），放进内存</text>
+    <rect x="440" y="296" width="260" height="62" rx="6" fill="#f3f4f6" stroke="#6b7280"/>
+    <text x="452" y="318" fill="#374151">每一级 IR 和二进制都写进</text>
+    <text x="452" y="336" fill="#374151">磁盘缓存，下次（包括下一个</text>
+    <text x="452" y="352" fill="#374151">进程）直接用</text>
+  </g>
+  <g stroke-width="2" font-size="12">
+    <line x1="170" y1="62" x2="170" y2="84" stroke="#6b7280" marker-end="url(#c41a)"/>
+    <line x1="170" y1="132" x2="170" y2="154" stroke="#6b7280" marker-end="url(#c41a)"/>
+    <line x1="320" y1="175" x2="436" y2="175" stroke="#3f9b5c" marker-end="url(#c41g)"/><text x="360" y="168" fill="#3f9b5c">有</text>
+    <line x1="170" y1="194" x2="170" y2="224" stroke="#6b7280" marker-end="url(#c41a)"/><text x="178" y="214" fill="#6b7280">没有</text>
+    <line x1="320" y1="245" x2="436" y2="245" stroke="#3f9b5c" marker-end="url(#c41g)"/><text x="360" y="238" fill="#3f9b5c">有</text>
+    <line x1="570" y1="226" x2="570" y2="198" stroke="#3f9b5c" marker-end="url(#c41g)"/>
+    <line x1="170" y1="264" x2="170" y2="294" stroke="#6b7280" marker-end="url(#c41a)"/><text x="178" y="284" fill="#6b7280">没有</text>
+    <line x1="320" y1="327" x2="436" y2="327" stroke="#e06a3b" marker-end="url(#c41o)"/>
+    <path d="M700,327 L712,327 L712,175 L704,175" fill="none" stroke="#3f9b5c" marker-end="url(#c41g)"/>
+  </g>
+  <text x="20" y="386" font-size="12" fill="#6b7280">另外：每个进程第一次用到磁盘缓存时，要先给 Triton 自己算一个指纹（Max 1100 上约 1 秒，见下文）</text>
+</svg>
+<div class="caption">图 4-1　一次 <code>kernel[grid](...)</code> 调用的完整路径。绿色是快路径，橙色是慢路径。时间都是 Max 1100 上实测的量级（本章后面有完整输出）。特化键相同的调用，只会走一次橙色那条路</div>
+</div><p>下面先把 kernel 本身逐行讲清楚，再用实测把这张图上的每一个时间验证一遍。</p>
+<h2>逐行读 vector add</h2>
+<p>还是这个 kernel：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs &lt; n
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    tl.store(out_ptr + offs, x + y, mask=mask)</code></pre>
+</div><p><strong><code>@triton.jit</code></strong>。它定义在 <code>python/triton/runtime/jit.py</code>，把函数包成一个 <code>JITFunction</code> 对象。定义的时候什么也不编译，连函数体里有没有语法错误都不检查。被 <code>@triton.jit</code> 修饰的函数只能在 Triton 里调用：它的函数体会被 Triton 自己的前端解析，而不是由 Python 解释器执行。所以里面只能用 <code>tl.*</code> 的运算和有限的 Python 语法（<code>if</code>、<code>for</code>、<code>while</code>、算术），不能调用 NumPy，也不能调用任意的 Python 函数。</p>
+<p><strong>参数</strong>。调用时传进来的 PyTorch 张量会变成<strong>指针</strong>：<code>x_ptr</code> 在 kernel 里的类型是 <code>*fp32</code>（指向 fp32 的指针），指向这个张量的第一个元素。Triton 只拿走了地址，不知道张量的形状和 stride。所以 kernel 必须自己知道要读多少个元素（这里是 <code>n</code>）、怎么排布（这里假设是连续的，任意 stride 的写法在第 5 章）。整数参数（<code>n</code>）在 kernel 里是 <code>i32</code> 或 <code>i64</code> 的标量。</p>
+<p><strong><code>tl.program_id(0)</code></strong>。返回这个 program 在第 0 维上的编号。grid 最多有三维，所以 <code>program_id</code> 的参数可以是 0、1、2。</p>
+<p><strong><code>tl.arange(0, BLOCK)</code></strong>。产生一个长度为 <code>BLOCK</code> 的张量 <code>[0, 1, …, BLOCK-1]</code>。<strong>它的长度必须是 2 的幂</strong>，并且必须是编译时常量。这就是 <code>BLOCK</code> 要声明成 <code>tl.constexpr</code> 的原因。</p>
+<p><strong><code>tl.constexpr</code></strong>。标了 <code>tl.constexpr</code> 的参数是<strong>编译时常量</strong>：它的值在编译时就确定，直接写进生成的机器码，所以可以拿来决定张量的形状、展开循环。代价是<strong>每一个不同的值都要单独编译一次</strong>（下一节实测）。把 <code>BLOCK</code> 设成 1000 会怎样？</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">add_kernel[(triton.cdiv(x.numel(), 1000),)](x, y, out, x.numel(), BLOCK=1000)</code></pre>
+</div><p>运行结果（节选，去掉了前面的 traceback）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">triton.compiler.errors.CompilationError: at 3:25:
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+                         ^
+arange's range must be a power of 2</code></pre>
+</div><p>这是一个<strong>编译期</strong>错误，发生在第一次调用、Triton 解析函数体的时候，而且精确地指出了源码里的位置。Triton 的报错大多长这样（第 9 章会专门整理常见的报错）。</p>
+<p><strong>mask 与 <code>other</code></strong>。<code>offs &lt; n</code> 产生一个布尔张量，标出哪些下标在界内。<code>tl.load(ptr, mask=mask)</code> 只读 mask 为真的位置；<code>tl.store(ptr, value, mask=mask)</code> 只写 mask 为真的位置。为什么必须有它？因为数据长度几乎从来不是 <code>BLOCK</code> 的整数倍：</p>
+<div class="concept">
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="20" y="22" font-size="13" font-weight="bold" fill="#374151">最后一个 program（pid = 96）：n = 98432，BLOCK = 1024</text>
+  <g font-size="12" fill="#374151">
+    <text x="20" y="62">offs</text><text x="20" y="102">mask</text><text x="20" y="142">tl.load</text><text x="20" y="182">tl.store</text>
+  </g>
+  <rect x="90" y="44" width="150" height="160" fill="#ebf4ff" stroke="#2b6cb0"/>
+  <rect x="240" y="44" width="460" height="160" fill="#f3f4f6" stroke="#9ca3af" stroke-dasharray="4 3"/>
+  <g font-size="12" text-anchor="middle" fill="#374151" font-family="monospace">
+    <text x="165" y="62">98304 … 98431</text><text x="470" y="62">98432 … 99327</text>
+    <text x="165" y="102">True × 128</text><text x="470" y="102">False × 896</text>
+    <text x="165" y="142">读 x[98304:98432]</text><text x="470" y="142">不读；值 = other（不给就是未定义）</text>
+    <text x="165" y="182">写 out[98304:98432]</text><text x="470" y="182">不写</text>
+  </g>
+  <line x1="240" y1="36" x2="240" y2="212" stroke="#e06a3b" stroke-width="2"/>
+  <text x="246" y="224" font-size="12" fill="#e06a3b">n = 98432：张量到这里就结束了</text>
+</svg>
+<div class="caption">图 4-2　mask 覆盖的边界块。97 个 program 里，前 96 个的 mask 全是 True；只有最后一个越过了 n，它的后 896 个元素被 mask 掉。没有 mask，这个 program 就会读写到张量后面不属于它的显存</div>
+</div><p>被 mask 掉的位置，<code>tl.load</code> 返回 <code>other</code> 参数给的值；<strong>不给 <code>other</code>，那些位置的值是未定义的</strong>（<code>tl.load</code> 的文档原话：「If <code>other</code> is <code>None</code>, the masked-out value is undefined」）。在 vector add 里这无所谓，因为那些位置也不会被写出去。但如果后面要对整块做归约，就一定要给一个不影响结果的 <code>other</code>：第 1 章的 softmax 在求最大值之前，写的是 <code>other=-float(&quot;inf&quot;)</code>。</p>
+<p><strong>grid</strong>。<code>add_kernel[grid]</code> 的 <code>grid</code> 是一个元组，表示每一维启动多少个 program：<code>(triton.cdiv(n, BLOCK),)</code> 是一维，向上取整。它也可以是一个函数，接收这次调用的参数（一个 dict），返回元组：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">grid = lambda meta: (triton.cdiv(n, meta["BLOCK"]),)
+add_kernel[grid](x, y, out, n, BLOCK=1024)</code></pre>
+</div><p>现在看不出这种写法有什么好处。到第 14 章，<code>BLOCK</code> 由 autotune 替你挑，调用的时候你还不知道它是多少，就必须用这种写法。</p>
+<h2>实测：一次调用到底发生了什么</h2>
+<p>下面这个脚本用 Triton 提供的一个钩子 <code>triton.knobs.runtime.jit_cache_hook</code>：每当内存里的缓存没命中、要去编译（或从磁盘缓存加载）之前，Triton 会调用它。我们在钩子里打印这次的特化键，再测每一次调用的耗时。它依次换长度、换 dtype、换 <code>BLOCK</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import time
+
+import torch
+import triton
+import triton.language as tl
+
+t0 = time.perf_counter()
+DEVICE = triton.runtime.driver.active.get_active_torch_device()   # 第一次用到 driver：初始化它
+gpu = getattr(torch, DEVICE.type)
+triton.runtime.driver.active.get_current_target()
+print(f"初始化 driver：{(time.perf_counter() - t0) * 1e3:.0f} ms")
+
+
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs &lt; n
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    tl.store(out_ptr + offs, x + y, mask=mask)
+
+
+def on_compile(compile, **kw):
+    """内存里的缓存没命中、要去编译（或者从磁盘缓存加载）之前，Triton 会调用这个钩子。"""
+    sig, consts, attrs = compile["signature"], compile["constants"], compile["configs"][0]
+    parts = []
+    for i, name in enumerate(sig):
+        if (i,) in consts:
+            parts.append(f"{name}={consts[(i,)]}")
+        else:
+            div16 = ["tt.divisibility", 16] in attrs.get((i,), [])
+            parts.append(f"{name}: {sig[name]}{'（16 的倍数）' if div16 else ''}")
+    print("      编译 " + ", ".join(parts))
+    return False                       # 返回 False 表示「照常编译」
+
+
+triton.knobs.runtime.jit_cache_hook = on_compile
+
+
+def call(label, n, dtype=torch.float32, BLOCK=1024):
+    x = torch.randn(n, device=DEVICE, dtype=dtype); y = torch.randn_like(x); out = torch.empty_like(x)
+    gpu.synchronize()
+    print(f"  {label}")
+    t = time.perf_counter()
+    add_kernel[(triton.cdiv(n, BLOCK),)](x, y, out, n, BLOCK=BLOCK)
+    gpu.synchronize()
+    print(f"      耗时 {(time.perf_counter() - t) * 1e3:.2f} ms")
+
+
+call("n=98432", 98432)
+call("再调一次", 98432)
+call("n=1048576（换了长度，但也是 16 的倍数）", 1048576)
+call("n=98433（不是 16 的倍数）", 98433)
+call("fp16", 98432, torch.float16)
+call("BLOCK=256", 98432, BLOCK=256)
+call("n=1", 1)</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>先用一个空的缓存目录跑一次，再用同一个缓存目录在新进程里跑第二次：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">export TRITON_CACHE_DIR=$(mktemp -d)   # 空的缓存目录
+python life.py                          # 第一次
+python life.py                          # 新进程，磁盘缓存已经有了</code></pre>
+</div><p>运行结果（Max 1100，第一次）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">初始化 driver：5448 ms
+  n=98432
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n: i32（16 的倍数）, BLOCK=1024
+      耗时 1114.52 ms
+  再调一次
+      耗时 0.10 ms
+  n=1048576（换了长度，但也是 16 的倍数）
+      耗时 0.06 ms
+  n=98433（不是 16 的倍数）
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n: i32, BLOCK=1024
+      耗时 112.07 ms
+  fp16
+      编译 x_ptr: *fp16（16 的倍数）, y_ptr: *fp16（16 的倍数）, out_ptr: *fp16（16 的倍数）, n: i32（16 的倍数）, BLOCK=1024
+      耗时 158.56 ms
+  BLOCK=256
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n: i32（16 的倍数）, BLOCK=256
+      耗时 88.46 ms
+  n=1
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n=1, BLOCK=1024
+      耗时 98.68 ms</code></pre>
+</div><p>运行结果（Max 1100，第二次，新进程）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">初始化 driver：88 ms
+  n=98432
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n: i32（16 的倍数）, BLOCK=1024
+      耗时 983.18 ms
+  再调一次
+      耗时 0.21 ms
+  n=1048576（换了长度，但也是 16 的倍数）
+      耗时 0.06 ms
+  n=98433（不是 16 的倍数）
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n: i32, BLOCK=1024
+      耗时 1.56 ms
+  fp16
+      编译 x_ptr: *fp16（16 的倍数）, y_ptr: *fp16（16 的倍数）, out_ptr: *fp16（16 的倍数）, n: i32（16 的倍数）, BLOCK=1024
+      耗时 1.19 ms
+  BLOCK=256
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n: i32（16 的倍数）, BLOCK=256
+      耗时 3.00 ms
+  n=1
+      编译 x_ptr: *fp32（16 的倍数）, y_ptr: *fp32（16 的倍数）, out_ptr: *fp32（16 的倍数）, n=1, BLOCK=1024
+      耗时 1.04 ms</code></pre>
+</div><p>逐条对照图 4-1：</p>
+<ul>
+<li><strong>第一次运行时，「初始化 driver」花了几秒。</strong> 这是 Intel 后端特有的：driver 第一次运行时要现场编几段 C++ 胶水代码（附录 A 第 3.3 节），编好的 <code>.so</code> 也放进缓存目录。第二次运行，同一个缓存目录里已经有了，只要几十毫秒。NVIDIA 后端也有类似的胶水代码（启动 kernel 用的 launcher），开销小一些。</li>
+<li><strong>「再调一次」和「n=1048576」都没有触发编译</strong>，只花了零点几毫秒，走的是内存里的缓存。注意 1048576 和 98432 是不同的长度，但它们都是 16 的倍数，特化键相同，于是用同一份编译结果。<strong>长度本身不是特化键的一部分，长度能不能被 16 整除才是。</strong></li>
+<li><strong><code>n=98433</code>、<code>fp16</code>、<code>BLOCK=256</code>、<code>n=1</code> 各触发了一次编译。</strong> 看钩子打印的特化键：<code>n=98433</code> 少了「16 的倍数」；<code>fp16</code> 的指针类型变成了 <code>*fp16</code>；<code>BLOCK=256</code> 换了常量；<code>n=1</code> 直接被当成常量 <code>n=1</code> 编进了 kernel。第一次运行时，每次编译 0.1 秒左右。第二次运行时，同样这几次「编译」只要一两毫秒，因为是从磁盘缓存加载的。</li>
+<li>**两次运行里，第一次调用 <code>add_kernel</code> 都要 1 秒左右，**哪怕第二次时磁盘缓存里早就有了。我用 cProfile 看过，这 1 秒几乎全部花在 <code>python/triton/runtime/cache.py</code> 的 <code>triton_key()</code> 上：它给 <strong>Triton 自己</strong>算一个指纹，要哈希 compiler、backends、language 目录下的源码，再把整个 <code>libtriton.so</code> 读一遍。缓存的键里包含这个指纹，Triton 一升级，旧缓存就自动作废。它带着 <code>@functools.lru_cache()</code>，每个进程只算一次。Intel 的 <code>libtriton.so</code> 有 1.2 GB；PyPI 上 NVIDIA 版的 triton 3.9.0 只有 477 MB，这笔开销会小一些。</li>
+</ul>
+<div class="warn">
+<strong>推理服务里的冷启动</strong>
+<p>上面这几笔开销加起来，就是「服务刚启动时，前几个请求特别慢」的来源：每个进程都要算一次 Triton 的指纹，每种新的特化键都要编译或加载一次。如果第一个请求的序列长度恰好不是 16 的倍数，第二个是，那第二个请求还会再触发一次编译。生产环境里常见的做法是：<strong>启动时先用各种可能的形状把 kernel 都调一遍（预热）</strong>，并且把 <code>TRITON_CACHE_DIR</code> 放在持久化的盘上，让磁盘缓存在重启之间保留下来。</p>
+</div><h2>特化：哪些变化会触发重新编译</h2>
+<p>把上面的实测总结成规则。Triton 3.9.0 为每次调用算一个特化键，键里有：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>键里记什么</th>
+<th>源码位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>张量（指针）</td>
+<td>元素类型（<code>*fp32</code>、<code>*bf16</code>…）；地址是不是 16 字节的倍数</td>
+<td><code>python/triton/backends/compiler.py</code> 的 <code>get_tensor_specialization</code></td>
+</tr>
+<tr>
+<td>整数</td>
+<td>等于 1 时记成常量；否则记类型（<code>i32</code>，超出 32 位范围是 <code>i64</code>），以及是不是 16 的倍数</td>
+<td><code>python/src/specialize.cc</code> 的 <code>handle_long_type</code></td>
+</tr>
+<tr>
+<td><code>tl.constexpr</code></td>
+<td>值本身</td>
+<td></td>
+</tr>
+<tr>
+<td>启动参数</td>
+<td><code>num_warps</code>、<code>num_stages</code> 等</td>
+<td></td>
+</tr>
+</tbody></table>
+<p>能被 16 整除这件事为什么这么重要，第 3 章已经看到了：它决定了编译器敢不敢做向量化访存。</p>
+<p>如果某个整数参数变化得很频繁，而且你不在乎向量化，可以关掉对它的特化：<code>@triton.jit(do_not_specialize=[&quot;n&quot;])</code>。这样 <code>n</code> 能不能被 16 整除、是不是 1，都不会再触发编译。代价是编译器永远不知道 <code>n</code> 的对齐，第 3 章那个例子的 PTX 里就一律是 16 条标量 load。</p>
+<p>推理服务里，同一个 kernel 会被各种长度调用。它到底会被编译几次？下面的模型按上面的规则算特化键，只用标准库，直接点运行；你可以改 <code>lengths</code>：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20Triton%20%E6%80%8E%E4%B9%88%E5%86%B3%E5%AE%9A%E3%80%8C%E8%BF%99%E6%AC%A1%E8%B0%83%E7%94%A8%E8%A6%81%E4%B8%8D%E8%A6%81%E9%87%8D%E6%96%B0%E7%BC%96%E8%AF%91%E3%80%8D%EF%BC%9A%E6%8C%89%20Triton%203.9.0%20%E7%9A%84%E8%A7%84%E5%88%99%E7%AE%97%E7%89%B9%E5%8C%96%E9%94%AE%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0A%23%0A%23%20%E5%AF%B9%E6%95%B4%E6%95%B0%E5%8F%82%E6%95%B0%EF%BC%88python%2Fsrc%2Fspecialize.cc%20%E7%9A%84%20handle_long_type%EF%BC%89%EF%BC%9A%0A%23%20%20%20%E7%AD%89%E4%BA%8E%201%20%20%20%20%20%20%20%20-%3E%20%E5%BD%93%E6%88%90%E5%B8%B8%E9%87%8F%E7%BC%96%E8%BF%9B%20kernel%EF%BC%88%E9%94%AE%E9%87%8C%E8%AE%B0%E4%B8%8B%E5%80%BC%201%EF%BC%89%0A%23%20%20%2016%20%E7%9A%84%E5%80%8D%E6%95%B0%20%20%20%20%20-%3E%20%E9%94%AE%E9%87%8C%E8%AE%B0%20%22D%22%EF%BC%88divisibility%20%3D%2016%EF%BC%89%EF%BC%8C%E7%BC%96%E8%AF%91%E5%99%A8%E5%8F%AF%E4%BB%A5%E6%94%BE%E5%BF%83%E5%90%91%E9%87%8F%E5%8C%96%0A%23%20%20%20%E5%85%B6%E5%AE%83%20%20%20%20%20%20%20%20%20%20-%3E%20%E9%94%AE%E9%87%8C%E5%8F%AA%E8%AE%B0%E7%B1%BB%E5%9E%8B%EF%BC%88i32%20%E6%88%96%20i64%EF%BC%89%0A%23%20%E5%AF%B9%E6%8C%87%E9%92%88%E5%8F%82%E6%95%B0%EF%BC%9A%E5%9C%B0%E5%9D%80%E6%98%AF%2016%20%E7%9A%84%E5%80%8D%E6%95%B0%E5%B0%B1%E8%AE%B0%20%22D%22%EF%BC%88PyTorch%20%E5%88%86%E9%85%8D%E7%9A%84%E5%BC%A0%E9%87%8F%E5%9F%BA%E6%9C%AC%E9%83%BD%E6%98%AF%EF%BC%89%E3%80%82%0A%23%20tl.constexpr%20%E5%8F%82%E6%95%B0%EF%BC%9A%E5%80%BC%E6%9C%AC%E8%BA%AB%E5%B0%B1%E6%98%AF%E9%94%AE%E7%9A%84%E4%B8%80%E9%83%A8%E5%88%86%E3%80%82%0A%0A%0Adef%20int_key(v%2C%20specialize%3DTrue)%3A%0A%20%20%20%20if%20specialize%20and%20v%20%3D%3D%201%3A%0A%20%20%20%20%20%20%20%20return%20(%22const%22%2C%201)%0A%20%20%20%20ty%20%3D%20%22i32%22%20if%20-2**31%20%3C%3D%20v%20%3C%202**31%20else%20%22i64%22%0A%20%20%20%20return%20(ty%2C%20%22D%22%20if%20specialize%20and%20v%20%25%2016%20%3D%3D%200%20else%20%22%22)%0A%0A%0Adef%20count_compiles(calls%2C%20specialize_n%3DTrue)%3A%0A%20%20%20%20seen%20%3D%20%5B%5D%0A%20%20%20%20for%20dtype%2C%20n%2C%20block%20in%20calls%3A%0A%20%20%20%20%20%20%20%20key%20%3D%20(dtype%2C%20int_key(n%2C%20specialize_n)%2C%20block)%20%20%20%23%20%E6%8C%87%E9%92%88%E9%83%BD%E6%8C%89%2016%20%E5%AD%97%E8%8A%82%E5%AF%B9%E9%BD%90%E5%A4%84%E7%90%86%0A%20%20%20%20%20%20%20%20if%20key%20not%20in%20seen%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20seen.append(key)%0A%20%20%20%20return%20seen%0A%0A%0A%23%20%E4%B8%80%E6%AC%A1%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E9%87%8C%EF%BC%8C%E5%90%8C%E4%B8%80%E4%B8%AA%E9%80%90%E7%82%B9%20kernel%20%E8%A2%AB%E8%BF%99%E4%BA%9B%E9%95%BF%E5%BA%A6%E8%B0%83%E7%94%A8%EF%BC%88dtype%20%E5%92%8C%20BLOCK%20%E4%B8%8D%E5%8F%98%EF%BC%89%0Alengths%20%3D%20%5B1%2C%201%2C%207%2C%20128%2C%20129%2C%204096%2C%204097%2C%201%2C%2031%2C%20512%2C%202**31%5D%0Acalls%20%3D%20%5B(%22bf16%22%2C%20n%2C%201024)%20for%20n%20in%20lengths%5D%0A%0Afor%20spec%20in%20(True%2C%20False)%3A%0A%20%20%20%20keys%20%3D%20count_compiles(calls%2C%20specialize_n%3Dspec)%0A%20%20%20%20print(f%22specialize%20n%20%3D%20%7Bspec%7D%EF%BC%9A%7Blen(lengths)%7D%20%E6%AC%A1%E8%B0%83%E7%94%A8%EF%BC%8C%E7%BC%96%E8%AF%91%20%7Blen(keys)%7D%20%E6%AC%A1%22)%0A%20%20%20%20for%20k%20in%20keys%3A%0A%20%20%20%20%20%20%20%20print(%22%20%20%20%22%2C%20k)%0A%20%20%20%20print()%0A%0A%23%20%E5%86%8D%E6%8D%A2%E4%B8%80%E4%B8%AA%20dtype%E3%80%81%E4%B8%80%E4%B8%AA%20BLOCK%EF%BC%9A%E6%AF%8F%E4%B8%80%E7%A7%8D%E7%BB%84%E5%90%88%E9%83%BD%E6%98%AF%E6%96%B0%E7%9A%84%E7%89%B9%E5%8C%96%0Acalls%20%2B%3D%20%5B(%22fp32%22%2C%204096%2C%201024)%2C%20(%22bf16%22%2C%204096%2C%20256)%5D%0Aprint(f%22%E5%86%8D%E5%8A%A0%E4%B8%8A%20fp32%20%E5%92%8C%20BLOCK%3D256%EF%BC%9A%E7%BC%96%E8%AF%91%20%7Blen(count_compiles(calls))%7D%20%E6%AC%A1%22)"># Triton 怎么决定「这次调用要不要重新编译」：按 Triton 3.9.0 的规则算特化键。只用标准库。
+#
+# 对整数参数（python/src/specialize.cc 的 handle_long_type）：
+#   等于 1        -&gt; 当成常量编进 kernel（键里记下值 1）
+#   16 的倍数     -&gt; 键里记 "D"（divisibility = 16），编译器可以放心向量化
+#   其它          -&gt; 键里只记类型（i32 或 i64）
+# 对指针参数：地址是 16 的倍数就记 "D"（PyTorch 分配的张量基本都是）。
+# tl.constexpr 参数：值本身就是键的一部分。
+
+
+def int_key(v, specialize=True):
+    if specialize and v == 1:
+        return ("const", 1)
+    ty = "i32" if -2**31 &lt;= v &lt; 2**31 else "i64"
+    return (ty, "D" if specialize and v % 16 == 0 else "")
+
+
+def count_compiles(calls, specialize_n=True):
+    seen = []
+    for dtype, n, block in calls:
+        key = (dtype, int_key(n, specialize_n), block)   # 指针都按 16 字节对齐处理
+        if key not in seen:
+            seen.append(key)
+    return seen
+
+
+# 一次推理服务里，同一个逐点 kernel 被这些长度调用（dtype 和 BLOCK 不变）
+lengths = [1, 1, 7, 128, 129, 4096, 4097, 1, 31, 512, 2**31]
+calls = [("bf16", n, 1024) for n in lengths]
+
+for spec in (True, False):
+    keys = count_compiles(calls, specialize_n=spec)
+    print(f"specialize n = {spec}：{len(lengths)} 次调用，编译 {len(keys)} 次")
+    for k in keys:
+        print("   ", k)
+    print()
+
+# 再换一个 dtype、一个 BLOCK：每一种组合都是新的特化
+calls += [("fp32", 4096, 1024), ("bf16", 4096, 256)]
+print(f"再加上 fp32 和 BLOCK=256：编译 {len(count_compiles(calls))} 次")</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">specialize n = True：11 次调用，编译 4 次
+    ('bf16', ('const', 1), 1024)
+    ('bf16', ('i32', ''), 1024)
+    ('bf16', ('i32', 'D'), 1024)
+    ('bf16', ('i64', 'D'), 1024)
+
+specialize n = False：11 次调用，编译 2 次
+    ('bf16', ('i32', ''), 1024)
+    ('bf16', ('i64', ''), 1024)
+
+再加上 fp32 和 BLOCK=256：编译 6 次</code></pre>
+</div><p>11 种长度只编译了 4 次。<code>n</code> 在特化键里只有四种「样子」：等于 1、普通的 i32、16 的倍数的 i32、16 的倍数的 i64。关掉特化以后只剩两种，因为 i32 和 i64 总是要区分的。所以对逐点 kernel 来说，长度变化不会引起「编译风暴」。真正危险的是<strong>把一个经常变化的值标成 <code>tl.constexpr</code></strong>，那样每一个新的值都是一次编译。第 14 章讲 autotune 时，你会看到它的 <code>key</code> 参数是怎么利用、又是怎么约束这件事的。</p>
+<h2>缓存目录里有什么</h2>
+<p>磁盘缓存默认在 <code>~/.triton/cache</code>，可以用 <code>TRITON_CACHE_DIR</code> 改到别处；<code>~</code> 这一级可以用 <code>TRITON_HOME</code> 改（都定义在 <code>python/triton/knobs.py</code>）。每个特化键对应一个子目录，目录名是哈希值。里面的文件就是各级编译产物。在纯 CPU 的机器上把 <code>add_kernel</code> 编到 NVIDIA sm_86（附录 A 第 8 节的离线编译），得到的是：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">add_kernel.source        # 第 0 级：从 Python AST 生成、还没优化的 TTIR
+add_kernel.ttir          # Triton IR，硬件无关
+add_kernel.ttgir         # TritonGPU IR，带 layout，第 3 章看过
+add_kernel.llir          # LLVM IR
+add_kernel.ptx           # NVIDIA 的虚拟汇编
+add_kernel.cubin         # 真正加载到 GPU 上的二进制
+add_kernel.json          # 元数据
+__grp__add_kernel.json   # 这一组文件的清单</code></pre>
+</div><p>Intel 后端的最后两级换成了 <code>add_kernel.spv</code>（SPIR-V），由 GPU 驱动在加载时再编成机器码。缓存目录的根上还会多出几个 <code>.so</code>，就是 driver 第一次运行时编的那些胶水模块。</p>
+<p><code>add_kernel.json</code> 里记着这次编译的全部选项和结果，几个最常用的字段（sm_86 的那份）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">"name": "add_kernel", "num_warps": 4, "num_stages": 3, "shared": 0,
+"target": {"backend": "cuda", "arch": 86, "warp_size": 32}, "enable_fp_fusion": true</code></pre>
+</div><p><code>shared</code> 是这个 kernel 用了多少字节 shared memory（vector add 不用，是 0；第 3 章的 softmax 是 16）。以后你想知道「编译器到底给我的 kernel 选了什么」，第一个该看的就是这个文件。顺带一提，Intel 后端的 <code>num_stages</code> 默认是 2，NVIDIA 是 3：同一个 kernel，不同后端的默认值也不一样。</p>
+<p>这些文件也是第四部分的主要材料：第 19 章会按顺序读一遍 <code>.source</code> → <code>.ttir</code> → <code>.ttgir</code> → <code>.llir</code>，看每一级做了什么。</p>
+<h2>minillm 起步：add 与 silu_mul</h2>
+<p>现在开始全书的贯穿项目 <strong>minillm</strong>：一个用 Triton 写的、简化的 decoder-only Transformer 层。代码在本书仓库的 <code>books/inside-triton/code/minillm/</code>，是一个能 <code>pip install -e</code> 的小包（附录 A 第 9 节）。这一章往里加两个逐点 kernel，都在 <code>minillm/kernels/pointwise.py</code>：</p>
+<ul>
+<li><strong><code>add</code></strong>：就是本章的 vector add。Transformer 层里的残差连接 <code>h = x + attn(x)</code> 用得到它。</li>
+<li><strong><code>silu_mul</code></strong>：<code>silu(gate) * up</code>。现在主流模型的 MLP 用的是 <strong>SwiGLU</strong>：输入分别乘两个权重矩阵得到 <code>gate</code> 和 <code>up</code>，再算 <code>silu(gate) * up</code>，然后乘第三个矩阵。中间这一步是纯逐点的。</li>
+</ul>
+<p><code>silu_mul</code> 的 kernel 和 vector add 几乎一样，只多了两件事：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def _silu_mul_kernel(gate_ptr, up_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    """out = silu(gate) * up，SwiGLU MLP 中间那一步。"""
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs &lt; n
+    # 输入可能是 fp16 / bf16：在 fp32 里算 sigmoid，最后再转回输出的类型
+    g = tl.load(gate_ptr + offs, mask=mask).to(tl.float32)
+    u = tl.load(up_ptr + offs, mask=mask).to(tl.float32)
+    out = g * tl.sigmoid(g) * u
+    tl.store(out_ptr + offs, out.to(out_ptr.dtype.element_ty), mask=mask)</code></pre>
+</div><ul>
+<li><strong>在 fp32 里算。</strong> 模型的激活值通常是 bf16。bf16 只有 8 位有效数字，直接在 bf16 里算 <code>exp</code> 和除法，误差会明显变大。所以先 <code>.to(tl.float32)</code>，算完再转回去。转换发生在寄存器里，不多搬一个字节。</li>
+<li><strong><code>out_ptr.dtype.element_ty</code></strong>：指针指向的元素类型。用它来决定存回去的类型，这个 kernel 就对 fp32、fp16、bf16 都适用。别忘了，每种 dtype 都会单独编译一次。</li>
+</ul>
+<p>外面再包一层普通的 Python 函数，负责检查输入、分配输出、算 grid：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def silu_mul(gate: torch.Tensor, up: torch.Tensor, BLOCK: int = 1024) -&gt; torch.Tensor:
+    _check(gate, up)                          # 形状、dtype、设备相同，并且是连续张量
+    out = torch.empty_like(gate)
+    n = gate.numel()
+    if n:                                     # grid 不能是 0
+        _silu_mul_kernel[(triton.cdiv(n, BLOCK),)](gate, up, out, n, BLOCK=BLOCK)
+    return out</code></pre>
+</div><p>测试在 <code>tests/test_pointwise.py</code>，用 pytest 把两个 kernel 和 PyTorch 的参考实现对比：三种 dtype × 四种长度（1；不是 <code>BLOCK</code> 整数倍的 1000；第 3 章的 98432；不是 16 的倍数的 2²⁰+7），外加二维张量、空张量、非连续张量会被拒绝。<code>add</code> 要求和 PyTorch <strong>逐位相同</strong>；<code>silu_mul</code> 用 <code>torch.testing.assert_close</code> 对该 dtype 的默认容差（容差该怎么定，第 9 章讲）。在仓库根目录运行：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-minillm.sh -q</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">.............................                                            [100%]
+29 passed in 2.57s</code></pre>
+</div><p>最后测性能。<code>bench/bench_pointwise.py</code> 取一个 8B 级别模型 MLP 中间层的大小（4096 个 token × 14336，bf16）。先预测，用第 1 章数趟数的方法：</p>
+<ul>
+<li><code>add</code>：PyTorch 的 <code>a + b</code> 本来就是一个 kernel，读 2 趟、写 1 趟，和我们的一样。<strong>应当一样快。</strong></li>
+<li><code>silu_mul</code>：PyTorch 的 <code>F.silu(a) * b</code> 是两个 kernel：<code>silu</code> 读 1 趟、写 1 趟，乘法读 2 趟、写 1 趟，共 5 趟；我们的融合版读 2 趟、写 1 趟，共 3 趟。<strong>应当快 5/3 ≈ 1.7 倍。</strong></li>
+</ul>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm &amp;&amp; python bench/bench_pointwise.py</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0，4096×14336 bfloat16（每个张量 112 MiB）
+  add       eager       558.1 us   搬 3 趟，按趟数算的带宽   631 GB/s
+  add       minillm     558.7 us   搬 3 趟，按趟数算的带宽   631 GB/s
+  silu_mul  eager       870.2 us   搬 5 趟，按趟数算的带宽   675 GB/s
+  silu_mul  minillm     558.1 us   搬 3 趟，按趟数算的带宽   631 GB/s</code></pre>
+</div><p>预测对上了：<code>add</code> 两边打平；<code>silu_mul</code> 快了 1.56 倍，接近 1.7。差的那一点，是因为 eager 版每一趟单独拿出来跑得更快（按趟数算的带宽更高），中间那张临时矩阵也有一部分留在了 L2 里。第 1 章讲过同样的事。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>看看你的机器上第一次调用有多贵。</strong> 把「实测」那一节的脚本存成 <code>life.py</code>，按上面的两条命令跑两次。在 NVIDIA GPU 上，「初始化 driver」和第一次调用的耗时分别是多少？和 Max 1100 比，哪一笔差得最多，为什么？</li>
+<li><strong>关掉对 <code>n</code> 的特化。</strong> 把 <code>@triton.jit</code> 改成 <code>@triton.jit(do_not_specialize=[&quot;n&quot;])</code>，再跑一次。预测：<code>n=98433</code> 和 <code>n=1</code> 那两行不会再触发编译，其余几行照旧。然后用附录 A 第 8 节的 <code>triton_ir_local.py</code> 看一眼 PTX 里的 <code>ld.global</code> 指令，和第 3 章的表比一比，这个改动的代价是什么？</li>
+<li><strong>在浏览器的模型里</strong>，把 <code>lengths</code> 换成「1 到 4096 的所有整数」（<code>list(range(1, 4097))</code>），会编译几次？再把 <code>BLOCK</code> 也改成随长度变化（比如 <code>min(4096, triton.next_power_of_2(n))</code> 那样，自己用 Python 写一个），又会编译几次？</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li><code>@triton.jit</code> 把函数包成 <code>JITFunction</code>，定义时什么也不做。每次 <code>kernel[grid](...)</code>：算特化键 → 查内存缓存 → 查磁盘缓存 → 都没有才编译。</li>
+<li>在 Max 1100 上实测：编译一个特化版本约 0.1 秒，从磁盘缓存加载约 1–3 毫秒，命中内存缓存约 0.05–0.2 毫秒。每个进程第一次调用还要多花约 1 秒，用来给 Triton 自己算指纹（<code>triton_key()</code>，要把 1.2 GB 的 <code>libtriton.so</code> 哈希一遍）。</li>
+<li><strong>特化键</strong>包括：张量的元素类型和 16 字节对齐、整数是否等于 1 以及是否是 16 的倍数、<code>tl.constexpr</code> 的值、<code>num_warps</code> 等启动参数。长度本身不在键里，所以长度变化不会引起编译风暴；把经常变化的值标成 <code>tl.constexpr</code> 才会。</li>
+<li><code>tl.arange</code> 的长度必须是 2 的幂，并且是编译时常量。mask 掉的位置，<code>tl.load</code> 返回 <code>other</code>；不给 <code>other</code>，值是未定义的，后面要做归约时必须给。</li>
+<li>磁盘缓存在 <code>~/.triton/cache</code>（<code>TRITON_CACHE_DIR</code>、<code>TRITON_HOME</code> 可改），每个特化版本一个目录，里面是每一级 IR、二进制和一份 <code>.json</code> 元数据。服务上线前用各种形状预热一遍，并把缓存目录放在持久化的盘上。</li>
+</ul>
+<p><strong>minillm 进度</strong>：<code>minillm/kernels/pointwise.py</code> 有了 <code>add</code>、<code>silu_mul</code>；<code>tests/test_pointwise.py</code> 共 29 个测试；<code>bench/bench_pointwise.py</code> 测出 <code>silu_mul</code> 融合后快 1.56 倍。</p>
+<p>下一章，我们把 <code>tl</code> 语言系统地过一遍：指针算术和广播、<code>load</code> / <code>store</code> 的 <code>mask</code> 与 <code>other</code>、<code>tl.where</code>、类型提升规则，以及怎么用 stride 去读一个任意排布的二维张量。到时候你就知道怎么处理非连续的输入了。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch03.html">← 第 3 章 块级编程：一个 program 处理一块数据</a>
+  <a class="nav-next" href="ch05.html">第 5 章 tl 语言核心 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

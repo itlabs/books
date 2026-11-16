@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li class="active"><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>上一章的 roofline 显示，minillm 的 GEMM 离屋顶还有一截。接下来三章专门优化它，每一节都按同一个节奏：<strong>先用模型预测改一个参数会怎样，再测，再解释偏差</strong>。这一章动两个最基本的旋钮：tile 有多大（<code>BLOCK_M</code>、<code>BLOCK_N</code>、<code>BLOCK_K</code>，配合 <code>num_warps</code>），以及 program 按什么顺序执行（L2 swizzle）。</p>
+<p>读完你会拿到两个能直接用的模型。一是寄存器预算：<strong>每个线程要放 BLOCK_M × BLOCK_N ÷（每个 warp 的线程数 × num_warps）个累加器元素</strong>。在 Max 1100 上，这个数到了 256 就一定大量溢出，性能从 150 TFLOP/s 掉到 20 几；同一个 128×128 的 tile，只是把 4 个 warp 改成 8 个，就快了 6 倍。二是 L2 复用：同一时刻在跑的 program 要用到多少条 A 和 B。你会先预测 swizzle 在 4096³ 上不起作用，在更大的矩阵上能快 20%–40%，然后看实测是不是这样。最后，minillm 的矩阵乘用上了这两条结论。</p>
+</div><h2>旋钮一：tile 有多大</h2>
+<p>第 7 章的模拟器说过：tile 越大，每搬一个字节能做的运算越多（算术强度 ∝ BM·BN/(BM+BN)）。照这个说法，tile 应该越大越好。但 tile 越大，每个 program 的累加器也越大，而累加器整个循环都待在寄存器里。</p>
+<p>先算一笔账。一个 BM×BN 的 fp32 累加器，分给一个 program 的所有线程：</p>
+<p><strong>每个线程的累加器元素 = BM × BN ÷（每个 warp 的线程数 × num_warps）</strong></p>
+<p>「每个 warp 的线程数」就是 TTGIR 里的 <code>&quot;ttg.threads-per-warp&quot;</code>：NVIDIA 是 32；Intel 上带 <code>tl.dot</code> 的 kernel 是 16（第 2 章）。在 Max 1100 上，第 6 章看到默认每个线程 128 个寄存器，大寄存器模式 256 个。一个 128 个元素的累加器就要占掉 128 个 fp32 寄存器，再加上 A、B 两个操作数、地址和循环变量，256 个也很紧。<strong>预测：累加器每线程 128 个左右是能接受的上限，到了 256 个必然大量溢出。</strong></p>
+<p>用第 8 章的 descriptor GEMM，扫一遍 tile 和 <code>num_warps</code>：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+from triton.tools.tensor_descriptor import TensorDescriptor
+
+from minillm import DEVICE
+from minillm.kernels.matmul import _matmul_desc_kernel
+
+M = N = K = 4096
+a = torch.randn(M, K, device=DEVICE, dtype=torch.bfloat16)
+b = torch.randn(K, N, device=DEVICE, dtype=torch.bfloat16)
+c = torch.empty(M, N, device=DEVICE, dtype=torch.bfloat16)
+ref = a @ b
+# TTGIR 里 "ttg.threads-per-warp" 的值：带 tl.dot 的 kernel 在 Intel 上是 16（第 2 章），NVIDIA 上是 32
+TPW = 16 if DEVICE.type == "xpu" else 32
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，triton {triton.__version__}，bf16 {M}³")
+for BM, BN, BK, nw in ((64, 64, 32, 4), (128, 128, 32, 4), (128, 128, 32, 8), (128, 128, 64, 8),
+                       (128, 256, 32, 8), (128, 256, 32, 16), (256, 128, 32, 16), (256, 256, 32, 16),
+                       (256, 256, 32, 32), (256, 256, 64, 32)):
+    descs = (TensorDescriptor.from_tensor(a, [BM, BK]), TensorDescriptor.from_tensor(b, [BK, BN]),
+             TensorDescriptor.from_tensor(c, [BM, BN]))
+    grid = (triton.cdiv(M, BM), triton.cdiv(N, BN))
+    run = lambda: _matmul_desc_kernel[grid](*descs, K, BLOCK_M=BM, BLOCK_N=BN, BLOCK_K=BK, num_warps=nw)
+    k = run()                                         # 返回编译好的 kernel：拿 n_regs、n_spills
+    torch.testing.assert_close(c, ref, atol=0.5, rtol=0.05)
+    ms = triton.testing.do_bench(run)
+    acc = BM * BN // (TPW * nw)                       # 每个线程要放的累加器元素
+    print(f"  {BM:3}×{BN:3}×{BK:2} num_warps={nw:2}  累加器/线程 {acc:3}  n_regs={k.n_regs:3} "
+          f"n_spills={k.n_spills:4}  {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，bf16 4096³
+   64× 64×32 num_warps= 4  累加器/线程  64  n_regs=256 n_spills=   0   120.7 TFLOP/s
+  128×128×32 num_warps= 4  累加器/线程 256  n_regs=256 n_spills= 406    20.6 TFLOP/s
+  128×128×32 num_warps= 8  累加器/线程 128  n_regs=256 n_spills= 100   130.1 TFLOP/s
+  128×128×64 num_warps= 8  累加器/线程 128  n_regs=256 n_spills= 101    80.4 TFLOP/s
+  128×256×32 num_warps= 8  累加器/线程 256  n_regs=256 n_spills= 406    23.9 TFLOP/s
+  128×256×32 num_warps=16  累加器/线程 128  n_regs=256 n_spills= 100   143.6 TFLOP/s
+  256×128×32 num_warps=16  累加器/线程 128  n_regs=256 n_spills= 100   143.7 TFLOP/s
+  256×256×32 num_warps=16  累加器/线程 256  n_regs=256 n_spills= 406    27.4 TFLOP/s
+  256×256×32 num_warps=32  累加器/线程 128  n_regs=256 n_spills= 100   150.9 TFLOP/s
+  256×256×64 num_warps=32  累加器/线程 128  n_regs=256 n_spills= 101   152.5 TFLOP/s</code></pre>
+</div><p>预测完全成立，而且分界线非常干净：</p>
+<ul>
+<li><strong>累加器每线程 256 个的那四行，全部溢出 406，性能在 20–27 TFLOP/s</strong>，比最好的配置慢 6 倍左右。</li>
+<li>**累加器每线程 128 个的，溢出 100 左右，性能 130–153 TFLOP/s。**少量的溢出没有造成明显的伤害。</li>
+<li><strong>64×64 的 tile 每线程只有 64 个，完全不溢出，但只有 121 TFLOP/s</strong>：tile 太小，算术强度低（第 7 章），数据复用少。</li>
+</ul>
+<p>最能说明问题的是 128×128×32 那两行：<strong>同一个 tile，<code>num_warps</code> 从 4 改成 8，从 20.6 变成 130.1 TFLOP/s</strong>。warp 多一倍，每个线程分到的累加器就少一半，正好跨过了那条线。所以 tile 的大小和 <code>num_warps</code> 不能分开选：<strong>tile 每大一倍，<code>num_warps</code> 也要跟着大一倍</strong>，让每个线程的负担保持不变。</p>
+<p>所有 <code>n_regs</code> 都是 256：这些 kernel 在默认的 128 个寄存器下都会溢出，Intel 后端都自动换成了大寄存器模式（第 6 章）。在 NVIDIA 上，每个线程最多 255 个寄存器，分界线的位置会不一样：同样的 128×128 tile 和 4 个 warp，每个线程分到的累加器只有 128 个（一个 warp 32 个线程）。</p>
+<p>还有一行我还没有解释清楚：<strong>128×128 的 tile、8 个 warp，<code>BLOCK_K</code> 从 32 改成 64，性能从 130 掉到 80</strong>，溢出量却几乎没变（100 对 101）；同样的改动放在 256×256 的 tile 上，性能没有变化（150.9 对 152.5）。<code>BLOCK_K</code> 加倍会让每次循环读进来的 A、B 块变大，但这不足以解释一个上一个下。我暂时没有定位到原因，第 22 章读 TTGIR、看编译器的流水和 layout 决定时，会回到这个例子。<strong>模型能解释大部分现象，但不是全部，这时候要老实承认，然后去读 IR。</strong></p>
+<h2>旋钮二：program 按什么顺序执行</h2>
+<p>tile 定下来以后，还有一个看起来无关紧要的选择：C 的这么多 tile，哪个 program 先算哪个。</p>
+<p>默认的二维 grid 是「按行排」：<code>program_id(0)</code> 走得最快。把 grid 改成一维，自己把编号映射到 <code>(pid_m, pid_n)</code>，就可以换一种顺序。Triton 官方教程 03（矩阵乘）用的是<strong>分组排（grouped ordering）</strong>：<code>GROUP_M</code> 行 tile 为一组，组内一列一列地走。</p>
+<p>为什么顺序会影响速度？同一时刻在 GPU 上跑的，是编号相邻的几十到上百个 program。它们要用到的 A 的行、B 的列，如果有重叠，读一次就能被好几个 program 共享（在 L2 里）；如果没有重叠，就要各自从显存读。看一个 8×8 个 tile 的小例子：</p>
+<div class="concept">
+<svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="60" y="24" font-size="13" font-weight="bold" fill="#374151">按行排（GROUP_M = 1）</text>
+  <rect x="60" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="73" y="61" font-size="11" text-anchor="middle" fill="#ffffff">0</text>
+  <rect x="88" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="101" y="61" font-size="11" text-anchor="middle" fill="#ffffff">1</text>
+  <rect x="116" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="129" y="61" font-size="11" text-anchor="middle" fill="#ffffff">2</text>
+  <rect x="144" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="157" y="61" font-size="11" text-anchor="middle" fill="#ffffff">3</text>
+  <rect x="172" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="185" y="61" font-size="11" text-anchor="middle" fill="#ffffff">4</text>
+  <rect x="200" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="213" y="61" font-size="11" text-anchor="middle" fill="#ffffff">5</text>
+  <rect x="228" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="241" y="61" font-size="11" text-anchor="middle" fill="#ffffff">6</text>
+  <rect x="256" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="269" y="61" font-size="11" text-anchor="middle" fill="#ffffff">7</text>
+  <rect x="60" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="73" y="89" font-size="11" text-anchor="middle" fill="#374151">8</text>
+  <rect x="88" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="101" y="89" font-size="11" text-anchor="middle" fill="#374151">9</text>
+  <rect x="116" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="129" y="89" font-size="11" text-anchor="middle" fill="#374151">10</text>
+  <rect x="144" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="157" y="89" font-size="11" text-anchor="middle" fill="#374151">11</text>
+  <rect x="172" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="185" y="89" font-size="11" text-anchor="middle" fill="#374151">12</text>
+  <rect x="200" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="213" y="89" font-size="11" text-anchor="middle" fill="#374151">13</text>
+  <rect x="228" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="241" y="89" font-size="11" text-anchor="middle" fill="#374151">14</text>
+  <rect x="256" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="269" y="89" font-size="11" text-anchor="middle" fill="#374151">15</text>
+  <rect x="60" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="88" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="116" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="144" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="172" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="200" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="228" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="256" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="60" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="88" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="116" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="144" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="172" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="200" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="228" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="256" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="60" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="88" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="116" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="144" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="172" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="200" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="228" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="256" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="60" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="88" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="116" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="144" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="172" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="200" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="228" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="256" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="60" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="88" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="116" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="144" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="172" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="200" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="228" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="256" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="60" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="88" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="116" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="144" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="172" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="200" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="228" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="256" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <text x="60" y="290" font-size="12" fill="#374151">前 8 个 program：A 的 1 条 + B 的 8 条 = 9 条</text>
+  <text x="420" y="24" font-size="13" font-weight="bold" fill="#374151">分组排（GROUP_M = 4）</text>
+  <rect x="420" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="433" y="61" font-size="11" text-anchor="middle" fill="#ffffff">0</text>
+  <rect x="448" y="44" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="461" y="61" font-size="11" text-anchor="middle" fill="#ffffff">4</text>
+  <rect x="476" y="44" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="489" y="61" font-size="11" text-anchor="middle" fill="#374151">8</text>
+  <rect x="504" y="44" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="517" y="61" font-size="11" text-anchor="middle" fill="#374151">12</text>
+  <rect x="532" y="44" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="44" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="44" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="44" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="72" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="433" y="89" font-size="11" text-anchor="middle" fill="#ffffff">1</text>
+  <rect x="448" y="72" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="461" y="89" font-size="11" text-anchor="middle" fill="#ffffff">5</text>
+  <rect x="476" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="489" y="89" font-size="11" text-anchor="middle" fill="#374151">9</text>
+  <rect x="504" y="72" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="517" y="89" font-size="11" text-anchor="middle" fill="#374151">13</text>
+  <rect x="532" y="72" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="72" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="72" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="72" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="100" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="433" y="117" font-size="11" text-anchor="middle" fill="#ffffff">2</text>
+  <rect x="448" y="100" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="461" y="117" font-size="11" text-anchor="middle" fill="#ffffff">6</text>
+  <rect x="476" y="100" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="489" y="117" font-size="11" text-anchor="middle" fill="#374151">10</text>
+  <rect x="504" y="100" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="517" y="117" font-size="11" text-anchor="middle" fill="#374151">14</text>
+  <rect x="532" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="100" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="128" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="433" y="145" font-size="11" text-anchor="middle" fill="#ffffff">3</text>
+  <rect x="448" y="128" width="26" height="26" fill="#e06a3b" stroke="#ffffff"/>
+  <text x="461" y="145" font-size="11" text-anchor="middle" fill="#ffffff">7</text>
+  <rect x="476" y="128" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="489" y="145" font-size="11" text-anchor="middle" fill="#374151">11</text>
+  <rect x="504" y="128" width="26" height="26" fill="#fbd5c5" stroke="#ffffff"/>
+  <text x="517" y="145" font-size="11" text-anchor="middle" fill="#374151">15</text>
+  <rect x="532" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="128" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="448" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="476" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="504" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="532" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="156" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="448" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="476" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="504" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="532" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="184" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="448" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="476" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="504" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="532" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="212" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="420" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="448" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="476" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="504" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="532" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="560" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="588" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <rect x="616" y="240" width="26" height="26" fill="#f3f4f6" stroke="#ffffff"/>
+  <text x="420" y="290" font-size="12" fill="#374151">前 8 个 program：A 的 4 条 + B 的 2 条 = 6 条</text>
+  <text x="60" y="316" font-size="12" fill="#6b7280">每格是 C 的一个 tile，数字是 program 编号。深橙：同时在跑的前 8 个；浅橙：接下来的 8 个</text>
+</svg>
+<div class="caption">图 12-1　两种执行顺序下，C 的 8×8 个 tile 由哪个 program 计算。按行排时，同时在跑的 program 横着排成一行，要用到 B 的很多列；分组排时，它们挤在一个更「方」的区域里，用到的 A 行和 B 列的总数更少，L2 里的数据被更多的 program 共享</div>
+</div><p>图上前 8 个 program，按行排要用到 9 条（A 的 1 行加 B 的 8 列），分组排只要 6 条。矩阵越大、一行的 tile 越多，这个差距越大。这种重新安排执行顺序、让同时在跑的 program 尽量共享 L2 数据的做法，叫 <strong>L2 swizzle</strong>。minillm 的写法（<code>kernels/matmul.py</code> 的 <code>_matmul_grouped_kernel</code>）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">    pid = tl.program_id(0)
+    num_m = tl.cdiv(M, BLOCK_M)
+    num_n = tl.cdiv(N, BLOCK_N)
+    in_group = GROUP_M * num_n                       # 一组里有多少个 program
+    first_m = (pid // in_group) * GROUP_M            # 这一组从第几行 tile 开始
+    size_m = tl.minimum(num_m - first_m, GROUP_M)    # 最后一组可能不满 GROUP_M 行
+    pid_m = first_m + (pid % in_group) % size_m
+    pid_n = (pid % in_group) // size_m</code></pre>
+</div><h3>先预测</h3>
+<p>swizzle 有没有用，取决于数据能不能<strong>本来就</strong>留在 L2 里。如果 A 和 B 加起来放得进 L2，不管什么顺序，每条都只从显存读一次；只有放不下时，顺序才决定一条数据被读几遍。</p>
+<p>4096³ 的 bf16 GEMM，A 和 B 合计 64 MiB，Max 1100 的 L2 有 192 MiB。**预测：swizzle 在 4096³ 上不起作用。**要看到效果，得把矩阵放大：16384×16384×4096 时 A、B 合计 256 MiB，16384×16384×8192 时 512 MiB，都放不下。</p>
+<p>下面的模型把这件事算出来：同一时刻有一批 program 在跑，它们要用的条从显存读进来，批与批之间按 LRU 留在 L2 里，统计 A、B 一共从显存读了几遍。只用标准库，直接点运行：</p>
+<div class="code-block runnable">
+  <div class="code-head"><span class="lang-tag">Python</span>
+    <button class="run-btn" data-target="code0">▶ 运行</button>
+    <button class="reset-btn" data-target="code0">↺ 还原</button></div>
+  <pre class="line-numbers"><code class="language-python" id="code0" data-original="%23%20GEMM%20%E7%9A%84%E6%89%A7%E8%A1%8C%E9%A1%BA%E5%BA%8F%E5%92%8C%20L2%EF%BC%9A%E6%8C%89%E8%A1%8C%E6%8E%92%20vs%20%E5%88%86%E7%BB%84%E6%8E%92%EF%BC%88GROUP_M%EF%BC%89%EF%BC%8CA%E3%80%81B%20%E8%A6%81%E4%BB%8E%E6%98%BE%E5%AD%98%E8%AF%BB%E5%87%A0%E9%81%8D%E3%80%82%E5%8F%AA%E7%94%A8%E6%A0%87%E5%87%86%E5%BA%93%E3%80%82%0A%23%0A%23%20%E6%AF%8F%E4%B8%AA%20program%20%E7%AE%97%20C%20%E7%9A%84%E4%B8%80%E4%B8%AA%20BM%C3%97BN%20tile%EF%BC%8C%E8%A6%81%E7%94%A8%E5%88%B0%20A%20%E7%9A%84%E4%B8%80%E6%9D%A1%E8%A1%8C%EF%BC%88BM%C3%97K%EF%BC%89%E5%92%8C%20B%20%E7%9A%84%E4%B8%80%E6%9D%A1%E5%88%97%EF%BC%88K%C3%97BN%EF%BC%89%E3%80%82%0A%23%20%E6%A8%A1%E5%9E%8B%EF%BC%88%E5%BE%88%E7%B2%97%EF%BC%8C%E4%BD%86%E6%8A%93%E4%BD%8F%E4%BA%86%E8%A6%81%E7%82%B9%EF%BC%89%EF%BC%9A%0A%23%20%20%20-%20%E5%90%8C%E4%B8%80%E6%97%B6%E5%88%BB%E6%9C%89%20WAVE%20%E4%B8%AA%20program%20%E5%9C%A8%E8%B7%91%EF%BC%88%E4%B8%80%E3%80%8C%E6%89%B9%E3%80%8D%EF%BC%89%EF%BC%8C%E5%AE%83%E4%BB%AC%E6%B2%BF%E7%9D%80%20K%20%E4%B8%80%E8%B5%B7%E5%BE%80%E5%89%8D%E8%B5%B0%EF%BC%9B%0A%23%20%20%20-%20%E4%B8%80%E6%89%B9%E9%87%8C%E5%A6%82%E6%9E%9C%E6%9C%89%E5%A5%BD%E5%87%A0%E4%B8%AA%20program%20%E7%94%A8%E5%90%8C%E4%B8%80%E6%9D%A1%E8%A1%8C%EF%BC%88%E6%88%96%E5%88%97%EF%BC%89%EF%BC%8C%E8%BF%99%E6%9D%A1%E5%8F%AA%E4%BB%8E%E6%98%BE%E5%AD%98%E8%AF%BB%E4%B8%80%E6%AC%A1%EF%BC%9B%0A%23%20%20%20-%20%E6%89%B9%E4%B8%8E%E6%89%B9%E4%B9%8B%E9%97%B4%EF%BC%8C%E7%BC%93%E5%AD%98%E6%8C%89%20LRU%20%E4%BF%9D%E7%95%99%EF%BC%9B%E5%AE%B9%E9%87%8F%20L2%20%E6%98%AF%E3%80%8C%E8%83%BD%E6%9C%89%E6%95%88%E5%88%A9%E7%94%A8%E7%9A%84%E3%80%8D%E9%82%A3%E9%83%A8%E5%88%86%EF%BC%8C%E6%AF%94%E6%A0%87%E7%A7%B0%E5%80%BC%E5%B0%8F%EF%BC%88%E7%AC%AC%201%20%E7%AB%A0%E8%A7%81%E8%BF%87%EF%BC%89%E3%80%82%0Afrom%20collections%20import%20OrderedDict%0A%0A%0Adef%20order(num_m%2C%20num_n%2C%20group_m)%3A%0A%20%20%20%20for%20pid%20in%20range(num_m%20*%20num_n)%3A%0A%20%20%20%20%20%20%20%20if%20group_m%20%3D%3D%201%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%8C%89%E8%A1%8C%E6%8E%92%EF%BC%9A%E5%85%88%E8%B5%B0%E5%AE%8C%20C%20%E7%9A%84%E7%AC%AC%E4%B8%80%E8%A1%8C%20tile%0A%20%20%20%20%20%20%20%20%20%20%20%20yield%20pid%20%2F%2F%20num_n%2C%20pid%20%25%20num_n%0A%20%20%20%20%20%20%20%20else%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E5%88%86%E7%BB%84%E6%8E%92%EF%BC%9Agroup_m%20%E8%A1%8C%E4%B8%80%E7%BB%84%EF%BC%8C%E7%BB%84%E5%86%85%E4%B8%80%E5%88%97%E4%B8%80%E5%88%97%E5%9C%B0%E8%B5%B0%0A%20%20%20%20%20%20%20%20%20%20%20%20group%20%3D%20pid%20%2F%2F%20(group_m%20*%20num_n)%0A%20%20%20%20%20%20%20%20%20%20%20%20first%20%3D%20group%20*%20group_m%0A%20%20%20%20%20%20%20%20%20%20%20%20size%20%3D%20min(num_m%20-%20first%2C%20group_m)%0A%20%20%20%20%20%20%20%20%20%20%20%20yield%20first%20%2B%20(pid%20%25%20(group_m%20*%20num_n))%20%25%20size%2C%20(pid%20%25%20(group_m%20*%20num_n))%20%2F%2F%20size%0A%0A%0Adef%20dram_reads(M%2C%20N%2C%20K%2C%20BM%2C%20BN%2C%20l2_bytes%2C%20wave%2C%20group_m%2C%20elem%3D2)%3A%0A%20%20%20%20strip%20%3D%20%7B%22A%22%3A%20BM%20*%20K%20*%20elem%2C%20%22B%22%3A%20K%20*%20BN%20*%20elem%7D%0A%20%20%20%20progs%20%3D%20list(order(M%20%2F%2F%20BM%2C%20N%20%2F%2F%20BN%2C%20group_m))%0A%20%20%20%20cache%2C%20used%2C%20read%20%3D%20OrderedDict()%2C%200%2C%200%0A%20%20%20%20for%20start%20in%20range(0%2C%20len(progs)%2C%20wave)%3A%0A%20%20%20%20%20%20%20%20need%20%3D%20%7B(%22A%22%2C%20pm)%20for%20pm%2C%20_%20in%20progs%5Bstart%3Astart%20%2B%20wave%5D%7D%20%7C%20%7B(%22B%22%2C%20pn)%20for%20_%2C%20pn%20in%20progs%5Bstart%3Astart%20%2B%20wave%5D%7D%0A%20%20%20%20%20%20%20%20for%20key%20in%20sorted(need)%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20if%20key%20in%20cache%3A%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20cache.move_to_end(key)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20continue%0A%20%20%20%20%20%20%20%20%20%20%20%20read%20%2B%3D%20strip%5Bkey%5B0%5D%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20cache%5Bkey%5D%20%3D%20strip%5Bkey%5B0%5D%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20used%20%2B%3D%20strip%5Bkey%5B0%5D%5D%0A%20%20%20%20%20%20%20%20%20%20%20%20while%20used%20%3E%20l2_bytes%3A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E6%94%BE%E4%B8%8D%E4%B8%8B%EF%BC%9A%E8%B5%B6%E8%B5%B0%E6%9C%80%E4%B9%85%E6%B2%A1%E7%94%A8%E7%9A%84%EF%BC%88%E5%8F%AF%E8%83%BD%E6%98%AF%E8%BF%99%E4%B8%80%E6%89%B9%E5%88%9A%E8%AF%BB%E7%9A%84%EF%BC%89%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20_%2C%20s%20%3D%20cache.popitem(last%3DFalse)%0A%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20used%20-%3D%20s%0A%20%20%20%20return%20read%20%2F%20((M%20*%20K%20%2B%20K%20*%20N)%20*%20elem)%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%23%20%E7%9B%B8%E5%AF%B9%E4%BA%8E%E3%80%8CA%E3%80%81B%20%E5%90%84%E8%AF%BB%E4%B8%80%E9%81%8D%E3%80%8D%E7%9A%84%E5%80%8D%E6%95%B0%0A%0A%0AMiB%20%3D%202**20%0ASHAPES%20%3D%20((4096%2C%204096%2C%204096)%2C%20(16384%2C%2016384%2C%204096)%2C%20(16384%2C%2016384%2C%208192))%0Afor%20gpu%2C%20l2%2C%20wave%20in%20((%22Max%201100%22%2C%20192%20*%20MiB%2C%20112)%2C%20(%22Max%201100%22%2C%2096%20*%20MiB%2C%20112)%2C%20(%22A10%22%2C%206%20*%20MiB%2C%2072))%3A%0A%20%20%20%20print(f%22%7Bgpu%7D%EF%BC%88%E6%9C%89%E6%95%88%20L2%20%E6%8C%89%20%7Bl2%20%2F%2F%20MiB%7D%20MiB%E3%80%81%E6%AF%8F%E6%89%B9%20%7Bwave%7D%20%E4%B8%AA%20program%20%E7%AE%97%EF%BC%89%EF%BC%8Ctile%20256%C3%97256%EF%BC%8CA%E3%80%81B%20%E4%BB%8E%E6%98%BE%E5%AD%98%E8%AF%BB%E4%BA%86%E5%87%A0%E9%81%8D%EF%BC%9A%22)%0A%20%20%20%20print(f%22%20%20%7B'M%C3%97N%C3%97K'%3A%3E18%7D%20%20%20GROUP_M%3D1%20%20%20%20%3D4%20%20%20%20%20%3D8%20%20%20%20%3D16%22)%0A%20%20%20%20for%20M%2C%20N%2C%20K%20in%20SHAPES%3A%0A%20%20%20%20%20%20%20%20r%20%3D%20%5Bdram_reads(M%2C%20N%2C%20K%2C%20256%2C%20256%2C%20l2%2C%20wave%2C%20g)%20for%20g%20in%20(1%2C%204%2C%208%2C%2016)%5D%0A%20%20%20%20%20%20%20%20print(f%22%20%20%7BM%3A%3E6%7D%C3%97%7BN%7D%C3%97%7BK%3A%3C5%7D%20%20%20%7Br%5B0%5D%3A7.1f%7D%20%20%7Br%5B1%5D%3A6.1f%7D%20%7Br%5B2%5D%3A6.1f%7D%20%7Br%5B3%5D%3A6.1f%7D%22)%0A%20%20%20%20print()"># GEMM 的执行顺序和 L2：按行排 vs 分组排（GROUP_M），A、B 要从显存读几遍。只用标准库。
+#
+# 每个 program 算 C 的一个 BM×BN tile，要用到 A 的一条行（BM×K）和 B 的一条列（K×BN）。
+# 模型（很粗，但抓住了要点）：
+#   - 同一时刻有 WAVE 个 program 在跑（一「批」），它们沿着 K 一起往前走；
+#   - 一批里如果有好几个 program 用同一条行（或列），这条只从显存读一次；
+#   - 批与批之间，缓存按 LRU 保留；容量 L2 是「能有效利用的」那部分，比标称值小（第 1 章见过）。
+from collections import OrderedDict
+
+
+def order(num_m, num_n, group_m):
+    for pid in range(num_m * num_n):
+        if group_m == 1:                                 # 按行排：先走完 C 的第一行 tile
+            yield pid // num_n, pid % num_n
+        else:                                            # 分组排：group_m 行一组，组内一列一列地走
+            group = pid // (group_m * num_n)
+            first = group * group_m
+            size = min(num_m - first, group_m)
+            yield first + (pid % (group_m * num_n)) % size, (pid % (group_m * num_n)) // size
+
+
+def dram_reads(M, N, K, BM, BN, l2_bytes, wave, group_m, elem=2):
+    strip = {"A": BM * K * elem, "B": K * BN * elem}
+    progs = list(order(M // BM, N // BN, group_m))
+    cache, used, read = OrderedDict(), 0, 0
+    for start in range(0, len(progs), wave):
+        need = {("A", pm) for pm, _ in progs[start:start + wave]} | {("B", pn) for _, pn in progs[start:start + wave]}
+        for key in sorted(need):
+            if key in cache:
+                cache.move_to_end(key)
+                continue
+            read += strip[key[0]]
+            cache[key] = strip[key[0]]
+            used += strip[key[0]]
+            while used &gt; l2_bytes:                          # 放不下：赶走最久没用的（可能是这一批刚读的）
+                _, s = cache.popitem(last=False)
+                used -= s
+    return read / ((M * K + K * N) * elem)               # 相对于「A、B 各读一遍」的倍数
+
+
+MiB = 2**20
+SHAPES = ((4096, 4096, 4096), (16384, 16384, 4096), (16384, 16384, 8192))
+for gpu, l2, wave in (("Max 1100", 192 * MiB, 112), ("Max 1100", 96 * MiB, 112), ("A10", 6 * MiB, 72)):
+    print(f"{gpu}（有效 L2 按 {l2 // MiB} MiB、每批 {wave} 个 program 算），tile 256×256，A、B 从显存读了几遍：")
+    print(f"  {'M×N×K':&gt;18}   GROUP_M=1    =4     =8    =16")
+    for M, N, K in SHAPES:
+        r = [dram_reads(M, N, K, 256, 256, l2, wave, g) for g in (1, 4, 8, 16)]
+        print(f"  {M:&gt;6}×{N}×{K:&lt;5}   {r[0]:7.1f}  {r[1]:6.1f} {r[2]:6.1f} {r[3]:6.1f}")
+    print()</code></pre>
+  <div class="output" id="code0-out" hidden></div>
+</div><p>运行结果：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Max 1100（有效 L2 按 192 MiB、每批 112 个 program 算），tile 256×256，A、B 从显存读了几遍：
+               M×N×K   GROUP_M=1    =4     =8    =16
+    4096×4096×4096        1.0     1.0    1.0    1.0
+   16384×16384×4096        1.0     1.0    1.0    1.0
+   16384×16384×8192       19.2     8.4    4.5    2.5
+
+Max 1100（有效 L2 按 96 MiB、每批 112 个 program 算），tile 256×256，A、B 从显存读了几遍：
+               M×N×K   GROUP_M=1    =4     =8    =16
+    4096×4096×4096        1.0     1.0    1.0    1.0
+   16384×16384×4096       19.2     8.4    4.5    2.5
+   16384×16384×8192       19.2     9.6    4.5    2.5
+
+A10（有效 L2 按 6 MiB、每批 72 个 program 算），tile 256×256，A、B 从显存读了几遍：
+               M×N×K   GROUP_M=1    =4     =8    =16
+    4096×4096×4096        2.6     2.7    2.2    2.6
+   16384×16384×4096       29.4    10.2    8.0    9.7
+   16384×16384×8192       29.4    10.2    8.0    9.7</code></pre>
+</div><p>第一组按 L2 的标称容量 192 MiB 算：4096³ 和 16384×16384×4096 都只读 1 遍，swizzle 没用；只有 K = 8192 时才有差别。第二组按「能有效利用的」96 MiB 算（第 1 章就见过，真实缓存能用上的比标称值少）：16384×16384×4096 也开始有差别了，按行排要读 19 遍，<code>GROUP_M=16</code> 只要 2.5 遍。到底是哪一种，测了才知道。</p>
+<h3>再测</h3>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import triton
+
+from minillm import DEVICE
+from minillm.kernels.matmul import matmul_grouped
+
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，triton {triton.__version__}，bf16，tile 256×256×32")
+for M, N, K in ((4096, 4096, 4096), (16384, 16384, 4096), (16384, 16384, 8192)):
+    a = torch.randn(M, K, device=DEVICE, dtype=torch.bfloat16)
+    b = torch.randn(K, N, device=DEVICE, dtype=torch.bfloat16)
+    print(f"  {M}×{N}×{K}（A、B 合计 {(M * K + K * N) * 2 / 2**20:.0f} MiB）")
+    for g in (1, 4, 8, 16):                        # GROUP_M=1 就是按行排
+        ms = triton.testing.do_bench(lambda: matmul_grouped(a, b, GROUP_M=g))
+        print(f"    GROUP_M={g:2}  {2 * M * N * K / ms / 1e9:6.1f} TFLOP/s")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，triton 3.9.0，bf16，tile 256×256×32
+  4096×4096×4096（A、B 合计 64 MiB）
+    GROUP_M= 1   150.0 TFLOP/s
+    GROUP_M= 4   149.6 TFLOP/s
+    GROUP_M= 8   148.8 TFLOP/s
+    GROUP_M=16   148.3 TFLOP/s
+  16384×16384×4096（A、B 合计 256 MiB）
+    GROUP_M= 1   155.0 TFLOP/s
+    GROUP_M= 4   173.4 TFLOP/s
+    GROUP_M= 8   182.0 TFLOP/s
+    GROUP_M=16   185.0 TFLOP/s
+  16384×16384×8192（A、B 合计 512 MiB）
+    GROUP_M= 1   132.8 TFLOP/s
+    GROUP_M= 4   178.6 TFLOP/s
+    GROUP_M= 8   188.3 TFLOP/s
+    GROUP_M=16   186.9 TFLOP/s</code></pre>
+</div><ul>
+<li><strong>4096³：四种顺序一样快（148–150 TFLOP/s）</strong>，预测成立。</li>
+<li>**16384×16384×4096：分组以后从 155.0 涨到 185.0，快了 19%。**这一档按 192 MiB 的模型说不该有差别，按 96 MiB 的说有。实测支持后者：能被有效利用的 L2 比 192 MiB 少得多，B 的 64 条（128 MiB）留不住。</li>
+<li>**16384×16384×8192：从 132.8 涨到 188.3，快了 42%。**按行排时 A、B 合计 512 MiB，读的遍数最多，swizzle 的收益也最大。</li>
+</ul>
+<p>模型的数字（读 19 遍 vs 2.5 遍）比实测的差距（快 19%–42%）夸张得多，因为它只数了显存流量，而这个 kernel 在分组以后已经不完全受显存带宽限制了（第 11 章：它离矩阵单元的屋顶也不远）。<strong>模型告诉你方向和大致的分界线，具体快多少要靠测量。</strong><code>GROUP_M</code> 取 8 或 16 都差不多，minillm 取 8。</p>
+<h3>在 A10 上会怎样</h3>
+<p>A10 的 L2 只有 6 MB。上面模型的第三组预测：在 A10 上，<strong>连 4096³ 都放不下</strong>，按行排要读 2.6 遍，分组排 2.2 遍；到了 16384 这两档，差距是 29.4 遍对 8 遍。所以 swizzle 在 L2 小的 GPU 上更重要。这也是为什么 Triton 官方教程在 NVIDIA 上，4096 这种「不大」的尺寸就能测出 swizzle 的收益。本书还没在 A10 上验证这个预测。</p>
+<h2>minillm：带 L2 swizzle 的矩阵乘</h2>
+<p><code>kernels/matmul.py</code> 新增 <code>_matmul_grouped_kernel</code> 和 <code>matmul_grouped</code>：一维 grid、<code>GROUP_M=8</code>、256×256×32、32 个 warp，descriptor 在 kernel 里创建（这样在 <code>triton_op</code> 里也是安全的，第 10 章）。<code>mm()</code> 和 <code>ops.mm</code> 在 Intel GPU 上都改用它。新的测试检查「最后一组不满 GROUP_M 行」时，编号映射没有漏算或重复（比如 1000 行、BLOCK_M=256 时，只有 4 行 tile）。</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">cd books/inside-triton/code/minillm &amp;&amp; python bench/bench_matmul.py</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0，bf16
+  4096×4096×4096
+    指针版 128×128×32                10.189 ms    13.5 TFLOP/s
+    descriptor 256×256×32          0.910 ms   151.1 TFLOP/s
+    + L2 swizzle（GROUP_M=8）        0.911 ms   150.8 TFLOP/s
+    torch.matmul                   0.791 ms   173.9 TFLOP/s
+  16384×16384×4096
+    descriptor 256×256×32         14.705 ms   149.5 TFLOP/s
+    + L2 swizzle（GROUP_M=8）       12.084 ms   182.0 TFLOP/s
+    torch.matmul                   9.811 ms   224.1 TFLOP/s</code></pre>
+</div><p>4096³ 上 swizzle 不起作用，16384×16384×4096 上从 149.5 涨到 182.0 TFLOP/s。和 <code>torch.matmul</code>（oneDNN）还差 15%–20%：下一章的软件流水，和第 14 章的 autotune，就是去追这一截的。</p>
+<h2>动手</h2>
+<ol>
+<li><strong>在你的 GPU 上找寄存器的分界线。</strong> 跑本章的 tile 扫描。NVIDIA 上一个 warp 32 个线程，每个线程最多 255 个寄存器：哪几个配置开始溢出？分界线还在「累加器每线程 256 个」吗？</li>
+<li><strong>验证 A10 上的 swizzle 预测。</strong> 在 A10 上跑本章的 swizzle 实验。4096³ 上 <code>GROUP_M</code> 有没有用？16384 那两档呢？和浏览器里模型的第三组比一比。</li>
+<li><strong>在模型里改一下有效 L2 的大小</strong>，比如 48 MiB、128 MiB，看 16384×16384×4096 这一档的预测怎么变。能不能找到一个值，让模型预测的「按行排 / 分组排」的遍数之比，和实测的速度之比最接近？想一想为什么两者不会完全一致。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>tile 越大，算术强度越高，但累加器越大。<strong>每个线程的累加器元素 = BM × BN ÷（每个 warp 的线程数 × num_warps）</strong>，NVIDIA 一个 warp 32 个线程，Intel 带 <code>tl.dot</code> 的 kernel 是 16。</li>
+<li>Max 1100 上实测：累加器每线程 256 个时一律溢出 406，性能 20–27 TFLOP/s；128 个时 130–153 TFLOP/s。同一个 128×128 tile，<code>num_warps</code> 从 4 改成 8，快了 6 倍。<strong>tile 和 <code>num_warps</code> 要一起选。</strong></li>
+<li>一处尚未解释的现象：128×128、8 个 warp 时，<code>BLOCK_K</code> 从 32 改成 64 会慢下来，溢出量却几乎不变。留到第 22 章读 IR。</li>
+<li><strong>L2 swizzle</strong>：一维 grid，按 <code>GROUP_M</code> 行一组安排 program 的执行顺序，让同时在跑的 program 共享 A 的行和 B 的列。它只在 A、B 放不下 L2 时才有用：Max 1100 上，4096³ 不起作用，16384×16384×4096 快 19%，16384×16384×8192 快 42%。L2 小的 GPU（如 A10，6 MB）上，模型预测它在小得多的矩阵上就开始起作用。</li>
+<li>模型给方向和分界线，测量给具体的数：这一章的两个模型都预测对了「什么时候有用」，但都没能准确预测「快多少」。</li>
+</ul>
+<p><strong>minillm 进度</strong>：<code>kernels/matmul.py</code> 新增 <code>matmul_grouped</code>（L2 swizzle，GROUP_M=8），<code>mm()</code> 和 <code>ops.mm</code> 在 Intel 上改用它；测试共 138 个。</p>
+<p>下一章讲 GEMM 的另一个大旋钮 <code>num_stages</code>：它在硬件上到底做了什么（异步拷贝和多缓冲），为什么 stage 不是越多越好，以及它在 NVIDIA 和 Intel 上为什么是两种完全不同的机制。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch11.html">← 第 11 章 性能模型与测量</a>
+  <a class="nav-next" href="ch13.html">第 13 章 GEMM 优化（二）：软件流水 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

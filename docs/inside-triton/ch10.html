@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 接入 PyTorch</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li class="active"><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 10 章 接入 PyTorch</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>到目前为止，minillm 的 kernel 都是普通的 Python 函数：能算，但 PyTorch 不认识它们。不能求梯度，<code>torch.compile</code> 遇到它们会怎样也不清楚，<code>torch.export</code> 更是无从谈起。这一章用 <code>torch.library</code> 把它们注册成真正的 PyTorch 算子，补上反向传播，并用 <code>torch.compile(fullgraph=True)</code> 把一个 MLP block 整图编译。</p>
+<p>读完你会拿到三样东西。一是三种接法的区别：直接调用、<code>triton_op</code>、<code>custom_op</code>，各自让 <code>torch.compile</code> 看到什么，以 Inductor 生成的代码为证。二是一个完整、通过 <code>opcheck</code> 的算子库 <code>minillm/ops.py</code>，以及两个真实踩到的坑：在算子里取 <code>data_ptr()</code> 会让 <code>opcheck</code> 失败；在 <code>triton_op</code> 里给 kernel 传 host 端的 <code>TensorDescriptor</code>，<code>torch.compile</code> 以后结果变成 NaN，而且不报任何错。三是一个关于性能的诚实结论：<strong>对手写好的 kernel，<code>torch.compile</code> 不会替你融合</strong>，Inductor 只是原样启动它们。</p>
+</div><h2>三种接法</h2>
+<p>把一个 Triton kernel 接进 PyTorch，有三种做法：</p>
+<ol>
+<li><strong>直接调用。</strong> 不注册任何东西，在函数里照常 <code>kernel[grid](...)</code>。<code>torch.compile</code> 能追踪进去（这叫 user-defined Triton kernel），把它原样放进生成的代码里。</li>
+<li><strong><code>torch.library.triton_op</code>。</strong> 注册成一个有名字、有 schema 的算子（比如 <code>minillm::silu_mul</code>），函数体里的 kernel 要用 <code>torch.library.wrap_triton(...)</code> 包一层。它是一个真正的算子：能注册反向、能 <code>torch.export</code>、能被 <code>opcheck</code> 检查；同时 <code>torch.compile</code> 还是看得见里面的 kernel。</li>
+<li><strong><code>torch.library.custom_op</code>。</strong> 也注册成算子，但对 <code>torch.compile</code> <strong>不透明</strong>：编译器不会追踪进去，只把它当成一次外部调用。代价是要自己提供一个 fake 实现（告诉编译器输出的形状和类型）。</li>
+</ol>
+<p>PyTorch 的文档（<code>torch.library.triton_op</code> 的 docstring）给的建议很直接：<strong>能直接调用就直接调用，那是最简单的</strong>；只有当你需要它表现得像一个 PyTorch 内建算子时，比如要注册反向、要支持 tensor subclass 或 <code>torch.export</code>，才用 <code>triton_op</code>；<code>custom_op</code> 是给不能被追踪的实现准备的。</p>
+<p>用同一个 <code>silu_mul</code> kernel 试一试三种接法，函数是 <code>silu_mul(x @ w1, x @ w3) * 2.0</code>，用 <code>TORCH_LOGS=output_code</code> 看 <code>torch.compile</code> 生成的执行计划（Max 1100，节选，去掉了 <code>stream=</code> 参数）：</p>
+<div class="compare">
+<div class="known">
+<div class="compare-head">custom_op：编译器看不见里面</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">extern_kernels.mm(arg0_1, arg1_1, out=buf0)
+extern_kernels.mm(arg0_1, arg2_1, out=buf1)
+buf2 = torch.ops.demo2.silu_mul.default(
+    buf0, buf1)
+...</code></pre>
+</div></div>
+<div class="cpp-side">
+<div class="compare-head">直接调用 / triton_op：kernel 被嵌进来</div><div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">extern_kernels.mm(arg0_1, arg1_1, out=buf0)
+extern_kernels.mm(arg0_1, arg2_1, out=buf1)
+_silu_mul_kernel_0.run(buf0, buf1, buf2,
+    32768, 32, 1, 1)
+triton_poi_fused_mul_0.run(buf2, buf4,
+    32768)</code></pre>
+</div></div>
+</div><p>用 <code>custom_op</code> 时，生成的代码里只有一行 <code>torch.ops.demo2.silu_mul.default(...)</code>；用直接调用或 <code>triton_op</code> 时，我们的 <code>_silu_mul_kernel</code> 的源码被原样复制进了 Inductor 生成的文件，由 Inductor 直接启动（<code>32, 1, 1</code> 是 grid）。</p>
+<p>但注意最后一行：后面那个 <code>* 2.0</code> 是 Inductor 另外生成的一个 kernel（<code>triton_poi_fused_mul_0</code>），<strong>没有被融进我们的 kernel</strong>。Inductor 看得见用户的 kernel，但不会去改写它。这一点在本章最后会变得很重要。</p>
+<div class="concept">
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <g font-size="13" font-weight="bold" text-anchor="middle">
+    <text x="120" y="24" fill="#374151">直接调用</text><text x="360" y="24" fill="#2b6cb0">triton_op</text><text x="600" y="24" fill="#374151">custom_op</text>
+  </g>
+  <g font-size="12">
+    <rect x="20" y="36" width="200" height="150" rx="8" fill="#f9fafb" stroke="#6b7280"/>
+    <rect x="260" y="36" width="200" height="150" rx="8" fill="#ebf4ff" stroke="#2b6cb0" stroke-width="2"/>
+    <rect x="500" y="36" width="200" height="150" rx="8" fill="#f9fafb" stroke="#6b7280"/>
+    <text x="32" y="60" fill="#3f9b5c">✓ torch.compile 看得见 kernel</text><text x="32" y="82" fill="#6b7280">✗ 不是算子：没有名字</text><text x="32" y="104" fill="#6b7280">✗ 不能注册反向</text><text x="32" y="126" fill="#6b7280">✗ 不能 opcheck / export</text><text x="32" y="160" fill="#374151">最简单；只在 compile 里用</text>
+    <text x="272" y="60" fill="#3f9b5c">✓ torch.compile 看得见 kernel</text><text x="272" y="82" fill="#3f9b5c">✓ 是算子：minillm::silu_mul</text><text x="272" y="104" fill="#3f9b5c">✓ register_autograd</text><text x="272" y="126" fill="#3f9b5c">✓ opcheck、torch.export</text><text x="272" y="160" fill="#2b6cb0">kernel 要用 wrap_triton 包</text>
+    <text x="512" y="60" fill="#6b7280">✗ torch.compile 看不见里面</text><text x="512" y="82" fill="#3f9b5c">✓ 是算子</text><text x="512" y="104" fill="#3f9b5c">✓ register_autograd</text><text x="512" y="126" fill="#3f9b5c">✓ opcheck、torch.export</text><text x="512" y="160" fill="#374151">要自己写 register_fake</text>
+  </g>
+  <text x="20" y="214" font-size="12" fill="#6b7280">三种方式下，Inductor 都不会把你的 kernel 和它前后的运算融合在一起：融合仍然是你自己的事</text>
+</svg>
+<div class="caption">图 10-1　把 Triton kernel 接进 PyTorch 的三种方式。minillm 用 triton_op：它既是一个完整的算子，又不妨碍 torch.compile 看见里面的 kernel</div>
+</div><h2>minillm/ops.py：用 triton_op 注册算子</h2>
+<p>minillm 选第二种。<code>minillm/ops.py</code> 把 <code>add</code>、<code>silu_mul</code>、<code>rmsnorm</code>、<code>softmax</code>、<code>mm</code> 都注册成了 <code>minillm::</code> 命名空间下的算子。以 <code>silu_mul</code> 为例：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton_op("minillm::silu_mul", mutates_args=())
+def silu_mul(gate: torch.Tensor, up: torch.Tensor) -&gt; torch.Tensor:
+    gate, up = gate.contiguous(), up.contiguous()
+    out = torch.empty_like(gate)
+    if gate.numel():
+        wrap_triton(_pw._silu_mul_kernel)[_grid1d(gate.numel())](gate, up, out, gate.numel(), BLOCK=BLOCK)
+    return out</code></pre>
+</div><p>几条规则：</p>
+<ul>
+<li><strong>名字是 <code>命名空间::算子名</code></strong>。注册以后，<code>minillm.ops.silu_mul(...)</code> 和 <code>torch.ops.minillm.silu_mul(...)</code> 是同一个东西。</li>
+<li><strong>类型标注不能省</strong>：PyTorch 根据它们推出算子的 schema（<code>(Tensor gate, Tensor up) -&gt; Tensor</code>）。</li>
+<li><strong><code>mutates_args=()</code></strong> 声明这个算子不修改任何输入。如果你的 kernel 是就地写入某个输入的，必须在这里列出来，否则编译器可能做出错误的优化（本章最后那个坑，本质上就是编译器以为某次写入不存在）。</li>
+<li><strong>函数体里只能有 PyTorch 的算子和用 <code>wrap_triton</code> 包起来的 kernel</strong>。<code>.contiguous()</code>、<code>torch.empty_like</code> 都是 PyTorch 算子，可以用；直接写 <code>_silu_mul_kernel[grid](...)</code> 不行。</li>
+</ul>
+<h2>反向传播</h2>
+<p>注册反向用 <code>register_autograd(backward, setup_context=...)</code>：<code>setup_context</code> 在前向结束时运行，决定要为反向保存什么；<code>backward</code> 拿到输出的梯度，返回每个输入的梯度。</p>
+<p><code>silu_mul</code> 的反向值得写成 Triton kernel：它是逐点的，读 3 个张量（输出的梯度、gate、up）、写 2 个，融合成一个 kernel 最划算。设 s = sigmoid(g)，那么 silu(g) = g·s，对 g 求导是 s + g·s·(1 − s) = s·(1 + g·(1 − s))：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span></div>
+  <pre class="line-numbers"><code class="language-python">@triton.jit
+def _silu_mul_bwd_kernel(grad_ptr, gate_ptr, up_ptr, dgate_ptr, dup_ptr, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs &lt; n
+    dy = tl.load(grad_ptr + offs, mask=mask).to(tl.float32)
+    g = tl.load(gate_ptr + offs, mask=mask).to(tl.float32)
+    u = tl.load(up_ptr + offs, mask=mask).to(tl.float32)
+    s = tl.sigmoid(g)
+    tl.store(dup_ptr + offs, (dy * g * s).to(dup_ptr.dtype.element_ty), mask=mask)
+    tl.store(dgate_ptr + offs, (dy * u * s * (1 + g * (1 - s))).to(dgate_ptr.dtype.element_ty), mask=mask)</code></pre>
+</div><p>它本身也注册成一个 <code>triton_op</code>（<code>minillm::silu_mul_backward</code>），反向函数调用它：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def _silu_mul_setup(ctx, inputs, output):
+    ctx.save_for_backward(*inputs)                 # 反向要用 gate 和 up，不保存输出
+
+
+def _silu_mul_bwd(ctx, grad):
+    gate, up = ctx.saved_tensors
+    return silu_mul_backward(grad, gate, up)
+
+
+silu_mul.register_autograd(_silu_mul_bwd, setup_context=_silu_mul_setup)</code></pre>
+</div><p>其余几个算子的反向：</p>
+<ul>
+<li><strong><code>add</code></strong>：梯度原样传给两个输入。</li>
+<li><strong><code>mm</code></strong>：dA = dC · Bᵀ，dB = Aᵀ · dC，直接调用 <code>mm</code> 自己。转置视图的最后一维不连续，<code>mm</code> 会自动退回指针版（第 8 章）。</li>
+<li><strong><code>rmsnorm</code>、<code>softmax</code></strong>：先用 PyTorch 在 fp32 里写。rmsnorm 的公式是 dx = r·(g·w) − x·r³·mean(g·w·x)，dw = Σ g·x·r，其中 r 是前向里的 1/√(mean(x²)+ε)。把它们写成 Triton kernel，是本章的练习之一。</li>
+</ul>
+<h2>opcheck：算子合不合格</h2>
+<p>注册完的算子要用 <code>torch.library.opcheck</code> 检查一遍。它默认跑四项测试（看它的签名就知道：<code>test_schema</code>、<code>test_autograd_registration</code>、<code>test_faketensor</code>、<code>test_aot_dispatch_dynamic</code>），检查 schema 是否和实际行为一致、反向是否注册对了、在 FakeTensor 上（<code>torch.compile</code> 追踪时用的「只有形状没有数据」的张量）能不能运行、在动态形状下能不能被 AOT 编译。</p>
+<p>我在写 <code>ops.mm</code> 时踩了一个坑。第 8 章的 <code>descriptor_ok</code> 里调用了 <code>t.data_ptr()</code> 来检查地址对齐，搬进 <code>triton_op</code> 以后，<code>opcheck</code> 失败了。下面是一个最小的复现（一个在算子里取 <code>data_ptr()</code> 的 <code>add</code>），运行结果（Max 1100，节选）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">OpCheckError
+opcheck(op, ...): test_aot_dispatch_dynamic failed with Cannot access data pointer of Tensor (e.g. FakeTensor, FunctionalTensor). If you're using torch.compile/export/fx, it is likely that we are erroneously tracing into a custom kernel. To fix this, please wrap the custom kernel into an opaque custom op. Please see the following for details: https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html (scroll up for stack trace)</code></pre>
+</div><p><code>torch.compile</code> 追踪时，传进算子的是 FakeTensor，它没有真正的内存，取不到地址。<code>ops.py</code> 里的做法是改查 <code>storage_offset()</code>：PyTorch 分配的存储本身是对齐的，只要视图的偏移量对齐，地址就对齐。<strong><code>triton_op</code> 的函数体里，凡是要看「具体数据」的事情都不能做</strong>：取地址、读张量的值、根据数据走不同的分支，都不行。能看的只有形状、stride、dtype、设备。</p>
+<h2>torch.compile 看到了什么</h2>
+<p><code>tests/test_ops.py</code> 用这些算子拼了一个 MLP 半层，也就是 minillm 后面要用的结构：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">def mlp_block(x, w_norm, w1, w3, w2):
+    """minillm 的 MLP 半层：h = x + W2 · (silu(W1 · rmsnorm(x)) ⊙ (W3 · rmsnorm(x)))"""
+    h = ops.rmsnorm(x, w_norm, 1e-6)
+    return ops.add(x, ops.mm(ops.silu_mul(ops.mm(h, w1), ops.mm(h, w3)), w2))</code></pre>
+</div><p><code>torch.compile(mlp_block, fullgraph=True)</code> 能整图编译（<code>fullgraph=True</code> 的意思是不允许 graph break：任何一处编译器处理不了，都直接报错，而不是悄悄退回 eager），前向和反向的结果都和 eager 一致。生成的执行计划是这样的（Max 1100，节选，去掉了分配缓冲区的行和 <code>stream=</code> 参数）：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">_rmsnorm_kernel_0.run(arg0_1, arg1_1, buf0, 512, 512, 512, 1e-06, 256, 1, 1)
+_matmul_desc_dev_kernel_1.run(buf0, arg2_1, buf2, 256, 1024, 512, 512, 1024, 1024, 1, 4, 1)
+_matmul_desc_dev_kernel_1.run(buf0, arg3_1, buf4, 256, 1024, 512, 512, 1024, 1024, 1, 4, 1)
+_silu_mul_kernel_2.run(buf2, buf4, buf6, 262144, 256, 1, 1)
+_matmul_desc_dev_kernel_3.run(buf6, arg4_1, buf8, 256, 512, 1024, 1024, 512, 512, 1, 2, 1)
+_add_kernel_4.run(arg0_1, buf8, buf10, 131072, 128, 1, 1)</code></pre>
+</div><p><strong>就是我们的 6 个 kernel，按顺序一个一个启动</strong>，Inductor 自己没有生成任何计算代码。对比一下，同样的 MLP 用 PyTorch 原生的算子写（<code>F.rms_norm</code>、<code>@</code>、<code>F.silu</code>），交给 <code>torch.compile</code>，生成的是：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">triton_per_fused__fused_rms_norm_0.run(arg0_1, arg1_1, buf1, 256, 512)
+extern_kernels.mm(buf1, arg2_1, out=buf2)
+extern_kernels.mm(buf1, arg3_1, out=buf3)
+triton_poi_fused_mul_silu_1.run(buf4, buf3, 262144)
+extern_kernels.addmm(arg0_1, buf4, arg4_1, alpha=1, beta=1, out=buf5)</code></pre>
+</div><p>Inductor 自己生成了 rmsnorm 和 <code>silu * mul</code> 两个融合 kernel，矩阵乘交给库函数，<strong>最后一次矩阵乘和残差加法合成了一个 <code>addmm</code></strong>：在矩阵乘的结尾顺手加上 x，省掉了一个单独的加法 kernel，也省掉了一趟读写。</p>
+<p>在真实的尺寸上测一下这四种跑法（8B 级别模型的一层 MLP，4096 个 token，bf16）：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: sm80 xpu
+import torch
+import torch.nn.functional as F
+import triton
+
+import minillm.ops as ops
+from minillm import DEVICE
+
+
+def mlp_minillm(x, w_norm, w1, w3, w2):
+    h = ops.rmsnorm(x, w_norm, 1e-6)
+    return ops.add(x, ops.mm(ops.silu_mul(ops.mm(h, w1), ops.mm(h, w3)), w2))
+
+
+def mlp_torch(x, w_norm, w1, w3, w2):
+    h = F.rms_norm(x, (x.shape[-1],), w_norm, 1e-6)
+    return x + (F.silu(h @ w1) * (h @ w3)) @ w2
+
+
+tokens, hidden, inter = 4096, 4096, 14336            # 8B 级别模型的一层 MLP
+torch.manual_seed(0)
+x = torch.randn(tokens, hidden, device=DEVICE, dtype=torch.bfloat16)
+ws = (torch.randn(hidden, device=DEVICE, dtype=torch.bfloat16),
+      torch.randn(hidden, inter, device=DEVICE, dtype=torch.bfloat16) * 0.02,
+      torch.randn(hidden, inter, device=DEVICE, dtype=torch.bfloat16) * 0.02,
+      torch.randn(inter, hidden, device=DEVICE, dtype=torch.bfloat16) * 0.02)
+flops = 2 * tokens * hidden * inter * 3
+ref = mlp_torch(x, *ws)
+print(f"{getattr(torch, DEVICE.type).get_device_name()}，torch {torch.__version__}，triton {triton.__version__}，"
+      f"MLP {tokens}×{hidden}→{inter}，bf16")
+for name, fn in (("PyTorch eager", mlp_torch), ("minillm eager", mlp_minillm),
+                 ("torch.compile(PyTorch)", torch.compile(mlp_torch)),
+                 ("torch.compile(minillm)", torch.compile(mlp_minillm, fullgraph=True))):
+    torch.testing.assert_close(fn(x, *ws), ref, atol=0.1, rtol=0.05)
+    ms = triton.testing.do_bench(lambda: fn(x, *ws))
+    print(f"  {name:24} {ms:6.2f} ms   {flops / ms / 1e9:6.1f} TFLOP/s")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 NVIDIA sm_80+ 或 Intel GPU（XPU）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">Intel(R) Data Center GPU Max 1100，torch 2.15.0+xpu，triton 3.9.0，MLP 4096×4096→14336，bf16
+  PyTorch eager              8.59 ms    168.0 TFLOP/s
+  minillm eager              8.81 ms    163.8 TFLOP/s
+  torch.compile(PyTorch)     8.00 ms    180.3 TFLOP/s
+  torch.compile(minillm)     9.08 ms    159.0 TFLOP/s</code></pre>
+</div><p>几个结论，都不太讨喜，但都是真的：</p>
+<ul>
+<li><strong>minillm 的 eager 已经和 PyTorch eager 差不多快</strong>：三次矩阵乘占了绝大部分时间，第 8 章的 descriptor GEMM 已经接近 oneDNN。</li>
+<li><strong><code>torch.compile</code> 没有让 minillm 变快，甚至稍慢</strong>：它只是原样启动我们的 kernel，没有可以融合的东西，还多了一点调度开销。</li>
+<li><strong><code>torch.compile</code> 包 PyTorch 原生写法是最快的。</strong></li>
+</ul>
+<p>最后一条的那一截差距从哪来？只看上面的执行计划，很容易以为是融合，特别是把残差加法合进 <code>addmm</code> 的那一步。我把 MLP 拆成单个 kernel 分别测了一遍（同样的尺寸，Max 1100）：</p>
+<table>
+<thead>
+<tr>
+<th>部分</th>
+<th align="right">minillm</th>
+<th align="right"><code>torch.matmul</code> / PyTorch</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>两次 4096×4096×14336 的矩阵乘</td>
+<td align="right">2 × 2.618 ms</td>
+<td align="right">2 × 2.459 ms</td>
+</tr>
+<tr>
+<td>一次 4096×14336×4096 的矩阵乘</td>
+<td align="right">2.987 ms</td>
+<td align="right">2.604 ms</td>
+</tr>
+<tr>
+<td><code>silu_mul</code></td>
+<td align="right">0.382 ms</td>
+<td align="right">（Inductor 也要做一次）</td>
+</tr>
+<tr>
+<td>rmsnorm</td>
+<td align="right">0.140 ms</td>
+<td align="right">（Inductor 也要做一次）</td>
+</tr>
+<tr>
+<td>残差加法</td>
+<td align="right">0.159 ms</td>
+<td align="right">0（合进了 <code>addmm</code>）</td>
+</tr>
+</tbody></table>
+<p>三次矩阵乘，minillm 比 PyTorch 背后的 oneDNN 合计慢了 0.70 ms；残差加法那个单独的 kernel 只有 0.16 ms。<strong>差距的大头在 GEMM 本身，不在融合。</strong> 我还试过把残差加法融进 minillm 的矩阵乘（在 <code>store</code> 之前把残差读进来加上，就是本章的练习 2）：在 Max 1100 上，MLP 的时间不降反升，从 8.83 ms 变成了 8.99 ms。收尾时多读的那一块残差，让 GEMM 自己慢了下来，抵掉了省下的那个 kernel。</p>
+<p>两个教训：</p>
+<ul>
+<li><strong>当你决定手写 kernel 时，融合就成了你自己的事</strong>：Inductor 会原样启动你的 kernel，不会替你把前后的运算融进去。</li>
+<li><strong>融合不是免费的，先测清楚时间花在哪。</strong> 对一个 GEMM 占九成时间的层来说，先让 GEMM 本身追上 oneDNN（第三部分：tile、执行顺序、流水、autotune），比琢磨省掉一个 0.16 ms 的加法重要得多。反过来，对已经被 Inductor 处理得很好的部分（逐点、按行归约），手写 kernel 的收益本来就很小；手写的价值在 Inductor 做不到的地方，比如第 1 章的 attention。</li>
+</ul>
+<h2>一个坑：triton_op 里的 host 端 TensorDescriptor</h2>
+<p>最后讲一个我在写 <code>ops.mm</code> 时遇到的、最危险的坑，因为它<strong>不报错，只给出错误的结果</strong>。</p>
+<p>第 8 章 minillm 的 <code>matmul_desc</code> 是在 host 端用 <code>TensorDescriptor.from_tensor</code> 创建 descriptor，再传给 kernel。把这段代码原样搬进 <code>triton_op</code>，eager 模式下完全正确；但被 <code>torch.compile</code> 编译以后，在 torch 2.15.0+xpu、triton-xpu 3.9.0 上，结果变成了 NaN：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">eager 0.03125
+compile nan</code></pre>
+</div><p>（第一行是 eager 模式下和 <code>a @ b</code> 的最大误差，fp16 的正常范围；第二行是 <code>torch.compile(lambda a, b: mm(a, b) + 1)</code> 的最大误差。）打开生成的代码，原因一目了然：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">buf1 = empty_strided_xpu((512, 512), (512, 1), torch.float16)
+# Topologically Sorted Source Nodes: [add], Original ATen: [aten.add]
+triton_poi_fused_add_0.run(buf1, 262144, stream=raw_stream0)</code></pre>
+</div><p><strong>矩阵乘的 kernel 根本没有被调用</strong>。Inductor 分配了一块输出缓冲区，就直接在这块没有初始化的内存上做 <code>+ 1</code>。它显然认为那次 kernel 调用没有任何效果，于是把它当成死代码删掉了。Inductor 分析用户 kernel 读写了哪些张量的代码在 PyTorch 的 <code>torch/_higher_order_ops/triton_kernel_wrap.py</code> 里（它认得 <code>tt.descriptor_store</code>，host 端 descriptor 另有一个 <code>maybe_unpack_host_tma_descriptor</code> 处理），具体是哪一步在这个组合下漏掉了输出，我没有进一步定位。</p>
+<p>我又试了另外三种组合：</p>
+<table>
+<thead>
+<tr>
+<th>写法</th>
+<th><code>torch.compile</code> 以后</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>triton_op</code> + host 端 <code>TensorDescriptor</code></td>
+<td><strong>结果是 NaN，不报错</strong></td>
+</tr>
+<tr>
+<td>直接调用 + host 端 <code>TensorDescriptor</code></td>
+<td>报错：<code>Unsupported: Observed exception</code></td>
+</tr>
+<tr>
+<td><code>triton_op</code> + kernel 里 <code>tl.make_tensor_descriptor</code></td>
+<td>正确</td>
+</tr>
+<tr>
+<td>直接调用 + kernel 里 <code>tl.make_tensor_descriptor</code></td>
+<td>正确</td>
+</tr>
+</tbody></table>
+<p>所以 <code>ops.mm</code> 改用了一个在 kernel 里创建 descriptor 的版本（<code>kernels/matmul.py</code> 的 <code>_matmul_desc_dev_kernel</code>），测试 <code>tests/test_ops.py::test_compile_mlp_block</code> 会在每次运行时检查编译以后的结果。这个问题在 NVIDIA 上是否存在，我还没有验证。教训比具体的修法更重要：<strong>接进 <code>torch.compile</code> 的算子，一定要有一个「编译以后结果还对」的测试</strong>，因为编译器的优化可能悄悄删掉你的 kernel。</p>
+<h2>minillm 进度</h2>
+<p>新增 <code>minillm/ops.py</code>（5 个前向算子、1 个反向算子），<code>kernels/pointwise.py</code> 加了 <code>_silu_mul_bwd_kernel</code>，<code>kernels/matmul.py</code> 加了 <code>_matmul_desc_dev_kernel</code>。新增的 <code>tests/test_ops.py</code> 对每个算子跑 <code>opcheck</code>、对比梯度，并整图编译 MLP 半层，前向反向都要和 eager 一致：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">终端</span></div>
+  <pre class="line-numbers"><code class="language-bash">books/inside-triton/verify/verify-minillm.sh -q</code></pre>
+</div><p>运行结果（Max 1100）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">........................................................................ [ 57%]
+......................................................                   [100%]
+126 passed in 7.81s</code></pre>
+</div><h2>动手</h2>
+<ol>
+<li><strong>把 rmsnorm 的反向写成 Triton kernel。</strong> 照着 <code>_silu_mul_bwd_kernel</code> 的样子，一个 program 处理一行：先算 r 和 mean(g·w·x)，再写出 dx。dw 要对所有行求和，可以先让每个 program 写出自己那一行的 g·x·r，最后用 PyTorch 求和（或者用 <code>tl.atomic_add</code>，想想它的代价）。用 <code>opcheck</code> 和 <code>test_backward</code> 检查。</li>
+<li><strong>把残差加法融进矩阵乘。</strong> 给 <code>_matmul_desc_dev_kernel</code> 加一个输入 <code>residual</code>，在 <code>c_desc.store</code> 之前用一个 descriptor 把它读进来加上。再用它重写 <code>mlp_block</code> 的最后一步。在 Max 1100 上这样做反而慢了（正文那张表下面）；在你的 GPU 上呢？用第 2 章的「数趟数」解释你看到的结果：省掉了什么，又多搬了什么。</li>
+<li><strong>复现那个坑。</strong> 用 host 端的 <code>TensorDescriptor</code> 写一个 <code>triton_op</code>，在你的 GPU 上 <code>torch.compile</code> 一下，看结果对不对；再用 <code>TORCH_LOGS=output_code</code> 看生成的代码里有没有你的 kernel。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>三种接法：<strong>直接调用</strong>（最简单，<code>torch.compile</code> 能追踪进去，但不是算子）；<strong><code>triton_op</code></strong>（真正的算子，能注册反向、<code>opcheck</code>、<code>export</code>，编译器还看得见 kernel，kernel 要用 <code>wrap_triton</code> 包起来）；<strong><code>custom_op</code></strong>（对编译器不透明，要自己写 fake 实现）。minillm 用 <code>triton_op</code>。</li>
+<li>反向用 <code>register_autograd(backward, setup_context=...)</code> 注册。逐点算子的反向值得写成融合的 Triton kernel（<code>silu_mul</code> 的反向读 3 写 2，一个 kernel）。</li>
+<li><code>torch.library.opcheck</code> 检查 schema、autograd 注册、FakeTensor、动态形状。<code>triton_op</code> 的函数体里不能看具体数据：调用 <code>data_ptr()</code> 会让 <code>test_aot_dispatch_dynamic</code> 失败。</li>
+<li><strong><code>torch.compile</code> 不会融合你手写的 kernel</strong>：它原样启动它们，融合是你自己的事。Max 1100 上，同一个 MLP 层，<code>torch.compile(PyTorch 原生)</code> 最快，但拆开测发现，差距的大头是三次 GEMM（minillm 比 oneDNN 慢 0.70 ms），而不是融合（残差加法只有 0.16 ms，把它融进 GEMM 实测反而更慢）。先测清楚时间花在哪，再决定融合什么。</li>
+<li>在 torch 2.15.0+xpu、triton-xpu 3.9.0 上，<code>triton_op</code> 里传 host 端 <code>TensorDescriptor</code> 的 kernel 会在 <code>torch.compile</code> 后被删掉，结果是 NaN 且不报错；改成在 kernel 里创建 descriptor 就正常。<strong>接进 <code>torch.compile</code> 的算子，一定要测编译以后的结果。</strong></li>
+</ul>
+<p><strong>minillm 进度</strong>：新增 <code>minillm/ops.py</code>（<code>add</code>、<code>silu_mul</code>、<code>rmsnorm</code>、<code>softmax</code>、<code>mm</code> 五个算子，都能求梯度、能被 <code>torch.compile</code> 整图编译）；测试共 126 个。第二部分到此结束：minillm 的 kernel 都写对了，也接进了 PyTorch。</p>
+<p>第三部分从下一章开始，目标从「写对」变成「写快」。第 11 章先把测量本身讲清楚：roofline 怎么用，<code>triton.testing.do_bench</code> 到底做了什么、为什么要清 L2，以及怎么用 proton 看一个 kernel 的时间花在了哪里。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch09.html">← 第 9 章 调试与测试</a>
+  <a class="nav-next" href="ch11.html">第 11 章 性能模型与测量 →</a>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>

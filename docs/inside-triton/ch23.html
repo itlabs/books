@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 23 章 三个后端</title>
+<link href="vendor/prism-tomorrow.min.css" rel="stylesheet">
+<link href="vendor/prism-line-numbers.min.css" rel="stylesheet">
+<link href="assets/style.css" rel="stylesheet">
+</head>
+<body>
+<button id="menu-toggle" aria-label="目录">☰ 目录</button>
+<nav id="sidebar"><div class="toc-title"><a href="index.html">📘 目录</a></div>
+<div class="toc-home"><a href="../index.html">← 返回书架</a></div>
+<ul class="toc-list"><li><a href="ch01.html">第 1 章 为什么是 Triton：从 PyTorch eager 到手写 kernel 之间的鸿沟</a></li>
+<li><a href="ch02.html">第 2 章 够用的 GPU 硬件模型</a></li>
+<li><a href="ch03.html">第 3 章 块级编程：一个 program 处理一块数据</a></li>
+<li><a href="ch04.html">第 4 章 第一个 kernel：vector add 的完整生命周期</a></li>
+<li><a href="ch05.html">第 5 章 tl 语言核心</a></li>
+<li><a href="ch06.html">第 6 章 归约与逐行算子</a></li>
+<li><a href="ch07.html">第 7 章 tl.dot 与第一个 GEMM</a></li>
+<li><a href="ch08.html">第 8 章 访存的三种写法</a></li>
+<li><a href="ch09.html">第 9 章 调试与测试</a></li>
+<li><a href="ch10.html">第 10 章 接入 PyTorch</a></li>
+<li><a href="ch11.html">第 11 章 性能模型与测量</a></li>
+<li><a href="ch12.html">第 12 章 GEMM 优化（一）：tile 尺寸与执行顺序</a></li>
+<li><a href="ch13.html">第 13 章 GEMM 优化（二）：软件流水</a></li>
+<li><a href="ch14.html">第 14 章 autotune</a></li>
+<li><a href="ch15.html">第 15 章 新架构特性在 Triton 里怎么用</a></li>
+<li><a href="ch16.html">第 16 章 低精度</a></li>
+<li><a href="ch17.html">第 17 章 FlashAttention 前向</a></li>
+<li><a href="ch18.html">第 18 章 够用的 MLIR</a></li>
+<li><a href="ch19.html">第 19 章 编译管线全景</a></li>
+<li><a href="ch20.html">第 20 章 Layout 系统（一）</a></li>
+<li><a href="ch21.html">第 21 章 Layout 系统（二）：linear layout 与 convert_layout</a></li>
+<li><a href="ch22.html">第 22 章 关键 pass 与性能定位</a></li>
+<li class="active"><a href="ch23.html">第 23 章 三个后端</a></li>
+<li class="toc-todo"><span>第 24 章 Gluon（一）：为什么需要再往下一层</span></li>
+<li class="toc-todo"><span>第 25 章 Gluon（二）：手写高性能 GEMM</span></li>
+<li class="toc-todo"><span>第 26 章 Helion：带 tile 的 PyTorch</span></li>
+<li class="toc-todo"><span>第 27 章 同一个 kernel 的另几种写法</span></li>
+<li class="toc-todo"><span>第 28 章 MoE：grouped GEMM 与路由</span></li>
+<li class="toc-todo"><span>第 29 章 推理 kernel：decode attention</span></li>
+<li class="toc-todo"><span>第 30 章 收官：串起一层，再谈 Triton 还没解决的问题</span></li>
+<li><a href="appendix-a.html">附录 A 环境搭建</a></li>
+<li><a href="appendix-b.html">附录 B 概念对照表</a></li>
+<li class="toc-todo"><span>附录 C 环境变量与调试开关速查</span></li>
+<li class="toc-todo"><span>附录 D 源码导览地图</span></li></ul></nav>
+<main>
+<article>
+<h1>第 23 章 三个后端</h1>
+<h2>这一章想让你带走什么</h2>
+<div class="goal-box">
+<p>同一份 Triton kernel，可以编到 NVIDIA、AMD、Intel 三家的 GPU 上。前面二十多章一直在两个后端之间来回对照：A10（NVIDIA）和 Max 1100（Intel），AMD 只在 CE 的链接里露过面。这一章把三个后端并排放：它们怎样接进 Triton，<code>ttgir</code> 之后各走什么路，以及<strong>同一个 kernel 换一个后端时，哪些东西会悄悄地变</strong>。</p>
+<p>读完你会拿到三样东西。一是后端的结构：每个后端就是一对 <code>compiler.py</code> + <code>driver.py</code>，通过 Python 的 entry point 注册，NVIDIA、AMD 在 Triton 的主仓库里，Intel 在一个公开的下游仓库里。二是一张实测的对照表：默认的 <code>num_warps</code>、<code>num_stages</code>、warp 宽度、fp32 <code>tl.dot</code> 的默认精度、<code>tl.dot</code> 的最小形状、支持的 fp8 格式、编译的各段、每段的 pass 数，以及同一个 kernel 在三边编出来的 layout 和 shared memory。三是一张可移植性清单：比如 <code>num_warps=4</code> 在 NVIDIA 上是 128 个线程，在 AMD 上是 256 个，在 Intel 上做矩阵乘时是 64 个；同一个 fp32 的 <code>tl.dot</code>，在 AMD 上默认按 IEEE fp32 算，在另外两家默认是 TF32。</p>
+</div><h2>后端是怎么接进来的</h2>
+<p><code>triton.backends</code> 这个包在导入时调用 <code>_discover_backends()</code>（<code>python/triton/backends/__init__.py</code>），找出所有后端：</p>
+<div class="code-block">
+  <div class="code-head"><span class="lang-tag">Python</span></div>
+  <pre class="line-numbers"><code class="language-python">    # Default path: discover via entry points for out-of-tree/downstream plugins.
+    for ep in entry_points().select(group="triton.backends"):
+        compiler = importlib.import_module(f"{ep.value}.compiler")
+        driver = importlib.import_module(f"{ep.value}.driver")
+        backends[ep.name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),  # type: ignore
+                                    _find_concrete_subclasses(driver, DriverBase))  # type: ignore</code></pre>
+</div><p>每个后端就是两个模块：</p>
+<ul>
+<li><strong><code>compiler.py</code></strong> 里一个 <code>BaseBackend</code> 的子类，负责编译：<code>parse_options</code>（默认选项）、<code>add_stages</code>（第 19 章那几段）、<code>get_codegen_implementation</code>（前端生成 TTIR 时要问后端的几件事，比如 <code>tl.dot</code> 的最小形状）、<code>hash</code>（进缓存键）。</li>
+<li><strong><code>driver.py</code></strong> 里一个 <code>DriverBase</code> 的子类，负责运行：检测这台机器上有没有这种 GPU、加载编译好的二进制、启动 kernel、提供 <code>do_bench</code> 用的计时器和清缓存的办法。</li>
+</ul>
+<p><code>triton.runtime.driver.active</code> 选的是「检测到有 GPU 的那个」驱动，<code>compile()</code> 再根据它报告的 <code>GPUTarget</code> 用 <code>make_backend</code> 挑出对应的编译器。所以第 15、16 章那种「在 Intel 的机器上编 sm_90」的离线编译能成立：编译器只要一个 <code>GPUTarget</code>，不需要真的有这块 GPU。</p>
+<p>三个后端的源码位置：</p>
+<table>
+<thead>
+<tr>
+<th>后端</th>
+<th>位置</th>
+<th>维护方式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>NVIDIA</td>
+<td>Triton 主仓库的 <code>third_party/nvidia/</code></td>
+<td>树内（in-tree）</td>
+</tr>
+<tr>
+<td>AMD</td>
+<td>Triton 主仓库的 <code>third_party/amd/</code></td>
+<td>树内</td>
+</tr>
+<tr>
+<td>Intel</td>
+<td>GitHub 上的 intel/intel-xpu-backend-for-triton，<code>third_party/intel/</code></td>
+<td>树外（out-of-tree）：一个跟着主仓库同步的下游分支</td>
+</tr>
+</tbody></table>
+<p>「树外」意味着 Intel 后端不在 Triton 的主仓库里，而是一个完整的 Triton 分支加上自己的 <code>third_party/intel/</code>。本书用的 triton-xpu 3.9.0 就是从它构建的，所以它同时带着 nvidia、amd、intel 三个后端，这也是本书能在 Max 1100 上离线编 NVIDIA、AMD 代码的原因。主仓库里的公共部分（TTIR、TTGIR 的大部分 pass）三家共用，第 22 章那张表里「各有一份」的 pass，是后端在公共版本之外又写了自己的。</p>
+<h2>默认值对照</h2>
+<p>下面的脚本不需要任何 GPU 也能跑（只要装的 Triton 带着这几个后端）：对三个目标各构造一个编译器对象，打印它的默认选项，最后再加上当前机器上的 GPU。</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton (Python)</span>
+    </div>
+  <pre class="line-numbers"><code class="language-python"># arch: any
+import dataclasses
+
+import triton
+import triton.language as tl
+from triton.backends import backends
+from triton.backends.compiler import GPUTarget, Language
+from triton.compiler.compiler import make_backend
+
+print(f"triton {triton.__version__}，装好的后端：{', '.join(backends)}")
+current = triton.runtime.driver.active.get_current_target()
+targets = [("NVIDIA sm_86", GPUTarget("cuda", 86, 32)), ("NVIDIA sm_90", GPUTarget("cuda", 90, 32)),
+           ("AMD gfx942", GPUTarget("hip", "gfx942", 64)), (f"当前的 GPU（{current.backend}）", current)]
+for name, target in targets:
+    backend = make_backend(target)                 # 不需要这个 GPU：只是构造编译器对象
+    opts = backend.parse_options({})               # 不传任何选项时的默认值
+    stages = {}
+    backend.add_stages(stages, opts, Language.TRITON)
+    min_dot = backend.get_codegen_implementation(opts)["min_dot_size"]
+    d = dataclasses.asdict(opts)
+    print(f"{name}")
+    print(f"  warp 宽度 {target.warp_size}，num_warps {d['num_warps']}，num_stages {d['num_stages']}，"
+          f"fp32 tl.dot 默认精度 {d['default_dot_input_precision']}")
+    print(f"  各段：{' → '.join(stages)}")
+    print("  tl.dot 的最小形状 (M, N, K)：" + "，".join(f"{t} {min_dot(t, t)}" for t in (tl.bfloat16, tl.float32, tl.int8)))
+    print(f"  支持的 fp8：{', '.join(d['supported_fp8_dtypes'])}")</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">本地运行：</span><code>python main.py   # 需要 GPU（不限厂商）；环境见附录 A</code></div>
+</div><p>运行结果（Max 1100 上的 triton-xpu 3.9.0）：</p>
+<div class="code-block">
+  
+  <pre class="line-numbers"><code class="language-none">triton 3.9.0，装好的后端：amd, intel, nvidia
+NVIDIA sm_86
+  warp 宽度 32，num_warps 4，num_stages 3，fp32 tl.dot 默认精度 tf32
+  各段：ttir → ttgir → llir → ptx → cubin
+  tl.dot 的最小形状 (M, N, K)：bf16 (1, 1, 16)，fp32 (1, 1, 8)，int8 (1, 1, 32)
+  支持的 fp8：fp8e4b15, fp8e5
+NVIDIA sm_90
+  warp 宽度 32，num_warps 4，num_stages 3，fp32 tl.dot 默认精度 tf32
+  各段：ttir → ttgir → llir → ptx → cubin
+  tl.dot 的最小形状 (M, N, K)：bf16 (1, 1, 16)，fp32 (1, 1, 8)，int8 (1, 1, 32)
+  支持的 fp8：fp8e4b15, fp8e4nv, fp8e5
+AMD gfx942
+  warp 宽度 64，num_warps 4，num_stages 2，fp32 tl.dot 默认精度 ieee
+  各段：ttir → ttgir → llir → amdgcn → hsaco
+  tl.dot 的最小形状 (M, N, K)：bf16 (1, 1, 1)，fp32 (1, 1, 1)，int8 (1, 1, 1)
+  支持的 fp8：fp8e4b8, fp8e4nv, fp8e5, fp8e5b16
+当前的 GPU（xpu）
+  warp 宽度 32，num_warps 4，num_stages 2，fp32 tl.dot 默认精度 tf32
+  各段：ttir → ttgir → llir → spv
+  tl.dot 的最小形状 (M, N, K)：bf16 (1, 1, 1)，fp32 (1, 1, 1)，int8 (1, 16, 32)
+  支持的 fp8：fp8e5, fp8e4nv, fp8e4b15</code></pre>
+</div><p>逐行看差别：</p>
+<ul>
+<li><strong>warp 宽度</strong>：NVIDIA 32，AMD 64（AMD 叫 wavefront）。Intel 这里报告 32，但第 12 章说过，有 <code>tl.dot</code> 的 kernel 用 16（module 属性 <code>&quot;ttg.threads-per-warp&quot; = 16</code>），其它 kernel 用 32。</li>
+<li><strong><code>num_stages</code></strong>：NVIDIA 默认 3，AMD 和 Intel 默认 2。同一个参数在三边的含义也不同（第 13 章）：NVIDIA 是 shared memory 的缓冲区份数加一，Intel 是提前几轮发预取。</li>
+<li><strong>fp32 <code>tl.dot</code> 的默认精度</strong>：NVIDIA 和 Intel 默认 TF32，<strong>AMD 默认 IEEE fp32</strong>。同一个 fp32 的矩阵乘，在 AMD 上算得更准、也更慢（第 7 章讲过 TF32 的精度）。</li>
+<li><strong>最后几段</strong>：NVIDIA <code>ptx → cubin</code>，AMD <code>amdgcn → hsaco</code>，Intel 只到 <code>spv</code>（机器码在加载时由驱动生成，第 19 章）。</li>
+<li><strong><code>tl.dot</code> 的最小形状</strong>：前端用 <code>min_dot_size</code> 检查 <code>tl.dot</code> 的形状（第 7 章）。NVIDIA 只限制 K（bf16 至少 16，int8 至少 32），AMD 什么都不限制，Intel 只限制 int8（N ≥ 16，K ≥ 32），其余形状太小时退回普通的乘加（第 7 章）。</li>
+<li><strong>fp8</strong>：列表是「前端接受哪些 fp8 类型」，不是「哪些有硬件支持」。sm_86 不接受 e4m3（<code>fp8e4nv</code>），第 16 章那个报错就是这么来的；Intel 接受 e4m3，但第 16 章看到，它是先转成 fp16 再算的。AMD gfx942 多了 <code>fp8e4b8</code>、<code>fp8e5b16</code> 两种，是 MI300 自己的 fp8 变体（指数偏置不同）。</li>
+</ul>
+<h2><code>ttgir</code> 之后：三条路</h2>
+<p>第 19 章按段数过 <code>row_sum</code> 的 pass，加上 AMD（gfx942，离线编译）：</p>
+<table>
+<thead>
+<tr>
+<th>段</th>
+<th align="right">sm_86</th>
+<th align="right">gfx942</th>
+<th align="right">Max 1100</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ttir</code></td>
+<td align="right">10</td>
+<td align="right">11</td>
+<td align="right">20</td>
+</tr>
+<tr>
+<td><code>ttgir</code></td>
+<td align="right">44</td>
+<td align="right">35</td>
+<td align="right">32</td>
+</tr>
+<tr>
+<td><code>llir</code></td>
+<td align="right">19</td>
+<td align="right">20</td>
+<td align="right">19</td>
+</tr>
+<tr>
+<td>最后几段</td>
+<td align="right"><code>ptx</code>：LLVM 的 NVPTX 后端；<code>cubin</code>：<code>ptxas</code></td>
+<td align="right"><code>amdgcn</code>：LLVM 的 AMDGPU 后端；<code>hsaco</code>：用 lld 链接（<code>amd.link_hsaco</code>）</td>
+<td align="right"><code>spv</code>：LLVM IR 翻译成 SPIR-V（<code>LLVMSPIRVLib</code>，即 SPIRV-LLVM-Translator）</td>
+</tr>
+</tbody></table>
+<p><code>ttgir</code> 段里各家都有自己的 pass。AMD 那 35 个里，有 <code>TritonAMDGPUAccelerateMatmul</code>（选 MFMA 指令）、<code>TritonAMDGPUPipeline</code>（流水）、<code>TritonAMDGPUConvertToBufferOps</code>（把指针访存换成 AMD 的 buffer 指令）、<code>TritonAMDGPUBlockPingpong</code>（两组 warp 交替做计算和访存）、<code>TritonAMDGPUInThreadTranspose</code> 等；Intel 的见第 22 章那张表。</p>
+<p><code>llir</code> 段的结构三家相同：先把 <code>scf</code> 变成 <code>cf</code>、分配 shared memory，再把 <code>tt</code> / <code>ttg</code> / 后端方言的 op 换成 LLVM 方言，最后转成 LLVM IR、跑 LLVM 的优化。区别在于换成什么：NVIDIA 用 NVVM 的 intrinsic（<code>llvm.nvvm.*</code>），AMD 用 ROCDL（<code>llvm.amdgcn.*</code>），Intel 先经过自己的 TritonGEN 方言（<code>ConvertTritonGENToLLVM</code>），换成 Intel GPU 的内建函数和 SPIR-V 的扩展指令。</p>
+<h2>同一个 kernel，三种 layout</h2>
+<p>第 20 章那几个小 kernel，在三个后端上编一遍（sm_86、gfx942 离线编译，Max 1100 上实际运行）。下面的链接打开的是 AMD 的版本（CE 上的 <code>triton_amd_370</code>，gfx942），把编译器换成 <code>triton_nvidia_370</code> 就是 NVIDIA：</p>
+<div class="code-block cpp">
+  <div class="code-head"><span class="lang-tag">Triton → TTGIR</span>
+    <a class="ce-btn" href="https://godbolt.org/#%7B%22version%22%3A4%2C%22content%22%3A%5B%7B%22type%22%3A%22row%22%2C%22content%22%3A%5B%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22codeEditor%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22source%22%3A%22%23%20CE%3A%20triton_amd_370%5Cn%23%20IR%3A%20ttgir%5Cnimport%20torch%5Cnimport%20triton%5Cnimport%20triton.language%20as%20tl%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20copy1d(x_ptr%2C%20y_ptr%2C%20BLOCK%3A%20tl.constexpr)%3A%5Cn%20%20%20%20offs%20%3D%20tl.program_id(0)%20*%20BLOCK%20%2B%20tl.arange(0%2C%20BLOCK)%5Cn%20%20%20%20tl.store(y_ptr%20%2B%20offs%2C%20tl.load(x_ptr%20%2B%20offs))%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20tile2d(x_ptr%2C%20y_ptr%2C%20stride%2C%20BM%3A%20tl.constexpr%2C%20BN%3A%20tl.constexpr)%3A%5Cn%20%20%20%20r%20%3D%20tl.arange(0%2C%20BM)%5B%3A%2C%20None%5D%5Cn%20%20%20%20c%20%3D%20tl.arange(0%2C%20BN)%5BNone%2C%20%3A%5D%5Cn%20%20%20%20tl.store(y_ptr%20%2B%20r%20*%20stride%20%2B%20c%2C%20tl.load(x_ptr%20%2B%20r%20*%20stride%20%2B%20c)%20*%202)%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20rowmax(x_ptr%2C%20y_ptr%2C%20stride%2C%20BM%3A%20tl.constexpr%2C%20BN%3A%20tl.constexpr)%3A%5Cn%20%20%20%20r%20%3D%20tl.arange(0%2C%20BM)%5Cn%20%20%20%20c%20%3D%20tl.arange(0%2C%20BN)%5Cn%20%20%20%20x%20%3D%20tl.load(x_ptr%20%2B%20r%5B%3A%2C%20None%5D%20*%20stride%20%2B%20c%5BNone%2C%20%3A%5D)%5Cn%20%20%20%20tl.store(y_ptr%20%2B%20r%2C%20tl.max(x%2C%20axis%3D1))%5Cn%5Cn%5Cn%40triton.jit%5Cndef%20dot(a_ptr%2C%20b_ptr%2C%20c_ptr%2C%20M%3A%20tl.constexpr%2C%20N%3A%20tl.constexpr%2C%20K%3A%20tl.constexpr)%3A%5Cn%20%20%20%20m%20%3D%20tl.arange(0%2C%20M)%5Cn%20%20%20%20n%20%3D%20tl.arange(0%2C%20N)%5Cn%20%20%20%20k%20%3D%20tl.arange(0%2C%20K)%5Cn%20%20%20%20a%20%3D%20tl.load(a_ptr%20%2B%20m%5B%3A%2C%20None%5D%20*%20K%20%2B%20k%5BNone%2C%20%3A%5D)%5Cn%20%20%20%20b%20%3D%20tl.load(b_ptr%20%2B%20k%5B%3A%2C%20None%5D%20*%20N%20%2B%20n%5BNone%2C%20%3A%5D)%5Cn%20%20%20%20tl.store(c_ptr%20%2B%20m%5B%3A%2C%20None%5D%20*%20N%20%2B%20n%5BNone%2C%20%3A%5D%2C%20tl.dot(a%2C%20b))%5Cn%5Cn%5Cnh%20%3D%20torch.empty(4096%2C%20device%3D%5C%22cuda%5C%22%2C%20dtype%3Dtorch.float16)%5Cnt%20%3D%20torch.empty(64%2C%2064%2C%20device%3D%5C%22cuda%5C%22%2C%20dtype%3Dtorch.float16)%5Cnc%20%3D%20torch.empty(64%2C%2064%2C%20device%3D%5C%22cuda%5C%22%2C%20dtype%3Dtorch.float32)%5Cncopy1d%5B(4%2C)%5D(h%2C%20h%2C%20BLOCK%3D1024)%5Cntile2d%5B(1%2C)%5D(t%2C%20t%2C%2064%2C%20BM%3D64%2C%20BN%3D64)%5Cnrowmax%5B(1%2C)%5D(t%2C%20t%2C%2064%2C%20BM%3D64%2C%20BN%3D64)%5Cndot%5B(1%2C)%5D(t%2C%20t%2C%20c%2C%20M%3D64%2C%20N%3D64%2C%20K%3D64)%22%2C%22lang%22%3A%22triton%22%7D%7D%2C%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22compiler%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22source%22%3A1%2C%22lang%22%3A%22triton%22%2C%22compiler%22%3A%22triton_amd_370%22%2C%22options%22%3A%22%22%7D%7D%2C%7B%22type%22%3A%22component%22%2C%22componentName%22%3A%22device%22%2C%22componentState%22%3A%7B%22id%22%3A1%2C%22editorid%22%3A1%2C%22treeid%22%3A0%2C%22compilerName%22%3A%22triton_amd_370%22%2C%22device%22%3A%22copy1d%20%5Bstage%203%5D.ttgir%22%7D%7D%5D%7D%5D%7D" target="_blank" rel="noopener">🔬 在 Compiler Explorer 看 IR</a></div>
+  <pre class="line-numbers"><code class="language-python"># CE: triton_amd_370
+# IR: ttgir
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def copy1d(x_ptr, y_ptr, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    tl.store(y_ptr + offs, tl.load(x_ptr + offs))
+
+
+@triton.jit
+def tile2d(x_ptr, y_ptr, stride, BM: tl.constexpr, BN: tl.constexpr):
+    r = tl.arange(0, BM)[:, None]
+    c = tl.arange(0, BN)[None, :]
+    tl.store(y_ptr + r * stride + c, tl.load(x_ptr + r * stride + c) * 2)
+
+
+@triton.jit
+def rowmax(x_ptr, y_ptr, stride, BM: tl.constexpr, BN: tl.constexpr):
+    r = tl.arange(0, BM)
+    c = tl.arange(0, BN)
+    x = tl.load(x_ptr + r[:, None] * stride + c[None, :])
+    tl.store(y_ptr + r, tl.max(x, axis=1))
+
+
+@triton.jit
+def dot(a_ptr, b_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr):
+    m = tl.arange(0, M)
+    n = tl.arange(0, N)
+    k = tl.arange(0, K)
+    a = tl.load(a_ptr + m[:, None] * K + k[None, :])
+    b = tl.load(b_ptr + k[:, None] * N + n[None, :])
+    tl.store(c_ptr + m[:, None] * N + n[None, :], tl.dot(a, b))
+
+
+h = torch.empty(4096, device="cuda", dtype=torch.float16)
+t = torch.empty(64, 64, device="cuda", dtype=torch.float16)
+c = torch.empty(64, 64, device="cuda", dtype=torch.float32)
+copy1d[(4,)](h, h, BLOCK=1024)
+tile2d[(1,)](t, t, 64, BM=64, BN=64)
+rowmax[(1,)](t, t, 64, BM=64, BN=64)
+dot[(1,)](t, t, c, M=64, N=64, K=64)</code></pre>
+  <div class="local-cmd"><span class="local-cmd-label">不需要 GPU：</span><code>CE 只编译不运行（triton_amd_370）；Device 面板里可切换 source / TTIR / TTGIR / LLVM IR / AMDGCN</code></div>
+</div><p>结果（3.9.0）：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>sm_86</th>
+<th>gfx942</th>
+<th>Max 1100</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>warp 宽度（<code>threads-per-warp</code>）</td>
+<td>32</td>
+<td>64</td>
+<td>32；<code>dot</code> 是 16</td>
+</tr>
+<tr>
+<td><code>copy1d</code>（1024 个 fp16，4 个 warp）每个线程几个元素</td>
+<td>8（16 字节）</td>
+<td><strong>4（8 字节）</strong></td>
+<td>8（16 字节）</td>
+</tr>
+<tr>
+<td><code>tile2d</code>（64×64 fp16）的 <code>threadsPerWarp</code></td>
+<td>[4, 8]</td>
+<td>[8, 8]</td>
+<td>[4, 8]</td>
+</tr>
+<tr>
+<td><code>dot</code> 的累加器 layout</td>
+<td><code>nvidia_mma</code> v2，<code>instrShape = [16, 8]</code></td>
+<td><code>amd_mfma</code> v3，<code>instrShape = [32, 32, 8]</code></td>
+<td><code>ttig.dpas</code>，8×16</td>
+</tr>
+<tr>
+<td><code>dot</code> 的 shared memory</td>
+<td>16384 字节</td>
+<td>8192 字节</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>rowmax</code> 的 shared memory</td>
+<td>128 字节</td>
+<td>128 字节</td>
+<td>128 字节</td>
+</tr>
+</tbody></table>
+<p>几个值得注意的地方：</p>
+<ul>
+<li><strong><code>copy1d</code> 在 AMD 上每个线程只有 4 个元素</strong>。1024 个元素分给 4 × 64 = 256 个线程，每人只能分到 4 个，一次只读 8 字节，而不是 NVIDIA、Intel 上的 16 字节。<code>BLOCK = 1024, num_warps = 4</code> 这组参数是按 32 线程的 warp 挑的，到了 64 线程的 warp 上，同样的块就「不够分」了。要读满 16 字节，AMD 上要么把 <code>BLOCK</code> 翻倍，要么把 <code>num_warps</code> 减半。</li>
+<li><strong>矩阵指令的形状差别很大</strong>：NVIDIA <code>mma.sync</code> 一条算 16×8，AMD MFMA 一条算 32×32，Intel DPAS 一条算 8×16。tile 太小时，AMD 的一条指令就盖过了整个 tile 的一大块；第 12 章那套「每个线程多少个累加器」的算法，在三边要用不同的数。</li>
+<li><strong>shared memory</strong>：NVIDIA 两个操作数都要经过 shared memory（16 KiB）；AMD 用了 8 KiB，TTGIR 里有两个 shared layout，其中一个是 AMD 自己的 <code>#ttg.amd_rotating_shared</code>，8 KiB 只放得下一个 64×64 的 fp16 操作数，两个操作数怎样复用这块空间我没有细看；Intel 直接用 2D block IO 读进寄存器，一点都不用（第 20 章）。</li>
+</ul>
+<h2>可移植性清单</h2>
+<p>把前面二十多章遇到的、和后端有关的差别列在一起。写一个要在多家 GPU 上跑的 kernel 时，这些是要检查的地方：</p>
+<table>
+<thead>
+<tr>
+<th>方面</th>
+<th>NVIDIA</th>
+<th>AMD</th>
+<th>Intel</th>
+<th>本书哪里讲过</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>warp 宽度，<code>num_warps=4</code> 时的线程数</td>
+<td>32，128 个</td>
+<td>64，256 个</td>
+<td>32 / 16（有 <code>tl.dot</code> 时），128 / 64 个</td>
+<td>第 2、12 章</td>
+</tr>
+<tr>
+<td>每个线程的累加器元素数 = BM·BN ÷（warp 宽度 · num_warps）</td>
+<td>按 32 算</td>
+<td>按 64 算</td>
+<td>按 16 算</td>
+<td>第 12 章</td>
+</tr>
+<tr>
+<td>shared memory 上限</td>
+<td>A10 每个 block 约 99 KB；H100 约 227 KB</td>
+<td>MI300 每个 CU 64 KB</td>
+<td>Max 1100 每个 work-group 128 KiB</td>
+<td>第 13 章</td>
+</tr>
+<tr>
+<td><code>num_stages</code> 的含义和默认值</td>
+<td>多缓冲 + <code>cp.async</code> / TMA，默认 3</td>
+<td>流水，默认 2</td>
+<td>提前预取，默认 2</td>
+<td>第 13 章</td>
+</tr>
+<tr>
+<td>fp32 <code>tl.dot</code> 的默认精度</td>
+<td>TF32</td>
+<td>IEEE</td>
+<td>TF32</td>
+<td>第 7 章、本章</td>
+</tr>
+<tr>
+<td>访存的快速路径</td>
+<td>Hopper+ 的 TMA（descriptor）</td>
+<td>buffer 指令</td>
+<td>2D block IO（descriptor，要能证明对齐）</td>
+<td>第 8、15 章</td>
+</tr>
+<tr>
+<td>后端自己的编译选项</td>
+<td><code>maxnreg</code> 等</td>
+<td><code>waves_per_eu</code>、<code>kpack</code>、<code>matrix_instr_nonkdim</code> 等</td>
+<td><code>grf_mode</code>、<code>reduce_variable_liveness</code> 等</td>
+<td>第 17、22 章</td>
+</tr>
+<tr>
+<td>最后的机器码在哪里生成</td>
+<td><code>compile()</code> 里（<code>ptxas</code>）</td>
+<td><code>compile()</code> 里（lld）</td>
+<td>加载时（驱动里的 IGC），另有驱动的缓存</td>
+<td>第 19 章</td>
+</tr>
+</tbody></table>
+<p>由此得出几条实用的规则：</p>
+<ul>
+<li><strong>不要把 <code>num_warps</code>、<code>BLOCK_*</code> 写死成一组数</strong>。它们的「合适值」由 warp 宽度、寄存器数、shared memory 上限共同决定，每家都不一样。第 14 章的 autotune、或者像 minillm 那样按 <code>DEVICE.type</code> 分开配置（<code>attention.launch_config</code>、<code>lowp._config</code>），是最简单的办法。</li>
+<li><strong>后端专有的选项只传给对应的后端</strong>。把 <code>reduce_variable_liveness</code> 传给 NVIDIA 后端，会报 <code>KeyError: &#39;Keyword argument reduce_variable_liveness was specified but unrecognised&#39;</code>。minillm 只在 <code>DEVICE.type == &quot;xpu&quot;</code> 时加这个选项。</li>
+<li><strong>数值结果要在每个后端上分别验证</strong>。TF32 和 IEEE 的默认值不同，fp8 是硬件支持还是软件模拟也不同（第 16 章），同一个测试的容差可能要按后端调。</li>
+<li><strong>性能结论不能跨后端照搬</strong>。本书里「一个后端上有用、另一个上没用甚至有害」的例子：软件流水的级数（第 13 章）、persistent kernel（第 15 章）、对角线单独一个循环（第 17 章）、<code>ReduceVariableLiveness</code>（第 17、22 章）。</li>
+</ul>
+<h2>动手</h2>
+<ol>
+<li><strong>在 A10 上跑本章的默认值脚本。</strong> 「当前的 GPU」那一组和 sm_86 一样吗？它的 <code>warp_size</code> 是 32，<code>get_current_target()</code> 返回的 <code>arch</code> 是什么？</li>
+<li><strong>在 CE 上把第 4 章的 <code>add</code> kernel 编到 AMD。</strong> 用 <code>BLOCK = 1024, num_warps = 4</code>，看 <code>#blocked</code> 的 <code>sizePerThread</code>；再把 <code>num_warps</code> 改成 2，它变成几？对照本章的表解释。</li>
+<li><strong>写一个「三家通用」的配置函数。</strong> 仿照 <code>attention.launch_config</code>，给第 6 章的 softmax 写一个按后端返回 <code>num_warps</code> 的函数，规则是「每个线程 16 字节」。用本章脚本里的 <code>target.warp_size</code> 和元素大小算出来，不要写死 32。</li>
+</ol>
+<hr>
+<p><strong>这一章的要点</strong></p>
+<ul>
+<li>后端 = <code>compiler.py</code>（<code>BaseBackend</code>：默认选项、各段、前端要的信息、缓存哈希）+ <code>driver.py</code>（<code>DriverBase</code>：检测、加载、启动、计时），通过 <code>triton.backends</code> 这个 entry point 组注册（<code>python/triton/backends/__init__.py</code>）。NVIDIA、AMD 在主仓库，Intel 是公开的下游分支 intel-xpu-backend-for-triton。编译器只需要一个 <code>GPUTarget</code>，所以能离线编别家的 GPU。</li>
+<li>默认值（3.9.0）：warp 宽度 32 / 64 / 32（Intel 的 dot kernel 用 16）；<code>num_stages</code> 3 / 2 / 2；fp32 <code>tl.dot</code> 默认 TF32 / <strong>IEEE</strong> / TF32；最后几段 <code>ptx → cubin</code> / <code>amdgcn → hsaco</code> / <code>spv</code>；<code>tl.dot</code> 的最小形状 NVIDIA 限 K、AMD 不限、Intel 只限 int8；fp8 列表是「接受」不是「硬件支持」。</li>
+<li>同一个 kernel：<code>copy1d</code>（1024 个 fp16，4 个 warp）在 AMD 上每个线程只有 8 字节，因为 64 线程的 warp 让块「不够分」；矩阵指令 16×8 / 32×32 / 8×16；矩阵乘的 shared memory 16 KiB / 8 KiB / 0。</li>
+<li>可移植的写法：块大小和 <code>num_warps</code> 按后端配置或交给 autotune；后端专有选项只传给对应后端；数值和性能结论都要在每个后端上分别验证。</li>
+</ul>
+<p>第四部分到此结束：从 MLIR 的基本概念，到编译流水线、layout、关键 pass，再到三个后端。下一部分往 Triton 的上一层和下一层看：Gluon 把 layout 等决定交还给你，Helion 在 Triton 之上又加了一层自动化。</p>
+
+<div class="chapter-nav">
+  <a class="nav-prev" href="ch22.html">← 第 22 章 关键 pass 与性能定位</a>
+  <span></span>
+</div>
+</article>
+</main>
+<!-- 语法高亮：本地文件，离线可用 -->
+<script src="vendor/prism-core.min.js"></script>
+<script src="vendor/prism-python.min.js"></script>
+<!-- C++ 高亮：cpp 依赖 c，c 依赖 clike，须按此顺序加载 -->
+<script src="vendor/prism-clike.min.js"></script>
+<script src="vendor/prism-c.min.js"></script>
+<script src="vendor/prism-cpp.min.js"></script>
+<script src="vendor/prism-bash.min.js"></script>
+<script src="vendor/prism-line-numbers.min.js"></script>
+<!-- Pyodide（浏览器内运行 Python）：需联网从 CDN 加载，仅"▶ 运行"按钮用到 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="assets/runner.js"></script>
+</body>
+</html>
