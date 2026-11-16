@@ -331,11 +331,11 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **批次 2**：完成（2026-11-15）。ch05–10 都已写完；minillm 有 `pointwise`、`softmax`、`norm`、`matmul`（指针版 / descriptor 版 / `mm`）、`ops.py`（`triton_op` 加反向），共 126 个测试；`verify-triton.sh` 全书通过。
   - 写作中订正过的事实：block pointer 在 3.9.0 已移除；`tl.dot` 的形状下限由各后端的 `min_dot_size` 决定（NVIDIA 只限 K，Intel 退回 FMA）。
   - 写作中新发现、写进正文的坑：Intel 后端的 `tf32x3` / `bf16x3` 不走矩阵单元；解释器不查越界；`triton_op` 加 host 端 `TensorDescriptor` 在 `torch.compile` 后会被删掉。
-- **批次 3**：进行中。ch11–15、ch17 已写完；minillm 加了 `matmul_grouped`、`matmul_tuned`（按 M 分档的 autotune）、`matmul_persistent`、`kernels/attention.py` 和 `ops.attention`（FlashAttention 前向），共 199 个测试。剩 ch16。
+- **批次 3**：完成（2026-11-15）。ch11–17 都已写完；minillm 加了 `matmul_grouped`、`matmul_tuned`（按 M 分档的 autotune）、`matmul_persistent`、`kernels/lowp.py`（mxfp4）、`kernels/attention.py` 和 `ops.attention`（FlashAttention 前向），共 216 个测试。ch15、ch16 的 NVIDIA 新架构部分按 §14 第 1 项用离线 IR。
   - ch15 修的 minillm 性能 bug：`_matmul_grouped_kernel` 在 N 不是 16 的倍数（如 3000）时，Intel 后端证明不了 pitch 对齐，B、C 丢掉 2D block IO，16 TFLOP/s；加 `HINT_ALIGN`（`N // 8 * 8` 的写法）后约 107。`tl.multiple_of`、`tl.assume` 对标量无效。
   - ch17 的发现：Intel 后端的 `ReduceVariableLiveness` pass 会把 Q 的 load 挪进循环；非因果时它让 kernel 快 22%，因果时让 kernel 慢 19%（`reduce_variable_liveness=False` 可以关掉）。把缩放提前乘到 Q 上多一次 bf16 舍入，注意力集中时最大误差变成 6–8 倍。ch22 要回到「因果时为什么慢」。
   - 新发现、写进正文的坑：Max 1100 上，寄存器严重溢出的配置会让 IGC 内部崩溃；第一次能用 large GRF 重试救回来，同一进程第二次崩溃就段错误退出。autotune 必须用寄存器模型剪枝（ch14）。
-- **下一步**：ch15、ch16（按 §14 第 1 项：离线 IR + 能跑的部分实测），然后批次 4（ch18–23）。
+- **下一步**：批次 4（ch18–23）。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
 - **写作流程**（每章都照这个来）：
   1. 先在 Max 1100 上把要用的数字测出来，或者用 `triton_ir_local.py` 取 3.9.0 的 IR；
   2. 写正文，运行结果先留占位符；
@@ -414,7 +414,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch15**：
   - 跑「普通 vs persistent」（A10 有 72 个 SM，descriptor 在 sm_86 上编成 `cp.async`）。**预测**：和 Max 1100 一样大致持平；128×256、32 个 warp 在 A10 上可能寄存器不够，若很慢就把这组换成 128×128、8 个 warp 再测。
   - 「两个对齐的坑」那个块是 `# arch: xpu`，A10 上跳过。
-- **租到 Hopper / Blackwell 时（§14 第 1 项）**：ch15 的 GEMM 在 sm_90 / sm_100 上实测：descriptor 与指针版、`num_warps` 2 与 4（`wgmma` 有没有）、persistent 与普通、`warp_specialize` 开关；把数字补进 ch15，去掉 warn 框里相应的说法。
+- **ch16**：
+  - 跑本章的实测。**预测**：e4m3 那一行在 sm_86 上报 `fp8e4nv not supported`（离线编译已确认）；e5m2 会变慢。A10 带宽 600 GB/s，decode（M = 16）时 mxfp4 有可能反过来比 bf16 快，请重点看这一行。
+  - `kernels/lowp.py` 在 NVIDIA 上的配置（16 / 64 × 128、4 个 warp）是随手挑的，请扫一遍。
+- **租到 Hopper / Blackwell 时（§14 第 1 项）**：ch16 的 fp8 `tl.dot`（sm_90）和 mxfp4 × mxfp4 `tl.dot_scaled`（sm_100）实测，看原生指令比 bf16 快多少；ch15 的 GEMM 在 sm_90 / sm_100 上实测：descriptor 与指针版、`num_warps` 2 与 4（`wgmma` 有没有）、persistent 与普通、`warp_specialize` 开关；把数字补进 ch15，去掉 warn 框里相应的说法。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
