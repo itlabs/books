@@ -335,7 +335,8 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - ch15 修的 minillm 性能 bug：`_matmul_grouped_kernel` 在 N 不是 16 的倍数（如 3000）时，Intel 后端证明不了 pitch 对齐，B、C 丢掉 2D block IO，16 TFLOP/s；加 `HINT_ALIGN`（`N // 8 * 8` 的写法）后约 107。`tl.multiple_of`、`tl.assume` 对标量无效。
   - ch17 的发现：Intel 后端的 `ReduceVariableLiveness` pass 会把 Q 的 load 挪进循环；非因果时它让 kernel 快 22%，因果时让 kernel 慢 19%（`reduce_variable_liveness=False` 可以关掉）。把缩放提前乘到 Q 上多一次 bf16 舍入，注意力集中时最大误差变成 6–8 倍。ch22 要回到「因果时为什么慢」。
   - 新发现、写进正文的坑：Max 1100 上，寄存器严重溢出的配置会让 IGC 内部崩溃；第一次能用 large GRF 重试救回来，同一进程第二次崩溃就段错误退出。autotune 必须用寄存器模型剪枝（ch14）。
-- **下一步**：批次 4（ch18–23）。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
+- **批次 4**：进行中。ch18 已写完。
+- **下一步**：ch19–23。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
 - **写作流程**（每章都照这个来）：
   1. 先在 Max 1100 上把要用的数字测出来，或者用 `triton_ir_local.py` 取 3.9.0 的 IR；
   2. 写正文，运行结果先留占位符；
@@ -417,6 +418,7 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch16**：
   - 跑本章的实测。**预测**：e4m3 那一行在 sm_86 上报 `fp8e4nv not supported`（离线编译已确认）；e5m2 会变慢。A10 带宽 600 GB/s，decode（M = 16）时 mxfp4 有可能反过来比 bf16 快，请重点看这一行。
   - `kernels/lowp.py` 在 NVIDIA 上的配置（16 / 64 × 128、4 个 warp）是随手挑的，请扫一遍。
+- **ch18**：用空的 `TRITON_CACHE_DIR` 和 `MLIR_ENABLE_DUMP=row_sum MLIR_DUMP_PATH=dump.txt` 跑本章的 `row_sum`，数 `IR Dump Before` 的行数。**预测**：73（和离线编译到 sm_86 一样）。
 - **租到 Hopper / Blackwell 时（§14 第 1 项）**：ch16 的 fp8 `tl.dot`（sm_90）和 mxfp4 × mxfp4 `tl.dot_scaled`（sm_100）实测，看原生指令比 bf16 快多少；ch15 的 GEMM 在 sm_90 / sm_100 上实测：descriptor 与指针版、`num_warps` 2 与 4（`wgmma` 有没有）、persistent 与普通、`warp_specialize` 开关；把数字补进 ch15，去掉 warn 框里相应的说法。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
