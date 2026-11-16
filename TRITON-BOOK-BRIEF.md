@@ -398,6 +398,9 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch11、ch12**：
   - 跑 ch11 的「四种测法」和 roofline 脚本（三道墙的常数要换成 A10 的）。
   - 跑 ch12 的 tile 扫描和 swizzle 实验。**预测**：A10 一个 warp 32 个线程，寄存器的分界线会不同；L2 只有 6 MB，所以 4096³ 上 swizzle 就会有收益（模型预测按行排读 2.6 遍，分组排读 2.2 遍）。
+- **ch13**：
+  - 用指针版 GEMM（128×128×32，8 个 warp）把 `num_stages` 从 1 扫到 8。
+  - **预测**：每多一级多 16 KiB；第 8 级需要 112 KiB，超过 sm_86 每个 block 约 99 KB 的上限，会抛 `OutOfResources`。请把报错里的 `Hardware limit` 贴回来。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
 ### 15.4 写作规则备忘（来自作者的反馈，散落在各节，这里汇总）
