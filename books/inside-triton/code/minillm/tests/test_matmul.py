@@ -86,3 +86,17 @@ def test_matmul_grouped(device, mnk, group_m):
     a = torch.randn(m, k, device=device, dtype=torch.float16)
     b = torch.randn(k, n, device=device, dtype=torch.float16)
     assert rel_err(matmul_grouped(a, b, GROUP_M=group_m), a.double() @ b.double()) < TOL[torch.float16]
+
+
+# ---------------------------------------------------------------- 第 14 章 ----
+from minillm.kernels.matmul import _matmul_tuned_kernel, matmul_tuned  # noqa: E402
+
+
+def test_matmul_tuned(device):
+    # 同一个 M 分档（2048 < M ≤ 4096）里的两个 M：第二个不应该重新调优
+    b = torch.randn(1024, 1024, device=device, dtype=torch.bfloat16)
+    for m in (4096, 3008):
+        a = torch.randn(m, 1024, device=device, dtype=torch.bfloat16)
+        assert rel_err(matmul_tuned(a, b), a.double() @ b.double()) < TOL[torch.bfloat16]
+    keys = [k for k in _matmul_tuned_kernel.cache if k[1:3] == (1024, 1024)]
+    assert len(keys) == 1, f"同一个 M 分档应该只调优一次，实际：{keys}"

@@ -171,3 +171,43 @@ def matmul_grouped(a: torch.Tensor, b: torch.Tensor, BLOCK_M: int = 256, BLOCK_N
                                  BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, GROUP_M=GROUP_M,
                                  num_warps=num_warps)
     return c
+
+
+# ---------------------------------------------------------------- 第 14 章 ----
+_TUNE_SPACE = [(64, 64, 32, 4), (128, 128, 32, 4), (128, 128, 32, 8), (128, 256, 32, 8), (128, 256, 32, 16),
+               (256, 128, 32, 16), (256, 256, 32, 16), (256, 256, 32, 32), (256, 256, 64, 32)]
+_TUNE_CONFIGS = [triton.Config({"BLOCK_M": bm, "BLOCK_N": bn, "BLOCK_K": bk, "GROUP_M": 8}, num_warps=nw)
+                 for bm, bn, bk, nw in _TUNE_SPACE]
+
+
+def _register_prune(configs, named_args, **kwargs):
+    """第 12 章的寄存器模型：每个线程的累加器超过 128 个就会大量溢出，不必测。
+    在本书的 Max 1100 上，这一步还有一个更实际的理由：那几个配置会让 GPU 驱动里的编译器崩溃，
+    同一个进程里崩第二次，整个进程就会退出（第 14 章）。"""
+    tpw = 16 if DEVICE.type == "xpu" else 32
+    kept = [c for c in configs if c.kwargs["BLOCK_M"] * c.kwargs["BLOCK_N"] // (tpw * c.num_warps) <= 128]
+    return kept or configs[:1]
+
+
+@triton.autotune(configs=_TUNE_CONFIGS, key=["M_BUCKET", "N", "K"],
+                 prune_configs_by={"early_config_prune": _register_prune})
+@triton.jit
+def _matmul_tuned_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_bk, stride_cm, M_BUCKET,
+                         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+                         GROUP_M: tl.constexpr):
+    """和 _matmul_grouped_kernel 一样，只是 BLOCK_* 和 num_warps 交给 autotune。
+    M_BUCKET 只用在 autotune 的 key 里，kernel 本身不用它。"""
+    # 在 @triton.jit 函数里可以直接调用另一个 @triton.jit 函数
+    _matmul_grouped_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_bk, stride_cm,
+                           BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+
+
+def matmul_tuned(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """自动调优版。key 用的是 M 按 2 的幂分档以后的值：M 在同一档里变化时不会重新调优（第 14 章）。"""
+    M, K = a.shape
+    _, N = b.shape
+    c = torch.empty(M, N, device=a.device, dtype=a.dtype)
+    assert descriptor_ok(a, b, c), "不满足 tensor descriptor 的对齐要求，请用 matmul()"
+    grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"]),)
+    _matmul_tuned_kernel[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0), triton.next_power_of_2(M))
+    return c
