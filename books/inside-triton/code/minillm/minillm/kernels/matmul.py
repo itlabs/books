@@ -110,7 +110,7 @@ def mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     n = b.shape[1]
     out_ok = n * a.element_size() % 16 == 0       # 输出是新分配的连续张量，它的行 stride 就是 N
     if prefer_descriptor() and a.shape[0] and n and out_ok and descriptor_ok(a, b):
-        return matmul_desc(a, b)
+        return matmul_grouped(a, b)                 # 第 12 章起：带 L2 swizzle 的版本（第 8 章是 matmul_desc）
     return matmul(a, b)
 
 
@@ -129,3 +129,45 @@ def _matmul_desc_dev_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_bk, 
     for k in range(0, K, BLOCK_K):
         acc = tl.dot(a_desc.load([pid_m * BLOCK_M, k]), b_desc.load([k, pid_n * BLOCK_N]), acc)
     c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc.to(c_desc.dtype))
+
+
+# ---------------------------------------------------------------- 第 12 章 ----
+@triton.jit
+def _matmul_grouped_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_bk, stride_cm,
+                           BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+                           GROUP_M: tl.constexpr):
+    """一维 grid，按 GROUP_M 分组安排执行顺序（L2 swizzle）。descriptor 在 kernel 里创建（第 10 章）。
+
+    program 的编号 pid 按「GROUP_M 行 tile 为一组，组内一列一列地走」映射到 (pid_m, pid_n)：
+    同一时刻在跑的 program 集中在少数几行 A 和几列 B 上，它们从 L2 里共享数据。"""
+    pid = tl.program_id(0)
+    num_m = tl.cdiv(M, BLOCK_M)
+    num_n = tl.cdiv(N, BLOCK_N)
+    in_group = GROUP_M * num_n                       # 一组里有多少个 program
+    first_m = (pid // in_group) * GROUP_M            # 这一组从第几行 tile 开始
+    size_m = tl.minimum(num_m - first_m, GROUP_M)    # 最后一组可能不满 GROUP_M 行
+    pid_m = first_m + (pid % in_group) % size_m
+    pid_n = (pid % in_group) // size_m
+    a_desc = tl.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [K, N], [stride_bk, 1], [BLOCK_K, BLOCK_N])
+    c_desc = tl.make_tensor_descriptor(c_ptr, [M, N], [stride_cm, 1], [BLOCK_M, BLOCK_N])
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        acc = tl.dot(a_desc.load([pid_m * BLOCK_M, k]), b_desc.load([k, pid_n * BLOCK_N]), acc)
+    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc.to(c_desc.dtype))
+
+
+def matmul_grouped(a: torch.Tensor, b: torch.Tensor, BLOCK_M: int = 256, BLOCK_N: int = 256, BLOCK_K: int = 32,
+                   GROUP_M: int = 8, num_warps: int = 32) -> torch.Tensor:
+    """第 12 章的默认配置：256×256×32、32 个 warp（每个线程 128 个累加器元素，见第 12 章的 tile 扫描），
+    GROUP_M=8（L2 swizzle）。要求满足 descriptor 的对齐条件。"""
+    assert a.dim() == 2 and b.dim() == 2 and a.shape[1] == b.shape[0], f"形状不对：{a.shape} @ {b.shape}"
+    M, K = a.shape
+    _, N = b.shape
+    c = torch.empty(M, N, device=a.device, dtype=a.dtype)
+    assert descriptor_ok(a, b, c), "不满足 tensor descriptor 的对齐要求，请用 matmul()"
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),)
+    _matmul_grouped_kernel[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0),
+                                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, GROUP_M=GROUP_M,
+                                 num_warps=num_warps)
+    return c

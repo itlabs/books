@@ -161,9 +161,9 @@ def mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     if M == 0 or N == 0:
         return c
     if _use_descriptor(a, b):
-        grid = (triton.cdiv(M, 256), triton.cdiv(N, 256))
-        wrap_triton(_mm._matmul_desc_dev_kernel)[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0),
-                                                       BLOCK_M=256, BLOCK_N=256, BLOCK_K=32, num_warps=32)
+        grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256),)     # 第 12 章：一维 grid + L2 swizzle
+        wrap_triton(_mm._matmul_grouped_kernel)[grid](a, b, c, M, N, K, a.stride(0), b.stride(0), c.stride(0),
+                                                      BLOCK_M=256, BLOCK_N=256, BLOCK_K=32, GROUP_M=8, num_warps=32)
     else:
         grid = (triton.cdiv(M, 128), triton.cdiv(N, 128))
         wrap_triton(_mm._matmul_kernel)[grid](a, b, c, M, N, K, *a.stride(), *b.stride(), *c.stride(),

@@ -72,3 +72,17 @@ def test_mm_dispatch(device, mnk):
     a = torch.randn(m, k, device=device, dtype=torch.float16)
     b = torch.randn(k, n, device=device, dtype=torch.float16)
     assert rel_err(mm(a, b), a.double() @ b.double()) < TOL[torch.float16]
+
+
+# ---------------------------------------------------------------- 第 12 章 ----
+from minillm.kernels.matmul import matmul_grouped  # noqa: E402
+
+
+@pytest.mark.parametrize("group_m", [1, 4, 8])
+@pytest.mark.parametrize("mnk", [(1000, 776, 1032), (4096, 512, 256), (512, 4096, 1024), (2304, 2304, 512)])
+def test_matmul_grouped(device, mnk, group_m):
+    # 行数不是 GROUP_M × BLOCK_M 的整数倍时，最后一组不满：检查编号映射没有漏算、没有重复
+    m, n, k = mnk
+    a = torch.randn(m, k, device=device, dtype=torch.float16)
+    b = torch.randn(k, n, device=device, dtype=torch.float16)
+    assert rel_err(matmul_grouped(a, b, GROUP_M=group_m), a.double() @ b.double()) < TOL[torch.float16]
