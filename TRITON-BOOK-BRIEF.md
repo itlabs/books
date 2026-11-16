@@ -335,9 +335,10 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
   - ch15 修的 minillm 性能 bug：`_matmul_grouped_kernel` 在 N 不是 16 的倍数（如 3000）时，Intel 后端证明不了 pitch 对齐，B、C 丢掉 2D block IO，16 TFLOP/s；加 `HINT_ALIGN`（`N // 8 * 8` 的写法）后约 107。`tl.multiple_of`、`tl.assume` 对标量无效。
   - ch17 的发现：Intel 后端的 `ReduceVariableLiveness` pass 会把 Q 的 load 挪进循环；非因果时它让 kernel 快 22%，因果时让 kernel 慢 19%（`reduce_variable_liveness=False` 可以关掉）。把缩放提前乘到 Q 上多一次 bf16 舍入，注意力集中时最大误差变成 6–8 倍。ch22 要回到「因果时为什么慢」。
   - 新发现、写进正文的坑：Max 1100 上，寄存器严重溢出的配置会让 IGC 内部崩溃；第一次能用 large GRF 重试救回来，同一进程第二次崩溃就段错误退出。autotune 必须用寄存器模型剪枝（ch14）。
-- **批次 4**：进行中。ch18–21 已写完。
+- **批次 4**：进行中。ch18–22 已写完。
+  - ch22 定位了 ch17 的现象：触发条件是 mask；IGC 的寄存器分配在快的两种组合里是 `RR_BC_RA`，其余全是 `FF_RA`（IGC `visa/GraphColor.cpp`：先试 round robin + bank 冲突优化，失败退回 first fit）。ch17 正文的猜测已改成指向 ch22。
   - ch19 的发现：Intel 上 SPIR-V → 机器码在加载时由驱动的 IGC 完成，驱动有自己的磁盘缓存（`NEO_CACHE_PERSISTENT=0` 关掉以后，第一次调用多 0.3–0.5 秒）。
-- **下一步**：ch22、ch23。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
+- **下一步**：ch23，然后批次 5（ch24–27）。ch22 要回到 ch17 的「因果时 ReduceVariableLiveness 为什么让 kernel 变慢」。
 - **写作流程**（每章都照这个来）：
   1. 先在 Max 1100 上把要用的数字测出来，或者用 `triton_ir_local.py` 取 3.9.0 的 IR；
   2. 写正文，运行结果先留占位符；
@@ -422,6 +423,7 @@ torch 2.15.0+xpu 自带依赖 `triton-xpu 3.9.0`。
 - **ch18**：用空的 `TRITON_CACHE_DIR` 和 `MLIR_ENABLE_DUMP=row_sum MLIR_DUMP_PATH=dump.txt` 跑本章的 `row_sum`，数 `IR Dump Before` 的行数。**预测**：73（和离线编译到 sm_86 一样）。
 - **ch19**：跑「时间花在哪」的脚本。**预测**：NVIDIA 多出 `ptx`、`cubin` 两段，`cubin`（ptxas）可能比 `llir` 还长；「第一次调用一共」减去各段之和只有几毫秒（没有加载时的 JIT）。
 - **ch21**：跑 Gluon 的「三种转换」实验。**预测**：分类和离线编译一致（0 / 32 条 `shfl.sync` / 2048 字节 shared memory）；shared memory 那一档比 shuffle 贵一个数量级。
+- **ch22**：做「动手」第 1 题：去掉 `reduce_variable_liveness`，测 `MASK` × `SKIP` 四种组合，`TRITON_KERNEL_DUMP=1` 导出 SASS 数主循环里的 `LDL` / `STL`。
 - **租到 Hopper / Blackwell 时（§14 第 1 项）**：ch16 的 fp8 `tl.dot`（sm_90）和 mxfp4 × mxfp4 `tl.dot_scaled`（sm_100）实测，看原生指令比 bf16 快多少；ch15 的 GEMM 在 sm_90 / sm_100 上实测：descriptor 与指针版、`num_warps` 2 与 4（`wgmma` 有没有）、persistent 与普通、`warp_specialize` 开关；把数字补进 ch15，去掉 warn 框里相应的说法。
 - 跑法：`books/inside-triton/verify/verify-triton.sh ch01` 只校验代码能不能跑，不打印输出；要贴的数字请用 `VERBOSE=1` 跑，或者把代码块单独存成文件运行。
 
